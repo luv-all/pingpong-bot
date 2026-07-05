@@ -1,0 +1,10 @@
+[package]
+name = "pingpong-app"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+crossbeam-channel = "0.5.15"
+crossbeam-queue = "0.3.12"
+pingpong-domain = { version = "0.1.0", path = "../domain" }
+tracing = "0.1.44"

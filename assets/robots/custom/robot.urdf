@@ -1,0 +1,126 @@
+<?xml version="1.0"?>
+<!--
+  커스텀 탁구 로봇 URDF 템플릿 (Fusion 360 mesh용)
+
+  1. Fusion에서 body마다 STL export → meshes/ 아래 저장
+  2. joint origin/axis는 CAD 조인트 위치에 맞게 수정
+  3. 실행:
+     cargo run -p pingpong-bin -- --urdf assets/robots/custom/robot.urdf --ee-link racket_link
+
+  STL 단위: Fusion 기본은 mm → scale="0.001 0.001 0.001"
+-->
+<robot name="pingpong_custom_arm">
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="grey"><color rgba="0.55 0.56 0.58 1"/></material>
+    </visual>
+  </link>
+
+  <link name="yaw_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/yaw_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <link name="shoulder_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/shoulder_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <link name="upper_arm_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/upper_arm_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <link name="forearm_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/forearm_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <link name="wrist_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/wrist_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+    </visual>
+  </link>
+
+  <link name="racket_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/racket_link.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="paddle"><color rgba="0.75 0.77 0.8 1"/></material>
+    </visual>
+  </link>
+
+  <!-- joint origin/axis는 Fusion 조인트에 맞게 튜닝 필요 -->
+  <joint name="joint_base_yaw" type="revolute">
+    <parent link="base_link"/>
+    <child link="yaw_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.2" upper="1.2" effort="20" velocity="3"/>
+  </joint>
+
+  <joint name="joint_shoulder" type="revolute">
+    <parent link="yaw_link"/>
+    <child link="shoulder_link"/>
+    <origin xyz="0 0.05 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.5" upper="1.5" effort="20" velocity="3"/>
+  </joint>
+
+  <joint name="joint_upper_arm" type="revolute">
+    <parent link="shoulder_link"/>
+    <child link="upper_arm_link"/>
+    <origin xyz="0 0.08 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.0" upper="2.0" effort="20" velocity="3"/>
+  </joint>
+
+  <joint name="joint_elbow" type="revolute">
+    <parent link="upper_arm_link"/>
+    <child link="forearm_link"/>
+    <origin xyz="0 0.25 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.0" upper="2.0" effort="20" velocity="3"/>
+  </joint>
+
+  <joint name="joint_wrist" type="revolute">
+    <parent link="forearm_link"/>
+    <child link="wrist_link"/>
+    <origin xyz="0 0.22 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.5" upper="1.5" effort="20" velocity="3"/>
+  </joint>
+
+  <joint name="joint_racket" type="revolute">
+    <parent link="wrist_link"/>
+    <child link="racket_link"/>
+    <origin xyz="0 0.12 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-1.0" upper="1.0" effort="20" velocity="3"/>
+  </joint>
+</robot>

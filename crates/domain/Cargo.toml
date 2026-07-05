@@ -1,0 +1,7 @@
+[package]
+name = "pingpong-domain"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+nalgebra = "0.35.0"
