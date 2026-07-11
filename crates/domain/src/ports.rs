@@ -7,8 +7,7 @@ use std::time::Instant;
 
 use crate::error::HwError;
 use crate::types::{
-    BallObservation, FrameRef, HitPlane, PixelPoint, Prediction, RobotPose, Roi, SwingTrajectory,
-    TelemetryEvent,
+    FrameRef, HitPlane, PixelPoint, Prediction, RobotPose, Roi, SwingTrajectory, TelemetryEvent,
 };
 
 /// monotonic 시각 제공. sim에서는 `SimClock`로 시간 가속 가능.
@@ -31,8 +30,8 @@ pub trait Detector: Send {
 
 /// 공 상태(위치·속도) 추정 및 타격 평면까지 예측 (확장 칼만 필터).
 pub trait Estimator: Send {
-    /// 새 관측으로 내부 상태를 갱신한다.
-    fn update(&mut self, observation: BallObservation);
+    /// 삼각측량된 3D 관측으로 내부 상태를 갱신한다.
+    fn update(&mut self, position: crate::types::Point3<crate::types::World>, timestamp: Instant);
     /// 타격 평면까지의 임팩트를 예측한다.
     fn predict_to(&self, plane: HitPlane) -> Option<Prediction>;
 }

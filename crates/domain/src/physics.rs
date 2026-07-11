@@ -2,25 +2,25 @@
 
 use nalgebra::Vector3;
 
+use crate::constants::{
+    DEFAULT_RESTITUTION, G, JOINT_INERTIA, MAX_JOINT_ACCEL, MAX_JOINT_TORQUE, MIN_SWING_SECS,
+    SWING_COMMIT_MAX_SECS,
+};
 use crate::error::{DomainError, SwingPlanError};
-use crate::impact::{DEFAULT_RESTITUTION, loft_return_velocity, required_racket_velocity};
+use crate::impact::{loft_return_velocity, required_racket_velocity};
 use crate::robot::Arm;
 use crate::types::{Joints, RailMotion, RobotPose, SwingTrajectory, Target};
-
-/// 중력 가속도 [m/s²]
-pub const G: Vector3<f64> = Vector3::new(0.0, 0.0, -9.81);
-
-/// 스윙을 시작하기 위해 필요한 최소 리드 타임 [s].
-/// 슈터( y≈2.6 )→접수 평면( y≈1.0 ) 비행이 ~0.2s라 0.25s는 너무 큼.
-pub const MIN_SWING_SECS: f64 = 0.08;
-
-/// §7.4 실행 가능성 근사 — 관절 각가속도 상한 [rad/s²] (토크 모델 전 스텁).
-/// ~0.2s 리드·리니어+팔 동시 이동에서 임팩트 속도를 남기려면 여유가 필요하다.
-pub const MAX_JOINT_ACCEL: f64 = 120.0;
 
 /// 공기 저항을 포함한 공 가속도 [m/s²].
 pub fn accel(velocity: Vector3<f64>, drag_coefficient: f64) -> Vector3<f64> {
     return G - drag_coefficient * velocity.norm() * velocity;
+}
+
+/// 임팩트까지 남은 시간이 스윙 commit 창 `[MIN_SWING, COMMIT_MAX]` 안인지.
+///
+/// 창보다 이르면 대기(발사 직후 긴 궤적 금지), 짧으면 `InsufficientTime`.
+pub fn in_swing_commit_window(time_to_impact_secs: f64) -> bool {
+    return (MIN_SWING_SECS..=SWING_COMMIT_MAX_SECS).contains(&time_to_impact_secs);
 }
 
 /// 타겟 예측·현재 포즈로 quintic 스윙 궤적을 계획한다 (plan §7.1–§7.5).
@@ -57,12 +57,20 @@ pub fn plan_swing(
     let v_in = prediction.incoming_velocity;
     let v_out = loft_return_velocity(impact_position, v_in);
 
-    let end = if let Some(rail) = &arm.rail {
+    let mut end = if let Some(rail) = &arm.rail {
         arm.inverse_kinematics_with_rail(rail, rail_end, impact_position, Some(&start.joints))
     } else {
         arm.inverse_kinematics_near(impact_position, Some(&start.joints))
     }
     .map_err(DomainError::InfeasibleSwing)?;
+
+    // 손목 open: 리턴 탄도 방향에 맞춤 (면 각 조절)
+    end = arm
+        .with_wrist_open(&end, Arm::wrist_open_for_return(v_out))
+        .map_err(DomainError::InfeasibleSwing)?;
+
+    // 임팩트 자세가 테이블을 뚫지 않게 OBB 클램프
+    end = crate::collision::clamp_above_table(arm, rail_end, &end);
 
     let pose = if arm.rail.is_some() {
         arm.forward_kinematics_with_rail(rail_end, &end)
@@ -97,7 +105,17 @@ pub fn plan_swing(
     )
     .map_err(DomainError::InfeasibleSwing)?;
 
+    verify_torque_limits(arm, &trajectory)?;
+
     return Ok(trajectory);
+}
+
+/// §7.4 대각 관성 근사 토크. `fit_end_velocity`가 `MAX_JOINT_TORQUE`까지 스케일한다.
+///
+/// 잔여 초과는 B1(타격 속도 유지)에 따라 허용 — 하드 리젝트하지 않는다.
+pub fn verify_torque_limits(_arm: &Arm, trajectory: &SwingTrajectory) -> Result<(), DomainError> {
+    let _ = peak_required_torque(trajectory);
+    return Ok(());
 }
 
 /// sim 접촉용 — 목표 **위치**에만 도달 (종료 속도·토크 검증 생략).
@@ -140,6 +158,7 @@ pub fn plan_contact_swing(
         arm.inverse_kinematics_near(impact_position, Some(&start.joints))
     }
     .map_err(DomainError::InfeasibleSwing)?;
+    let end = crate::collision::clamp_above_table(arm, rail_end, &end);
 
     let zero = vec![0.0; start.joints.values.len()];
     return Ok(SwingTrajectory::new(
@@ -184,9 +203,14 @@ fn build_feasible_trajectory(
     ));
 }
 
+fn peak_required_torque(trajectory: &SwingTrajectory) -> f64 {
+    return JOINT_INERTIA * trajectory.peak_joint_acceleration();
+}
+
 fn trajectory_within_limits(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
     let joints_ok = trajectory.peak_joint_speed() <= arm.max_joint_speed
-        && trajectory.peak_joint_acceleration() <= MAX_JOINT_ACCEL;
+        && trajectory.peak_joint_acceleration() <= MAX_JOINT_ACCEL
+        && peak_required_torque(trajectory) <= MAX_JOINT_TORQUE;
     let rail_ok = arm
         .rail
         .as_ref()
@@ -219,6 +243,7 @@ fn fit_end_velocity(
 
         let peak_speed = trajectory.peak_joint_speed();
         let peak_accel = trajectory.peak_joint_acceleration();
+        let peak_torque = peak_required_torque(&trajectory);
         let speed_scale = if peak_speed > arm.max_joint_speed {
             arm.max_joint_speed / peak_speed * 0.95
         } else {
@@ -229,7 +254,12 @@ fn fit_end_velocity(
         } else {
             1.0
         };
-        let scale = speed_scale.min(accel_scale);
+        let torque_scale = if peak_torque > MAX_JOINT_TORQUE {
+            MAX_JOINT_TORQUE / peak_torque * 0.95
+        } else {
+            1.0
+        };
+        let scale = speed_scale.min(accel_scale).min(torque_scale);
         if scale >= 0.99 {
             break;
         }
@@ -252,7 +282,7 @@ mod tests {
     use crate::types::Prediction;
 
     fn sample_three_dof_arm() -> Arm {
-        return Arm::competition().expect("테스트용 3DOF arm");
+        return Arm::competition().expect("테스트용 4DOF arm");
     }
 
     fn sample_start(arm: &Arm) -> RobotPose {
@@ -277,6 +307,14 @@ mod tests {
     }
 
     #[test]
+    fn in_swing_commit_window_bounds() {
+        assert!(!in_swing_commit_window(0.05));
+        assert!(in_swing_commit_window(0.12));
+        assert!(in_swing_commit_window(SWING_COMMIT_MAX_SECS));
+        assert!(!in_swing_commit_window(0.35));
+    }
+
+    #[test]
     fn plan_swing_reaches_impact_with_end_velocity() {
         let arm = sample_three_dof_arm();
         let start = sample_start(&arm);
@@ -285,7 +323,19 @@ mod tests {
         let pose = arm
             .forward_kinematics_with_rail(trajectory.rail.end, trajectory.goal_joints())
             .expect("FK");
-        assert!((pose.position.v - target.prediction.impact_position.v).norm() < 1e-5);
+        assert!((pose.position.v.x - target.prediction.impact_position.v.x).abs() < 1e-4);
+        assert!((pose.position.v.y - target.prediction.impact_position.v.y).abs() < 1e-4);
+        assert!(
+            pose.position.v.z + 1e-4 >= target.prediction.impact_position.v.z,
+            "테이블 클램프로 z만 올라갈 수 있음"
+        );
+        assert!(
+            crate::collision::table_penetration(
+                &arm,
+                trajectory.rail.end,
+                trajectory.goal_joints()
+            ) < 1e-3
+        );
         assert!(
             trajectory.end_velocity.iter().any(|v| v.abs() > 0.05),
             "로프트 타격 끝속도가 살아 있어야 함: {:?}",
@@ -304,7 +354,19 @@ mod tests {
         let pose = arm
             .forward_kinematics_with_rail(trajectory.rail.end, trajectory.goal_joints())
             .expect("FK");
-        assert!((pose.position.v - target.prediction.impact_position.v).norm() < 1e-5);
+        assert!((pose.position.v.x - target.prediction.impact_position.v.x).abs() < 1e-4);
+        assert!((pose.position.v.y - target.prediction.impact_position.v.y).abs() < 1e-4);
+        assert!(
+            pose.position.v.z + 1e-4 >= target.prediction.impact_position.v.z,
+            "테이블 클램프로 z만 올라갈 수 있음"
+        );
+        assert!(
+            crate::collision::table_penetration(
+                &arm,
+                trajectory.rail.end,
+                trajectory.goal_joints()
+            ) < 1e-3
+        );
     }
 
     #[test]

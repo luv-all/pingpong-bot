@@ -2,27 +2,13 @@
 
 use nalgebra::Vector3;
 
+use crate::constants::impact::{
+    COOPERATIVE_RETURN_SCALE, LOFT_TIME_TO_NET, MAX_RETURN_SPEED, NET_CLEARANCE,
+};
+use crate::constants::physics::G_Z;
 use crate::constants::table;
 use crate::error::SwingPlanError;
 use crate::types::{Point3, World};
-
-/// 중력 z 성분 [m/s²] — `physics::G`와 동일 (순환 import 회피).
-const G_Z: f64 = -9.81;
-
-/// 기본 반발계수 (탁구공-고무 라켓, 측정 전 추정값).
-pub const DEFAULT_RESTITUTION: f64 = 0.85;
-
-/// 네트 위 여유 높이 [m] — 네트 상단보다 이만큼 높게 통과.
-pub const NET_CLEARANCE: f64 = 0.08;
-
-/// 임팩트 → 네트까지 목표 비행 시간 [s] (아래에서 위로 띄우는 리드).
-pub const LOFT_TIME_TO_NET: f64 = 0.40;
-
-/// 리턴 속도 상한 [m/s] — 모터·안전.
-pub const MAX_RETURN_SPEED: f64 = 6.0;
-
-/// 레거시: 입사 대비 스케일 리턴 (타격 본선에서는 쓰지 않음).
-pub const COOPERATIVE_RETURN_SCALE: f64 = 0.35;
 
 /// 임팩트에 필요한 라켓 속도·면 법선.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,14 +35,12 @@ pub fn loft_return_velocity(impact: Point3<World>, _v_in: Vector3<f64>) -> Vecto
     let dz = z_net - impact.v.z;
 
     // z(t) = z0 + vz t + ½ G.z t²  →  vz = (z_net - z0)/t - ½ G.z t
-    // G.z = -9.81 이므로 -½ G.z t = +½·9.81·t (위로 띄움)
     let mut v_out = Vector3::new(dx / (t * 2.0), dy / t, dz / t - 0.5 * G_Z * t);
 
     let speed = v_out.norm();
     if speed > MAX_RETURN_SPEED && speed > f64::EPSILON {
         v_out *= MAX_RETURN_SPEED / speed;
     }
-    // 로프트 보장: +Z·+Y
     if v_out.y < 1.0 {
         v_out.y = 1.0;
     }
@@ -148,6 +132,7 @@ fn vector3_to_array(v: Vector3<f64>) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::DEFAULT_RESTITUTION;
 
     #[test]
     fn loft_return_has_upward_and_forward() {

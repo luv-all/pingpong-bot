@@ -1,17 +1,19 @@
-//! 궤적 추정기 (1단계: PassThrough 스텁).
+//! 궤적 추정기 — [`PassThroughEstimator`]는 레거시 스텁.
 //!
-//! 확장 칼만 필터/RK4 본체는 2단계에서 `Estimator` trait의 다른 구현으로 교체한다.
+//! 본선은 [`crate::ekf::BallEkf`].
+
+use std::time::Instant;
 
 use nalgebra::Vector3;
 
+use crate::ballistics::predict_hit_plane;
 use crate::ports::Estimator;
-use crate::types::{BallObservation, CameraId, HitPlane, Point3, Prediction, World};
+use crate::types::{HitPlane, Point3, Prediction, World};
 
-/// sim/테스트용 추정기 — 관측 픽셀을 카메라별 오프셋으로 3D에 투영한다.
+/// 테스트용 단순 추정기 — 관측 위치를 그대로 쓰고 고정 속도로 hit-plane을 예측한다.
 pub struct PassThroughEstimator {
-    /// 마지막 3D 추정 위치
     last: Option<Point3<World>>,
-    /// 공기 저항 계수 (2단계 EKF용)
+    last_time: Option<Instant>,
     drag_coefficient: f64,
 }
 
@@ -20,6 +22,7 @@ impl PassThroughEstimator {
     pub fn new(drag_coefficient: f64) -> Self {
         return Self {
             last: None,
+            last_time: None,
             drag_coefficient,
         };
     }
@@ -28,60 +31,42 @@ impl PassThroughEstimator {
     pub fn drag_coefficient(&self) -> f64 {
         return self.drag_coefficient;
     }
-
-    /// 카메라 ID별 3D 오프셋.
-    fn camera_offset(camera_id: CameraId) -> Vector3<f64> {
-        let index = f64::from(camera_id.index());
-        return Vector3::new((index - 1.0) * 0.5, 0.0, 1.0);
-    }
-
-    /// 관측 1건을 3D 점으로 변환한다.
-    fn observation_to_point(observation: BallObservation) -> Point3<World> {
-        let offset = Self::camera_offset(observation.camera_id);
-        return Point3::from_vector(
-            offset
-                + Vector3::new(
-                    observation.pixel.x * 1e-4,
-                    observation.pixel.y * 1e-4,
-                    0.0,
-                ),
-        );
-    }
 }
 
 impl Estimator for PassThroughEstimator {
-    fn update(&mut self, observation: BallObservation) {
-        self.last = Some(Self::observation_to_point(observation));
+    fn update(&mut self, position: Point3<World>, timestamp: Instant) {
+        self.last = Some(position);
+        self.last_time = Some(timestamp);
     }
 
     fn predict_to(&self, plane: HitPlane) -> Option<Prediction> {
-        let position = self.last.as_ref()?;
-        return Some(Prediction {
-            time_to_impact_secs: 0.3,
-            impact_position: Point3::new(position.v.x, plane.y, position.v.z),
-            incoming_velocity: Vector3::new(0.0, -1.0, 0.0),
+        let position = self.last.as_ref()?.v;
+        // 대략 로봇 쪽으로 오는 속도 가정
+        let velocity = Vector3::new(0.0, -5.0, 0.0);
+        return predict_hit_plane(position, velocity, plane, self.drag_coefficient).or_else(|| {
+            Some(Prediction {
+                time_to_impact_secs: 0.3,
+                impact_position: Point3::new(position.x, plane.y, position.z),
+                incoming_velocity: velocity,
+            })
         });
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
-
     use super::*;
-    use crate::types::PixelPoint;
 
     #[test]
     fn pass_through_produces_prediction() {
-        let mut estimator = PassThroughEstimator::new(0.01);
-        estimator.update(BallObservation {
-            pixel: PixelPoint::new(100.0, 200.0),
-            camera_id: CameraId::new(0),
-            timestamp: Instant::now(),
-        });
+        let mut estimator = PassThroughEstimator::new(0.0);
+        estimator.update(
+            Point3::new(0.7, 1.5, 0.9),
+            Instant::now(),
+        );
         let prediction = estimator
-            .predict_to(HitPlane { y: 1.0 })
+            .predict_to(HitPlane { y: 0.30 })
             .expect("예측값");
-        assert!((prediction.impact_position.v.y - 1.0).abs() < f64::EPSILON);
+        assert!((prediction.impact_position.v.y - 0.30).abs() < 1e-4);
     }
 }

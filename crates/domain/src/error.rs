@@ -77,6 +77,10 @@ pub enum ObservationError {
     },
     /// 동기화 시각 보간에 필요한 앞뒤 관측 프레임 없음 (plan §5.4)
     InterpolationFailed { camera_id: CameraId },
+    /// Calibration에 해당 카메라가 없음
+    MissingCalibration { camera_id: CameraId },
+    /// DLT가 유한한 3D 점을 내지 못함 (퇴화·수치 실패)
+    TriangulationFailed,
 }
 
 /// 하드웨어 포트 오류.
@@ -203,6 +207,10 @@ impl fmt::Display for ObservationError {
             Self::InterpolationFailed { camera_id } => {
                 write!(f, "{camera_id} — 동기화 시각 보간용 앞뒤 프레임 없음")
             }
+            Self::MissingCalibration { camera_id } => {
+                write!(f, "{camera_id} — Calibration에 파라미터 없음")
+            }
+            Self::TriangulationFailed => write!(f, "DLT 삼각측량 실패 (퇴화 또는 비유한 해)"),
         };
     }
 }
