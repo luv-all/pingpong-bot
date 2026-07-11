@@ -137,11 +137,11 @@ cargo run -p pingpong-bot -- --frames 60 --shoot-on-start --sim-speed 5
 ## 실험 도구 (`tools/`)
 
 각 도구는 `domain`/`infra`와 같은 타입·포트를 공유한다.  
-**현재 1단계: CLI만 있고 본문은 `todo!()` 스텁.**
+**Phase 2:** `calib_charuco --emit-sim` / `--validate` 사용 가능. OpenCV·측정 도구 본문은 실물 마일스톤.
 
 | crate | 바이너리 | 용도 |
 |-------|----------|------|
-| `calib-charuco` | `calib_charuco` | ChArUco 카메라 보정 |
+| `calib-charuco` | `calib_charuco` | ChArUco 보정 (`--emit-sim`으로 sim Calibration JSON) |
 | `measure-restitution` | `measure_restitution` | 반발계수 e 측정 |
 | `measure-friction` | `measure_friction` | 마찰계수 μ 측정 |
 | `jog-axis` | `jog_axis` | 축 수동 조그 |
@@ -152,9 +152,8 @@ cargo run -p pingpong-bot -- --frames 60 --shoot-on-start --sim-speed 5
 | `detect-roi` | `detect_roi` | ROI 추적 검출 실험 |
 
 ```bash
-# 도구 실행 예 (스텁 — panic: not yet implemented)
-cargo run -p calib-charuco -- --help
-cargo run -p detect-roi -- --help
+cargo run -p calib-charuco -- --emit-sim 3 -o calibration.json
+cargo run -p pingpong-bin -- --config config/example.toml --gui
 ```
 
 ---
