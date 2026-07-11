@@ -6,11 +6,15 @@
 use std::sync::Arc;
 
 use pingpong_domain::{
-    Arm, RobotState,
+    Arm, DomainError, HitPlane, MIN_SWING_SECS, Prediction, RobotPose, RobotState, Target,
     constants::{ball, table},
+    plan_swing,
 };
 use rapier3d::prelude::*;
+use tracing::{debug, warn};
 
+use super::ball_script::{BallAction, BallEvent, BallScript, BallVec3};
+use super::estimator::predict_impact;
 use super::rapier_convert::racket_pose_to_rapier;
 use super::shooter::{BallShooterSettings, BallState, ShooterLayout};
 
@@ -66,6 +70,12 @@ pub struct SimWorld {
     pub ball_state: BallState,
     /// 마지막 발사 설정 (상태 표시용)
     pub last_shooter_settings: BallShooterSettings,
+    /// `sim_time`에 실행할 공 동역학 이벤트
+    pending_ball_events: Vec<BallEvent>,
+    /// 디버그 — 마지막 hit plane 예측 (뷰어 마커용)
+    debug_prediction: Option<Prediction>,
+    /// 접수 평면 — 물리 스텝에서 즉시 스윙 계획에 사용
+    hit_plane: HitPlane,
 }
 
 impl SimWorld {
@@ -78,7 +88,13 @@ impl SimWorld {
         let mut collider_set = ColliderSet::new();
 
         let robot = if let Some(ref model) = urdf {
-            RobotState::new(model.default_joints())
+            let joints = model.default_joints();
+            let rail_x = arm
+                .rail
+                .as_ref()
+                .map(|rail| rail.home_x())
+                .unwrap_or(arm.base.v.x);
+            RobotState::new(joints, rail_x)
         } else {
             arm.initial_state()
         };
@@ -147,7 +163,7 @@ impl SimWorld {
             .pose(Pose::from_parts(racket_pos, racket_rot))
             .build();
         let racket_handle = rigid_body_set.insert(racket_body);
-        let racket_collider = ColliderBuilder::cuboid(0.08, 0.09, 0.006)
+        let racket_collider = ColliderBuilder::cuboid(0.06, 0.07, 0.005)
             .restitution(0.75)
             .friction(0.5)
             .build();
@@ -184,12 +200,17 @@ impl SimWorld {
             sim_time: 0.0,
             ball_state: BallState::Parked,
             last_shooter_settings: default_shooter.clone(),
+            pending_ball_events: Vec::new(),
+            debug_prediction: None,
+            hit_plane: HitPlane {
+                y: table::DEFAULT_HIT_PLANE_Y,
+            },
         };
         world.sync_shooter_pose(&default_shooter);
         return world;
     }
 
-    /// 물리 1스텝: GUI 요청 처리 → 관절 추종 → Rapier 적분 → 이탈 공 회수.
+    /// 물리 1스텝: GUI 요청 처리 → 공 스크립트 → 관절 추종 → Rapier 적분.
     pub fn step(&mut self, dt: f64, input: Option<SimStepInput<'_>>) {
         if let Some(input) = input {
             if input.park {
@@ -204,7 +225,10 @@ impl SimWorld {
             }
         }
 
+        self.tick_ball_events();
+
         self.robot.step_toward_targets(&self.arm, dt);
+        self.try_auto_swing();
         self.sync_racket_kinematic();
 
         self.physics_pipeline.step(
@@ -247,6 +271,61 @@ impl SimWorld {
         }
     }
 
+    /// 접수 평면을 설정한다 (CLI·파이프라인과 동기화).
+    pub fn set_hit_plane(&mut self, plane: HitPlane) {
+        self.hit_plane = plane;
+    }
+
+    /// 공 비행 중 첫 유효 `plan_swing`만 commit하고 임팩트까지 유지한다.
+    ///
+    /// 재계획·`plan_contact_swing` 폴백은 끝속도를 죽여 “대고만 있는” 느낌을 만든다.
+    fn try_auto_swing(&mut self) {
+        if self.ball_state != BallState::InFlight {
+            return;
+        }
+        if self.robot.is_swinging() {
+            return;
+        }
+        let Some(prediction) = predict_impact(self, self.hit_plane) else {
+            return;
+        };
+        self.set_debug_prediction(Some(prediction));
+        if prediction.time_to_impact_secs < MIN_SWING_SECS {
+            return;
+        }
+
+        let start = RobotPose::new(self.robot.rail_x(), self.robot.joints().clone());
+        let target = Target { prediction };
+        let trajectory = match plan_swing(&self.arm, target, &start) {
+            Ok(trajectory) => trajectory,
+            Err(DomainError::InfeasibleSwing(ref err)) => {
+                debug!(%err, "plan_swing 불가 — 이번 공 스킵");
+                return;
+            }
+            Err(other) => {
+                warn!(%other, "sim 자동 스윙 계획 실패");
+                return;
+            }
+        };
+        debug!(
+            duration_secs = trajectory.duration_secs,
+            rail_end = trajectory.rail.end,
+            end_vel = ?trajectory.end_velocity,
+            "sim plan_swing commit"
+        );
+        self.robot.replace_swing(trajectory);
+    }
+
+    /// 디버그용 hit plane 예측 (없으면 `None`).
+    pub fn debug_prediction(&self) -> Option<&Prediction> {
+        return self.debug_prediction.as_ref();
+    }
+
+    /// 디버그용 hit plane 예측을 갱신한다.
+    pub fn set_debug_prediction(&mut self, prediction: Option<Prediction>) {
+        self.debug_prediction = prediction;
+    }
+
     /// 슈터에서 공을 발사한다.
     pub fn shoot_ball(&mut self, settings: &BallShooterSettings) {
         self.sync_shooter_pose(settings);
@@ -254,19 +333,112 @@ impl SimWorld {
         let muzzle = settings.muzzle_position();
         let linvel = settings.launch_velocity();
         let angvel = settings.launch_angular_velocity();
+        self.launch_ball_at(
+            BallVec3::new(muzzle.x, muzzle.y, muzzle.z),
+            BallVec3::new(linvel.x, linvel.y, linvel.z),
+            BallVec3::new(angvel.x, angvel.y, angvel.z),
+        );
+    }
 
+    /// 위치·속도로 공을 dynamic 비행 상태로 만든다.
+    pub fn launch_ball_at(
+        &mut self,
+        position: BallVec3,
+        linear_velocity: BallVec3,
+        angular_velocity: BallVec3,
+    ) {
         if let Some(body) = self.rigid_body_set.get_mut(self.ball_handle) {
             body.set_body_type(RigidBodyType::Dynamic, true);
-            body.set_translation(muzzle, true);
-            body.set_linvel(linvel, true);
-            body.set_angvel(angvel, true);
+            body.set_translation(position.to_rapier(), true);
+            body.set_linvel(linear_velocity.to_rapier(), true);
+            body.set_angvel(angular_velocity.to_rapier(), true);
             body.enable_ccd(true);
         }
         self.ball_state = BallState::InFlight;
+        self.robot.cancel_swing();
+        self.try_auto_swing();
+    }
+
+    /// 선형 임펄스 [N·s]를 적용한다 (dynamic일 때만).
+    pub fn apply_ball_impulse(&mut self, impulse: BallVec3) {
+        if let Some(body) = self.rigid_body_set.get_mut(self.ball_handle) {
+            if body.body_type() != RigidBodyType::Dynamic {
+                return;
+            }
+            body.apply_impulse(impulse.to_rapier(), true);
+        }
+    }
+
+    /// 공 동역학 이벤트를 큐에 넣는다 (`sim_time` 도달 시 실행).
+    pub fn enqueue_ball_events(&mut self, script: BallScript) {
+        for event in script.events() {
+            self.pending_ball_events.push(event.clone());
+        }
+        self.pending_ball_events.sort_by(|a, b| {
+            a.at_time
+                .partial_cmp(&b.at_time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    /// 대기 중인 공 이벤트 수.
+    pub fn pending_ball_event_count(&self) -> usize {
+        return self.pending_ball_events.len();
+    }
+
+    fn tick_ball_events(&mut self) {
+        while let Some(event) = self.pending_ball_events.first() {
+            if event.at_time > self.sim_time {
+                break;
+            }
+            let event = self.pending_ball_events.remove(0);
+            self.apply_ball_action(event.action);
+        }
+    }
+
+    fn apply_ball_action(&mut self, action: BallAction) {
+        match action {
+            BallAction::Launch {
+                position,
+                linear_velocity,
+                angular_velocity,
+            } => self.launch_ball_at(position, linear_velocity, angular_velocity),
+            BallAction::Impulse { impulse } => self.apply_ball_impulse(impulse),
+            BallAction::SetVelocity {
+                linear_velocity,
+                angular_velocity,
+            } => {
+                if let Some(body) = self.rigid_body_set.get_mut(self.ball_handle) {
+                    body.set_body_type(RigidBodyType::Dynamic, true);
+                    body.set_linvel(linear_velocity.to_rapier(), true);
+                    body.set_angvel(angular_velocity.to_rapier(), true);
+                    body.enable_ccd(true);
+                }
+                self.ball_state = BallState::InFlight;
+            }
+            BallAction::Teleport { position } => {
+                if let Some(body) = self.rigid_body_set.get_mut(self.ball_handle) {
+                    body.set_translation(position.to_rapier(), true);
+                }
+            }
+            BallAction::Park { position } => {
+                if let Some(body) = self.rigid_body_set.get_mut(self.ball_handle) {
+                    if let Some(pos) = position {
+                        body.set_translation(pos.to_rapier(), true);
+                    }
+                    body.set_body_type(RigidBodyType::Fixed, true);
+                    body.set_linvel(Vector::ZERO, true);
+                    body.set_angvel(Vector::ZERO, true);
+                }
+                self.ball_state = BallState::Parked;
+            }
+        }
     }
 
     /// 공을 슈터 발사구에 주차한다.
     pub fn park_ball(&mut self, settings: &BallShooterSettings) {
+        self.debug_prediction = None;
+        self.robot.cancel_swing();
         self.last_shooter_settings = settings.clone();
         self.sync_shooter_pose(settings);
         let muzzle = settings.muzzle_position();
@@ -336,14 +508,29 @@ impl SimWorld {
         return self.urdf.as_deref();
     }
 
-    /// FK 결과로 키네마틱 라켓 위치를 갱신한다.
-    fn sync_racket_kinematic(&mut self) {
-        let pose = if let Some(model) = self.urdf.as_ref() {
-            model.end_effector_pose_in_sim(self.robot.joints().values.as_slice())
-        } else {
-            self.robot.racket_pose(&self.arm)
+    /// 리니어 레일 x를 반영한 sim 마운트 (URDF FK·뷰어).
+    pub fn effective_sim_mount(&self) -> crate::urdf::SimRobotMount {
+        if let Some(rail) = self.arm.rail.as_ref() {
+            return crate::urdf::SimRobotMount {
+                position: [self.robot.rail_x(), rail.mount_y, rail.mount_z],
+                rpy: [0.0, 0.0, 0.0],
+            };
+        }
+        if let Some(urdf) = self.urdf.as_ref() {
+            return urdf.mount;
+        }
+        return crate::urdf::SimRobotMount {
+            position: [self.arm.base.v.x, self.arm.base.v.y, self.arm.base.v.z],
+            rpy: [0.0, 0.0, 0.0],
         };
-        let Some(pose) = pose else {
+    }
+
+    /// FK 결과로 키네마틱 라켓 위치를 갱신한다.
+    ///
+    /// Rapier 충돌은 **제어 IK와 동일한 `Arm` FK**만 사용한다.
+    /// URDF mesh FK는 링크 길이가 달라 공과 맞지 않는다 (mesh는 뷰어 전용).
+    fn sync_racket_kinematic(&mut self) {
+        let Some(pose) = self.robot.racket_pose(&self.arm) else {
             return;
         };
         let (pos, rot) = racket_pose_to_rapier(&pose);
@@ -359,22 +546,12 @@ mod tests {
 
     use super::*;
 
-    use pingpong_domain::{Arm, constants::table};
+    use crate::sim::shooter::BallShooterSettings;
+
+    use pingpong_domain::{Arm, RobotPose, Target, constants::table};
 
     fn test_arm() -> Arc<Arm> {
-        return Arc::new(
-            Arm::builder()
-                .base_xyz(table::WIDTH_X * 0.15, 0.02, table::SURFACE_Z)
-                .link(0.35)
-                .revolute_at(-1.2, 1.2, 0.0)
-                .link(0.30)
-                .revolute_at(-0.2, 1.4, 0.6)
-                .link(0.15)
-                .revolute_at(-1.5, 0.5, -0.4)
-                .max_joint_speed(2.5)
-                .build()
-                .expect("테스트용 3DOF arm"),
-        );
+        return Arc::new(Arm::competition().expect("테스트용 3DOF arm"));
     }
 
     #[test]
@@ -401,5 +578,143 @@ mod tests {
         }
         assert_eq!(world.ball_state, BallState::InFlight);
         assert!(world.ball_position().y < y0);
+    }
+
+    #[test]
+    fn contact_swing_reaches_impact_fk_at_duration() {
+        let arm = test_arm();
+        let mut world = SimWorld::new(arm.clone(), None);
+        world.shoot_ball(&BallShooterSettings::default());
+
+        let mut min_dist = f64::MAX;
+        for _ in 0..600 {
+            world.step(1.0 / 1000.0, None);
+            let ee = world.robot().racket_pose(&arm).expect("FK").position.v;
+            let ball = world.ball_position();
+            let dx = f64::from(ball.x) - ee.x;
+            let dy = f64::from(ball.y) - ee.y;
+            let dz = f64::from(ball.z) - ee.z;
+            min_dist = min_dist.min((dx * dx + dy * dy + dz * dz).sqrt());
+        }
+
+        assert!(
+            min_dist < 0.12,
+            "비행 중 라켓·공 최소 거리 {min_dist:.3}m — 접촉 근처여야 함"
+        );
+    }
+
+    #[test]
+    fn auto_swing_on_shoot_moves_rail() {
+        let arm = test_arm();
+        assert!(arm.rail.is_some(), "테스트 arm은 리니어 포함");
+        let mut world = SimWorld::new(arm, None);
+        let settings = BallShooterSettings::default();
+        assert_eq!(world.robot().rail_x(), 0.0, "대기 위치 x=0");
+        world.shoot_ball(&settings);
+        assert!(
+            world.robot().is_swinging(),
+            "발사 직후 자동 스윙이 시작되어야 함"
+        );
+        for _ in 0..500 {
+            world.step(1.0 / 1000.0, None);
+        }
+        let rail_after = world.robot().rail_x();
+        assert!(
+            rail_after > 0.2,
+            "레일이 impact x 방향으로 이동해야 함 (after={rail_after})"
+        );
+    }
+
+    #[test]
+    fn auto_swing_plans_with_strike_velocity() {
+        use pingpong_domain::plan_swing;
+
+        let arm = test_arm();
+        let world = SimWorld::new(arm.clone(), None);
+        let rail_x = world.robot().rail_x();
+        let reachable = arm
+            .forward_kinematics_with_rail(rail_x, world.robot().joints())
+            .expect("FK")
+            .position
+            .v;
+        // 도달 가능한 접수점 + 슈터 입사 속도
+        let impact = pingpong_domain::Point3::new(
+            reachable.x,
+            table::DEFAULT_HIT_PLANE_Y.min(reachable.y.max(0.15)),
+            reachable.z,
+        );
+        let start = RobotPose::new(rail_x, world.robot().joints().clone());
+        let traj = plan_swing(
+            &arm,
+            Target {
+                prediction: pingpong_domain::Prediction {
+                    time_to_impact_secs: 0.25,
+                    impact_position: impact,
+                    incoming_velocity: nalgebra::Vector3::new(0.0, -7.5, -0.5),
+                },
+            },
+            &start,
+        )
+        .expect("속도 포함 스윙");
+        assert!(
+            traj.end_velocity.iter().any(|v| v.abs() > 0.05),
+            "로프트 타격 끝속도가 살아 있어야 함: {:?}",
+            traj.end_velocity
+        );
+    }
+
+    #[test]
+    fn quintic_swing_moves_robot_joints() {
+        use pingpong_domain::{HitPlane, Target, plan_swing};
+
+        let arm = test_arm();
+        let mut world = SimWorld::new(arm.clone(), None);
+        let settings = BallShooterSettings::default();
+        world.shoot_ball(&settings);
+
+        let hit_plane = HitPlane {
+            y: table::DEFAULT_HIT_PLANE_Y,
+        };
+        let pos = world.ball_position();
+        let vel = world.ball_velocity();
+        let vy = f64::from(vel.y);
+        let t = ((hit_plane.y - f64::from(pos.y)) / vy).max(0.15);
+        let impact_x = f64::from(pos.x) + f64::from(vel.x) * t;
+        let reachable = arm
+            .forward_kinematics_with_rail(world.robot().rail_x(), world.robot().joints())
+            .expect("FK");
+        let impact = pingpong_domain::Point3::<pingpong_domain::World>::new(
+            impact_x,
+            hit_plane.y,
+            reachable.position.v.z,
+        );
+        let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
+        let trajectory = plan_swing(
+            &arm,
+            Target {
+                prediction: pingpong_domain::Prediction {
+                    time_to_impact_secs: t,
+                    impact_position: impact,
+                    incoming_velocity: nalgebra::Vector3::new(
+                        f64::from(vel.x),
+                        f64::from(vel.y),
+                        f64::from(vel.z),
+                    ),
+                },
+            },
+            &start,
+        )
+        .expect("스윙 계획");
+        let rail_end = trajectory.rail.end;
+        world.robot_mut().begin_swing(trajectory);
+
+        let j0: Vec<f64> = world.robot().joints().values.clone();
+        for _ in 0..300 {
+            world.step(1.0 / 1000.0, None);
+        }
+        let j1: Vec<f64> = world.robot().joints().values.clone();
+        let r1 = world.robot().rail_x();
+        assert_ne!(j0, j1, "스윙 후 관절각이 변해야 함");
+        assert!((r1 - rail_end).abs() < 0.05, "레일이 접수 x로 이동해야 함");
     }
 }

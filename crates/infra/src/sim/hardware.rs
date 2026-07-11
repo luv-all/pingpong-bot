@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use pingpong_domain::{Hardware, HwError, Joints, SwingTrajectory};
+use pingpong_domain::{Hardware, HwError, RobotPose, SwingTrajectory};
 use tracing::debug;
 
 use super::world::SimWorld;
@@ -35,29 +35,37 @@ impl SimHardware {
 
 impl Hardware for SimHardware {
     fn command(&mut self, trajectory: &SwingTrajectory) -> Result<(), HwError> {
+        {
+            let mut world = self.world.lock().expect("sim 월드");
+            if world.robot().is_swinging() {
+                debug!("sim 이미 스윙 중 — 제어 루프 명령 무시");
+                return Ok(());
+            }
+            world.robot_mut().begin_swing(trajectory.clone());
+        }
         self.command_count += 1;
-        self.world
-            .lock()
-            .expect("sim 월드")
-            .robot_mut()
-            .set_targets_from_trajectory(trajectory);
 
         debug!(
             commands = self.command_count,
             duration_secs = trajectory.duration_secs,
-            joints = ?trajectory.joints.values,
-            "sim 라켓 궤적 적용"
+            rail_start = trajectory.rail.start,
+            rail_end = trajectory.rail.end,
+            goal = ?trajectory.end.values,
+            end_vel = ?trajectory.end_velocity,
+            peak_speed = trajectory.peak_joint_speed(),
+            peak_rail_speed = trajectory.peak_rail_speed(),
+            "sim quintic 스윙 적용"
         );
         return Ok(());
     }
 
-    fn read_joints(&mut self) -> Result<Joints, HwError> {
-        return Ok(self
-            .world
-            .lock()
-            .expect("sim 월드")
-            .robot()
-            .joints()
-            .clone());
+    fn read_pose(&mut self) -> Result<RobotPose, HwError> {
+        let world = self.world.lock().expect("sim 월드");
+        let robot = world.robot();
+        return Ok(RobotPose::new(robot.rail_x(), robot.joints().clone()));
+    }
+
+    fn is_busy(&mut self) -> bool {
+        return self.world.lock().expect("sim 월드").robot().is_swinging();
     }
 }

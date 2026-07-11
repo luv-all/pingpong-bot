@@ -6,8 +6,10 @@
 //! - `SimSession`: 물리 스레드 + 공유 월드
 //! - `viewer`: kiss3d 3D + egui 슈터 패널 (feature `gui`)
 
+mod ball_script;
 mod camera;
 mod controls;
+mod estimator;
 mod hardware;
 #[cfg(feature = "gui")]
 #[cfg(feature = "gui")]
@@ -21,8 +23,10 @@ mod shooter;
 mod viewer;
 mod world;
 
+pub use ball_script::{BallAction, BallEvent, BallScript, BallVec3};
 pub use camera::SimCamera;
 pub use controls::{SimRuntimeControls, new_shutdown_flag};
+pub use estimator::SimBallEstimator;
 pub use hardware::SimHardware;
 pub use session::{SimSession, SimSessionConfig};
 pub use shooter::{BallShooterSettings, BallState, ShooterLayout};
