@@ -3,6 +3,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use super::ball_script::BallScript;
 use super::shooter::BallShooterSettings;
 
 /// GUI에서 바꾸고 물리 스레드가 읽는 sim 런타임 상태.
@@ -16,6 +17,8 @@ pub struct SimRuntimeControls {
     pub shoot_requested: bool,
     /// 공 회수 — 슈터에 다시 주차
     pub park_requested: bool,
+    /// 물리 스레드로 넘길 공 동역학 이벤트 큐
+    pub ball_script_queue: BallScript,
 }
 
 impl Default for SimRuntimeControls {
@@ -25,6 +28,7 @@ impl Default for SimRuntimeControls {
             time_scale: 1.0,
             shoot_requested: false,
             park_requested: false,
+            ball_script_queue: BallScript::new(),
         };
     }
 }
@@ -38,6 +42,11 @@ impl SimRuntimeControls {
     /// GUI 공 회수 버튼.
     pub fn request_park(&mut self) {
         self.park_requested = true;
+    }
+
+    /// 공 동역학 이벤트를 큐에 넣는다 (물리 스레드가 다음 스텝에 소비).
+    pub fn enqueue_ball_script(&mut self, script: BallScript) {
+        self.ball_script_queue.extend(script);
     }
 }
 

@@ -79,18 +79,32 @@ impl CameraSource for SimCamera {
         }
         let timestamp = self.clock.now();
 
-        let ball = self.world.lock().expect("sim 월드").ball_position();
-        let frame = project_ball(ball, &self.view);
+        let world = self.world.lock().expect("sim 월드");
+        let ball = world.ball_position();
+        let frame = frame_for_ball(ball, world.ball_state, &self.view);
         return Some((self.camera_id, frame, timestamp));
     }
 }
 
 /// Rapier 공 위치 → `FrameRef`.
-fn project_ball(ball: Vector, view: &CameraView) -> FrameRef {
-    return match view.project(ball) {
-        Some(pixel) => FrameRef::sim(pixel),
-        None => FrameRef::empty(),
-    };
+///
+/// 비행 중 공이 시야 밖이면 `empty` 대신 더미 픽셀을 낸다.
+/// 추정기(`SimBallEstimator`)는 픽셀이 아니라 Rapier 월드에서 궤적을 읽으므로,
+/// 카메라 FOV만으로 예측 시작 시점이 늦어지는 것을 막는다.
+fn frame_for_ball(
+    ball: Vector,
+    ball_state: super::shooter::BallState,
+    view: &CameraView,
+) -> FrameRef {
+    use pingpong_domain::PixelPoint;
+
+    if let Some(pixel) = view.project(ball) {
+        return FrameRef::sim(pixel);
+    }
+    if ball_state == super::shooter::BallState::InFlight {
+        return FrameRef::sim(PixelPoint::new(320.0, 240.0));
+    }
+    return FrameRef::empty();
 }
 
 #[cfg(test)]
@@ -99,25 +113,13 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
 
+    use crate::sim::SimSession;
     use crate::sim::controls::SimRuntimeControls;
     use crate::sim::session::SimSessionConfig;
-    use crate::sim::SimSession;
-    use pingpong_domain::{constants::table, Arm};
+    use pingpong_domain::Arm;
 
     fn test_arm() -> Arc<Arm> {
-        return Arc::new(
-            Arm::builder()
-                .base_xyz(table::WIDTH_X * 0.15, 0.02, table::SURFACE_Z)
-                .link(0.35)
-                .revolute_at(-1.2, 1.2, 0.0)
-                .link(0.30)
-                .revolute_at(-0.2, 1.4, 0.6)
-                .link(0.15)
-                .revolute_at(-1.5, 0.5, -0.4)
-                .max_joint_speed(2.5)
-                .build()
-                .expect("테스트용 3DOF arm"),
-        );
+        return Arc::new(Arm::competition().expect("테스트용 3DOF arm"));
     }
 
     #[test]

@@ -137,15 +137,19 @@ impl SimSession {
                     if current >= target_sim {
                         break;
                     }
-                    let (shoot, park, shooter) = {
+                    let (shoot, park, shooter, ball_script) = {
                         let mut ctrl = physics_controls.lock().expect("sim controls");
                         let shoot = ctrl.shoot_requested;
                         let park = ctrl.park_requested;
                         ctrl.shoot_requested = false;
                         ctrl.park_requested = false;
-                        (shoot, park, ctrl.shooter.clone())
+                        let script = std::mem::take(&mut ctrl.ball_script_queue);
+                        (shoot, park, ctrl.shooter.clone(), script)
                     };
                     let mut w = physics_world.lock().expect("sim 월드");
+                    if !ball_script.is_empty() {
+                        w.enqueue_ball_events(ball_script);
+                    }
                     w.step(
                         physics_dt,
                         Some(SimStepInput {

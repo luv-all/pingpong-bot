@@ -8,6 +8,7 @@
 
 mod clock;
 mod detector;
+mod robot_builder;
 mod sim;
 mod synthetic_camera;
 mod telemetry;
@@ -18,9 +19,11 @@ mod real_hardware;
 
 pub use clock::{SimClock, SystemClock};
 pub use detector::PassthroughDetector;
+pub use robot_builder::{MountPreset, RobotBuildError, RobotBuilder, SimRobot};
 pub use sim::{
-    new_shutdown_flag, BallShooterSettings, BallState, SimCamera, SimHardware, SimRuntimeControls,
-    SimSession, SimSessionConfig, SimWorld, ShooterLayout,
+    new_shutdown_flag, BallAction, BallEvent, BallScript, BallShooterSettings, BallState,
+    BallVec3, SimBallEstimator, SimCamera, SimHardware, SimRuntimeControls, SimSession,
+    SimSessionConfig, SimWorld, ShooterLayout,
 };
 #[cfg(feature = "gui")]
 pub use sim::{run_sim_viewer, SimViewerOptions};

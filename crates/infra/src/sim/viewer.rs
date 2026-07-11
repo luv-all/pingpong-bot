@@ -57,6 +57,10 @@ struct SceneDynamics {
     ball: SceneNode3d,
     shooter: SceneNode3d,
     robot: RobotRender,
+    /// hit plane 예측 3D 위치 (공 비행 중 디버그)
+    impact_marker: SceneNode3d,
+    /// 접수 평면 위 투영 (x, y)
+    impact_ring: SceneNode3d,
 }
 
 async fn viewer_main(options: SimViewerOptions) -> Result<(), String> {
@@ -81,9 +85,8 @@ async fn viewer_main(options: SimViewerOptions) -> Result<(), String> {
     let mut dynamic = build_scene_dynamics(&mut scene, options.urdf.as_deref());
 
     let controls = Arc::clone(&options.controls);
-    let mut ui_state = panel::PanelUiState::from_controls(
-        &options.controls.lock().expect("controls"),
-    );
+    let mut ui_state =
+        panel::PanelUiState::from_controls(&options.controls.lock().expect("controls"));
     ui_state.camera_dist = camera.dist();
 
     info!("kiss3d sim — 3D view + shooter panel (drag: orbit, scroll/slider: zoom)");
@@ -98,12 +101,7 @@ async fn viewer_main(options: SimViewerOptions) -> Result<(), String> {
             status_cache = Some(panel::StatusSnapshot::from_world(&snapshot));
         }
         window.draw_ui(|ctx| {
-            panel::draw(
-                ctx,
-                &mut ui_state,
-                &controls,
-                status_cache.as_ref(),
-            );
+            panel::draw(ctx, &mut ui_state, &controls, status_cache.as_ref());
         });
         camera.set_dist(ui_state.camera_dist);
     }
@@ -142,6 +140,13 @@ fn build_static_scene(scene: &mut SceneNode3d) {
         )
         .set_color(Color::new(0.25, 0.25, 0.28, 1.0))
         .set_position(Vec3::new(tcx, tcy, 0.01));
+
+    let rail_y = 0.02_f32;
+    let rail_z = (table::SURFACE_Z - 0.02) as f32;
+    scene
+        .add_cube(table::WIDTH_X as f32, 0.06, 0.04)
+        .set_color(Color::new(0.35, 0.38, 0.42, 1.0))
+        .set_position(Vec3::new((table::WIDTH_X * 0.5) as f32, rail_y, rail_z));
 }
 
 fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfRobot>) -> SceneDynamics {
@@ -151,6 +156,12 @@ fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfRobot>) -> Sc
     let shooter = scene
         .add_cube(0.24, 0.5, 0.36)
         .set_color(Color::new(0.45, 0.45, 0.5, 1.0));
+    let impact_marker = scene
+        .add_sphere(0.035)
+        .set_color(Color::new(1.0, 0.15, 0.95, 0.95));
+    let impact_ring = scene
+        .add_cube(0.08, 0.08, 0.004)
+        .set_color(Color::new(1.0, 0.95, 0.1, 0.9));
 
     let robot = if let Some(model) = urdf {
         RobotRender::Urdf(build_urdf_nodes(scene, model))
@@ -158,7 +169,13 @@ fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfRobot>) -> Sc
         RobotRender::Primitive(build_primitive_robot_nodes(scene))
     };
 
-    return SceneDynamics { ball, shooter, robot };
+    return SceneDynamics {
+        ball,
+        shooter,
+        robot,
+        impact_marker,
+        impact_ring,
+    };
 }
 
 fn build_primitive_robot_nodes(scene: &mut SceneNode3d) -> DynamicNodes {
@@ -173,20 +190,20 @@ fn build_primitive_robot_nodes(scene: &mut SceneNode3d) -> DynamicNodes {
             .add_cube(0.24, 0.5, 0.36)
             .set_color(Color::new(0.45, 0.45, 0.5, 1.0)),
         racket: scene
-            .add_cube(0.16, 0.18, 0.012)
+            .add_cube(0.12, 0.14, 0.010)
             .set_color(Color::new(0.85, 0.15, 0.12, 1.0)),
         arm_base: scene
-            .add_cylinder(0.12, 0.08)
+            .add_cylinder(0.06, 0.05)
             .set_color(Color::new(0.2, 0.25, 0.55, 1.0)),
         links: [
-            scene.add_cylinder(0.045, 0.35).set_color(link_color),
-            scene.add_cylinder(0.04, 0.30).set_color(link_color),
-            scene.add_cylinder(0.035, 0.15).set_color(link_color),
+            scene.add_cylinder(0.025, 0.16).set_color(link_color),
+            scene.add_cylinder(0.022, 0.14).set_color(link_color),
+            scene.add_cylinder(0.018, 0.08).set_color(link_color),
         ],
         joints: [
-            scene.add_sphere(0.05).set_color(joint_color),
-            scene.add_sphere(0.045).set_color(joint_color),
-            scene.add_sphere(0.04).set_color(joint_color),
+            scene.add_sphere(0.028).set_color(joint_color),
+            scene.add_sphere(0.025).set_color(joint_color),
+            scene.add_sphere(0.022).set_color(joint_color),
         ],
     };
 }
@@ -222,6 +239,8 @@ fn sync_scene_dynamics(nodes: &mut SceneDynamics, world: &SimWorld, urdf: Option
         .set_position(to_vec3(sh_pos))
         .set_rotation(to_quat(sh_rot));
 
+    sync_impact_debug_markers(nodes, world);
+
     match (&mut nodes.robot, urdf) {
         (RobotRender::Primitive(arm_nodes), None) => {
             sync_primitive_robot(arm_nodes, world);
@@ -231,10 +250,30 @@ fn sync_scene_dynamics(nodes: &mut SceneDynamics, world: &SimWorld, urdf: Option
                 urdf_nodes,
                 model,
                 world.robot().joints().values.as_slice(),
+                world.effective_sim_mount(),
             );
         }
         _ => {}
     }
+}
+
+fn sync_impact_debug_markers(nodes: &mut SceneDynamics, world: &SimWorld) {
+    const HIDDEN: Vec3 = Vec3::new(0.0, 0.0, -10.0);
+    let Some(pred) = world.debug_prediction() else {
+        nodes.impact_marker.set_position(HIDDEN);
+        nodes.impact_ring.set_position(HIDDEN);
+        return;
+    };
+    let p = pred.impact_position.v;
+    nodes.impact_ring.set_position(Vec3::new(
+        p.x as f32,
+        p.y as f32,
+        (table::SURFACE_Z + 0.008) as f32,
+    ));
+    let marker_z = (p.z as f32).max((table::SURFACE_Z + 0.02) as f32);
+    nodes
+        .impact_marker
+        .set_position(Vec3::new(p.x as f32, p.y as f32, marker_z));
 }
 
 fn sync_primitive_robot(nodes: &mut DynamicNodes, world: &SimWorld) {
@@ -255,7 +294,7 @@ fn sync_primitive_robot(nodes: &mut DynamicNodes, world: &SimWorld) {
 
     let arm = world.arm();
     let joints = world.robot().joints();
-    let points = arm_chain_points(arm, joints);
+    let points = arm_chain_points(arm, world.robot().rail_x(), joints);
     nodes.arm_base.set_position(points[0]);
 
     let lengths = [
@@ -269,9 +308,14 @@ fn sync_primitive_robot(nodes: &mut DynamicNodes, world: &SimWorld) {
     }
 }
 
-fn sync_urdf_robot(nodes: &mut [UrdfVisualNode], urdf: &UrdfRobot, joints: &[f64]) {
+fn sync_urdf_robot(
+    nodes: &mut [UrdfVisualNode],
+    urdf: &UrdfRobot,
+    joints: &[f64],
+    mount: crate::urdf::SimRobotMount,
+) {
     let poses: std::collections::HashMap<String, ([f64; 3], [f64; 4])> = urdf
-        .link_poses_in_sim(joints)
+        .link_poses_with_mount(joints, mount)
         .into_iter()
         .map(|(name, pos, quat)| (name, (pos, quat)))
         .collect();
@@ -300,7 +344,9 @@ fn sync_urdf_robot(nodes: &mut [UrdfVisualNode], urdf: &UrdfRobot, joints: &[f64
         entry
             .node
             .set_position(Vec3::new(t.x as f32, t.y as f32, t.z as f32))
-            .set_rotation(Quat::from_xyzw(q.i as f32, q.j as f32, q.k as f32, q.w as f32));
+            .set_rotation(Quat::from_xyzw(
+                q.i as f32, q.j as f32, q.k as f32, q.w as f32,
+            ));
     }
 }
 
@@ -342,7 +388,7 @@ fn rpy_to_quat(rpy: [f64; 3]) -> Quat {
     return Quat::from_xyzw(q.i as f32, q.j as f32, q.k as f32, q.w as f32);
 }
 
-fn arm_chain_points(arm: &Arm, joints: &Joints) -> [Vec3; 4] {
+fn arm_chain_points(arm: &Arm, rail_x: f64, joints: &Joints) -> [Vec3; 4] {
     let yaw = joints.values[0] as f32;
     let a1 = joints.values[1] as f32;
     let a2 = joints.values[2] as f32;
@@ -351,11 +397,8 @@ fn arm_chain_points(arm: &Arm, joints: &Joints) -> [Vec3; 4] {
     let l2 = arm.link_lengths[1] as f32;
     let l3 = arm.link_lengths[2] as f32;
 
-    let base = Vec3::new(
-        arm.base.v.x as f32,
-        arm.base.v.y as f32,
-        arm.base.v.z as f32,
-    );
+    let mount = arm.mount_at_rail(rail_x);
+    let base = Vec3::new(mount.v.x as f32, mount.v.y as f32, mount.v.z as f32);
 
     let to_world = |reach: f32, height: f32| -> Vec3 {
         return base + Vec3::new(reach * yaw.sin(), reach * yaw.cos(), height);

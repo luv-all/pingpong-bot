@@ -35,7 +35,9 @@ impl Telemetry for TracingTelemetry {
             TelemetryEvent::SwingCommand(trajectory) => {
                 let _span = info_span!(
                     "swing_command",
-                    duration_secs = trajectory.duration_secs
+                    duration_secs = trajectory.duration_secs,
+                    rail_start = trajectory.rail.start,
+                    rail_end = trajectory.rail.end,
                 )
                 .entered();
             }

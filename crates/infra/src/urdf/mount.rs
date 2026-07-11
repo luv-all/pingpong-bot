@@ -34,7 +34,7 @@ impl SimRobotMount {
     /// 이미 sim Z-up으로 작성된 URDF (내장 `competition_arm` 등).
     pub fn competition_placed() -> Self {
         return Self {
-            position: [table::WIDTH_X * 0.15, 0.02, table::SURFACE_Z],
+            position: [0.0, 0.02, table::SURFACE_Z],
             rpy: [0.0, 0.0, 0.0],
         };
     }
@@ -42,7 +42,7 @@ impl SimRobotMount {
     /// REP-103 Z-up URDF → sim Z-up. `base_link` z=0이 탁구대 윗면에 닿도록 배치.
     pub fn rep103_z_up_at_table_end() -> Self {
         return Self {
-            position: [table::WIDTH_X * 0.15, 0.02, table::SURFACE_Z],
+            position: [0.0, 0.02, table::SURFACE_Z],
             rpy: [0.0, 0.0, 0.0],
         };
     }
