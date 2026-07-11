@@ -106,6 +106,24 @@
 
 ---
 
+## H. 모듈 역할명
+
+**결정 (2026-07):** 폴더 = 포트 역할명.
+
+| 모듈 | 역할 |
+|------|------|
+| `camera` | Calibration · SimCamera |
+| `detector` | 이미지 → 2D |
+| `triangulator` | 2D → 3D (DLT) |
+| `estimator` | 상태·hit-plane 예측 |
+| `planner` | plan_swing · impact · collision |
+| `robot` | Arm · URDF |
+| `hardware` / `telemetry` | infra 어댑터 |
+
+파이프라인: Detector → Triangulator → Estimator → Planner.
+
+---
+
 ## 권장 결정 순서
 
 1. **A** — \(v_{out}\) ✅  

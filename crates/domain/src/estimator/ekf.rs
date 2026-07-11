@@ -1,13 +1,13 @@
 //! 확장 칼만 필터 (plan §6.1–§6.2).
 //!
 //! 상태 `x = [p, v]`, 측정은 삼각측량 3D 위치.
-//! 짧은 전파·hit-plane 예측 모두 반암시적 오일러 ([`crate::ballistics`]).
+//! 짧은 전파·hit-plane 예측 모두 반암시적 오일러 ([`super::ballistics`]).
 
 use std::time::Instant;
 
 use nalgebra::{Matrix3, Matrix6, Vector3, Vector6};
 
-use crate::ballistics::{predict_hit_plane, semi_implicit_euler};
+use super::ballistics::{predict_hit_plane, semi_implicit_euler};
 use crate::constants::estimator::{Q_POS, Q_VEL, R_MEAS};
 use crate::constants::DEFAULT_DRAG;
 use crate::ports::Estimator;

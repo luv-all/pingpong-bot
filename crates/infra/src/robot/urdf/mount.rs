@@ -64,7 +64,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::urdf::UrdfRobot;
+    use crate::robot::urdf::UrdfRobot;
 
     #[test]
     fn rep103_mount_puts_base_on_table_and_arm_toward_plus_y() {

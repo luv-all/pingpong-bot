@@ -7,7 +7,7 @@ use crate::constants::{
     SWING_COMMIT_MAX_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
-use crate::impact::{loft_return_velocity, required_racket_velocity};
+use super::impact::{loft_return_velocity, required_racket_velocity};
 use crate::robot::Arm;
 use crate::types::{Joints, RailMotion, RobotPose, SwingTrajectory, Target};
 
@@ -70,7 +70,7 @@ pub fn plan_swing(
         .map_err(DomainError::InfeasibleSwing)?;
 
     // 임팩트 자세가 테이블을 뚫지 않게 OBB 클램프
-    end = crate::collision::clamp_above_table(arm, rail_end, &end);
+    end = crate::planner::collision::clamp_above_table(arm, rail_end, &end);
 
     let pose = if arm.rail.is_some() {
         arm.forward_kinematics_with_rail(rail_end, &end)
@@ -158,7 +158,7 @@ pub fn plan_contact_swing(
         arm.inverse_kinematics_near(impact_position, Some(&start.joints))
     }
     .map_err(DomainError::InfeasibleSwing)?;
-    let end = crate::collision::clamp_above_table(arm, rail_end, &end);
+    let end = crate::planner::collision::clamp_above_table(arm, rail_end, &end);
 
     let zero = vec![0.0; start.joints.values.len()];
     return Ok(SwingTrajectory::new(
@@ -330,7 +330,7 @@ mod tests {
             "테이블 클램프로 z만 올라갈 수 있음"
         );
         assert!(
-            crate::collision::table_penetration(
+            crate::planner::collision::table_penetration(
                 &arm,
                 trajectory.rail.end,
                 trajectory.goal_joints()
@@ -361,7 +361,7 @@ mod tests {
             "테이블 클램프로 z만 올라갈 수 있음"
         );
         assert!(
-            crate::collision::table_penetration(
+            crate::planner::collision::table_penetration(
                 &arm,
                 trajectory.rail.end,
                 trajectory.goal_joints()

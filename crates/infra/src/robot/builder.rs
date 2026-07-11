@@ -6,7 +6,7 @@ use std::sync::Arc;
 use pingpong_domain::Arm;
 use thiserror::Error;
 
-use crate::urdf::{SimRobotMount, UrdfLoadError, UrdfRobot};
+use crate::robot::urdf::{SimRobotMount, UrdfLoadError, UrdfRobot};
 
 /// 빌드된 sim 로봇 — 제어용 `Arm` + (선택) URDF FK·mesh 뷰어.
 #[derive(Debug, Clone)]

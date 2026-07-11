@@ -13,7 +13,7 @@ use super::controls::SimRuntimeControls;
 use super::mesh_loader;
 use super::panel;
 use super::world::SimWorld;
-use crate::urdf::{UrdfLinkVisual, UrdfRobot};
+use crate::robot::urdf::{UrdfLinkVisual, UrdfRobot};
 
 /// sim 3D + 제어 패널 옵션.
 pub struct SimViewerOptions {
@@ -22,7 +22,7 @@ pub struct SimViewerOptions {
     /// 공유 sim 월드
     pub world: Arc<Mutex<SimWorld>>,
     /// URDF 모델 (kiss3d 로봇 mesh 대신 사용)
-    pub urdf: Option<Arc<crate::urdf::UrdfRobot>>,
+    pub urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>,
     /// 창 닫을 때 파이프라인 종료
     pub shutdown: Arc<AtomicBool>,
 }
@@ -199,10 +199,10 @@ fn build_primitive_robot_nodes(scene: &mut SceneNode3d) -> DynamicNodes {
             .set_color(Color::new(0.2, 0.25, 0.55, 1.0)),
         links: [
             scene
-                .add_cylinder(0.025, pingpong_domain::LINK_UPPER as f32)
+                .add_cylinder(0.025, pingpong_domain::constants::LINK_UPPER as f32)
                 .set_color(link_color),
             scene
-                .add_cylinder(0.022, pingpong_domain::LINK_FOREARM as f32)
+                .add_cylinder(0.022, pingpong_domain::constants::LINK_FOREARM as f32)
                 .set_color(link_color),
         ],
         joints: [
@@ -312,7 +312,7 @@ fn sync_urdf_robot(
     nodes: &mut [UrdfVisualNode],
     urdf: &UrdfRobot,
     joints: &[f64],
-    mount: crate::urdf::SimRobotMount,
+    mount: crate::robot::urdf::SimRobotMount,
 ) {
     let poses: std::collections::HashMap<String, ([f64; 3], [f64; 4])> = urdf
         .link_poses_with_mount(joints, mount)

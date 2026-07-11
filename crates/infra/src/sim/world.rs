@@ -14,7 +14,7 @@ use rapier3d::prelude::*;
 use tracing::{debug, warn};
 
 use super::ball_script::{BallAction, BallEvent, BallScript, BallVec3};
-use super::estimator::predict_impact;
+use crate::estimator::predict_impact;
 use super::rapier_convert::racket_pose_to_rapier;
 use super::shooter::{BallShooterSettings, BallState, ShooterLayout};
 
@@ -61,7 +61,7 @@ pub struct SimWorld {
     /// 불변 로봇 기구 모델
     pub arm: Arc<Arm>,
     /// URDF 기반 FK·뷰어 (선택)
-    pub urdf: Option<Arc<crate::urdf::UrdfRobot>>,
+    pub urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>,
     /// 런타임 관절 상태
     pub robot: RobotState,
     /// sim 경과 시간 [s]
@@ -85,7 +85,7 @@ pub struct SimWorld {
 
 impl SimWorld {
     /// 탁구대·슈터·주차된 공·로봇 라켓을 배치한다.
-    pub fn new(arm: Arc<Arm>, urdf: Option<Arc<crate::urdf::UrdfRobot>>) -> Self {
+    pub fn new(arm: Arc<Arm>, urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>) -> Self {
         let mut integration_parameters = IntegrationParameters::default();
         integration_parameters.dt = 1.0 / 1000.0;
 
@@ -550,14 +550,14 @@ impl SimWorld {
     }
 
     /// URDF 모델 (있으면 FK·뷰어에 사용).
-    pub fn urdf(&self) -> Option<&crate::urdf::UrdfRobot> {
+    pub fn urdf(&self) -> Option<&crate::robot::urdf::UrdfRobot> {
         return self.urdf.as_deref();
     }
 
     /// 리니어 레일 x를 반영한 sim 마운트 (URDF FK·뷰어).
-    pub fn effective_sim_mount(&self) -> crate::urdf::SimRobotMount {
+    pub fn effective_sim_mount(&self) -> crate::robot::urdf::SimRobotMount {
         if let Some(rail) = self.arm.rail.as_ref() {
-            return crate::urdf::SimRobotMount {
+            return crate::robot::urdf::SimRobotMount {
                 position: [self.robot.rail_x(), rail.mount_y, rail.mount_z],
                 rpy: [0.0, 0.0, 0.0],
             };
@@ -565,7 +565,7 @@ impl SimWorld {
         if let Some(urdf) = self.urdf.as_ref() {
             return urdf.mount;
         }
-        return crate::urdf::SimRobotMount {
+        return crate::robot::urdf::SimRobotMount {
             position: [self.arm.base.v.x, self.arm.base.v.y, self.arm.base.v.z],
             rpy: [0.0, 0.0, 0.0],
         };
@@ -592,7 +592,7 @@ mod tests {
 
     use super::*;
 
-    use crate::sim::shooter::BallShooterSettings;
+    use crate::sim::BallShooterSettings;
 
     use pingpong_domain::{Arm, RobotPose, Target, constants::table};
 
@@ -763,11 +763,14 @@ mod tests {
         )
         .expect("스윙 계획");
         let rail_end = trajectory.rail.end;
+        let duration = trajectory.duration_secs;
         world.robot_mut().begin_swing(trajectory);
 
         let j0: Vec<f64> = world.robot().joints().values.clone();
-        for _ in 0..300 {
-            world.step(1.0 / 1000.0, None);
+        let dt = 1.0 / 1000.0;
+        let steps = ((duration / dt).ceil() as usize).saturating_add(100);
+        for _ in 0..steps {
+            world.step(dt, None);
         }
         let j1: Vec<f64> = world.robot().joints().values.clone();
         let r1 = world.robot().rail_x();

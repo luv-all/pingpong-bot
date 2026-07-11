@@ -8,8 +8,8 @@ use pingpong_domain::{CameraId, CameraSource, Clock, FrameRef};
 use rapier3d::prelude::Vector;
 
 use super::projection::CameraView;
-use super::session::SimClockHandle;
-use super::world::SimWorld;
+use crate::sim::session::SimClockHandle;
+use crate::sim::world::SimWorld;
 
 /// Rapier 월드 공을 픽셀로 투영하는 가상 카메라.
 pub struct SimCamera {
@@ -103,8 +103,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::sim::SimSession;
-    use crate::sim::controls::SimRuntimeControls;
-    use crate::sim::session::SimSessionConfig;
+    use crate::sim::SimRuntimeControls;
+    use crate::sim::SimSessionConfig;
     use pingpong_domain::Arm;
 
     fn test_arm() -> Arc<Arm> {

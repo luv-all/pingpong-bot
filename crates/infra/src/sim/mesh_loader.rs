@@ -7,7 +7,7 @@ use std::path::Path;
 use kiss3d::prelude::*;
 use tracing::warn;
 
-use crate::urdf::UrdfGeometry;
+use crate::robot::urdf::UrdfGeometry;
 
 /// URDF visual geometry를 kiss3d 노드로 추가한다. 실패 시 작은 placeholder cube.
 pub fn add_geometry(scene: &mut SceneNode3d, geometry: &UrdfGeometry, color: Color) -> SceneNode3d {

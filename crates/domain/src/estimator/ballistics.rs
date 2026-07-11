@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 use crate::constants::{
     ball, estimator as est, table, TABLE_BOUNCE_RESTITUTION,
 };
-use crate::physics::accel;
+use crate::planner::physics::accel;
 use crate::types::{HitPlane, Point3, Prediction, World};
 
 /// 위치·속도에서 접수 평면 교차를 반암시적 오일러(+바운스)로 예측한다.

@@ -8,11 +8,11 @@ use std::time::{Duration, Instant};
 use pingpong_domain::Clock;
 use tracing::info;
 
-use super::camera::SimCamera;
+use crate::camera::SimCamera;
 use super::controls::SimRuntimeControls;
-use super::hardware::SimHardware;
+use crate::hardware::SimHardware;
 use super::world::{SimStepInput, SimWorld};
-use crate::urdf::UrdfRobot;
+use crate::robot::urdf::UrdfRobot;
 
 /// sim 실행 설정.
 #[derive(Debug, Clone, Copy)]

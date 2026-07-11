@@ -1,12 +1,12 @@
 //! 궤적 추정기 — [`PassThroughEstimator`]는 레거시 스텁.
 //!
-//! 본선은 [`crate::ekf::BallEkf`].
+//! 본선은 [`super::ekf::BallEkf`].
 
 use std::time::Instant;
 
 use nalgebra::Vector3;
 
-use crate::ballistics::predict_hit_plane;
+use super::ballistics::predict_hit_plane;
 use crate::ports::Estimator;
 use crate::types::{HitPlane, Point3, Prediction, World};
 

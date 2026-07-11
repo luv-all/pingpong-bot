@@ -8,10 +8,14 @@
 
 use std::fmt;
 
+pub mod rail;
+
 use nalgebra::{Matrix3, Vector3};
 
 use crate::error::SwingPlanError;
-use crate::rail::LinearRail;
+use self::rail::LinearRail;
+
+
 use crate::types::{Joints, Point3, World};
 
 /// revolute 관절 1축 허용 범위 [rad].
@@ -873,7 +877,7 @@ impl RobotState {
         let t = playback.elapsed.min(playback.trajectory.duration_secs);
         let sampled = playback.trajectory.sample_at(t);
         self.rail_x = playback.trajectory.sample_rail_at(t);
-        self.angles = crate::collision::clamp_above_table(arm, self.rail_x, &sampled);
+        self.angles = crate::planner::collision::clamp_above_table(arm, self.rail_x, &sampled);
         if playback.elapsed >= playback.trajectory.duration_secs {
             self.active_swing = None;
             return true;
@@ -898,7 +902,7 @@ impl RobotState {
             let step = (arm.max_joint_speed * dt).min(diff.abs());
             self.angles.values[i] += diff.signum() * step;
         }
-        self.angles = crate::collision::clamp_above_table(arm, self.rail_x, &self.angles);
+        self.angles = crate::planner::collision::clamp_above_table(arm, self.rail_x, &self.angles);
     }
 
     /// 현재 관절각으로 FK 라켓 자세를 계산한다.

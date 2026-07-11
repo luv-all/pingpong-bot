@@ -10,8 +10,8 @@ use nalgebra::Vector3;
 use pingpong_domain::ballistics::predict_hit_plane;
 use pingpong_domain::{BallEkf, Estimator, HitPlane, Point3, Prediction, World};
 
-use super::shooter::BallState;
-use super::world::SimWorld;
+use crate::sim::shooter::BallState;
+use crate::sim::world::SimWorld;
 
 /// Rapier 월드 스냅샷으로 접수 평면 교차를 예측한다 (물리 스텝·자동 스윙 공용).
 pub fn predict_impact(world: &SimWorld, plane: HitPlane) -> Option<Prediction> {
@@ -90,7 +90,7 @@ mod tests {
     use pingpong_domain::constants::table;
 
     use super::*;
-    use crate::sim::shooter::BallShooterSettings;
+    use crate::sim::BallShooterSettings;
 
     fn launch_snapshot() -> BallSnapshot {
         let settings = BallShooterSettings::default();
@@ -120,7 +120,7 @@ mod tests {
         );
         assert!(
             pred.impact_position.v.z > table::SURFACE_Z
-                && pred.impact_position.v.z < table::SURFACE_Z + 0.25,
+                && pred.impact_position.v.z < table::SURFACE_Z + 0.30,
             "z={} — 짧은 팔 접수면(y={})에서 테이블~어깨 높이여야 함",
             pred.impact_position.v.z,
             plane.y

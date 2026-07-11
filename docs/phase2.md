@@ -23,6 +23,7 @@
 | 토크 한계 (대각 \(I\alpha\)) | ✅ | `verify_torque_limits` |
 | `--config` TOML | ✅ | `bin/config.rs` + Calibration JSON |
 | 상수 SSOT | ✅ | `domain::constants` |
+| 역할 모듈 | ✅ | camera·detector·triangulator·estimator·planner·robot |
 | OpenCV 검출 / ChArUco 실보정 | ⏳ | 실물 — `calib_charuco --emit-sim`만 |
 | Rerun / Dynamixel | ⏳ | 마일스톤 4–5 |
 

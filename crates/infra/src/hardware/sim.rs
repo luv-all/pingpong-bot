@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use pingpong_domain::{Hardware, HwError, RobotPose, SwingTrajectory};
 use tracing::debug;
 
-use super::world::SimWorld;
+use crate::sim::world::SimWorld;
 
 /// Rapier sim용 `Hardware` 어댑터.
 pub struct SimHardware {
