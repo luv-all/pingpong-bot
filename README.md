@@ -45,7 +45,11 @@ cargo run -p pingpong-bin -- [OPTIONS]
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
 | `--mode sim\|real` | `sim` | 실행 모드. `real`은 아직 미구현 |
-| `--frames N` | `300` | 가상 카메라 프레임 수 |
+| `--robot ID` | `competition` | 로봇 프리셋 (`crates/app/src/arm.rs` `ROBOTS`) |
+| `--urdf PATH` | — | URDF 직접 지정 (`--robot` / config `robot` 무시) |
+| `--ee-link LINK` | — | URDF 엔드이펙터 link (`--urdf`와 함께) |
+| `--config PATH` | — | TOML (`hit_plane_y`, `camera_count`, `robot`, …) |
+| `--frames N` | `300` | 가상 카메라 프레임 수 (headless) |
 | `--camera-count N` | `3` | sim 카메라 대수 (삼각측량 최소 2대) |
 | `--hit-plane-y M` | `0.30` | 접수 평면 y 좌표 [m] (로봇 앞 깊이) |
 | `--sim-speed X` | `1.0` | sim 시간 배율 (10 = 10배속) |
@@ -53,6 +57,9 @@ cargo run -p pingpong-bin -- [OPTIONS]
 | `--frame-hz H` | `120` | 가상 카메라 프레임률 [Hz] |
 | `--no-gui` | — | headless sim (기본은 GUI 켜짐) |
 | `--shoot-on-start` | `false` | headless sim 시작 시 1회 발사 |
+| `--ekf-swing` | `false` | EKF 예측으로 타격 (기본은 sim 오라클) |
+
+우선순위: `--urdf` > CLI `--robot` > TOML `robot` > `competition`.
 
 ### 예시
 
@@ -60,16 +67,23 @@ cargo run -p pingpong-bin -- [OPTIONS]
 # GUI sim (기본) — 슈터에서 「발사」로 공 쏘기
 cargo run -p pingpong-bin
 
+# 프리셋: mesh = urdf-test, 제어 = competition 빌더
+cargo run -p pingpong-bin -- --robot urdf-test
+
+# config + CLI가 robot을 덮어씀
+cargo run -p pingpong-bin -- --config config/example.toml --robot competition-urdf
+
+# URDF 직접 지정 (프리셋 무시, 제어는 기본 competition 빌더)
+cargo run -p pingpong-bin -- --urdf assets/robots/custom/robot.urdf --ee-link racket_link
+
 # headless + 시작 시 1회 발사
 cargo run -p pingpong-bin -- --no-gui --frames 120 --shoot-on-start --sim-speed 5
 
-# 카메라 2대, 120프레임, 타격 높이 0.80m
+# 카메라 2대, 120프레임
 cargo run -p pingpong-bin -- --camera-count 2 --frames 120 --hit-plane-y 0.30
 
-# 로그 레벨 조정 (debug까지)
+# 로그 레벨 조정
 RUST_LOG=debug cargo run -p pingpong-bin -- --frames 30
-
-# 특정 crate 로그만
 RUST_LOG=pingpong_app=debug,info cargo run -p pingpong-bin -- --frames 30
 ```
 
@@ -90,37 +104,38 @@ plan.md     기술 마스터 플랜
 
 의존 방향: `bin` → `app` / `infra` → `domain`
 
-**로봇 모델(`Arm`)** 은 `domain/robot.rs`에만 있다. 부팅 시 `Arc<Arm>`으로 sim·real·제어가 **같은 불변 객체**를 공유한다. Rapier·Dynamixel은 `RacketPose`를 각자 SDK 형식으로 변환할 뿐, FK/관절 상태는 domain에만 있다.
+**로봇**
+- 기구학·제어 `Arm` 타입은 `domain/robot/`에만 있다. 부팅 시 `Arc<Arm>`으로 sim·real·제어가 같은 불변 객체를 공유한다.
+- **프리셋 SSOT**는 [`crates/app/src/arm.rs`](crates/app/src/arm.rs)의 `ROBOTS`다. id·URDF 경로·링크 길이·관절 한도는 여기만 고친다.
+- URDF가 있는 프리셋도 **제어·IK는 `build`(빌더 `Arm`)**, URDF는 kiss3d **mesh 시각화**용이다 (예: `urdf-test` mesh 3축 ↔ 제어 4DOF).
+
+| id | mesh | 제어 |
+|----|------|------|
+| `competition` | 없음 (빌더만) | competition 빌더 |
+| `urdf-test` | `assets/robots/urdf-test/.../urdf-test.urdf` | 동일 빌더 |
+| `competition-urdf` | `assets/robots/competition_arm.urdf` | 동일 빌더 |
+
+```toml
+# config/example.toml
+robot = "competition"
+```
 
 ### sim 모드 — Rapier3d 디지털 트윈 (plan §9)
 
 ```
 SimSession (물리 스레드 @ physics-hz, CCD)
-  ├─ SimWorld: ITTF 탁구대 + 슈터(+x) + 로봇 라켓(-x) + 공
+  ├─ SimWorld: ITTF 탁구대 + 슈터(+y) + 로봇 라켓(y≈0) + 공
   ├─ SimCamera × N: 공 3D 위치 → 핀홀 픽셀 투영
   └─ SimHardware: plan_swing → 관절 목표 → 라켓 이동
 
-슈터(+x) ──발사──► 테이블 ──► 로봇(-x) 라켓
+슈터(+y) ──발사──► 테이블 ──► 로봇(y≈0) 라켓
          ▲ GUI 「발사」 버튼으로 트리거
 ```
 
 ```bash
-# GUI로 슈터 설정·발사 (권장)
 cargo run -p pingpong-bin
-
-# URDF + STL mesh (Fusion 360 export → assets/robots/custom/meshes/)
-cargo run -p pingpong-bin -- --urdf assets/robots/custom/robot.urdf --ee-link racket_link
-
-# 실물 로봇 URDF (3축 + STL mesh, `assets/robots/urdf-test/`)
-cargo run -p pingpong-bin -- \
-  --urdf assets/robots/urdf-test/urdf-test_description/urdf/urdf-test.urdf \
-  --ee-link pingpong_paddle_v5_1
-
-# URDF primitive 예시 (3축 → plan_swing `Arm` 변환 가능)
-cargo run -p pingpong-bin -- --urdf assets/robots/competition_arm.urdf --ee-link racket_link
-
-# headless: 시작 시 1회 발사
-cargo run -p pingpong-bot -- --frames 60 --shoot-on-start --sim-speed 5
+cargo run -p pingpong-bin -- --robot urdf-test
+cargo run -p pingpong-bin -- --no-gui --frames 60 --shoot-on-start --sim-speed 5
 ```
 
 - 좌표계: **Z-up**, 원점 = 탁구대 로봇 쪽 꼭짓점 (바닥)
@@ -153,7 +168,7 @@ cargo run -p pingpong-bot -- --frames 60 --shoot-on-start --sim-speed 5
 
 ```bash
 cargo run -p calib-charuco -- --emit-sim 3 -o calibration.json
-cargo run -p pingpong-bin -- --config config/example.toml --gui
+cargo run -p pingpong-bin -- --config config/example.toml
 ```
 
 ---
@@ -180,18 +195,20 @@ cargo build -p pingpong-bin --release
 | **Rapier3d 디지털 트윈** (탁구대·슈터·로봇·공·SimCamera) | ✅ |
 | **egui 슈터 GUI** (발사 트리거·파라미터) | ✅ |
 | **kiss3d 3D 뷰** (탁구대·로봇·슈터·공) | ✅ |
-| **URDF 로봇 로드** (`--urdf`, `--ee-link`) | ✅ (primitive + **STL/OBJ mesh**) |
+| **로봇 프리셋** (`--robot` / TOML `robot`, `app/arm.rs` `ROBOTS`) | ✅ |
+| **URDF mesh** (`--urdf` 또는 프리셋 `urdf_rel`) | ✅ |
 | Z-up 좌표계 + `HitPlane { y }` 접수 평면 | ✅ |
 | **BallScript** (시간·위치·속도·임펄스 스케줄) | ✅ |
-| **RobotBuilder** (URDF mesh + 마운트 프리셋) | ✅ |
+| **RobotBuilder** (URDF mesh + sim 마운트) | ✅ |
 | `sample_at` 타임스탬프 보간 | ✅ |
-| DLT 삼각측량, ChArUco 캘리브레이션 | ⏳ 2단계 |
-| EKF / RK4 궤적 추정 | ⏳ 2단계 |
+| DLT 삼각측량, ChArUco 캘리브레이션 | ✅ (sim emit / validate) |
+| EKF / 궤적 추정 | ✅ (sim; Magnus 스핀 추적은 이후) |
+| `--config` TOML | ✅ |
 | OpenCV 검출, 실 카메라 | ⏳ 2단계 |
 | Rerun 시각화, Dynamixel/AXL real | ⏳ 2단계 |
-| `--config` TOML, `--mode real` | ⏳ 2단계 |
+| `--mode real` | ⏳ 2단계 |
 
-삼각측량·EKF·스윙 계획 본체는 아직 스텁이지만, sim에서는 **실제 3D 물리**로 공이 날고 라켓이 움직인다.
+sim에서는 **실제 3D 물리**로 공이 날고, 오라클(또는 `--ekf-swing`)로 라켓이 움직인다.
 
 **2단계 상세 로드맵:** [`docs/phase2.md`](docs/phase2.md)
 

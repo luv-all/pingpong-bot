@@ -1,9 +1,13 @@
 # pingpong-bot 런타임 설정 예시
 #
-#   cargo run -p pingpong-bot -- --config config/example.toml --gui
+#   cargo run -p pingpong-bin -- --config config/example.toml
+#   cargo run -p pingpong-bin -- --mode sim --robot urdf-test
+#
+# robot = ROBOTS id (crates/app/src/arm.rs). CLI `--robot` / `--urdf`가 덮어씀.
 #
 # Calibration JSON은 `calib_charuco --emit-sim 3 -o calibration.json` 으로 생성.
 
 hit_plane_y = 0.30
 camera_count = 3
+robot = "competition"
 # calibration_path = "calibration.json"

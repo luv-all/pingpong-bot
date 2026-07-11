@@ -12,9 +12,8 @@ pub mod rail;
 
 use nalgebra::{Matrix3, Vector3};
 
-use crate::error::SwingPlanError;
 use self::rail::LinearRail;
-
+use crate::error::SwingPlanError;
 
 use crate::types::{Joints, Point3, World};
 
@@ -383,6 +382,9 @@ impl Arm {
     ///
     /// `q0` yaw · `q1` 어깨 · `q2` 팔꿈치 · `q3` 손목 open.
     /// 기하·한계는 [`crate::constants::arm`].
+    ///
+    /// app 배포 SSOT는 `pingpong_app::ROBOTS`이다.
+    /// 이 메서는 domain/infra 단위 테스트용 편의 API로 같은 체인을 둔다.
     pub fn competition() -> Result<Self, ArmBuildError> {
         use crate::constants::arm::*;
         use crate::constants::{RACKET_OPEN_PITCH, table};
@@ -512,8 +514,7 @@ impl Arm {
         let mount = self.mount_at_rail(rail_x).v;
 
         let to_world = |reach: f64, height: f64| -> Vector3<f64> {
-            return mount
-                + Vector3::new(reach * yaw.sin(), reach * yaw.cos(), height);
+            return mount + Vector3::new(reach * yaw.sin(), reach * yaw.cos(), height);
         };
 
         let base = mount;
@@ -676,7 +677,10 @@ impl Arm {
     ) -> (f64, Point3<World>) {
         let rail_x = rail.clamp_x(target.v.x);
         let mount = rail.mount_point(rail_x);
-        return (rail_x, Self::clamp_preserving_y(mount, target, self.arm_length()));
+        return (
+            rail_x,
+            Self::clamp_preserving_y(mount, target, self.arm_length()),
+        );
     }
 
     /// 월드 목표를 팔 도달 반경 안으로 당긴다 (고정 베이스·레일 없을 때).

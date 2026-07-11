@@ -18,7 +18,8 @@ use pingpong_domain::{
 
 mod arm;
 pub use arm::{
-    CompetitionUrdfRobot, Robot, RobotMount, UrdfTestRobot, competition_arm, shared_competition_arm,
+    competition_arm, find_robot, robot_ids_csv, shared_competition_arm, RobotEntry,
+    DEFAULT_ROBOT_ID, ROBOTS,
 };
 use tracing::{info, info_span, warn};
 

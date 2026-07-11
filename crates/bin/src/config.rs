@@ -18,6 +18,9 @@ pub struct RuntimeConfig {
     pub camera_count: u8,
     /// Calibration JSON 경로 (없으면 sim 레이아웃)
     pub calibration_path: Option<String>,
+    /// 로봇 프리셋 id (`pingpong_app::ROBOTS`)
+    #[serde(default = "default_robot")]
+    pub robot: String,
 }
 
 fn default_hit_plane_y() -> f64 {
@@ -26,6 +29,10 @@ fn default_hit_plane_y() -> f64 {
 
 fn default_camera_count() -> u8 {
     return 3;
+}
+
+fn default_robot() -> String {
+    return pingpong_app::DEFAULT_ROBOT_ID.into();
 }
 
 impl RuntimeConfig {

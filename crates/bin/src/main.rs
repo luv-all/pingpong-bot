@@ -17,7 +17,7 @@ use std::thread;
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use pingpong_app::{PipelineConfig, Robot, shared_competition_arm};
+use pingpong_app::{find_robot, robot_ids_csv, PipelineConfig, DEFAULT_ROBOT_ID};
 use pingpong_domain::{Arm, BallEkf, Calibration, CameraId, HitPlane, constants::table};
 use pingpong_infra::{
     RobotBuilder, SimRuntimeControls, SimSession, SimSessionConfig, SimViewerOptions,
@@ -77,7 +77,11 @@ struct Args {
     #[arg(long, default_value_t = false)]
     shoot_on_start: bool,
 
-    /// 로봇 URDF 파일 (미지정 시 내장 competition_arm)
+    /// 로봇 프리셋 id (`pingpong_app::ROBOTS`, 미지정 시 config → competition)
+    #[arg(long, value_name = "ID")]
+    robot: Option<String>,
+
+    /// 로봇 URDF 파일 (지정 시 `--robot` / config robot 무시)
     #[arg(long, value_name = "PATH")]
     urdf: Option<PathBuf>,
 
@@ -85,7 +89,7 @@ struct Args {
     #[arg(long, value_name = "LINK")]
     ee_link: Option<String>,
 
-    /// 설정 파일 (TOML: hit_plane_y, camera_count, calibration_path)
+    /// 설정 파일 (TOML: hit_plane_y, camera_count, robot, calibration_path)
     #[arg(long, value_name = "PATH")]
     config: Option<String>,
 
@@ -101,20 +105,29 @@ fn main() -> Result<()> {
         .init();
 
     let mut args = Args::parse();
-
+    let mut robot_id = pingpong_app::DEFAULT_ROBOT_ID.to_string();
     let mut calibration = Calibration::sim(args.camera_count);
+
     if let Some(path) = &args.config {
         let runtime = RuntimeConfig::load(std::path::Path::new(path))?;
         args.hit_plane_y = runtime.hit_plane_y;
         args.camera_count = runtime.camera_count;
+        robot_id = runtime.robot.clone();
         calibration = runtime.calibration()?;
         info!(
             path,
             cameras = calibration.camera_count(),
             hit_plane_y = args.hit_plane_y,
+            robot = %robot_id,
             "설정 파일 로드"
         );
     }
+
+    // CLI `--robot`이 TOML보다 우선
+    if let Some(id) = args.robot.take() {
+        robot_id = id;
+    }
+    args.robot = Some(robot_id);
 
     match args.mode {
         Mode::Sim => run_sim(args, calibration)?,
@@ -136,7 +149,11 @@ fn run_sim(args: Args, calibration: Calibration) -> Result<()> {
     }
 
     let gui = !args.no_gui;
-    let (arm, urdf) = load_robot(args.urdf.as_deref(), args.ee_link.as_deref())?;
+    let robot_id = args
+        .robot
+        .as_deref()
+        .unwrap_or(pingpong_app::DEFAULT_ROBOT_ID);
+    let (arm, urdf) = load_robot(robot_id, args.urdf.as_deref(), args.ee_link.as_deref())?;
     let controls = Arc::new(Mutex::new(SimRuntimeControls::default()));
     let shutdown = new_shutdown_flag();
 
@@ -237,43 +254,56 @@ fn run_real() -> Result<()> {
 }
 
 fn load_robot(
+    robot_id: &str,
     urdf_path: Option<&std::path::Path>,
     ee_link: Option<&str>,
 ) -> Result<(Arc<Arm>, Option<Arc<pingpong_infra::UrdfRobot>>)> {
-    let deployment = Robot::from_cli(
-        urdf_path.map(std::path::Path::to_path_buf),
-        ee_link.map(str::to_string),
-    );
-    let fallback = shared_competition_arm();
-
-    if deployment.is_primitive() {
-        return Ok((fallback, None));
+    // `--urdf`가 있으면 카탈로그 무시, 제어 Arm만 기본 프리셋
+    if let Some(path) = urdf_path {
+        let arm = find_robot(DEFAULT_ROBOT_ID)
+            .expect("DEFAULT_ROBOT_ID")
+            .arm();
+        let built = RobotBuilder::new()
+            .urdf(path)
+            .ee_link_opt(ee_link)
+            .mount_preset(pingpong_infra::MountPreset::Rep103AtTableEnd)
+            .max_joint_speed(2.5)
+            .build_with_arm_fallback(Arc::clone(&arm))
+            .with_context(|| format!("로봇 빌드 실패: {}", path.display()))?;
+        info!(path = %path.display(), "커스텀 URDF — 제어는 기본 빌더");
+        return Ok((arm, built.urdf));
     }
 
-    let workspace = std::env::current_dir().context("현재 작업 디렉터리")?;
-    let path = deployment
-        .urdf_path(&workspace)
-        .context("URDF 경로 해석 실패")?;
-    let mount = deployment.mount();
+    let entry = find_robot(robot_id).ok_or_else(|| {
+        anyhow::anyhow!("알 수 없는 robot id `{robot_id}` — 사용 가능: {}", robot_ids_csv())
+    })?;
+    let arm = entry.arm();
 
+    let Some(rel) = entry.urdf_rel else {
+        info!(robot = robot_id, "빌더 프리셋 (URDF 없음)");
+        return Ok((arm, None));
+    };
+
+    let workspace = std::env::current_dir().context("현재 작업 디렉터리")?;
+    let path = workspace.join(rel);
     let built = RobotBuilder::new()
         .urdf(&path)
-        .ee_link_opt(deployment.ee_link())
-        .mount_xyz_rpy(mount.position, mount.rpy)
-        .max_joint_speed(deployment.max_joint_speed())
-        .build_with_arm_fallback(Arc::clone(&fallback))
+        .ee_link_opt(entry.ee_link)
+        .mount_preset(pingpong_infra::MountPreset::Rep103AtTableEnd)
+        .max_joint_speed(entry.max_joint_speed)
+        .build_with_arm_fallback(Arc::clone(&arm))
         .with_context(|| format!("로봇 빌드 실패: {}", path.display()))?;
 
     if let Some(ref model) = built.urdf {
         info!(
-            robot = %model.name,
+            robot = robot_id,
+            mesh = %model.name,
             joints = model.joint_count(),
             ee = %model.ee_link,
             path = %path.display(),
-            "URDF mesh 로드 — 제어·IK는 리니어 포함 competition arm 사용"
+            "URDF mesh 로드 — 제어·IK는 카탈로그 빌더"
         );
     }
 
-    // URDF는 kiss3d mesh 전용. plan_swing·리니어 X는 항상 competition primitive arm.
-    return Ok((fallback, built.urdf));
+    return Ok((arm, built.urdf));
 }
