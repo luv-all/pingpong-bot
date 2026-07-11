@@ -139,7 +139,7 @@ impl Robot {
     }
 }
 
-/// GIST 경진용 3DOF primitive `Arm` + X축 리니어 레일.
+/// GIST 경진용 4DOF primitive `Arm` + X축 리니어 레일.
 pub fn competition_arm() -> Result<Arm, ArmBuildError> {
     return Arm::competition();
 }
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn competition_arm_builds() {
         let arm = competition_arm().expect("프리셋");
-        assert_eq!(arm.joint_count(), 3);
+        assert_eq!(arm.joint_count(), 4);
     }
 
     #[test]

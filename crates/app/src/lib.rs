@@ -6,14 +6,14 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
 use pingpong_domain::{
-    Arm, BallObservation, CameraSource, Detector, DomainError, Estimator, FrameRef, Hardware,
-    HitPlane, PixelPoint, Roi, SwingPlanError, Target, Telemetry, TelemetryEvent, constants::table,
-    plan_swing,
+    Arm, BallObservation, Calibration, CameraId, CameraSource, Detector, DomainError, Estimator,
+    FrameRef, Hardware, HitPlane, PixelPoint, Roi, SwingPlanError, Target, Telemetry,
+    TelemetryEvent, constants::table, in_swing_commit_window, plan_swing, triangulate_synced,
 };
 
 mod arm;
@@ -33,6 +33,8 @@ pub struct PipelineConfig {
     pub control_hz: f64,
     /// sim·real 공통 불변 로봇 모델 (plan §2, §7.2)
     pub arm: Arc<Arm>,
+    /// 카메라 캘리브 (삼각측량)
+    pub calibration: Calibration,
 }
 
 impl Default for PipelineConfig {
@@ -43,6 +45,7 @@ impl Default for PipelineConfig {
             },
             control_hz: CONTROL_HZ,
             arm: shared_competition_arm(),
+            calibration: Calibration::sim(3),
         };
     }
 }
@@ -90,17 +93,59 @@ pub fn run(
     let slot = Arc::clone(&target);
     let telemetry_estimation = Arc::clone(&telemetry);
     let hit_plane = config.hit_plane;
+    let calibration = config.calibration;
     let shutdown_estimation = Arc::clone(&shutdown);
     handles.push((
         PipelineThread::Estimation,
         thread::spawn(move || {
             pin_to_performance_core();
+            let mut series: Vec<(CameraId, Vec<BallObservation>)> = calibration
+                .cameras
+                .iter()
+                .map(|c| (c.camera_id, Vec::new()))
+                .collect();
             while let Ok(observation) = observation_rx.recv() {
                 let _span = info_span!("estimator").entered();
-                estimator.update(observation);
-                if let Some(prediction) = estimator.predict_to(hit_plane) {
-                    telemetry_estimation.log(TelemetryEvent::Prediction(prediction));
-                    let _ = slot.force_push(Target { prediction });
+                if let Some((_, buf)) = series
+                    .iter_mut()
+                    .find(|(id, _)| *id == observation.camera_id)
+                {
+                    buf.push(observation);
+                    // 카메라당 최근 몇 프레임만 유지
+                    if buf.len() > 8 {
+                        let drain = buf.len() - 8;
+                        buf.drain(0..drain);
+                    }
+                }
+
+                let sync_time = series
+                    .iter()
+                    .filter_map(|(_, b)| b.last().map(|o| o.timestamp))
+                    .max();
+                let Some(sync_time) = sync_time else {
+                    continue;
+                };
+
+                let refs: Vec<(CameraId, &[BallObservation])> = series
+                    .iter()
+                    .filter(|(_, b)| !b.is_empty())
+                    .map(|(id, b)| (*id, b.as_slice()))
+                    .collect();
+                if refs.len() < calibration.min_cameras_for_triangulation() {
+                    continue;
+                }
+
+                match triangulate_synced(&refs, sync_time, &calibration) {
+                    Ok(point) => {
+                        estimator.update(point, sync_time);
+                        if let Some(prediction) = estimator.predict_to(hit_plane) {
+                            telemetry_estimation.log(TelemetryEvent::Prediction(prediction));
+                            let _ = slot.force_push(Target { prediction });
+                        }
+                    }
+                    Err(_) => {
+                        // 시야 부족·보간 실패 — 다음 프레임
+                    }
                 }
             }
             shutdown_estimation.store(true, Ordering::Release);
@@ -116,11 +161,16 @@ pub fn run(
         PipelineThread::Control,
         thread::spawn(move || {
             pin_to_performance_core();
+            let mut last_plan_warn = Instant::now() - Duration::from_secs(10);
             loop {
                 if let Some(target) = slot.pop() {
                     let _span = info_span!("control").entered();
                     if hardware.is_busy() {
                         // sim 물리 스레드가 이미 plan_swing 중 — 늦은 예측으로 InsufficientTime 스팸 방지
+                        continue;
+                    }
+                    // 발사 직후·긴 lead는 버리고, commit 창에 들어온 예측만 계획
+                    if !in_swing_commit_window(target.prediction.time_to_impact_secs) {
                         continue;
                     }
                     let start = match hardware.read_pose() {
@@ -144,11 +194,15 @@ pub fn run(
                         Err(DomainError::InfeasibleSwing(SwingPlanError::InsufficientTime {
                             ..
                         })) => {
-                            // 이미 늦은 예측 — 재큐하지 않음
+                            // 이미 늦은 예측 — 버림
                         }
                         Err(error) => {
-                            warn!(%error, "스윙 계획 실패");
-                            let _ = slot.force_push(target);
+                            // 재큐 금지: 실패 타겟을 force_push하면 100Hz 로그 스팸
+                            let now = Instant::now();
+                            if now.duration_since(last_plan_warn) >= Duration::from_secs(1) {
+                                warn!(%error, "스윙 계획 실패");
+                                last_plan_warn = now;
+                            }
                         }
                     }
                 }
