@@ -11,12 +11,15 @@ use std::time::Duration;
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
 use pingpong_domain::{
-    Arm, BallObservation, CameraSource, Detector, Estimator, FrameRef, Hardware, HitPlane,
-    PixelPoint, Roi, Target, Telemetry, TelemetryEvent, constants::table, plan_swing,
+    Arm, BallObservation, CameraSource, Detector, DomainError, Estimator, FrameRef, Hardware,
+    HitPlane, PixelPoint, Roi, SwingPlanError, Target, Telemetry, TelemetryEvent, constants::table,
+    plan_swing,
 };
 
 mod arm;
-pub use arm::{competition_arm, shared_competition_arm};
+pub use arm::{
+    CompetitionUrdfRobot, Robot, RobotMount, UrdfTestRobot, competition_arm, shared_competition_arm,
+};
 use tracing::{info, info_span, warn};
 
 const OBSERVATION_CHANNEL_CAPACITY: usize = 64;
@@ -116,7 +119,18 @@ pub fn run(
             loop {
                 if let Some(target) = slot.pop() {
                     let _span = info_span!("control").entered();
-                    match plan_swing(&arm, target) {
+                    if hardware.is_busy() {
+                        // sim 물리 스레드가 이미 plan_swing 중 — 늦은 예측으로 InsufficientTime 스팸 방지
+                        continue;
+                    }
+                    let start = match hardware.read_pose() {
+                        Ok(pose) => pose,
+                        Err(error) => {
+                            warn!(?error, "로봇 포즈 읽기 실패 — 스윙 계획 건너뜀");
+                            continue;
+                        }
+                    };
+                    match plan_swing(&arm, target, &start) {
                         Ok(trajectory) => {
                             telemetry_control.log(TelemetryEvent::SwingCommand(trajectory.clone()));
                             if let Err(error) = hardware.command(&trajectory) {
@@ -127,8 +141,14 @@ pub fn run(
                                 );
                             }
                         }
+                        Err(DomainError::InfeasibleSwing(SwingPlanError::InsufficientTime {
+                            ..
+                        })) => {
+                            // 이미 늦은 예측 — 재큐하지 않음
+                        }
                         Err(error) => {
                             warn!(%error, "스윙 계획 실패");
+                            let _ = slot.force_push(target);
                         }
                     }
                 }

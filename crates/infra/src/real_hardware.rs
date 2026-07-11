@@ -5,7 +5,7 @@
 //!
 //! macOS 빌드에서는 `#[cfg(all(windows, feature = "real"))]`로 컴파일되지 않는다.
 
-use pingpong_domain::{Hardware, HwError, Joints, SwingTrajectory};
+use pingpong_domain::{Hardware, HwError, RobotPose, SwingTrajectory};
 
 /// Windows 실물 하드웨어 어댑터 (2단계).
 pub struct RealHardware;
@@ -22,7 +22,7 @@ impl Hardware for RealHardware {
         todo!("실물 하드웨어 스윙 명령")
     }
 
-    fn read_joints(&mut self) -> Result<Joints, HwError> {
-        todo!("실물 하드웨어 관절 읽기")
+    fn read_pose(&mut self) -> Result<RobotPose, HwError> {
+        todo!("실물 하드웨어 레일·관절 읽기")
     }
 }

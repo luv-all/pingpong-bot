@@ -15,11 +15,11 @@ use std::thread;
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use pingpong_app::{shared_competition_arm, PipelineConfig};
-use pingpong_domain::{constants::table, Arm, CameraId, HitPlane, PassThroughEstimator};
+use pingpong_app::{PipelineConfig, Robot, shared_competition_arm};
+use pingpong_domain::{Arm, CameraId, HitPlane, constants::table};
 use pingpong_infra::{
-    new_shutdown_flag, run_sim_viewer, SimRuntimeControls, SimSession, SimSessionConfig,
-    SimViewerOptions, TracingTelemetry, UrdfRobot,
+    RobotBuilder, SimBallEstimator, SimRuntimeControls, SimSession, SimSessionConfig,
+    SimViewerOptions, TracingTelemetry, new_shutdown_flag, run_sim_viewer,
 };
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -143,6 +143,14 @@ fn run_sim(args: Args) -> Result<()> {
         Arc::clone(&shutdown),
     );
 
+    {
+        let world_arc = session.world();
+        let mut world = world_arc.lock().expect("sim 월드");
+        world.set_hit_plane(HitPlane {
+            y: args.hit_plane_y,
+        });
+    }
+
     let frame_count = if gui { 0 } else { args.frames };
 
     let cameras: Vec<Box<dyn pingpong_domain::CameraSource>> = (0..args.camera_count)
@@ -152,7 +160,7 @@ fn run_sim(args: Args) -> Result<()> {
         })
         .collect();
 
-    let estimator = Box::new(PassThroughEstimator::new(0.01));
+    let estimator = Box::new(SimBallEstimator::new(session.world()));
     let hardware = session.hardware();
     let telemetry = Arc::new(TracingTelemetry);
     let config = PipelineConfig {
@@ -166,13 +174,8 @@ fn run_sim(args: Args) -> Result<()> {
     if gui {
         let pipeline_shutdown = Arc::clone(&shutdown);
         let pipeline_handle = thread::spawn(move || {
-            let result = pingpong_app::run(
-                cameras,
-                estimator,
-                Box::new(hardware),
-                config,
-                telemetry,
-            );
+            let result =
+                pingpong_app::run(cameras, estimator, Box::new(hardware), config, telemetry);
             pipeline_shutdown.store(true, Ordering::Release);
             result
         });
@@ -208,32 +211,41 @@ fn run_real() -> Result<()> {
 fn load_robot(
     urdf_path: Option<&std::path::Path>,
     ee_link: Option<&str>,
-) -> Result<(Arc<Arm>, Option<Arc<UrdfRobot>>)> {
-    let Some(path) = urdf_path else {
-        return Ok((shared_competition_arm(), None));
-    };
-
-    let urdf = Arc::new(
-        UrdfRobot::from_file(path, ee_link)
-            .with_context(|| format!("URDF 로드 실패: {}", path.display()))?,
+) -> Result<(Arc<Arm>, Option<Arc<pingpong_infra::UrdfRobot>>)> {
+    let deployment = Robot::from_cli(
+        urdf_path.map(std::path::Path::to_path_buf),
+        ee_link.map(str::to_string),
     );
-    info!(
-        robot = %urdf.name,
-        joints = urdf.joint_count(),
-        ee = %urdf.ee_link,
-        path = %path.display(),
-        "URDF 로봇 로드"
-    );
+    let fallback = shared_competition_arm();
 
-    let arm = match urdf.try_into_arm(2.5) {
-        Ok(arm) => Arc::new(arm),
-        Err(error) => {
-            warn!(
-                %error,
-                "URDF → `Arm` 변환 실패 — competition_arm으로 제어 (URDF FK·뷰어 유지)"
-            );
-            shared_competition_arm()
-        }
-    };
-    return Ok((arm, Some(urdf)));
+    if deployment.is_primitive() {
+        return Ok((fallback, None));
+    }
+
+    let workspace = std::env::current_dir().context("현재 작업 디렉터리")?;
+    let path = deployment
+        .urdf_path(&workspace)
+        .context("URDF 경로 해석 실패")?;
+    let mount = deployment.mount();
+
+    let built = RobotBuilder::new()
+        .urdf(&path)
+        .ee_link_opt(deployment.ee_link())
+        .mount_xyz_rpy(mount.position, mount.rpy)
+        .max_joint_speed(deployment.max_joint_speed())
+        .build_with_arm_fallback(Arc::clone(&fallback))
+        .with_context(|| format!("로봇 빌드 실패: {}", path.display()))?;
+
+    if let Some(ref model) = built.urdf {
+        info!(
+            robot = %model.name,
+            joints = model.joint_count(),
+            ee = %model.ee_link,
+            path = %path.display(),
+            "URDF mesh 로드 — 제어·IK는 리니어 포함 competition arm 사용"
+        );
+    }
+
+    // URDF는 kiss3d mesh 전용. plan_swing·리니어 X는 항상 competition primitive arm.
+    return Ok((fallback, built.urdf));
 }
