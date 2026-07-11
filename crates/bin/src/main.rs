@@ -8,6 +8,8 @@
 //! cargo run -p pingpong-bot -- --frames 60 --sim-speed 5 --shoot-on-start
 //! ```
 
+mod config;
+
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -16,13 +18,15 @@ use std::thread;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use pingpong_app::{PipelineConfig, Robot, shared_competition_arm};
-use pingpong_domain::{Arm, CameraId, HitPlane, constants::table};
+use pingpong_domain::{Arm, BallEkf, Calibration, CameraId, HitPlane, constants::table};
 use pingpong_infra::{
-    RobotBuilder, SimBallEstimator, SimRuntimeControls, SimSession, SimSessionConfig,
-    SimViewerOptions, TracingTelemetry, new_shutdown_flag, run_sim_viewer,
+    RobotBuilder, SimRuntimeControls, SimSession, SimSessionConfig, SimViewerOptions,
+    TracingTelemetry, new_shutdown_flag, run_sim_viewer,
 };
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
+
+use config::RuntimeConfig;
 
 /// CLI 실행 모드.
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -81,9 +85,13 @@ struct Args {
     #[arg(long, value_name = "LINK")]
     ee_link: Option<String>,
 
-    /// 설정 파일 경로 (2단계에서 TOML 로드 — 카메라 대수·extrinsics 포함)
-    #[arg(long)]
+    /// 설정 파일 (TOML: hit_plane_y, camera_count, calibration_path)
+    #[arg(long, value_name = "PATH")]
     config: Option<String>,
+
+    /// EKF→control로 타격 (기본은 sim 오라클=진실 상태 타격)
+    #[arg(long, default_value_t = false)]
+    ekf_swing: bool,
 }
 
 /// 프로그램 진입점.
@@ -92,22 +100,32 @@ fn main() -> Result<()> {
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
         .init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
 
+    let mut calibration = Calibration::sim(args.camera_count);
     if let Some(path) = &args.config {
-        todo!("설정 파일 로드: {path}");
+        let runtime = RuntimeConfig::load(std::path::Path::new(path))?;
+        args.hit_plane_y = runtime.hit_plane_y;
+        args.camera_count = runtime.camera_count;
+        calibration = runtime.calibration()?;
+        info!(
+            path,
+            cameras = calibration.camera_count(),
+            hit_plane_y = args.hit_plane_y,
+            "설정 파일 로드"
+        );
     }
 
     match args.mode {
-        Mode::Sim => run_sim(args)?,
+        Mode::Sim => run_sim(args, calibration)?,
         Mode::Real => run_real()?,
     }
 
     return Ok(());
 }
 
-/// sim 모드: Rapier 디지털 트윈 + 슈터(+x) + 로봇(-x) + PassThrough 추정
-fn run_sim(args: Args) -> Result<()> {
+/// sim 모드: Rapier 디지털 트윈 + 카메라→DLT→BallEkf→control 타격
+fn run_sim(args: Args, calibration: Calibration) -> Result<()> {
     if args.no_gui {
         warn!(
             frames = args.frames,
@@ -149,6 +167,13 @@ fn run_sim(args: Args) -> Result<()> {
         world.set_hit_plane(HitPlane {
             y: args.hit_plane_y,
         });
+        // 기본: 오라클 타격. EKF control은 아직 불안정해 팔을 헛스윙시킴.
+        world.set_oracle_auto_swing(!args.ekf_swing);
+        if args.ekf_swing {
+            warn!("EKF control 타격 모드 — 예측이 흔들리면 스윙이 이상해질 수 있음");
+        } else {
+            info!("sim 오라클 타격 (진실 상태) — EKF는 추정만, `--ekf-swing`으로 control 타격");
+        }
     }
 
     let frame_count = if gui { 0 } else { args.frames };
@@ -160,7 +185,7 @@ fn run_sim(args: Args) -> Result<()> {
         })
         .collect();
 
-    let estimator = Box::new(SimBallEstimator::new(session.world()));
+    let estimator = Box::new(BallEkf::with_defaults());
     let hardware = session.hardware();
     let telemetry = Arc::new(TracingTelemetry);
     let config = PipelineConfig {
@@ -169,6 +194,7 @@ fn run_sim(args: Args) -> Result<()> {
         },
         control_hz: 100.0,
         arm,
+        calibration,
     };
 
     if gui {
@@ -203,9 +229,11 @@ fn run_sim(args: Args) -> Result<()> {
     return Ok(());
 }
 
-/// real 모드: Dynamixel + AXL (2단계, Windows 전용).
+/// real 모드: Dynamixel + AXL (마일스톤 5, Windows 전용).
 fn run_real() -> Result<()> {
-    todo!("real 하드웨어 모드 (Windows + `--features pingpong-infra/real`, plan.md §3.2)")
+    anyhow::bail!(
+        "real 모드는 아직 미구현입니다. Windows에서 `--features pingpong-infra/real` + Dynamixel/AXL 연동 후 사용 (plan.md §3.2)."
+    );
 }
 
 fn load_robot(

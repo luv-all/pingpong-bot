@@ -1,0 +1,9 @@
+# pingpong-bot 런타임 설정 예시
+#
+#   cargo run -p pingpong-bot -- --config config/example.toml --gui
+#
+# Calibration JSON은 `calib_charuco --emit-sim 3 -o calibration.json` 으로 생성.
+
+hit_plane_y = 0.30
+camera_count = 3
+# calibration_path = "calibration.json"
