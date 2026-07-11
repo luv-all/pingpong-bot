@@ -346,7 +346,7 @@ mod tests {
             mesh.display()
         );
 
-        assert!(urdf.try_into_arm(2.5).is_ok());
+        assert!(urdf.try_into_arm(2.5).is_err());
     }
 
     #[test]

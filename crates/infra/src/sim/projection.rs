@@ -1,89 +1,34 @@
-//! 핀홀 카메라 투영 (sim 전용).
+//! 핀홀 카메라 투영 (sim 전용) — domain `CameraParams`와 동일 모델.
 
-use pingpong_domain::{constants::table, PixelPoint};
+use pingpong_domain::{CameraId, CameraParams, PixelPoint, Point3, World};
 use rapier3d::prelude::Vector;
 
-/// 카메라 시야 설정.
-#[derive(Debug, Clone, Copy)]
+/// 카메라 시야 — domain 캘리브의 얇은 래퍼.
+#[derive(Debug, Clone)]
 pub struct CameraView {
-    /// 카메라 위치 (월드)
-    pub eye: Vector,
-    /// 바라보는 점
-    pub target: Vector,
-    /// 위쪽 방향
-    pub up: Vector,
-    /// 이미지 너비 [px]
-    pub width: u32,
-    /// 이미지 높이 [px]
-    pub height: u32,
-    /// 수직 시야각 [rad]
-    pub fov_y: f32,
+    /// 공유 핀홀 파라미터
+    pub params: CameraParams,
 }
 
 impl CameraView {
-    /// 카메라 대수에 따라 테이블 주위에 배치한다.
+    /// 카메라 대수에 따라 테이블 주위에 배치한다 (`CameraParams::sim_layout`).
     pub fn for_camera_index(index: u8, count: u8) -> Self {
-        let t = if count <= 1 {
-            0.5
-        } else {
-            (f32::from(index) + 0.5) / f32::from(count)
-        };
-        let angle = std::f32::consts::FRAC_PI_2 + t * std::f32::consts::PI;
-        let radius = 2.2;
-        let height = 1.85;
-        let table_center = Vector::new(
-            (table::WIDTH_X * 0.5) as f32,
-            (table::LENGTH_Y * 0.5) as f32,
-            table::SURFACE_Z as f32,
-        );
-
         return Self {
-            eye: table_center
-                + Vector::new(radius * angle.cos(), radius * angle.sin(), height),
-            target: table_center,
-            up: Vector::new(0.0, 0.0, 1.0),
-            width: 640,
-            height: 480,
-            fov_y: 55.0_f32.to_radians(),
+            params: CameraParams::sim_layout(CameraId::new(index), count),
         };
     }
 
     /// 월드 좌표 [m] → 픽셀. 시야 밖·카메라 뒤면 `None`.
     pub fn project(&self, world: Vector) -> Option<PixelPoint> {
-        let forward = (self.target - self.eye).normalize();
-        let right = forward.cross(self.up).normalize();
-        let up = right.cross(forward);
-
-        let rel = world - self.eye;
-        let x_cam = rel.dot(right);
-        let y_cam = rel.dot(up);
-        let z_cam = rel.dot(forward);
-
-        if z_cam <= 0.05 {
-            return None;
-        }
-
-        let half_fov = self.fov_y * 0.5;
-        let tan_half = half_fov.tan();
-        let scale = (f64::from(self.height) * 0.5) / f64::from(z_cam * tan_half);
-        let px = f64::from(self.width) * 0.5 + f64::from(x_cam) * scale;
-        let py = f64::from(self.height) * 0.5 - f64::from(y_cam) * scale;
-
-        if px < 0.0
-            || py < 0.0
-            || px >= f64::from(self.width)
-            || py >= f64::from(self.height)
-        {
-            return None;
-        }
-
-        return Some(PixelPoint::new(px, py));
+        let point = Point3::<World>::new(f64::from(world.x), f64::from(world.y), f64::from(world.z));
+        return self.params.project_world(point);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pingpong_domain::constants::table;
 
     #[test]
     fn table_center_projects_near_image_center() {

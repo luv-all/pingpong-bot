@@ -1,4 +1,6 @@
 //! 텔레메트리 어댑터.
+//!
+//! Phase 2 본선은 [`TracingTelemetry`]. Rerun 어댑터는 마일스톤 4.
 
 use pingpong_domain::{Telemetry, TelemetryEvent};
 use tracing::{debug, info_span};

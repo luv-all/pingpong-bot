@@ -1,8 +1,11 @@
-//! 공 검출 어댑터 (1단계: passthrough).
+//! 공 검출 어댑터.
+//!
+//! Phase 2: sim은 카메라가 이미 투영 픽셀을 넣으므로 passthrough.
+//! 실물 OpenCV(HSV/contour)는 `tools/detect_*` 실험 후 여기로 이식.
 
 use pingpong_domain::{Detector, FrameRef, PixelPoint, Roi};
 
-/// 프레임 픽셀을 그대로 반환하는 스텁 검출기.
+/// 프레임에 실린 픽셀을 그대로 반환 (sim·합성 카메라용).
 pub struct PassthroughDetector;
 
 impl PassthroughDetector {

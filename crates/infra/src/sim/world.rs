@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use pingpong_domain::{
-    Arm, DomainError, HitPlane, MIN_SWING_SECS, Prediction, RobotPose, RobotState, Target,
+    Arm, DomainError, HitPlane, Prediction, RobotPose, RobotState, Target,
     constants::{ball, table},
-    plan_swing,
+    in_swing_commit_window, plan_swing,
 };
 use rapier3d::prelude::*;
 use tracing::{debug, warn};
@@ -76,6 +76,11 @@ pub struct SimWorld {
     debug_prediction: Option<Prediction>,
     /// 접수 평면 — 물리 스텝에서 즉시 스윙 계획에 사용
     hit_plane: HitPlane,
+    /// true면 Rapier 진실 상태로 자동 스윙 (sim 기본).
+    /// false면 카메라→DLT→EKF→control이 타격 (`--ekf-swing`).
+    oracle_auto_swing: bool,
+    /// 이번 비행에서 스윙을 이미 commit했는지 (재계획·팔 떨림 방지)
+    swing_committed: bool,
 }
 
 impl SimWorld {
@@ -119,7 +124,7 @@ impl SimWorld {
             (table::LENGTH_Y * 0.5) as f32,
             table::HALF_THICKNESS as f32,
         )
-        .restitution(0.85)
+        .restitution(ball::TABLE_BOUNCE_RESTITUTION as f32)
         .friction(0.4)
         .build();
         collider_set.insert_with_parent(table_collider, table_handle, &mut rigid_body_set);
@@ -164,7 +169,7 @@ impl SimWorld {
             .build();
         let racket_handle = rigid_body_set.insert(racket_body);
         let racket_collider = ColliderBuilder::cuboid(0.06, 0.07, 0.005)
-            .restitution(0.75)
+            .restitution(ball::RESTITUTION as f32)
             .friction(0.5)
             .build();
         collider_set.insert_with_parent(racket_collider, racket_handle, &mut rigid_body_set);
@@ -173,7 +178,7 @@ impl SimWorld {
         let ball_body = RigidBodyBuilder::fixed().translation(muzzle).build();
         let ball_handle = rigid_body_set.insert(ball_body);
         let ball_collider = ColliderBuilder::ball(ball::RADIUS as f32)
-            .restitution(0.88)
+            .restitution(ball::TABLE_BOUNCE_RESTITUTION as f32)
             .friction(0.2)
             .density(0.25)
             .build();
@@ -205,9 +210,31 @@ impl SimWorld {
             hit_plane: HitPlane {
                 y: table::DEFAULT_HIT_PLANE_Y,
             },
+            oracle_auto_swing: true,
+            swing_committed: false,
         };
         world.sync_shooter_pose(&default_shooter);
         return world;
+    }
+
+    /// Rapier 진실 상태 자동 스윙 on/off.
+    pub fn set_oracle_auto_swing(&mut self, enabled: bool) {
+        self.oracle_auto_swing = enabled;
+    }
+
+    /// 진실 상태 기반 자동 스윙(오라클) 여부.
+    pub fn oracle_auto_swing(&self) -> bool {
+        return self.oracle_auto_swing;
+    }
+
+    /// 이번 공에 스윙을 이미 commit했는지.
+    pub fn swing_committed(&self) -> bool {
+        return self.swing_committed;
+    }
+
+    /// control/oracle이 스윙을 commit했음을 표시한다.
+    pub fn mark_swing_committed(&mut self) {
+        self.swing_committed = true;
     }
 
     /// 물리 1스텝: GUI 요청 처리 → 공 스크립트 → 관절 추종 → Rapier 적분.
@@ -276,21 +303,38 @@ impl SimWorld {
         self.hit_plane = plane;
     }
 
-    /// 공 비행 중 첫 유효 `plan_swing`만 commit하고 임팩트까지 유지한다.
+    /// 공 비행 중 commit 창에 들어올 때 한 번만 `plan_swing`.
     ///
-    /// 재계획·`plan_contact_swing` 폴백은 끝속도를 죽여 “대고만 있는” 느낌을 만든다.
+    /// 발사 직후(긴 lead)에는 대기하고, 네트 통과 후
+    /// `time_to_impact ∈ [MIN_SWING, COMMIT_MAX]`일 때 시작한다.
+    /// sim 기본은 오라클(진실 상태). `--ekf-swing`이면 control 경로가 타격.
     fn try_auto_swing(&mut self) {
+        if !self.oracle_auto_swing {
+            // 디버그 마커만 갱신
+            if self.ball_state == BallState::InFlight {
+                if let Some(prediction) = predict_impact(self, self.hit_plane) {
+                    self.set_debug_prediction(Some(prediction));
+                }
+            }
+            return;
+        }
         if self.ball_state != BallState::InFlight {
             return;
         }
-        if self.robot.is_swinging() {
+        if self.swing_committed || self.robot.is_swinging() {
             return;
         }
         let Some(prediction) = predict_impact(self, self.hit_plane) else {
             return;
         };
         self.set_debug_prediction(Some(prediction));
-        if prediction.time_to_impact_secs < MIN_SWING_SECS {
+
+        // 상대 코트에 있으면 아직 이름 — 바운스·탄도 안정화 대기
+        let ball_y = f64::from(self.ball_position().y);
+        if ball_y > table::LENGTH_Y * 0.55 {
+            return;
+        }
+        if !in_swing_commit_window(prediction.time_to_impact_secs) {
             return;
         }
 
@@ -314,6 +358,7 @@ impl SimWorld {
             "sim plan_swing commit"
         );
         self.robot.replace_swing(trajectory);
+        self.swing_committed = true;
     }
 
     /// 디버그용 hit plane 예측 (없으면 `None`).
@@ -356,6 +401,7 @@ impl SimWorld {
         }
         self.ball_state = BallState::InFlight;
         self.robot.cancel_swing();
+        self.swing_committed = false;
         self.try_auto_swing();
     }
 
@@ -551,7 +597,7 @@ mod tests {
     use pingpong_domain::{Arm, RobotPose, Target, constants::table};
 
     fn test_arm() -> Arc<Arm> {
-        return Arc::new(Arm::competition().expect("테스트용 3DOF arm"));
+        return Arc::new(Arm::competition().expect("테스트용 4DOF arm"));
     }
 
     #[test]
@@ -584,6 +630,7 @@ mod tests {
     fn contact_swing_reaches_impact_fk_at_duration() {
         let arm = test_arm();
         let mut world = SimWorld::new(arm.clone(), None);
+        world.set_oracle_auto_swing(true);
         world.shoot_ball(&BallShooterSettings::default());
 
         let mut min_dist = f64::MAX;
@@ -608,13 +655,23 @@ mod tests {
         let arm = test_arm();
         assert!(arm.rail.is_some(), "테스트 arm은 리니어 포함");
         let mut world = SimWorld::new(arm, None);
+        world.set_oracle_auto_swing(true);
         let settings = BallShooterSettings::default();
         assert_eq!(world.robot().rail_x(), 0.0, "대기 위치 x=0");
         world.shoot_ball(&settings);
         assert!(
-            world.robot().is_swinging(),
-            "발사 직후 자동 스윙이 시작되어야 함"
+            !world.robot().is_swinging(),
+            "발사 직후는 commit 창 밖 — 스윙 대기"
         );
+        let mut started = false;
+        for _ in 0..800 {
+            world.step(1.0 / 1000.0, None);
+            if world.robot().is_swinging() || world.swing_committed() {
+                started = true;
+                break;
+            }
+        }
+        assert!(started, "네트 통과 후 commit 창에서 스윙이 시작되어야 함");
         for _ in 0..500 {
             world.step(1.0 / 1000.0, None);
         }

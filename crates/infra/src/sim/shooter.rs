@@ -43,7 +43,7 @@ pub struct BallShooterSettings {
 impl Default for BallShooterSettings {
     fn default() -> Self {
         return Self {
-            speed_mps: 7.5,
+            speed_mps: 5.0,
             yaw_deg: 0.0,
             pitch_deg: -4.0,
             roll_deg: 0.0,

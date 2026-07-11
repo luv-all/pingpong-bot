@@ -37,8 +37,10 @@ struct DynamicNodes {
     shooter: SceneNode3d,
     racket: SceneNode3d,
     arm_base: SceneNode3d,
-    links: [SceneNode3d; 3],
-    joints: [SceneNode3d; 3],
+    /// 팔 링크 2개 (urdf-test와 동일)
+    links: [SceneNode3d; 2],
+    /// 어깨·손목 관절 마커
+    joints: [SceneNode3d; 2],
 }
 
 struct UrdfVisualNode {
@@ -196,14 +198,16 @@ fn build_primitive_robot_nodes(scene: &mut SceneNode3d) -> DynamicNodes {
             .add_cylinder(0.06, 0.05)
             .set_color(Color::new(0.2, 0.25, 0.55, 1.0)),
         links: [
-            scene.add_cylinder(0.025, 0.16).set_color(link_color),
-            scene.add_cylinder(0.022, 0.14).set_color(link_color),
-            scene.add_cylinder(0.018, 0.08).set_color(link_color),
+            scene
+                .add_cylinder(0.025, pingpong_domain::LINK_UPPER as f32)
+                .set_color(link_color),
+            scene
+                .add_cylinder(0.022, pingpong_domain::LINK_FOREARM as f32)
+                .set_color(link_color),
         ],
         joints: [
             scene.add_sphere(0.028).set_color(joint_color),
-            scene.add_sphere(0.025).set_color(joint_color),
-            scene.add_sphere(0.022).set_color(joint_color),
+            scene.add_sphere(0.024).set_color(joint_color),
         ],
     };
 }
@@ -297,12 +301,8 @@ fn sync_primitive_robot(nodes: &mut DynamicNodes, world: &SimWorld) {
     let points = arm_chain_points(arm, world.robot().rail_x(), joints);
     nodes.arm_base.set_position(points[0]);
 
-    let lengths = [
-        arm.link_lengths[0] as f32,
-        arm.link_lengths[1] as f32,
-        arm.link_lengths[2] as f32,
-    ];
-    for i in 0..3 {
+    let lengths = [arm.link_lengths[0] as f32, arm.link_lengths[1] as f32];
+    for i in 0..2 {
         nodes.joints[i].set_position(points[i + 1]);
         place_link(&mut nodes.links[i], points[i], points[i + 1], lengths[i]);
     }
@@ -388,14 +388,13 @@ fn rpy_to_quat(rpy: [f64; 3]) -> Quat {
     return Quat::from_xyzw(q.i as f32, q.j as f32, q.k as f32, q.w as f32);
 }
 
-fn arm_chain_points(arm: &Arm, rail_x: f64, joints: &Joints) -> [Vec3; 4] {
+fn arm_chain_points(arm: &Arm, rail_x: f64, joints: &Joints) -> [Vec3; 3] {
     let yaw = joints.values[0] as f32;
     let a1 = joints.values[1] as f32;
     let a2 = joints.values[2] as f32;
     let elbow = a1 + a2;
     let l1 = arm.link_lengths[0] as f32;
     let l2 = arm.link_lengths[1] as f32;
-    let l3 = arm.link_lengths[2] as f32;
 
     let mount = arm.mount_at_rail(rail_x);
     let base = Vec3::new(mount.v.x as f32, mount.v.y as f32, mount.v.z as f32);
@@ -410,10 +409,6 @@ fn arm_chain_points(arm: &Arm, rail_x: f64, joints: &Joints) -> [Vec3; 4] {
         to_world(
             l1 * a1.cos() + l2 * elbow.cos(),
             l1 * a1.sin() + l2 * elbow.sin(),
-        ),
-        to_world(
-            l1 * a1.cos() + l2 * elbow.cos() + l3 * elbow.cos(),
-            l1 * a1.sin() + l2 * elbow.sin() + l3 * elbow.sin(),
         ),
     ];
 }

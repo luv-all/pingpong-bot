@@ -81,28 +81,17 @@ impl CameraSource for SimCamera {
 
         let world = self.world.lock().expect("sim 월드");
         let ball = world.ball_position();
-        let frame = frame_for_ball(ball, world.ball_state, &self.view);
+        let frame = frame_for_ball(ball, &self.view);
         return Some((self.camera_id, frame, timestamp));
     }
 }
 
 /// Rapier 공 위치 → `FrameRef`.
 ///
-/// 비행 중 공이 시야 밖이면 `empty` 대신 더미 픽셀을 낸다.
-/// 추정기(`SimBallEstimator`)는 픽셀이 아니라 Rapier 월드에서 궤적을 읽으므로,
-/// 카메라 FOV만으로 예측 시작 시점이 늦어지는 것을 막는다.
-fn frame_for_ball(
-    ball: Vector,
-    ball_state: super::shooter::BallState,
-    view: &CameraView,
-) -> FrameRef {
-    use pingpong_domain::PixelPoint;
-
+/// 시야 밖이면 빈 프레임 (더미 픽셀로 삼각측량을 오염시키지 않음).
+fn frame_for_ball(ball: Vector, view: &CameraView) -> FrameRef {
     if let Some(pixel) = view.project(ball) {
         return FrameRef::sim(pixel);
-    }
-    if ball_state == super::shooter::BallState::InFlight {
-        return FrameRef::sim(PixelPoint::new(320.0, 240.0));
     }
     return FrameRef::empty();
 }
@@ -119,7 +108,7 @@ mod tests {
     use pingpong_domain::Arm;
 
     fn test_arm() -> Arc<Arm> {
-        return Arc::new(Arm::competition().expect("테스트용 3DOF arm"));
+        return Arc::new(Arm::competition().expect("테스트용 4DOF arm"));
     }
 
     #[test]

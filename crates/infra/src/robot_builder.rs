@@ -11,7 +11,7 @@ use crate::urdf::{SimRobotMount, UrdfLoadError, UrdfRobot};
 /// 빌드된 sim 로봇 — 제어용 `Arm` + (선택) URDF FK·mesh 뷰어.
 #[derive(Debug, Clone)]
 pub struct SimRobot {
-    /// plan_swing·관절 추종용 (3축 FK)
+    /// plan_swing·관절 추종용 (4축 FK)
     pub arm: Arc<Arm>,
     /// mesh 뷰어·URDF FK (없으면 primitive 렌더)
     pub urdf: Option<Arc<UrdfRobot>>,
@@ -60,7 +60,7 @@ impl RobotBuilder {
         };
     }
 
-    /// 내장 primitive 3DOF 팔 (URDF 없음).
+    /// 내장 primitive 4DOF 팔 (URDF 없음).
     pub fn competition() -> Self {
         return Self::new().use_competition_primitive(true);
     }
@@ -208,7 +208,7 @@ mod tests {
             .build_with_arm_fallback(test_fallback_arm())
             .expect("competition");
         assert!(robot.urdf.is_none());
-        assert_eq!(robot.arm.joint_count(), 3);
+        assert_eq!(robot.arm.joint_count(), 4);
     }
 
     #[test]
@@ -218,13 +218,15 @@ mod tests {
         if !path.exists() {
             return;
         }
+        // urdf-test mesh는 3축 — 제어 Arm은 4DOF competition fallback
         let robot = RobotBuilder::new()
             .urdf(&path)
             .ee_link("pingpong_paddle_v5_1")
             .mount_preset(MountPreset::Rep103AtTableEnd)
-            .build()
+            .build_with_arm_fallback(test_fallback_arm())
             .expect("urdf-test");
         assert!(robot.urdf.is_some());
-        assert_eq!(robot.arm.joint_count(), 3);
+        assert_eq!(robot.arm.joint_count(), 4);
+        assert_eq!(robot.urdf.as_ref().unwrap().joint_count(), 3);
     }
 }

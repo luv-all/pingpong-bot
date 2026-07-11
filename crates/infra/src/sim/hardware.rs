@@ -37,11 +37,21 @@ impl Hardware for SimHardware {
     fn command(&mut self, trajectory: &SwingTrajectory) -> Result<(), HwError> {
         {
             let mut world = self.world.lock().expect("sim 월드");
+            // EKF control은 아직 불안정 — 오라클 모드에서는 물리 스레드만 타격
+            if world.oracle_auto_swing() {
+                debug!("oracle 타격 모드 — control 스윙 명령 무시");
+                return Ok(());
+            }
             if world.robot().is_swinging() {
                 debug!("sim 이미 스윙 중 — 제어 루프 명령 무시");
                 return Ok(());
             }
+            if world.swing_committed() {
+                debug!("이번 공에 이미 스윙 commit — 재계획 무시");
+                return Ok(());
+            }
             world.robot_mut().begin_swing(trajectory.clone());
+            world.mark_swing_committed();
         }
         self.command_count += 1;
 
@@ -66,6 +76,10 @@ impl Hardware for SimHardware {
     }
 
     fn is_busy(&mut self) -> bool {
-        return self.world.lock().expect("sim 월드").robot().is_swinging();
+        let world = self.world.lock().expect("sim 월드");
+        // 오라클 타격 중이면 control이 plan_swing을 돌리지 않게 한다
+        return world.oracle_auto_swing()
+            || world.swing_committed()
+            || world.robot().is_swinging();
     }
 }

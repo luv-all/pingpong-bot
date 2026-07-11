@@ -1,29 +1,28 @@
-//! sim 전용 궤적 추정 — Rapier 월드의 공 위치·속도로 접수 평면 교차를 예측한다.
+//! sim 궤적 추정 — Rapier 진실 상태를 domain ballistics / EKF에 넣는다.
 //!
-//! 2단계 EKF 본체 전까지 sim에서 IK·스윙 파이프라인을 검증하는 오라클 추정기.
+//! 자동 스윙(`predict_impact`)은 진실 탄도를 쓰고, 파이프라인 Estimator는
+//! 같은 상태를 EKF에 주입해 hit-plane 예측을 검증한다.
 
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use nalgebra::Vector3;
-use pingpong_domain::constants::{ball, table};
-use pingpong_domain::physics::{G, MIN_SWING_SECS};
-use pingpong_domain::{Estimator, HitPlane, Point3, Prediction, World};
+use pingpong_domain::ballistics::predict_hit_plane;
+use pingpong_domain::{BallEkf, Estimator, HitPlane, Point3, Prediction, World};
 
 use super::shooter::BallState;
 use super::world::SimWorld;
 
-/// Rapier와 동일한 ball·table restitution (world.rs 콜라이더 설정).
-const BALL_RESTITUTION: f64 = 0.88;
-
-/// Rapier 월드 스냅샷으로 접수 평면 교차를 예측한다 (물리 스텝·추정기 공용).
+/// Rapier 월드 스냅샷으로 접수 평면 교차를 예측한다 (물리 스텝·자동 스윙 공용).
 pub fn predict_impact(world: &SimWorld, plane: HitPlane) -> Option<Prediction> {
     let snap = snapshot_from_world(world)?;
-    return integrated_impact(snap, plane);
+    return predict_hit_plane(snap.position, snap.velocity, plane, 0.0);
 }
 
-/// Rapier 월드에서 공 상태를 읽어 `predict_to`를 계산한다.
+/// Rapier 월드에서 공 상태를 읽어 EKF에 주입한 뒤 `predict_to`한다.
 pub struct SimBallEstimator {
     world: Arc<Mutex<SimWorld>>,
+    ekf: BallEkf,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -34,7 +33,10 @@ struct BallSnapshot {
 
 impl SimBallEstimator {
     pub fn new(world: Arc<Mutex<SimWorld>>) -> Self {
-        return Self { world };
+        return Self {
+            world,
+            ekf: BallEkf::new(0.0),
+        };
     }
 
     fn publish_debug_prediction(&self, prediction: Option<Prediction>) {
@@ -56,99 +58,27 @@ fn snapshot_from_world(world: &SimWorld) -> Option<BallSnapshot> {
     });
 }
 
-/// Rapier와 같은 중력·테이블 바운스로 접수 평면 교차 시각을 적분한다.
-fn integrated_impact(snap: BallSnapshot, plane: HitPlane) -> Option<Prediction> {
-    let vy = snap.velocity.y;
-    if vy >= -0.05 {
-        return None;
-    }
-
-    const MIN_LEAD: f64 = 0.05;
-    const MAX_LEAD: f64 = 1.2;
-    const DT: f64 = 0.001;
-
-    // 이미 평면을 지난 공 — 짧은 리드로 현재 궤적 위 intercept
-    if snap.position.y <= plane.y + 1e-3 {
-        let t = MIN_SWING_SECS.max(MIN_LEAD);
-        if t > MAX_LEAD {
-            return None;
-        }
-        return Some(short_lead_prediction(snap, t));
-    }
-
-    let g = G.z;
-    let floor_z = table::SURFACE_Z + ball::RADIUS;
-    let mut pos = snap.position;
-    let mut vel = snap.velocity;
-    let mut t = 0.0;
-
-    while t < MAX_LEAD {
-        let prev_y = pos.y;
-        vel.z += g * DT;
-        pos += vel * DT;
-        t += DT;
-
-        if pos.z <= floor_z && vel.z < 0.0 {
-            pos.z = floor_z;
-            vel.z = -vel.z * BALL_RESTITUTION;
-        }
-
-        if prev_y > plane.y && pos.y <= plane.y {
-            let frac = (plane.y - prev_y) / (pos.y - prev_y);
-            let t_cross = t - DT + DT * frac;
-            if t_cross <= MIN_LEAD || t_cross > MAX_LEAD {
-                return None;
-            }
-            let mut impact = pos;
-            impact.y = plane.y;
-            if impact.z < floor_z {
-                impact.z = floor_z;
-            }
-            if impact.z > table::SURFACE_Z + 1.2 {
-                return None;
-            }
-            return Some(Prediction {
-                time_to_impact_secs: t_cross,
-                impact_position: Point3::<World>::from_vector(impact),
-                incoming_velocity: vel,
-            });
-        }
-    }
-
-    return None;
-}
-
-fn short_lead_prediction(snap: BallSnapshot, t: f64) -> Prediction {
-    let g = G.z;
-    let floor_z = table::SURFACE_Z + ball::RADIUS;
-    let mut impact = snap.position + snap.velocity * t + Vector3::new(0.0, 0.0, 0.5 * g * t * t);
-    if impact.z < floor_z {
-        impact.z = floor_z;
-    }
-    return Prediction {
-        time_to_impact_secs: t,
-        impact_position: Point3::<World>::from_vector(impact),
-        incoming_velocity: snap.velocity,
-    };
-}
-
 impl Estimator for SimBallEstimator {
-    fn update(&mut self, _observation: pingpong_domain::BallObservation) {
-        // predict_to가 월드에서 직접 읽는다. 주차·시야 밖이면 디버그 마커 제거.
+    fn update(&mut self, _position: Point3<World>, timestamp: Instant) {
         let snapshot = self
             .world
             .lock()
             .ok()
             .and_then(|world| snapshot_from_world(&world));
-        if snapshot.is_none() {
+        let Some(snap) = snapshot else {
             self.publish_debug_prediction(None);
-        }
+            return;
+        };
+        // 진실 위치·속도로 EKF를 리셋해 파이프라인 예측이 스윙과 맞게 유지
+        self.ekf
+            .set_state(snap.position, snap.velocity, timestamp);
     }
 
     fn predict_to(&self, plane: HitPlane) -> Option<Prediction> {
-        let world = self.world.lock().ok()?;
-        let prediction = predict_impact(&world, plane)?;
-        drop(world);
+        let prediction = self.ekf.predict_to(plane).or_else(|| {
+            let world = self.world.lock().ok()?;
+            return predict_impact(&world, plane);
+        })?;
         self.publish_debug_prediction(Some(prediction.clone()));
         return Some(prediction);
     }
@@ -182,9 +112,9 @@ mod tests {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        let pred = integrated_impact(snap, plane).expect("슈터 기본 샷 예측");
+        let pred = predict_hit_plane(snap.position, snap.velocity, plane, 0.0).expect("슈터 기본 샷 예측");
         assert!(
-            (pred.impact_position.v.y - plane.y).abs() < 1e-6,
+            (pred.impact_position.v.y - plane.y).abs() < 1e-5,
             "y={}",
             pred.impact_position.v.y
         );
