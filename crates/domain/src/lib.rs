@@ -7,22 +7,28 @@
 pub mod constants;
 pub mod error;
 pub mod estimator;
+pub mod impact;
 pub mod physics;
 pub mod ports;
+pub mod rail;
 pub mod robot;
+pub mod trajectory;
 pub mod triangulation;
 pub mod types;
 
 pub use constants::{
-    ball, table, BALL_RADIUS, TABLE_HALF_THICKNESS, TABLE_LENGTH_Y, TABLE_NET_HEIGHT,
-    TABLE_SURFACE_Z, TABLE_WIDTH_X, TABLE_DEFAULT_HIT_PLANE_Y,
+    BALL_RADIUS, TABLE_DEFAULT_HIT_PLANE_Y, TABLE_HALF_THICKNESS, TABLE_LENGTH_Y, TABLE_NET_HEIGHT,
+    TABLE_SURFACE_Z, TABLE_WIDTH_X, ball, table,
 };
 pub use error::{DomainError, HwError, HwFailDetail, ObservationError, SwingPlanError};
 pub use estimator::PassThroughEstimator;
-pub use physics::{accel, plan_swing, G};
-pub use ports::{
-    CameraSource, Clock, Detector, Estimator, Hardware, Telemetry,
+pub use impact::{
+    DEFAULT_RESTITUTION, RacketImpactTarget, cooperative_return_velocity, loft_return_velocity,
+    required_racket_velocity, verify_impact_model,
 };
+pub use physics::{G, MAX_JOINT_ACCEL, MIN_SWING_SECS, accel, plan_contact_swing, plan_swing};
+pub use ports::{CameraSource, Clock, Detector, Estimator, Hardware, Telemetry};
+pub use rail::LinearRail;
 pub use robot::{
     Arm, ArmBuildError, ArmBuilder, JointLimit, RacketPose, RobotState, SUPPORTED_FK_JOINTS,
 };

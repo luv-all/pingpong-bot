@@ -182,13 +182,68 @@ impl Joints {
     }
 }
 
-/// 하드웨어에 전달할 스윙 궤적.
+/// 리니어 X 위치·팔 관절각.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RobotPose {
+    /// 레일 위 베이스 x [m]
+    pub rail_x: f64,
+    /// revolute 관절각
+    pub joints: Joints,
+}
+
+impl RobotPose {
+    /// 레일 x와 관절각으로 포즈를 만든다.
+    pub fn new(rail_x: f64, joints: Joints) -> Self {
+        return Self { rail_x, joints };
+    }
+}
+
+/// quintic 스윙에 포함되는 리니어 X 이동.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RailMotion {
+    /// 시작 x [m]
+    pub start: f64,
+    /// 끝 x [m]
+    pub end: f64,
+    /// 시작 속도 [m/s]
+    pub start_velocity: f64,
+    /// 끝 속도 [m/s]
+    pub end_velocity: f64,
+}
+
+impl RailMotion {
+    /// 고정 위치 (이동 없음).
+    pub const fn fixed(x: f64) -> Self {
+        return Self {
+            start: x,
+            end: x,
+            start_velocity: 0.0,
+            end_velocity: 0.0,
+        };
+    }
+}
+
+impl Default for RailMotion {
+    fn default() -> Self {
+        return Self::fixed(0.0);
+    }
+}
+
+/// 하드웨어에 전달할 스윙 궤적 (quintic, plan §7.5).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwingTrajectory {
-    /// 목표 관절각
-    pub joints: Joints,
+    /// 스윙 시작 관절각
+    pub start: Joints,
+    /// 임팩트 시점 목표 관절각
+    pub end: Joints,
+    /// 시작 관절 각속도 [rad/s]
+    pub start_velocity: Vec<f64>,
+    /// 임팩트 시점 관절 각속도 [rad/s]
+    pub end_velocity: Vec<f64>,
     /// 궤적 소요 시간 [s]
     pub duration_secs: f64,
+    /// 리니어 레일 X 이동
+    pub rail: RailMotion,
 }
 
 /// 텔레메트리·로깅 이벤트 종류.

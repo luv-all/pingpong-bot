@@ -43,6 +43,18 @@ pub enum SwingPlanError {
         time_to_impact_secs: f64,
         min_swing_secs: f64,
     },
+    /// quintic 궤적이 관절 각속도 한계를 초과
+    JointSpeedLimit {
+        joint_index: usize,
+        speed: f64,
+        limit: f64,
+    },
+    /// quintic 궤적이 관절 각가속도 한계를 초과 (§7.4 실행 가능성 근사)
+    JointAccelerationLimit {
+        joint_index: usize,
+        acceleration: f64,
+        limit: f64,
+    },
     /// 임팩트 모델상 원하는 리턴 속도를 만들 수 없음 (plan §7.1)
     ReturnVelocityUnreachable {
         incoming_velocity: [f64; 3],
@@ -140,6 +152,22 @@ impl fmt::Display for SwingPlanError {
                 f,
                 "임팩트까지 {time_to_impact_secs:.3}s 남음 — 최소 스윙 {min_swing_secs:.3}s 필요"
             ),
+            Self::JointSpeedLimit {
+                joint_index,
+                speed,
+                limit,
+            } => write!(
+                f,
+                "관절 {joint_index} 각속도 {speed:.2} rad/s > 한계 {limit:.2} rad/s"
+            ),
+            Self::JointAccelerationLimit {
+                joint_index,
+                acceleration,
+                limit,
+            } => write!(
+                f,
+                "관절 {joint_index} 각가속도 {acceleration:.1} rad/s² > 한계 {limit:.1} rad/s²"
+            ),
             Self::ReturnVelocityUnreachable {
                 incoming_velocity,
                 outgoing_velocity,
@@ -172,10 +200,9 @@ impl fmt::Display for ObservationError {
                 f,
                 "삼각측량 카메라 부족 — {cameras_with_observation}/{required}대만 관측됨"
             ),
-            Self::InterpolationFailed { camera_id } => write!(
-                f,
-                "{camera_id} — 동기화 시각 보간용 앞뒤 프레임 없음"
-            ),
+            Self::InterpolationFailed { camera_id } => {
+                write!(f, "{camera_id} — 동기화 시각 보간용 앞뒤 프레임 없음")
+            }
         };
     }
 }
