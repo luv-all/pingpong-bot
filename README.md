@@ -47,7 +47,7 @@ cargo run -p pingpong-bin -- [OPTIONS]
 | `--mode sim\|real` | `sim` | 실행 모드. `real`은 아직 미구현 |
 | `--frames N` | `300` | 가상 카메라 프레임 수 |
 | `--camera-count N` | `3` | sim 카메라 대수 (삼각측량 최소 2대) |
-| `--hit-plane-y M` | `1.0` | 접수 평면 y 좌표 [m] (로봇 앞 깊이) |
+| `--hit-plane-y M` | `0.30` | 접수 평면 y 좌표 [m] (로봇 앞 깊이) |
 | `--sim-speed X` | `1.0` | sim 시간 배율 (10 = 10배속) |
 | `--physics-hz H` | `1000` | Rapier 물리 적분 주파수 [Hz] |
 | `--frame-hz H` | `120` | 가상 카메라 프레임률 [Hz] |
@@ -64,7 +64,7 @@ cargo run -p pingpong-bin
 cargo run -p pingpong-bin -- --no-gui --frames 120 --shoot-on-start --sim-speed 5
 
 # 카메라 2대, 120프레임, 타격 높이 0.80m
-cargo run -p pingpong-bin -- --camera-count 2 --frames 120 --hit-plane-y 0.80
+cargo run -p pingpong-bin -- --camera-count 2 --frames 120 --hit-plane-y 0.30
 
 # 로그 레벨 조정 (debug까지)
 RUST_LOG=debug cargo run -p pingpong-bin -- --frames 30
@@ -183,6 +183,8 @@ cargo build -p pingpong-bin --release
 | **kiss3d 3D 뷰** (탁구대·로봇·슈터·공) | ✅ |
 | **URDF 로봇 로드** (`--urdf`, `--ee-link`) | ✅ (primitive + **STL/OBJ mesh**) |
 | Z-up 좌표계 + `HitPlane { y }` 접수 평면 | ✅ |
+| **BallScript** (시간·위치·속도·임펄스 스케줄) | ✅ |
+| **RobotBuilder** (URDF mesh + 마운트 프리셋) | ✅ |
 | `sample_at` 타임스탬프 보간 | ✅ |
 | DLT 삼각측량, ChArUco 캘리브레이션 | ⏳ 2단계 |
 | EKF / RK4 궤적 추정 | ⏳ 2단계 |
