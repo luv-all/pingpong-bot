@@ -181,21 +181,24 @@ cargo run -p pingpong-bin -- --config config/example.toml
 
 **반발계수 \(e\)** — \(e \approx \sqrt{h_{i+1}/h_i}\) 또는 \(e = |v_n'|/|v_n|\)
 
+측정값은 기본으로 [`config/example.toml`](config/example.toml)의 `[physics]`에 **merge**된다.  
+다른 파일을 쓰려면 `--config path`, 쓰기 없이 확인만 하려면 `--dry-run`.
+
 ```bash
-# 연속 바운스 정점 높이 [m]
+# 연속 바운스 정점 높이 [m] → config [physics].restitution
 cargo run -p measure-restitution -- --heights 0.40,0.29,0.21
 
 # 법선 속력 쌍 |vin|:|vout|
 cargo run -p measure-restitution -- --vz-pairs 2.0:1.7,1.9:1.61
 
 # 탄도 적분으로 설정된 TABLE_BOUNCE_RESTITUTION 검증 (모델 SSOT)
-cargo run -p measure-restitution -- --sim-ballistics
+cargo run -p measure-restitution -- --sim-ballistics --dry-run
 
-# Rapier 낙하 — 솔버 실효 e (설정값과 다를 수 있음)
+# Rapier 낙하 — 솔버 실효 e
 cargo run -p measure-restitution -- --sim
 
-# TOML 스니펫 저장
-cargo run -p measure-restitution -- --heights 0.40,0.29,0.21 -o /tmp/e.toml
+# 다른 config 파일에 쓰기
+cargo run -p measure-restitution -- --heights 0.40,0.29 --config config/my.toml
 ```
 
 **마찰 \(\mu\)** — \(v_t' = (1-\mu)\,v_t\) → \(\mu = 1 - |v_t'|/|v_t|\)
@@ -203,21 +206,23 @@ cargo run -p measure-restitution -- --heights 0.40,0.29,0.21 -o /tmp/e.toml
 ```bash
 cargo run -p measure-friction -- --vt-pairs 2.0:1.4,1.5:1.05
 cargo run -p measure-friction -- --sim
-cargo run -p measure-friction -- --sim -o /tmp/mu.toml
+cargo run -p measure-friction -- --sim --dry-run
 ```
 
 **항력 \(k\)** — 비행 궤적 CSV `t,x,y,z` 최소제곱 (마일스톤 2.5)
 
 ```bash
-# traj.csv 예:
-# t,x,y,z
-# 0.000,0.76,2.40,1.00
-# 0.008,0.76,2.36,0.99
 cargo run -p measure-restitution -- --drag-csv traj.csv
-cargo run -p measure-restitution -- --drag-csv traj.csv -o /tmp/k.toml
 ```
 
-참고: sim 파이프라인 EKF는 Rapier와 맞춰 **drag=0** (`BallEkf::new(0.0)`). 실측 \(k\)는 constants/`DEFAULT_DRAG`에 넣은 뒤 실물·탄도에 켠다.
+런타임 반영:
+
+```bash
+cargo run -p pingpong-bin -- --config config/example.toml
+# → Rapier 반발 + BallEkf drag/friction/restitution 예측에 [physics] 사용
+```
+
+참고: 필드를 비우면 `PhysicsParams::default()` (e=0.85, μ=0.15, drag=0).
 ---
 
 ## 개발

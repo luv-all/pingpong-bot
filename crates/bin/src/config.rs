@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use pingpong_domain::Calibration;
+use pingpong_domain::{Calibration, PhysicsConfig, PhysicsParams};
 use serde::Deserialize;
 
 /// `pingpong-bot --config` 로 로드하는 설정.
@@ -21,6 +21,9 @@ pub struct RuntimeConfig {
     /// 로봇 프리셋 id (`pingpong_app::ROBOTS`)
     #[serde(default = "default_robot")]
     pub robot: String,
+    /// 물리 계수 — `tools/measure_*`가 `[physics]`에 merge
+    #[serde(default)]
+    pub physics: PhysicsConfig,
 }
 
 fn default_hit_plane_y() -> f64 {
@@ -43,6 +46,11 @@ impl RuntimeConfig {
         let config: Self = toml::from_str(&text)
             .with_context(|| format!("TOML 파싱 실패: {}", path.display()))?;
         return Ok(config);
+    }
+
+    /// `[physics]` → concrete [`PhysicsParams`].
+    pub fn physics_params(&self) -> PhysicsParams {
+        return self.physics.to_params();
     }
 
     /// Calibration을 로드하거나 sim 기본 배치를 만든다.

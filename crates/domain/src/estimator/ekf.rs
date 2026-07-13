@@ -10,10 +10,11 @@ use std::time::Instant;
 
 use nalgebra::{Matrix3, Matrix6, Vector3, Vector6};
 
-use super::ballistics::{predict_hit_plane, semi_implicit_euler};
+use super::ballistics::{predict_hit_plane_with, semi_implicit_euler};
 use crate::constants::control::EKF_MEAS_JUMP_M;
 use crate::constants::estimator::{Q_POS, Q_VEL, R_MEAS};
 use crate::constants::DEFAULT_DRAG;
+use crate::physics_config::PhysicsParams;
 use crate::ports::Estimator;
 use crate::types::{HitPlane, Point3, Prediction, World};
 
@@ -24,21 +25,29 @@ pub struct BallEkf {
     velocity: Vector3<f64>,
     covariance: Matrix6<f64>,
     last_time: Option<Instant>,
-    drag_coefficient: f64,
+    physics: PhysicsParams,
     initialized: bool,
     /// 두 번째 측정에서 finite-difference로 속도를 심었는지.
     velocity_seeded: bool,
 }
 
 impl BallEkf {
-    /// 항력 계수를 지정해 생성한다.
+    /// 항력 계수를 지정해 생성한다 (바운스는 default physics).
     pub fn new(drag_coefficient: f64) -> Self {
+        return Self::with_physics(PhysicsParams {
+            drag: drag_coefficient,
+            ..PhysicsParams::default()
+        });
+    }
+
+    /// config `[physics]` 등에서 만든 파라미터로 생성.
+    pub fn with_physics(physics: PhysicsParams) -> Self {
         return Self {
             position: Vector3::zeros(),
             velocity: Vector3::zeros(),
             covariance: Matrix6::identity(),
             last_time: None,
-            drag_coefficient,
+            physics,
             initialized: false,
             velocity_seeded: false,
         };
@@ -161,7 +170,7 @@ impl BallEkf {
 
     fn predict_step(&mut self, dt: f64) {
         let (pos, vel) =
-            semi_implicit_euler(self.position, self.velocity, dt, self.drag_coefficient);
+            semi_implicit_euler(self.position, self.velocity, dt, self.physics.drag);
         self.position = pos;
         self.velocity = vel;
 
@@ -193,7 +202,7 @@ impl Estimator for BallEkf {
         if !self.initialized || !self.velocity_seeded {
             return None;
         }
-        return predict_hit_plane(self.position, self.velocity, plane, self.drag_coefficient);
+        return predict_hit_plane_with(self.position, self.velocity, plane, &self.physics);
     }
 }
 
@@ -203,6 +212,7 @@ mod tests {
 
     use super::*;
     use crate::constants::{control, table};
+    use crate::estimator::ballistics::{predict_hit_plane, semi_implicit_euler};
     use crate::planner::physics::in_swing_commit_window;
 
     #[test]

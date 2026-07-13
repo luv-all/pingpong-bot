@@ -93,7 +93,26 @@ impl SimSession {
         controls: Arc<Mutex<SimRuntimeControls>>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
-        let world = Arc::new(Mutex::new(SimWorld::new(arm, urdf)));
+        return Self::with_physics(
+            config,
+            arm,
+            urdf,
+            controls,
+            shutdown,
+            pingpong_domain::PhysicsParams::default(),
+        );
+    }
+
+    /// config `[physics]`를 Rapier 월드에 반영한다.
+    pub fn with_physics(
+        config: SimSessionConfig,
+        arm: Arc<pingpong_domain::Arm>,
+        urdf: Option<Arc<UrdfRobot>>,
+        controls: Arc<Mutex<SimRuntimeControls>>,
+        shutdown: Arc<AtomicBool>,
+        physics: pingpong_domain::PhysicsParams,
+    ) -> Self {
+        let world = Arc::new(Mutex::new(SimWorld::with_physics(arm, urdf, physics)));
         let sim_time = Arc::new(Mutex::new(0.0_f64));
         let clock = Arc::new(SimClockHandle::new(Arc::clone(&sim_time)));
         let physics_shutdown = Arc::clone(&shutdown);

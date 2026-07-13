@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use pingpong_domain::{
     Arm, DomainError, HitPlane, Prediction, RobotPose, RobotState, Target,
-    ball_past_midcourt_for_commit, constants::{ball, table}, in_swing_commit_window, plan_swing,
+    ball_past_midcourt_for_commit,
+    constants::{ball, table},
+    in_swing_commit_window, plan_swing, PhysicsParams,
 };
 use rapier3d::prelude::*;
 use tracing::{debug, warn};
@@ -59,6 +61,8 @@ pub struct SimWorld {
     pub shooter_handle: RigidBodyHandle,
     /// 불변 로봇 기구 모델
     pub arm: Arc<Arm>,
+    /// 테이블·공 반발 등 (config `[physics]`)
+    pub physics: PhysicsParams,
     /// URDF 기반 FK·뷰어 (선택)
     pub urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>,
     /// 제어 관절 → URDF actuated 매핑 (`None`이면 앞쪽 truncate)
@@ -90,6 +94,15 @@ impl SimWorld {
     /// 제어·Rapier 라켓은 항상 `arm` SSOT. URDF는 뷰어 mesh용이며
     /// `set_control_to_urdf`로 관절 매핑을 줄 수 있다.
     pub fn new(arm: Arc<Arm>, urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>) -> Self {
+        return Self::with_physics(arm, urdf, PhysicsParams::default());
+    }
+
+    /// config `[physics]` 반발 등을 Rapier collider에 반영한다.
+    pub fn with_physics(
+        arm: Arc<Arm>,
+        urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>,
+        physics: PhysicsParams,
+    ) -> Self {
         let mut integration_parameters = IntegrationParameters::default();
         integration_parameters.dt = 1.0 / 1000.0;
 
@@ -113,7 +126,7 @@ impl SimWorld {
             (table::LENGTH_Y * 0.5) as f32,
             table::HALF_THICKNESS as f32,
         )
-        .restitution(ball::TABLE_BOUNCE_RESTITUTION as f32)
+        .restitution(physics.restitution as f32)
         .friction(0.4)
         .build();
         collider_set.insert_with_parent(table_collider, table_handle, &mut rigid_body_set);
@@ -158,7 +171,7 @@ impl SimWorld {
             .build();
         let racket_handle = rigid_body_set.insert(racket_body);
         let racket_collider = ColliderBuilder::cuboid(0.06, 0.07, 0.005)
-            .restitution(ball::RESTITUTION as f32)
+            .restitution(physics.restitution as f32)
             .friction(0.5)
             .build();
         collider_set.insert_with_parent(racket_collider, racket_handle, &mut rigid_body_set);
@@ -167,7 +180,7 @@ impl SimWorld {
         let ball_body = RigidBodyBuilder::fixed().translation(muzzle).build();
         let ball_handle = rigid_body_set.insert(ball_body);
         let ball_collider = ColliderBuilder::ball(ball::RADIUS as f32)
-            .restitution(ball::TABLE_BOUNCE_RESTITUTION as f32)
+            .restitution(physics.restitution as f32)
             .friction(0.2)
             .density(0.25)
             .build();
@@ -189,6 +202,7 @@ impl SimWorld {
             racket_handle,
             shooter_handle,
             arm,
+            physics,
             urdf,
             control_to_urdf: None,
             robot,

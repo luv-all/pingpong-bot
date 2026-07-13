@@ -4,9 +4,8 @@
 
 use nalgebra::Vector3;
 
-use crate::constants::{
-    ball, estimator as est, table, TABLE_BOUNCE_FRICTION, TABLE_BOUNCE_RESTITUTION,
-};
+use crate::constants::{ball, estimator as est, table};
+use crate::physics_config::PhysicsParams;
 use crate::planner::physics::accel;
 use crate::types::{HitPlane, Point3, Prediction, World};
 
@@ -19,6 +18,24 @@ pub fn predict_hit_plane(
     plane: HitPlane,
     drag_coefficient: f64,
 ) -> Option<Prediction> {
+    return predict_hit_plane_with(
+        position,
+        velocity,
+        plane,
+        &PhysicsParams {
+            drag: drag_coefficient,
+            ..PhysicsParams::default()
+        },
+    );
+}
+
+/// [`PhysicsParams`]로 항력·바운스를 지정한 hit-plane 예측.
+pub fn predict_hit_plane_with(
+    position: Vector3<f64>,
+    velocity: Vector3<f64>,
+    plane: HitPlane,
+    physics: &PhysicsParams,
+) -> Option<Prediction> {
     let vy = velocity.y;
     if vy > -est::MIN_APPROACH_SPEED_Y {
         return None;
@@ -28,7 +45,6 @@ pub fn predict_hit_plane(
     }
 
     if position.y <= plane.y + 1e-3 {
-        // 이미 평면을 지남 — 구름/잔여 관측으로 short-lead 스팸하지 않음
         return None;
     }
 
@@ -40,7 +56,7 @@ pub fn predict_hit_plane(
     while t < est::MAX_LEAD {
         let prev_y = pos.y;
         let (next_pos, next_vel) =
-            semi_implicit_euler(pos, vel, est::INTEGRATE_DT, drag_coefficient);
+            semi_implicit_euler_with(pos, vel, est::INTEGRATE_DT, physics);
         pos = next_pos;
         vel = next_vel;
         t += est::INTEGRATE_DT;
@@ -64,7 +80,6 @@ pub fn predict_hit_plane(
             if impact.z > table::SURFACE_Z + 1.2 {
                 return None;
             }
-            // 테이블 안착 높이만 클램프 — 바운스 후 낮은 접수점은 허용
             return Some(Prediction {
                 time_to_impact_secs: t_cross,
                 impact_position: Point3::<World>::from_vector(impact),
@@ -88,25 +103,45 @@ fn is_table_rolling(position: Vector3<f64>, velocity: Vector3<f64>) -> bool {
 }
 
 /// 반암시적 오일러: `v += a dt`, 그다음 `p += v_new dt` (+ 테이블 바운스).
+///
+/// 바운스 \(e,\mu\)는 [`PhysicsParams::default`]. 항력만 `drag_coefficient`.
 pub fn semi_implicit_euler(
     pos: Vector3<f64>,
     vel: Vector3<f64>,
     dt: f64,
     drag_coefficient: f64,
 ) -> (Vector3<f64>, Vector3<f64>) {
-    let a = accel(vel, drag_coefficient);
+    return semi_implicit_euler_with(
+        pos,
+        vel,
+        dt,
+        &PhysicsParams {
+            drag: drag_coefficient,
+            ..PhysicsParams::default()
+        },
+    );
+}
+
+/// [`PhysicsParams`]로 항력·바운스를 지정한 적분 스텝.
+pub fn semi_implicit_euler_with(
+    pos: Vector3<f64>,
+    vel: Vector3<f64>,
+    dt: f64,
+    physics: &PhysicsParams,
+) -> (Vector3<f64>, Vector3<f64>) {
+    let a = accel(vel, physics.drag);
     let next_vel = vel + a * dt;
     let next_pos = pos + next_vel * dt;
     let floor_z = table::SURFACE_Z + ball::RADIUS;
     if next_pos.z <= floor_z && next_vel.z < 0.0 {
-        let mu = TABLE_BOUNCE_FRICTION.clamp(0.0, 1.0);
+        let mu = physics.friction.clamp(0.0, 1.0);
         let tang_scale = 1.0 - mu;
         return (
             Vector3::new(next_pos.x, next_pos.y, floor_z),
             Vector3::new(
                 next_vel.x * tang_scale,
                 next_vel.y * tang_scale,
-                -next_vel.z * TABLE_BOUNCE_RESTITUTION,
+                -next_vel.z * physics.restitution,
             ),
         );
     }

@@ -12,6 +12,7 @@ pub mod constants;
 pub mod detector;
 pub mod error;
 pub mod estimator;
+pub mod physics_config;
 pub mod planner;
 pub mod ports;
 pub mod robot;
@@ -28,6 +29,9 @@ pub use estimator::{
     BallEkf, PassThroughEstimator, drag_from_trajectory, friction_from_tangential_speeds,
     physics_coeffs_toml, predict_hit_plane, restitution_from_bounce_heights,
     restitution_from_normal_speeds,
+};
+pub use physics_config::{
+    load_physics_from_config, merge_physics_into_config, PhysicsConfig, PhysicsParams,
 };
 pub use planner::{
     OrientedBox, RacketImpactTarget, accel, clamp_above_table, cooperative_return_velocity,

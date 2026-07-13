@@ -1,22 +1,23 @@
 //! 접선 속도 변화로 마찰계수 μ를 측정 (plan §3.4).
 //!
-//! 산출물: μ → TOML 스니펫 / `domain::constants::ball::TABLE_BOUNCE_FRICTION`
-//! \( v_t' = (1-\mu) v_t \)
+//! 산출물: `config.toml` `[physics].friction` (기본 `config/example.toml`)
 
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use pingpong_domain::constants::{ball, table, TABLE_BOUNCE_FRICTION};
-use pingpong_domain::{friction_from_tangential_speeds, physics_coeffs_toml, Arm};
+use pingpong_domain::{
+    friction_from_tangential_speeds, merge_physics_into_config, physics_coeffs_toml, Arm,
+    PhysicsConfig,
+};
 use pingpong_infra::{BallVec3, SimWorld};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "measure_friction",
-    about = "테이블 바운스 마찰 μ 측정 (접선속력·sim)"
+    about = "테이블 바운스 마찰 μ 측정 → config [physics] 자동 반영"
 )]
 struct Args {
     /// 접선 속력 쌍 |vin|:|vout| 목록 (쉼표)
@@ -27,9 +28,13 @@ struct Args {
     #[arg(long)]
     sim: bool,
 
-    /// 결과 TOML 스니펫 출력 경로
-    #[arg(short = 'o', long)]
-    output: Option<PathBuf>,
+    /// 갱신할 런타임 config
+    #[arg(long, value_name = "PATH", default_value = "config/example.toml")]
+    config: PathBuf,
+
+    /// config에 쓰지 않고 stdout 스니펫만
+    #[arg(long)]
+    dry_run: bool,
 
     /// sim 입사 수평 속력 [m/s]
     #[arg(long, default_value_t = 2.0)]
@@ -42,14 +47,14 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let mut friction = None;
+    let mut patch = PhysicsConfig::default();
 
     if let Some(ref raw) = args.vt_pairs {
         let pairs = parse_pairs(raw)?;
         let mu = friction_from_tangential_speeds(&pairs)
             .context("접선 쌍으로부터 μ 추정 실패")?;
         println!("friction μ = {mu:.6}  (from {} vt pairs)", pairs.len());
-        friction = Some(mu);
+        patch.friction = Some(mu);
     }
 
     if args.sim {
@@ -57,23 +62,35 @@ fn main() -> Result<()> {
         println!(
             "friction μ = {mu:.6}  (sim; configured TABLE_BOUNCE_FRICTION={TABLE_BOUNCE_FRICTION})"
         );
-        friction = Some(mu);
+        patch.friction = Some(mu);
     }
 
-    let Some(mu) = friction else {
+    if patch.is_empty() {
         bail!(
             "입력이 없습니다. 예:\n  \
              --vt-pairs 2.0:1.4,1.5:1.05\n  \
-             --sim"
+             --sim\n  \
+             (기본 --config config/example.toml, --dry-run 으로 쓰기 생략)"
         );
-    };
-
-    let toml = physics_coeffs_toml(None, Some(mu), None);
-    print!("{toml}");
-    if let Some(path) = args.output {
-        fs::write(&path, &toml).with_context(|| format!("쓰기 실패: {}", path.display()))?;
-        println!("wrote {}", path.display());
     }
+
+    if args.dry_run {
+        print!(
+            "{}",
+            physics_coeffs_toml(patch.restitution, patch.friction, patch.drag)
+        );
+        return Ok(());
+    }
+
+    let merged = merge_physics_into_config(&args.config, &patch)
+        .with_context(|| format!("config 갱신 실패: {}", args.config.display()))?;
+    println!(
+        "updated {} [physics] restitution={:?} friction={:?} drag={:?}",
+        args.config.display(),
+        merged.restitution,
+        merged.friction,
+        merged.drag
+    );
     return Ok(());
 }
 

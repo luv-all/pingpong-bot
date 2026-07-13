@@ -7,18 +7,18 @@
 #
 # Calibration JSON은 `calib_charuco --emit-sim 3 -o calibration.json` 으로 생성.
 #
-# 물리 계수 측정:
-#   cargo run -p measure-restitution -- --sim -o /tmp/e.toml
-#   cargo run -p measure-friction -- --sim -o /tmp/mu.toml
+# 물리 계수 — measure_* 가 [physics]에 자동 merge:
+#   cargo run -p measure-restitution -- --heights 0.40,0.29,0.21
+#   cargo run -p measure-friction -- --vt-pairs 2.0:1.4
 #   cargo run -p measure-restitution -- --drag-csv traj.csv
-# 측정값은 우선 `domain::constants::ball` / `physics::DEFAULT_DRAG`에 반영한다.
+# (--config 기본값 = 이 파일. --dry-run 이면 쓰기 생략)
 
 hit_plane_y = 0.30
 camera_count = 3
 robot = "competition"
 # calibration_path = "calibration.json"
 
-# [physics]  # 향후 RuntimeConfig — 지금은 주석 참고용
-# restitution = 0.85
-# friction = 0.15
-# drag = 0.01
+[physics]
+restitution = 0.85
+friction = 0.15
+drag = 0.0

@@ -18,7 +18,7 @@ use std::thread;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use pingpong_app::{find_robot, robot_ids_csv, PipelineConfig, DEFAULT_ROBOT_ID};
-use pingpong_domain::{Arm, BallEkf, Calibration, CameraId, HitPlane, constants::table};
+use pingpong_domain::{Arm, BallEkf, Calibration, CameraId, HitPlane, PhysicsParams, constants::table};
 use pingpong_infra::{
     RobotBuilder, SimRuntimeControls, SimSession, SimSessionConfig, SimViewerOptions,
     TracingTelemetry, new_shutdown_flag, run_sim_viewer,
@@ -107,6 +107,7 @@ fn main() -> Result<()> {
     let mut args = Args::parse();
     let mut robot_id = pingpong_app::DEFAULT_ROBOT_ID.to_string();
     let mut calibration = Calibration::sim(args.camera_count);
+    let mut physics = PhysicsParams::default();
 
     if let Some(path) = &args.config {
         let runtime = RuntimeConfig::load(std::path::Path::new(path))?;
@@ -114,11 +115,15 @@ fn main() -> Result<()> {
         args.camera_count = runtime.camera_count;
         robot_id = runtime.robot.clone();
         calibration = runtime.calibration()?;
+        physics = runtime.physics_params();
         info!(
             path,
             cameras = calibration.camera_count(),
             hit_plane_y = args.hit_plane_y,
             robot = %robot_id,
+            restitution = physics.restitution,
+            friction = physics.friction,
+            drag = physics.drag,
             "설정 파일 로드"
         );
     }
@@ -130,7 +135,7 @@ fn main() -> Result<()> {
     args.robot = Some(robot_id);
 
     match args.mode {
-        Mode::Sim => run_sim(args, calibration)?,
+        Mode::Sim => run_sim(args, calibration, physics)?,
         Mode::Real => run_real()?,
     }
 
@@ -138,7 +143,7 @@ fn main() -> Result<()> {
 }
 
 /// sim 모드: Rapier 디지털 트윈 + 카메라→DLT→BallEkf→control 타격
-fn run_sim(args: Args, calibration: Calibration) -> Result<()> {
+fn run_sim(args: Args, calibration: Calibration, physics: PhysicsParams) -> Result<()> {
     if args.no_gui {
         warn!(
             frames = args.frames,
@@ -166,7 +171,7 @@ fn run_sim(args: Args, calibration: Calibration) -> Result<()> {
         }
     }
 
-    let mut session = SimSession::new(
+    let mut session = SimSession::with_physics(
         SimSessionConfig {
             physics_hz: args.physics_hz,
             frame_hz: args.frame_hz,
@@ -177,6 +182,7 @@ fn run_sim(args: Args, calibration: Calibration) -> Result<()> {
         urdf.clone(),
         Arc::clone(&controls),
         Arc::clone(&shutdown),
+        physics,
     );
 
     {
@@ -204,7 +210,7 @@ fn run_sim(args: Args, calibration: Calibration) -> Result<()> {
         })
         .collect();
 
-    let estimator = Box::new(BallEkf::new(0.0));
+    let estimator = Box::new(BallEkf::with_physics(physics));
     let hardware = session.hardware();
     let telemetry = Arc::new(TracingTelemetry);
     let config = PipelineConfig {

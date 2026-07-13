@@ -5,7 +5,7 @@ pub mod ekf;
 pub mod identify;
 mod passthrough;
 
-pub use ballistics::predict_hit_plane;
+pub use ballistics::{predict_hit_plane, predict_hit_plane_with, semi_implicit_euler};
 pub use ekf::BallEkf;
 pub use identify::{
     drag_from_trajectory, friction_from_tangential_speeds, physics_coeffs_toml,

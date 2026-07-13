@@ -1,7 +1,6 @@
 //! 공 낙하 바운스 전후 속도비로 반발계수 e를 측정 (plan §3.4).
 //!
-//! 산출물: e → TOML 스니펫 / `domain::constants::ball::RESTITUTION`
-//! 항력 k 적합: `--drag-csv` (마일스톤 2.5)
+//! 산출물: `config.toml` `[physics].restitution` / `drag` (기본 `config/example.toml`)
 
 use std::fs;
 use std::path::PathBuf;
@@ -12,18 +11,18 @@ use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_domain::constants::{ball, table, TABLE_BOUNCE_RESTITUTION};
 use pingpong_domain::{
-    drag_from_trajectory, physics_coeffs_toml, restitution_from_bounce_heights,
-    restitution_from_normal_speeds, Arm,
+    drag_from_trajectory, merge_physics_into_config, physics_coeffs_toml,
+    restitution_from_bounce_heights, restitution_from_normal_speeds, Arm, PhysicsConfig,
 };
 use pingpong_infra::{BallVec3, SimWorld};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "measure_restitution",
-    about = "반발계수 e 측정 (높이·법선속도·sim). 항력 k는 --drag-csv"
+    about = "반발계수 e 측정 → config [physics] 자동 반영. 항력은 --drag-csv"
 )]
 struct Args {
-    /// 연속 바운스 정점 높이 [m] (쉼표, 테이블 면 기준 공 중심 z - SURFACE 가능)
+    /// 연속 바운스 정점 높이 [m] (쉼표)
     #[arg(long, value_name = "H0,H1,...")]
     heights: Option<String>,
 
@@ -31,11 +30,11 @@ struct Args {
     #[arg(long, value_name = "VIN:VOUT,...")]
     vz_pairs: Option<String>,
 
-    /// Rapier sim 수직 낙하로 e 추정 (설정된 TABLE_BOUNCE_RESTITUTION과 비교)
+    /// Rapier sim 수직 낙하로 e 추정
     #[arg(long)]
     sim: bool,
 
-    /// 탄도 적분(semi-implicit)으로 설정된 e가 공식과 맞는지 검증
+    /// 탄도 적분으로 설정된 e 검증
     #[arg(long)]
     sim_ballistics: bool,
 
@@ -43,9 +42,13 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     drag_csv: Option<PathBuf>,
 
-    /// 결과 TOML 스니펫 출력 경로
-    #[arg(short = 'o', long)]
-    output: Option<PathBuf>,
+    /// 갱신할 런타임 config
+    #[arg(long, value_name = "PATH", default_value = "config/example.toml")]
+    config: PathBuf,
+
+    /// config에 쓰지 않고 stdout 스니펫만
+    #[arg(long)]
+    dry_run: bool,
 
     /// sim 낙하 초기 높이 (테이블 면 위) [m]
     #[arg(long, default_value_t = 0.40)]
@@ -54,15 +57,14 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let mut restitution = None;
-    let mut drag = None;
+    let mut patch = PhysicsConfig::default();
 
     if let Some(ref csv) = args.drag_csv {
         let samples = load_traj_csv(csv)?;
         let k = drag_from_trajectory(&samples)
             .context("항력 적합 실패 — 샘플≥3, 비행 구간 속도≥0.3 m/s")?;
         println!("drag k = {k:.8}  (from {})", csv.display());
-        drag = Some(k);
+        patch.drag = Some(k);
     }
 
     if let Some(ref raw) = args.heights {
@@ -70,15 +72,15 @@ fn main() -> Result<()> {
         let e = restitution_from_bounce_heights(&hs)
             .context("높이로부터 e 추정 실패 — 높이 ≥2개, 양수")?;
         println!("restitution e = {e:.6}  (from {} heights)", hs.len());
-        restitution = Some(e);
+        patch.restitution = Some(e);
     }
 
     if let Some(ref raw) = args.vz_pairs {
         let pairs = parse_pairs(raw)?;
-        let e = restitution_from_normal_speeds(&pairs)
-            .context("속도 쌍으로부터 e 추정 실패")?;
+        let e =
+            restitution_from_normal_speeds(&pairs).context("속도 쌍으로부터 e 추정 실패")?;
         println!("restitution e = {e:.6}  (from {} vz pairs)", pairs.len());
-        restitution = Some(e);
+        patch.restitution = Some(e);
     }
 
     if args.sim_ballistics {
@@ -86,7 +88,7 @@ fn main() -> Result<()> {
         println!(
             "restitution e = {e:.6}  (ballistics; configured={TABLE_BOUNCE_RESTITUTION})"
         );
-        restitution = Some(e);
+        patch.restitution = Some(e);
     }
 
     if args.sim {
@@ -94,35 +96,50 @@ fn main() -> Result<()> {
         println!(
             "restitution e = {e:.6}  (sim drop; configured TABLE_BOUNCE_RESTITUTION={TABLE_BOUNCE_RESTITUTION})"
         );
-        restitution = Some(e);
+        patch.restitution = Some(e);
     }
 
-    if restitution.is_none() && drag.is_none() {
+    if patch.is_empty() {
         bail!(
             "입력이 없습니다. 예:\n  \
              --heights 0.40,0.29,0.21\n  \
-             --vz-pairs 2.0:1.7,1.9:1.61\n  \
+             --vz-pairs 2.0:1.7\n  \
              --sim\n  \
              --sim-ballistics\n  \
-             --drag-csv traj.csv"
+             --drag-csv traj.csv\n  \
+             (기본 --config config/example.toml, --dry-run 으로 쓰기 생략)"
         );
     }
 
-    let toml = physics_coeffs_toml(restitution, None, drag);
-    print!("{toml}");
-    if let Some(path) = args.output {
-        fs::write(&path, &toml).with_context(|| format!("쓰기 실패: {}", path.display()))?;
-        println!("wrote {}", path.display());
+    if args.dry_run {
+        print!(
+            "{}",
+            physics_coeffs_toml(patch.restitution, patch.friction, patch.drag)
+        );
+        return Ok(());
     }
+
+    let merged = merge_physics_into_config(&args.config, &patch)
+        .with_context(|| format!("config 갱신 실패: {}", args.config.display()))?;
+    println!(
+        "updated {} [physics] restitution={:?} friction={:?} drag={:?}",
+        args.config.display(),
+        merged.restitution,
+        merged.friction,
+        merged.drag
+    );
     return Ok(());
 }
 
 fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
     use pingpong_domain::ballistics::semi_implicit_euler;
-    use nalgebra::Vector3;
 
     let floor = table::SURFACE_Z + ball::RADIUS;
-    let mut pos = Vector3::new(table::WIDTH_X * 0.5, table::LENGTH_Y * 0.5, floor + drop_height);
+    let mut pos = Vector3::new(
+        table::WIDTH_X * 0.5,
+        table::LENGTH_Y * 0.5,
+        floor + drop_height,
+    );
     let mut vel = Vector3::zeros();
     let dt = 0.001;
     let mut vin = None;
