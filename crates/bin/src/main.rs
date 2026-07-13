@@ -153,7 +153,8 @@ fn run_sim(args: Args, calibration: Calibration) -> Result<()> {
         .robot
         .as_deref()
         .unwrap_or(pingpong_app::DEFAULT_ROBOT_ID);
-    let (arm, urdf) = load_robot(robot_id, args.urdf.as_deref(), args.ee_link.as_deref())?;
+    let (arm, urdf, joint_map) =
+        load_robot(robot_id, args.urdf.as_deref(), args.ee_link.as_deref())?;
     let controls = Arc::new(Mutex::new(SimRuntimeControls::default()));
     let shutdown = new_shutdown_flag();
 
@@ -181,6 +182,7 @@ fn run_sim(args: Args, calibration: Calibration) -> Result<()> {
     {
         let world_arc = session.world();
         let mut world = world_arc.lock().expect("sim 월드");
+        world.set_control_to_urdf(joint_map);
         world.set_hit_plane(HitPlane {
             y: args.hit_plane_y,
         });
@@ -257,8 +259,12 @@ fn load_robot(
     robot_id: &str,
     urdf_path: Option<&std::path::Path>,
     ee_link: Option<&str>,
-) -> Result<(Arc<Arm>, Option<Arc<pingpong_infra::UrdfRobot>>)> {
-    // `--urdf`가 있으면 카탈로그 무시, 제어 Arm만 기본 프리셋
+) -> Result<(
+    Arc<Arm>,
+    Option<Arc<pingpong_infra::UrdfRobot>>,
+    Option<Vec<Option<usize>>>,
+)> {
+    // `--urdf`가 있으면 카탈로그 무시, 제어 Arm만 기본 프리셋 (매핑 = truncate)
     if let Some(path) = urdf_path {
         let arm = find_robot(DEFAULT_ROBOT_ID)
             .expect("DEFAULT_ROBOT_ID")
@@ -270,18 +276,19 @@ fn load_robot(
             .max_joint_speed(2.5)
             .build_with_arm_fallback(Arc::clone(&arm))
             .with_context(|| format!("로봇 빌드 실패: {}", path.display()))?;
-        info!(path = %path.display(), "커스텀 URDF — 제어는 기본 빌더");
-        return Ok((arm, built.urdf));
+        info!(path = %path.display(), "커스텀 URDF — 제어는 기본 빌더, 매핑 truncate");
+        return Ok((arm, built.urdf, None));
     }
 
     let entry = find_robot(robot_id).ok_or_else(|| {
         anyhow::anyhow!("알 수 없는 robot id `{robot_id}` — 사용 가능: {}", robot_ids_csv())
     })?;
     let arm = entry.arm();
+    let joint_map = entry.control_to_urdf_owned();
 
     let Some(rel) = entry.urdf_rel else {
         info!(robot = robot_id, "빌더 프리셋 (URDF 없음)");
-        return Ok((arm, None));
+        return Ok((arm, None, None));
     };
 
     let workspace = std::env::current_dir().context("현재 작업 디렉터리")?;
@@ -295,15 +302,25 @@ fn load_robot(
         .with_context(|| format!("로봇 빌드 실패: {}", path.display()))?;
 
     if let Some(ref model) = built.urdf {
+        if let Some(ref map) = joint_map {
+            pingpong_infra::validate_control_to_urdf_map(
+                map,
+                model.joint_count(),
+                arm.joint_count(),
+            )
+            .map_err(|e| anyhow::anyhow!("robot `{robot_id}` 관절 매핑: {e}"))?;
+        }
         info!(
             robot = robot_id,
             mesh = %model.name,
             joints = model.joint_count(),
+            control_joints = arm.joint_count(),
+            mapped = joint_map.is_some(),
             ee = %model.ee_link,
             path = %path.display(),
             "URDF mesh 로드 — 제어·IK는 카탈로그 빌더"
         );
     }
 
-    return Ok((arm, built.urdf));
+    return Ok((arm, built.urdf, joint_map));
 }

@@ -62,6 +62,8 @@ pub struct SimWorld {
     pub arm: Arc<Arm>,
     /// URDF 기반 FK·뷰어 (선택)
     pub urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>,
+    /// 제어 관절 → URDF actuated 매핑 (`None`이면 앞쪽 truncate)
+    control_to_urdf: Option<Vec<Option<usize>>>,
     /// 런타임 관절 상태
     pub robot: RobotState,
     /// sim 경과 시간 [s]
@@ -85,6 +87,9 @@ pub struct SimWorld {
 
 impl SimWorld {
     /// 탁구대·슈터·주차된 공·로봇 라켓을 배치한다.
+    ///
+    /// 제어·Rapier 라켓은 항상 `arm` SSOT. URDF는 뷰어 mesh용이며
+    /// `set_control_to_urdf`로 관절 매핑을 줄 수 있다.
     pub fn new(arm: Arc<Arm>, urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>) -> Self {
         let mut integration_parameters = IntegrationParameters::default();
         integration_parameters.dt = 1.0 / 1000.0;
@@ -92,24 +97,9 @@ impl SimWorld {
         let mut rigid_body_set = RigidBodySet::new();
         let mut collider_set = ColliderSet::new();
 
-        let robot = if let Some(ref model) = urdf {
-            let joints = model.default_joints();
-            let rail_x = arm
-                .rail
-                .as_ref()
-                .map(|rail| rail.home_x())
-                .unwrap_or(arm.base.v.x);
-            RobotState::new(joints, rail_x)
-        } else {
-            arm.initial_state()
-        };
-        let initial_pose = if let Some(ref model) = urdf {
-            model
-                .end_effector_pose_in_sim(robot.joints().values.as_slice())
-                .expect("URDF 초기 FK")
-        } else {
-            robot.racket_pose(&arm).expect("초기 FK")
-        };
+        // 제어 DOF = Arm. URDF default(예: 3축)로 초기화하면 plan_swing과 어긋난다.
+        let robot = arm.initial_state();
+        let initial_pose = robot.racket_pose(&arm).expect("초기 FK");
         let (racket_pos, racket_rot) = racket_pose_to_rapier(&initial_pose);
 
         let table_z = (table::SURFACE_Z - table::HALF_THICKNESS) as f32;
@@ -201,6 +191,7 @@ impl SimWorld {
             shooter_handle,
             arm,
             urdf,
+            control_to_urdf: None,
             robot,
             sim_time: 0.0,
             ball_state: BallState::Parked,
@@ -215,6 +206,23 @@ impl SimWorld {
         };
         world.sync_shooter_pose(&default_shooter);
         return world;
+    }
+
+    /// 제어→URDF 관절 매핑 (뷰어 FK). `None`이면 truncate fallback.
+    pub fn set_control_to_urdf(&mut self, map: Option<Vec<Option<usize>>>) {
+        self.control_to_urdf = map;
+    }
+
+    /// 뷰어용 URDF 관절각 (제어 `Joints` + 매핑).
+    pub fn urdf_joint_values(&self) -> Option<Vec<f64>> {
+        let urdf = self.urdf.as_ref()?;
+        let sources = self.control_to_urdf.as_deref();
+        return Some(crate::robot::urdf::map_control_joints_or_truncate(
+            self.robot.joints().values.as_slice(),
+            urdf.joint_count(),
+            sources,
+            0.0,
+        ));
     }
 
     /// Rapier 진실 상태 자동 스윙 on/off.
@@ -776,5 +784,41 @@ mod tests {
         let r1 = world.robot().rail_x();
         assert_ne!(j0, j1, "스윙 후 관절각이 변해야 함");
         assert!((r1 - rail_end).abs() < 0.05, "레일이 접수 x로 이동해야 함");
+    }
+
+    #[test]
+    fn effective_sim_mount_follows_rail_x() {
+        let arm = Arc::new(Arm::competition().expect("arm"));
+        let mut world = SimWorld::new(arm, None);
+        let x = 0.42;
+        let joints = world.robot().joints().clone();
+        *world.robot_mut() = RobotState::new(joints, x);
+        let mount = world.effective_sim_mount();
+        assert!((mount.position[0] - x).abs() < 1e-9);
+    }
+
+    #[test]
+    fn urdf_joint_values_use_control_map() {
+        use std::path::PathBuf;
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/robots/urdf-test/urdf-test_description/urdf/urdf-test.urdf");
+        if !path.exists() {
+            return;
+        }
+        let urdf = Arc::new(
+            crate::robot::UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("urdf"),
+        );
+        let arm = Arc::new(Arm::competition().expect("arm"));
+        let mut world = SimWorld::new(arm, Some(urdf));
+        world.set_control_to_urdf(Some(vec![Some(0), Some(1), Some(2)]));
+        let rail = world.robot().rail_x();
+        *world.robot_mut() = RobotState::new(
+            pingpong_domain::Joints {
+                values: vec![0.11, 0.22, 0.33, 0.44],
+            },
+            rail,
+        );
+        let q = world.urdf_joint_values().expect("mapped");
+        assert_eq!(q, vec![0.11, 0.22, 0.33]);
     }
 }

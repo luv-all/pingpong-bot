@@ -20,7 +20,11 @@ pub use clock::{SimClock, SystemClock};
 pub use detector::PassthroughDetector;
 pub use estimator::SimBallEstimator;
 pub use hardware::SimHardware;
-pub use robot::{MountPreset, RobotBuildError, RobotBuilder, SimRobot};
+pub use robot::{
+    map_control_joints_or_truncate, map_control_joints_to_urdf, validate_control_to_urdf_map,
+    MountPreset, RobotBuildError, RobotBuilder, SimRobot, UrdfGeometry, UrdfLinkVisual,
+    UrdfLoadError, UrdfRobot,
+};
 pub use sim::{
     new_shutdown_flag, BallAction, BallEvent, BallScript, BallShooterSettings, BallState,
     BallVec3, SimRuntimeControls, SimSession, SimSessionConfig, SimWorld, ShooterLayout,
@@ -28,7 +32,6 @@ pub use sim::{
 #[cfg(feature = "gui")]
 pub use sim::{run_sim_viewer, SimViewerOptions};
 pub use telemetry::{NoopTelemetry, TracingTelemetry};
-pub use robot::{UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfRobot};
 
 #[cfg(all(windows, feature = "real"))]
 pub use hardware::RealHardware;

@@ -250,10 +250,13 @@ fn sync_scene_dynamics(nodes: &mut SceneDynamics, world: &SimWorld, urdf: Option
             sync_primitive_robot(arm_nodes, world);
         }
         (RobotRender::Urdf(urdf_nodes), Some(model)) => {
+            let joints = world
+                .urdf_joint_values()
+                .unwrap_or_else(|| world.robot().joints().values.clone());
             sync_urdf_robot(
                 urdf_nodes,
                 model,
-                world.robot().joints().values.as_slice(),
+                joints.as_slice(),
                 world.effective_sim_mount(),
             );
         }

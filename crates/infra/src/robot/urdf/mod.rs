@@ -2,6 +2,7 @@
 
 mod arm_from_urdf;
 mod fk;
+mod joint_map;
 mod mount;
 mod visual;
 
@@ -11,6 +12,9 @@ use pingpong_domain::{Arm, JointLimit, Joints, RacketPose};
 use thiserror::Error;
 use urdf_rs::{JointType, Robot};
 
+pub use joint_map::{
+    map_control_joints_or_truncate, map_control_joints_to_urdf, validate_control_to_urdf_map,
+};
 pub use mount::SimRobotMount;
 pub use visual::{UrdfGeometry, UrdfLinkVisual};
 
