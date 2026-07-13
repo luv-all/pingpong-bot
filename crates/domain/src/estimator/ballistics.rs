@@ -5,7 +5,7 @@
 use nalgebra::Vector3;
 
 use crate::constants::{
-    ball, estimator as est, table, TABLE_BOUNCE_RESTITUTION,
+    ball, estimator as est, table, TABLE_BOUNCE_FRICTION, TABLE_BOUNCE_RESTITUTION,
 };
 use crate::planner::physics::accel;
 use crate::types::{HitPlane, Point3, Prediction, World};
@@ -99,11 +99,13 @@ pub fn semi_implicit_euler(
     let next_pos = pos + next_vel * dt;
     let floor_z = table::SURFACE_Z + ball::RADIUS;
     if next_pos.z <= floor_z && next_vel.z < 0.0 {
+        let mu = TABLE_BOUNCE_FRICTION.clamp(0.0, 1.0);
+        let tang_scale = 1.0 - mu;
         return (
             Vector3::new(next_pos.x, next_pos.y, floor_z),
             Vector3::new(
-                next_vel.x,
-                next_vel.y,
+                next_vel.x * tang_scale,
+                next_vel.y * tang_scale,
                 -next_vel.z * TABLE_BOUNCE_RESTITUTION,
             ),
         );

@@ -19,7 +19,8 @@
 | A1 | ~~`v_out = -0.35 × v_in`~~ → loft 탄도 | `impact.rs` `loft_return_velocity` | ✅ |
 | A2 | loft 최소 `v_y≥1`, `v_z≥0.5` | `loft_return_velocity` | ✅ (시뮬 상수, 추후 측정) |
 | A3 | `‖v_out‖ ≤ 6` | `MAX_RETURN_SPEED` | 잠정 (구 4→6) |
-| A4 | `e = 0.85` | `DEFAULT_RESTITUTION` | 미측정 |
+| A4 | `e = 0.85` | `DEFAULT_RESTITUTION` | 툴 준비 ✅ / 실측 후 갱신 |
+
 
 ---
 
@@ -148,7 +149,7 @@
 ## 체크리스트 (회의용)
 
 - [x] A1 \(v_{out}\) 정의 확정 — loft 탄도
-- [ ] A4 \(e\) 측정 계획
+- [x] A4 \(e\) 측정 계획 — `tools/measure_restitution` (`--heights` / `--vz-pairs` / `--sim`)
 - [x] B1–B3 타격 모드에서 속도 0 폴백 금지
 - [x] C1 임팩트 전 스윙 동결 — commit 창 + once
 - [x] C2 본선 = app control (oracle off) / sim 기본 oracle

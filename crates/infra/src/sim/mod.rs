@@ -9,8 +9,8 @@
 mod ball_script;
 pub(crate) mod controls;
 #[cfg(feature = "gui")]
-#[cfg(feature = "gui")]
 mod mesh_loader;
+#[cfg(feature = "gui")]
 mod panel;
 mod rapier_convert;
 pub(crate) mod session;

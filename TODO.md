@@ -27,9 +27,9 @@
 
 ### 0.3 측정으로 잠글 상수 (decisions)
 
-- [ ] A4 반발계수 \(e\) — `tools/measure-restitution`
-- [ ] 마찰 μ — `tools/measure-friction`
-- [ ] drag \(k\) — 비행 데이터로 추정 (마일스톤 2.5)
+- [x] A4 반발계수 \(e\) — `tools/measure-restitution` (공식·CLI·`--sim`; 실측값으로 constants 갱신은 보드 준비 후)
+- [x] 마찰 μ — `tools/measure-friction` + 탄도 바운스 \(v_t'=(1-\mu)v_t\)
+- [x] drag \(k\) — `measure_restitution --drag-csv` (마일스톤 2.5 비행 로그 적합)
 
 ---
 

@@ -24,7 +24,11 @@ pub mod ballistics {
 }
 
 pub use error::{DomainError, HwError, HwFailDetail, ObservationError, SwingPlanError};
-pub use estimator::{BallEkf, PassThroughEstimator, predict_hit_plane};
+pub use estimator::{
+    BallEkf, PassThroughEstimator, drag_from_trajectory, friction_from_tangential_speeds,
+    physics_coeffs_toml, predict_hit_plane, restitution_from_bounce_heights,
+    restitution_from_normal_speeds,
+};
 pub use planner::{
     OrientedBox, RacketImpactTarget, accel, clamp_above_table, cooperative_return_velocity,
     ball_past_midcourt_for_commit, in_swing_commit_window, loft_return_velocity, plan_contact_swing,
