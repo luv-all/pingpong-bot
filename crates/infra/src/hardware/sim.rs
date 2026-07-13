@@ -5,7 +5,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use pingpong_domain::{Hardware, HwError, RobotPose, SwingTrajectory};
+use pingpong_domain::{
+    Hardware, HwError, RobotPose, SwingTrajectory, ball_past_midcourt_for_commit,
+};
 use tracing::debug;
 
 use crate::sim::world::SimWorld;
@@ -48,6 +50,12 @@ impl Hardware for SimHardware {
             }
             if world.swing_committed() {
                 debug!("이번 공에 이미 스윙 commit — 재계획 무시");
+                return Ok(());
+            }
+            // decisions C4: 네트 통과 전 commit 금지 (oracle과 동일, commit 표시 안 함)
+            let ball_y = f64::from(world.ball_position().y);
+            if !ball_past_midcourt_for_commit(ball_y) {
+                debug!(ball_y, "상대 코트 — EKF control commit 대기");
                 return Ok(());
             }
             world.robot_mut().begin_swing(trajectory.clone());

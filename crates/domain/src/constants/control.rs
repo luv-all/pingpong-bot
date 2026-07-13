@@ -12,6 +12,14 @@ pub const SWING_DURATION_SECS: f64 = 0.15;
 /// 실제 duration은 commit 시점의 `time_to_impact`를 쓴다.
 pub const SWING_COMMIT_MAX_SECS: f64 = 0.20;
 
+/// 스윙 commit 허용 최대 공 y — `LENGTH_Y`에 대한 비율 (네트 통과 후).
+///
+/// oracle·EKF control 공통 (decisions C4). 상대 코트면 탄도·추정이 아직 흔들린다.
+pub const SWING_COMMIT_MAX_BALL_Y_FRAC: f64 = 0.55;
+
+/// 측정이 예측에서 이 거리[m] 이상 벗어나면 EKF 하드 리셋 (주차↔발사 텔레포트).
+pub const EKF_MEAS_JUMP_M: f64 = 0.6;
+
 /// §7.4 실행 가능성 근사 — 관절 각가속도 상한 [rad/s²] (토크 모델 전).
 pub const MAX_JOINT_ACCEL: f64 = 120.0;
 

@@ -7,8 +7,7 @@ use std::sync::Arc;
 
 use pingpong_domain::{
     Arm, DomainError, HitPlane, Prediction, RobotPose, RobotState, Target,
-    constants::{ball, table},
-    in_swing_commit_window, plan_swing,
+    ball_past_midcourt_for_commit, constants::{ball, table}, in_swing_commit_window, plan_swing,
 };
 use rapier3d::prelude::*;
 use tracing::{debug, warn};
@@ -339,7 +338,7 @@ impl SimWorld {
 
         // 상대 코트에 있으면 아직 이름 — 바운스·탄도 안정화 대기
         let ball_y = f64::from(self.ball_position().y);
-        if ball_y > table::LENGTH_Y * 0.55 {
+        if !ball_past_midcourt_for_commit(ball_y) {
             return;
         }
         if !in_swing_commit_window(prediction.time_to_impact_secs) {

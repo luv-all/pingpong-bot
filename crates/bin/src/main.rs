@@ -204,7 +204,7 @@ fn run_sim(args: Args, calibration: Calibration) -> Result<()> {
         })
         .collect();
 
-    let estimator = Box::new(BallEkf::with_defaults());
+    let estimator = Box::new(BallEkf::new(0.0));
     let hardware = session.hardware();
     let telemetry = Arc::new(TracingTelemetry);
     let config = PipelineConfig {

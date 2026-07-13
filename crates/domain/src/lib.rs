@@ -27,7 +27,8 @@ pub use error::{DomainError, HwError, HwFailDetail, ObservationError, SwingPlanE
 pub use estimator::{BallEkf, PassThroughEstimator, predict_hit_plane};
 pub use planner::{
     OrientedBox, RacketImpactTarget, accel, clamp_above_table, cooperative_return_velocity,
-    in_swing_commit_window, loft_return_velocity, plan_contact_swing, plan_swing,
+    ball_past_midcourt_for_commit, in_swing_commit_window, loft_return_velocity, plan_contact_swing,
+    plan_swing,
     required_racket_velocity, robot_obbs, robot_obbs_all, table_penetration, verify_impact_model,
     verify_torque_limits,
 };

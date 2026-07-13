@@ -48,9 +48,20 @@
 | ID | 현재 | 위치 | 상태 |
 |----|------|------|------|
 | C1 | commit-once + **commit 창 대기** | `world.rs` / `app` | ✅ |
-| C2 | sim 기본 = 오라클 타격 / `--ekf-swing` = control | `world` / `bin` | ✅ |
+| C2 | sim 기본 = 오라클 타격 / `--ekf-swing` = control | `world` / `bin` | ✅ (승격 조건 ↓) |
 | C3 | `is_busy`면 타겟 discard | `app/lib.rs` | 유지 |
-| C4 | oracle: `ball_y ≤ 0.55·LENGTH` 후 commit | `world.rs` | ✅ |
+| C4 | oracle **및 EKF control**: `ball_y ≤ 0.55·LENGTH` 후 commit | `world` / `SimHardware` | ✅ |
+
+### C2 — 기본 모드를 oracle → EKF로 올리는 조건
+
+`--ekf-swing`이 실험 플래그가 아니라 **sim 기본**이 되려면 아래를 만족한다. 미달이면 오라클 유지.
+
+1. **예측**: commit 창 + 미드코트 게이트에서 EKF impact vs Rapier/탄도 진실 RMSE **&lt; 8 cm** (단위 테스트 `tracked_ballistic_impact_near_truth_in_commit_window`로 회귀).
+2. **타격**: headless `--ekf-swing`으로 기본 슈터 N발 중 리턴/접촉 성공률이 오라클의 **≥ 80%** (TODO §6 스모크와 연동, 수치 확정 전 수동 확인).
+3. **재발사**: 주차→발사 텔레포트 후 EKF가 점프 리셋되어 속도 시드가 다시 된다.
+4. **물리 정합**: sim 파이프라인 EKF drag는 Rapier와 같이 **0** (`BallEkf::new(0.0)`). 실측 \(k\)는 §0.3 이후 `with_defaults`/설정으로.
+
+현재(2026-07-13): (1)(3)(4) 코드 반영. (2)는 수동/`--ekf-swing` 확인 후 승격.
 
 ---
 

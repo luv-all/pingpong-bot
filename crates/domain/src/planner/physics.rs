@@ -4,7 +4,7 @@ use nalgebra::Vector3;
 
 use crate::constants::{
     DEFAULT_RESTITUTION, G, JOINT_INERTIA, MAX_JOINT_ACCEL, MAX_JOINT_TORQUE, MIN_SWING_SECS,
-    SWING_COMMIT_MAX_SECS,
+    SWING_COMMIT_MAX_BALL_Y_FRAC, SWING_COMMIT_MAX_SECS, table,
 };
 use crate::error::{DomainError, SwingPlanError};
 use super::impact::{loft_return_velocity, required_racket_velocity};
@@ -21,6 +21,11 @@ pub fn accel(velocity: Vector3<f64>, drag_coefficient: f64) -> Vector3<f64> {
 /// 창보다 이르면 대기(발사 직후 긴 궤적 금지), 짧으면 `InsufficientTime`.
 pub fn in_swing_commit_window(time_to_impact_secs: f64) -> bool {
     return (MIN_SWING_SECS..=SWING_COMMIT_MAX_SECS).contains(&time_to_impact_secs);
+}
+
+/// 네트 통과 후인지 — oracle·EKF control 공통 commit 게이트 (decisions C4).
+pub fn ball_past_midcourt_for_commit(ball_y: f64) -> bool {
+    return ball_y <= table::LENGTH_Y * SWING_COMMIT_MAX_BALL_Y_FRAC;
 }
 
 /// 타겟 예측·현재 포즈로 quintic 스윙 궤적을 계획한다 (plan §7.1–§7.5).
@@ -312,6 +317,15 @@ mod tests {
         assert!(in_swing_commit_window(0.12));
         assert!(in_swing_commit_window(SWING_COMMIT_MAX_SECS));
         assert!(!in_swing_commit_window(0.35));
+    }
+
+    #[test]
+    fn midcourt_gate_matches_fraction() {
+        use crate::constants::control::SWING_COMMIT_MAX_BALL_Y_FRAC;
+        let limit = table::LENGTH_Y * SWING_COMMIT_MAX_BALL_Y_FRAC;
+        assert!(!ball_past_midcourt_for_commit(limit + 0.01));
+        assert!(ball_past_midcourt_for_commit(limit));
+        assert!(ball_past_midcourt_for_commit(0.3));
     }
 
     #[test]

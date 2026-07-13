@@ -21,8 +21,9 @@
 
 ### 0.2 EKF control 타격
 
-- [ ] `--ekf-swing`이 오라클 수준으로 안정될 때까지 예측·commit 튜닝
-- [ ] 기본 모드를 oracle → EKF로 올릴 조건 문서화 (decisions C2)
+- [x] `--ekf-swing`이 오라클 수준으로 안정될 때까지 예측·commit 튜닝
+  - drag=0(sim), 속도 FD 시드, 텔레포트 점프 리셋, C4 미드코트 게이트를 control에도 적용
+- [x] 기본 모드를 oracle → EKF로 올릴 조건 문서화 (decisions C2)
 
 ### 0.3 측정으로 잠글 상수 (decisions)
 

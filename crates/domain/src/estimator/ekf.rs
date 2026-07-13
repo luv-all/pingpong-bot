@@ -2,12 +2,16 @@
 //!
 //! 상태 `x = [p, v]`, 측정은 삼각측량 3D 위치.
 //! 짧은 전파·hit-plane 예측 모두 반암시적 오일러 ([`super::ballistics`]).
+//!
+//! sim Rapier는 이차 항력이 없으므로 파이프라인은 [`BallEkf::new(0.0)`]을 쓴다.
+//! `with_defaults`(DEFAULT_DRAG)는 실측 k가 있을 때.
 
 use std::time::Instant;
 
 use nalgebra::{Matrix3, Matrix6, Vector3, Vector6};
 
 use super::ballistics::{predict_hit_plane, semi_implicit_euler};
+use crate::constants::control::EKF_MEAS_JUMP_M;
 use crate::constants::estimator::{Q_POS, Q_VEL, R_MEAS};
 use crate::constants::DEFAULT_DRAG;
 use crate::ports::Estimator;
@@ -22,6 +26,8 @@ pub struct BallEkf {
     last_time: Option<Instant>,
     drag_coefficient: f64,
     initialized: bool,
+    /// 두 번째 측정에서 finite-difference로 속도를 심었는지.
+    velocity_seeded: bool,
 }
 
 impl BallEkf {
@@ -34,12 +40,23 @@ impl BallEkf {
             last_time: None,
             drag_coefficient,
             initialized: false,
+            velocity_seeded: false,
         };
     }
 
-    /// 기본 항력으로 생성.
+    /// 기본 항력으로 생성 (실측 전 추정 k).
     pub fn with_defaults() -> Self {
         return Self::new(DEFAULT_DRAG);
+    }
+
+    /// 필터를 비운다 (다음 관측에서 재시드).
+    pub fn reset(&mut self) {
+        self.initialized = false;
+        self.velocity_seeded = false;
+        self.last_time = None;
+        self.position = Vector3::zeros();
+        self.velocity = Vector3::zeros();
+        self.covariance = Matrix6::identity();
     }
 
     /// 현재 위치 추정.
@@ -52,7 +69,7 @@ impl BallEkf {
 
     /// 현재 속도 추정.
     pub fn velocity(&self) -> Option<Vector3<f64>> {
-        if !self.initialized {
+        if !self.initialized || !self.velocity_seeded {
             return None;
         }
         return Some(self.velocity);
@@ -64,6 +81,7 @@ impl BallEkf {
         self.velocity = velocity;
         self.covariance = Matrix6::identity() * 0.01;
         self.initialized = true;
+        self.velocity_seeded = true;
         self.last_time = Some(time);
     }
 
@@ -71,8 +89,23 @@ impl BallEkf {
     pub fn update_position(&mut self, measured: Point3<World>, timestamp: Instant) {
         if let Some(prev) = self.last_time {
             let dt = timestamp.duration_since(prev).as_secs_f64();
-            if dt > 1e-4 && dt < 0.5 {
+            if dt < 0.0 {
+                return;
+            }
+            // 긴 공백(세션 공백·프레임 드롭) → 하드 리셋
+            if dt >= 0.5 {
+                self.reset();
+            } else if self.initialized && self.velocity_seeded && dt > 1e-4 {
                 self.predict_step(dt);
+                // 주차↔발사 텔레포트: 예측 후에도 잔차가 크면 리셋
+                if (measured.v - self.position).norm() > EKF_MEAS_JUMP_M {
+                    self.reset();
+                }
+            } else if self.initialized && !self.velocity_seeded {
+                // 시드 전: 원시 위치 점프만 검사
+                if (measured.v - self.position).norm() > EKF_MEAS_JUMP_M {
+                    self.reset();
+                }
             }
         }
 
@@ -81,8 +114,24 @@ impl BallEkf {
             self.velocity = Vector3::zeros();
             self.covariance = Matrix6::identity() * 0.1;
             self.initialized = true;
+            self.velocity_seeded = false;
             self.last_time = Some(timestamp);
             return;
+        }
+
+        // 두 번째 측정: Δp/Δt로 속도 시드 (v=0 초기화 잔여 제거)
+        if !self.velocity_seeded {
+            if let Some(prev) = self.last_time {
+                let dt = timestamp.duration_since(prev).as_secs_f64();
+                if dt > 1e-4 {
+                    self.velocity = (measured.v - self.position) / dt;
+                    self.position = measured.v;
+                    self.covariance = Matrix6::identity() * 0.05;
+                    self.velocity_seeded = true;
+                    self.last_time = Some(timestamp);
+                    return;
+                }
+            }
         }
 
         let r = Matrix3::identity() * R_MEAS;
@@ -141,7 +190,7 @@ impl Estimator for BallEkf {
     }
 
     fn predict_to(&self, plane: HitPlane) -> Option<Prediction> {
-        if !self.initialized {
+        if !self.initialized || !self.velocity_seeded {
             return None;
         }
         return predict_hit_plane(self.position, self.velocity, plane, self.drag_coefficient);
@@ -153,7 +202,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::constants::table;
+    use crate::constants::{control, table};
+    use crate::planner::physics::in_swing_commit_window;
 
     #[test]
     fn ekf_predicts_hit_plane_from_state() {
@@ -174,7 +224,7 @@ mod tests {
 
     #[test]
     fn ekf_update_accepts_measurements() {
-        let mut ekf = BallEkf::with_defaults();
+        let mut ekf = BallEkf::new(0.0);
         let t0 = Instant::now();
         for i in 0..10 {
             ekf.update_position(
@@ -184,5 +234,86 @@ mod tests {
         }
         assert!(ekf.position().is_some());
         assert!(ekf.velocity().is_some());
+    }
+
+    #[test]
+    fn velocity_seeded_on_second_measurement() {
+        let mut ekf = BallEkf::new(0.0);
+        let t0 = Instant::now();
+        ekf.update_position(Point3::new(0.7, 2.0, 0.95), t0);
+        assert!(ekf.velocity().is_none());
+        ekf.update_position(
+            Point3::new(0.7, 1.95, 0.95),
+            t0 + Duration::from_millis(8),
+        );
+        let v = ekf.velocity().expect("seeded");
+        assert!(
+            (v.y - (-0.05 / 0.008)).abs() < 1.0,
+            "finite-diff vy≈-6.25, got {}",
+            v.y
+        );
+    }
+
+    #[test]
+    fn jump_reinitializes_filter() {
+        let mut ekf = BallEkf::new(0.0);
+        let t0 = Instant::now();
+        ekf.set_state(
+            Vector3::new(0.2, 0.3, 0.9),
+            Vector3::new(0.0, -1.0, 0.0),
+            t0,
+        );
+        // 슈터로 텔레포트
+        ekf.update_position(
+            Point3::new(0.7, 2.5, 1.0),
+            t0 + Duration::from_millis(16),
+        );
+        // 리셋 후 첫 측정만 — 속도 미시드
+        assert!(ekf.velocity().is_none());
+    }
+
+    #[test]
+    fn tracked_ballistic_impact_near_truth_in_commit_window() {
+        let plane = HitPlane {
+            y: table::DEFAULT_HIT_PLANE_Y,
+        };
+        let p0 = Vector3::new(table::WIDTH_X * 0.5, 2.4, table::SURFACE_Z + 0.25);
+        let v0 = Vector3::new(0.0, -5.5, 0.8);
+        let truth0 = predict_hit_plane(p0, v0, plane, 0.0).expect("truth");
+
+        let mut ekf = BallEkf::new(0.0);
+        let t0 = Instant::now();
+        let dt = Duration::from_millis(8);
+        let mut pos = p0;
+        let mut vel = v0;
+        let mut t = 0.0_f64;
+        let mut best_err = f64::MAX;
+
+        for i in 0..200 {
+            let time = t0 + dt * i;
+            ekf.update_position(Point3::from_vector(pos), time);
+            if let Some(pred) = ekf.predict_to(plane) {
+                if in_swing_commit_window(pred.time_to_impact_secs)
+                    && pos.y <= table::LENGTH_Y * control::SWING_COMMIT_MAX_BALL_Y_FRAC
+                {
+                    let err = (pred.impact_position.v - truth0.impact_position.v).norm();
+                    best_err = best_err.min(err);
+                }
+            }
+            let (np, nv) = semi_implicit_euler(pos, vel, 0.008, 0.0);
+            pos = np;
+            vel = nv;
+            t += 0.008;
+            if pos.y < plane.y {
+                break;
+            }
+            let _ = t;
+        }
+
+        assert!(
+            best_err < 0.08,
+            "commit 창에서 impact RMSE {best_err:.3} m (목표 < 8 cm), truth tti={}",
+            truth0.time_to_impact_secs
+        );
     }
 }
