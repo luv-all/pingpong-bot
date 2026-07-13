@@ -98,16 +98,17 @@ crates/
   infra/    어댑터 — Rapier sim, TracingTelemetry, SyntheticCamera(레거시) 등
   bin/      CLI 진입점 — sim/real 모드 DI
 
-tools/      실험·캘리브·검증용 독립 바이너리 (9개, 1단계는 스텁)
+tools/      실험·캘리브·검증용 독립 바이너리
 plan.md     기술 마스터 플랜
+TODO.md     실행 체크리스트
 ```
 
 의존 방향: `bin` → `app` / `infra` → `domain`
 
 **로봇**
 - 기구학·제어 `Arm` 타입은 `domain/robot/`에만 있다. 부팅 시 `Arc<Arm>`으로 sim·real·제어가 같은 불변 객체를 공유한다.
-- **프리셋 SSOT**는 [`crates/app/src/arm.rs`](crates/app/src/arm.rs)의 `ROBOTS`다. id·URDF 경로·링크 길이·관절 한도는 여기만 고친다.
-- URDF가 있는 프리셋도 **제어·IK는 `build`(빌더 `Arm`)**, URDF는 kiss3d **mesh 시각화**용이다 (예: `urdf-test` mesh 3축 ↔ 제어 4DOF).
+- **프리셋 SSOT**는 [`crates/app/src/arm.rs`](crates/app/src/arm.rs)의 `ROBOTS`다. id·URDF 경로·링크 길이·관절 한도·`control_to_urdf` 매핑은 여기만 고친다.
+- URDF가 있는 프리셋도 **제어·IK는 `build`(빌더 `Arm`)**, URDF는 kiss3d **mesh 시각화**용이다 (예: `urdf-test` mesh 3축 ↔ 제어 4DOF, `control_to_urdf`로 앞 3축 동기).
 
 | id | mesh | 제어 |
 |----|------|------|
@@ -151,26 +152,72 @@ cargo run -p pingpong-bin -- --no-gui --frames 60 --shoot-on-start --sim-speed 5
 
 ## 실험 도구 (`tools/`)
 
-각 도구는 `domain`/`infra`와 같은 타입·포트를 공유한다.  
-**Phase 2:** `calib_charuco --emit-sim` / `--validate` 사용 가능. OpenCV·측정 도구 본문은 실물 마일스톤.
+각 도구는 `domain`/`infra`와 같은 타입·포트를 공유한다.
 
-| crate | 바이너리 | 용도 |
-|-------|----------|------|
-| `calib-charuco` | `calib_charuco` | ChArUco 보정 (`--emit-sim`으로 sim Calibration JSON) |
-| `measure-restitution` | `measure_restitution` | 반발계수 e 측정 |
-| `measure-friction` | `measure_friction` | 마찰계수 μ 측정 |
-| `jog-axis` | `jog_axis` | 축 수동 조그 |
-| `capture-flying-ball` | `capture_flying_ball` | 비행 공 캡처 데이터셋 |
-| `detect-bgsub` | `detect_bgsub` | 배경 차분 검출 실험 |
-| `detect-colormask` | `detect_colormask` | 색상 마스크 검출 실험 |
-| `detect-contour` | `detect_contour` | contour·원형도 검출 실험 |
-| `detect-roi` | `detect_roi` | ROI 추적 검출 실험 |
+| crate | 바이너리 | 상태 | 용도 |
+|-------|----------|------|------|
+| `calib-charuco` | `calib_charuco` | ✅ | ChArUco 보정 (`--emit-sim` / `--validate`) |
+| `measure-restitution` | `measure_restitution` | ✅ | 반발계수 \(e\), 항력 \(k\) |
+| `measure-friction` | `measure_friction` | ✅ | 마찰계수 \(\mu\) |
+| `jog-axis` | `jog_axis` | ⏳ 스텁 | 축 수동 조그 |
+| `capture-flying-ball` | `capture_flying_ball` | ⏳ 스텁 | 비행 공 캡처 데이터셋 |
+| `detect-bgsub` | `detect_bgsub` | ⏳ 스텁 | 배경 차분 검출 |
+| `detect-colormask` | `detect_colormask` | ⏳ 스텁 | 색상 마스크 검출 |
+| `detect-contour` | `detect_contour` | ⏳ 스텁 | contour·원형도 검출 |
+| `detect-roi` | `detect_roi` | ⏳ 스텁 | ROI 추적 검출 |
+
+### 캘리브레이션
 
 ```bash
 cargo run -p calib-charuco -- --emit-sim 3 -o calibration.json
+cargo run -p calib-charuco -- --validate calibration.json
 cargo run -p pingpong-bin -- --config config/example.toml
 ```
 
+### 물리 계수 측정 (`measure_*`)
+
+공식은 `domain::estimator::identify`, 기본 상수는 `domain::constants::ball` / `physics`다.  
+측정 결과는 TOML 스니펫으로 찍히며 `-o`로 저장한 뒤 constants에 반영한다.
+
+**반발계수 \(e\)** — \(e \approx \sqrt{h_{i+1}/h_i}\) 또는 \(e = |v_n'|/|v_n|\)
+
+```bash
+# 연속 바운스 정점 높이 [m]
+cargo run -p measure-restitution -- --heights 0.40,0.29,0.21
+
+# 법선 속력 쌍 |vin|:|vout|
+cargo run -p measure-restitution -- --vz-pairs 2.0:1.7,1.9:1.61
+
+# 탄도 적분으로 설정된 TABLE_BOUNCE_RESTITUTION 검증 (모델 SSOT)
+cargo run -p measure-restitution -- --sim-ballistics
+
+# Rapier 낙하 — 솔버 실효 e (설정값과 다를 수 있음)
+cargo run -p measure-restitution -- --sim
+
+# TOML 스니펫 저장
+cargo run -p measure-restitution -- --heights 0.40,0.29,0.21 -o /tmp/e.toml
+```
+
+**마찰 \(\mu\)** — \(v_t' = (1-\mu)\,v_t\) → \(\mu = 1 - |v_t'|/|v_t|\)
+
+```bash
+cargo run -p measure-friction -- --vt-pairs 2.0:1.4,1.5:1.05
+cargo run -p measure-friction -- --sim
+cargo run -p measure-friction -- --sim -o /tmp/mu.toml
+```
+
+**항력 \(k\)** — 비행 궤적 CSV `t,x,y,z` 최소제곱 (마일스톤 2.5)
+
+```bash
+# traj.csv 예:
+# t,x,y,z
+# 0.000,0.76,2.40,1.00
+# 0.008,0.76,2.36,0.99
+cargo run -p measure-restitution -- --drag-csv traj.csv
+cargo run -p measure-restitution -- --drag-csv traj.csv -o /tmp/k.toml
+```
+
+참고: sim 파이프라인 EKF는 Rapier와 맞춰 **drag=0** (`BallEkf::new(0.0)`). 실측 \(k\)는 constants/`DEFAULT_DRAG`에 넣은 뒤 실물·탄도에 켠다.
 ---
 
 ## 개발
@@ -196,13 +243,14 @@ cargo build -p pingpong-bin --release
 | **egui 슈터 GUI** (발사 트리거·파라미터) | ✅ |
 | **kiss3d 3D 뷰** (탁구대·로봇·슈터·공) | ✅ |
 | **로봇 프리셋** (`--robot` / TOML `robot`, `app/arm.rs` `ROBOTS`) | ✅ |
-| **URDF mesh** (`--urdf` 또는 프리셋 `urdf_rel`) | ✅ |
+| **URDF mesh** (`--urdf` 또는 프리셋 `urdf_rel`) + 제어→URDF 관절 매핑 | ✅ |
 | Z-up 좌표계 + `HitPlane { y }` 접수 평면 | ✅ |
 | **BallScript** (시간·위치·속도·임펄스 스케줄) | ✅ |
 | **RobotBuilder** (URDF mesh + sim 마운트) | ✅ |
 | `sample_at` 타임스탬프 보간 | ✅ |
 | DLT 삼각측량, ChArUco 캘리브레이션 | ✅ (sim emit / validate) |
-| EKF / 궤적 추정 | ✅ (sim; Magnus 스핀 추적은 이후) |
+| EKF / 궤적 추정 | ✅ (sim; `--ekf-swing` 실험, 기본은 오라클) |
+| `measure_restitution` / `measure_friction` (e·μ·k) | ✅ |
 | `--config` TOML | ✅ |
 | OpenCV 검출, 실 카메라 | ⏳ 2단계 |
 | Rerun 시각화, Dynamixel/AXL real | ⏳ 2단계 |
@@ -210,7 +258,7 @@ cargo build -p pingpong-bin --release
 
 sim에서는 **실제 3D 물리**로 공이 날고, 오라클(또는 `--ekf-swing`)로 라켓이 움직인다.
 
-**2단계 상세 로드맵:** [`docs/phase2.md`](docs/phase2.md)
+**로드맵:** [`docs/phase2.md`](docs/phase2.md) · 잔여 작업 [`TODO.md`](TODO.md) · 결정 [`docs/decisions.md`](docs/decisions.md)
 
 ---
 
