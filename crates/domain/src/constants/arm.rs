@@ -1,7 +1,7 @@
-//! 경진용 `Arm::competition` 기하·관절 한계.
+//! 경진용 `Arm::competition` 기하/관절 한계.
 //!
-//! DOF: yaw + 어깨 + 팔꿈치(2R 접힘) + 손목 open — Dynamixel 접힘 가능.
-//! (urdf-test mesh는 3축일 수 있음 — 제어는 이 primitive `Arm`을 쓴다.)
+//! DOF: yaw + 어깨 + 팔꿈치(2R 접힘) + 손목 open - Dynamixel 접힘 가능.
+//! (urdf-test mesh는 3축일 수 있음 - 제어는 이 primitive `Arm`을 쓴다.)
 
 /// FK가 지원하는 revolute 축 수.
 pub const SUPPORTED_FK_JOINTS: usize = 4;
@@ -9,7 +9,7 @@ pub const SUPPORTED_FK_JOINTS: usize = 4;
 /// 위치 IK에 쓰는 팔 링크 수 (마지막은 손목 스텁).
 pub const ARM_POSITION_LINKS: usize = 2;
 
-/// 베이스 y [m] — 테이블 끝에서 살짝 안쪽.
+/// 베이스 y [m] - 테이블 끝에서 살짝 안쪽.
 pub const BASE_Y: f64 = 0.02;
 
 /// 상완 링크 길이 [m].

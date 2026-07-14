@@ -1,6 +1,6 @@
 //! 다중 카메라 삼각측량.
 //!
-//! - `sample_at`: 타임스탬프 동기화를 위한 선형 보간 (plan §5.4)
+//! - `sample_at`: 타임스탬프 동기화를 위한 선형 보간
 //! - `triangulate_synced`: 동기화 시각에 N대 관측을 맞춘 뒤 DLT로 3D 복원
 
 use std::time::Instant;
@@ -8,7 +8,8 @@ use std::time::Instant;
 use nalgebra::{DMatrix, Matrix3x4};
 
 use crate::error::{DomainError, ObservationError};
-use crate::types::{BallObservation, Calibration, CameraId, CameraParams, PixelPoint, Point3, World};
+use crate::types::{BallObservation, CameraId, PixelPoint, Point3};
+use crate::camera::{Calibration, CameraParams};
 
 /// 관측 시계열에서 `sync_time`에 해당하는 픽셀 위치를 선형 보간한다.
 pub fn sample_at(observations: &[BallObservation], sync_time: Instant) -> Option<PixelPoint> {
@@ -47,7 +48,7 @@ pub fn triangulate_synced(
     observations_by_camera: &[(CameraId, &[BallObservation])],
     sync_time: Instant,
     calibration: &Calibration,
-) -> Result<Point3<World>, DomainError> {
+) -> Result<Point3, DomainError> {
     let required = calibration.min_cameras_for_triangulation();
     if observations_by_camera.len() < required {
         return Err(DomainError::InvalidObservation(
@@ -78,8 +79,8 @@ pub fn triangulate_synced(
     ));
 }
 
-/// 알려진 픽셀·투영행렬로 DLT 삼각측량 (동차 SVD).
-pub fn dlt_triangulate(views: &[(Matrix3x4<f64>, PixelPoint)]) -> Option<Point3<World>> {
+/// 알려진 픽셀/투영행렬로 DLT 삼각측량 (동차 SVD).
+pub fn dlt_triangulate(views: &[(Matrix3x4<f64>, PixelPoint)]) -> Option<Point3> {
     if views.len() < 2 {
         return None;
     }
@@ -111,12 +112,12 @@ pub fn dlt_triangulate(views: &[(Matrix3x4<f64>, PixelPoint)]) -> Option<Point3<
     return Some(Point3::new(x, y, z));
 }
 
-/// 테스트·디버그용: Calibration의 카메라들로 점을 투영한 뒤 DLT로 복원한다.
+/// 테스트/디버그용: Calibration의 카메라들로 점을 투영한 뒤 DLT로 복원한다.
 pub fn triangulate_projections(
     calibration: &Calibration,
     camera_ids: &[CameraId],
-    point: Point3<World>,
-) -> Option<Point3<World>> {
+    point: Point3,
+) -> Option<Point3> {
     let mut views = Vec::new();
     for id in camera_ids {
         let params: &CameraParams = calibration.params(*id)?;

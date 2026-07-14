@@ -1,55 +1,49 @@
-//! 헥사고날 **포트** 정의.
+//! 헥사고날 포트.
 //!
-//! 카메라·검출·추정·하드웨어·텔레메트리 등 변하는 경계를 trait으로 고정한다.
-//! `infra` crate가 이 trait들을 구현(어댑터)하고, `app`/`bin`이 조립한다.
+//! 카메라/검출/추정/하드웨어/텔레메트리 경계를 trait 으로 고정한다.
+//! infra 가 구현하고 app/bin 이 조립한다.
 
 use std::time::Instant;
 
 use crate::error::HwError;
 use crate::types::{
-    FrameRef, HitPlane, PixelPoint, Prediction, RobotPose, Roi, SwingTrajectory, TelemetryEvent,
+    CameraId, HitPlane, PixelPoint, Point3, Prediction, RobotPose, SwingTrajectory, TelemetryEvent,
 };
 
-/// monotonic 시각 제공. sim에서는 `SimClock`로 시간 가속 가능.
+/// monotonic 시각. sim 에서는 시간 가속 가능.
 pub trait Clock: Send {
-    /// 현재 시각을 반환한다.
     fn now(&self) -> Instant;
 }
 
-/// 카메라 프레임 소스. 프레임은 스레드 안에서만 사용하고 채널에는 `BallObservation`만 보낸다.
+/// 카메라 프레임 소스. 이미지 버퍼는 infra 안에 두고, 여기엔 픽셀만 나온다.
 pub trait CameraSource: Send {
-    /// 다음 프레임을 (카메라 ID, 프레임, 타임스탬프)로 반환한다.
-    fn next(&mut self) -> Option<(crate::types::CameraId, FrameRef, Instant)>;
+    /// (카메라, 검출 픽셀(없으면 None), 시각). 프레임 자체가 없으면 None.
+    fn next(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)>;
 }
 
-/// 2D 프레임에서 공 픽셀 좌표를 검출한다.
+/// 프레임에서 공 픽셀을 검출한다.
+///
+/// sim 은 이미 픽셀을 넘기고, 실물은 이미지 버퍼를 어댑터 안에 두고 여기서 계산한다.
 pub trait Detector: Send {
-    /// ROI 내에서 공 픽셀을 검출한다.
-    fn detect(&mut self, frame: FrameRef, roi: Option<Roi>) -> Option<PixelPoint>;
+    fn detect(&mut self, hint: Option<PixelPoint>) -> Option<PixelPoint>;
 }
 
-/// 공 상태(위치·속도) 추정 및 타격 평면까지 예측 (확장 칼만 필터).
+/// 공 상태 추정 + 타격 평면 예측.
 pub trait Estimator: Send {
-    /// 삼각측량된 3D 관측으로 내부 상태를 갱신한다.
-    fn update(&mut self, position: crate::types::Point3<crate::types::World>, timestamp: Instant);
-    /// 타격 평면까지의 임팩트를 예측한다.
+    fn update(&mut self, position: Point3, timestamp: Instant);
     fn predict_to(&self, plane: HitPlane) -> Option<Prediction>;
 }
 
-/// 로봇 팔·리니어 액추에이터 구동.
+/// 로봇 팔 / 리니어 구동.
 pub trait Hardware: Send {
-    /// 스윙 궤적을 하드웨어에 전송한다.
     fn command(&mut self, trajectory: &SwingTrajectory) -> Result<(), HwError>;
-    /// 현재 레일 x·관절각을 읽는다.
     fn read_pose(&mut self) -> Result<RobotPose, HwError>;
-    /// 스윙 궤적 재생 중이면 true (sim 자동 스윙과 제어 루프 중복 방지).
     fn is_busy(&mut self) -> bool {
         return false;
     }
 }
 
-/// 시각화·로깅 (Rerun, tracing 등).
+/// 시각화 / 로깅.
 pub trait Telemetry: Send + Sync {
-    /// 텔레메트리 이벤트를 기록한다.
     fn log(&self, event: TelemetryEvent);
 }

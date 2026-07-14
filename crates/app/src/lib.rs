@@ -12,8 +12,8 @@ use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
 use pingpong_domain::{
     Arm, BallObservation, Calibration, CameraId, CameraSource, Detector, DomainError, Estimator,
-    FrameRef, Hardware, HitPlane, PixelPoint, Roi, SwingPlanError, Target, Telemetry,
-    TelemetryEvent, constants::table, in_swing_commit_window, plan_swing, triangulate_synced,
+    Hardware, HitPlane, PixelPoint, Prediction, SwingPlanError, Telemetry, TelemetryEvent,
+    constants::table, in_swing_commit_window, plan_swing, triangulate_synced,
 };
 
 mod arm;
@@ -60,7 +60,7 @@ pub fn run(
     telemetry: Arc<dyn Telemetry>,
 ) -> Result<(), PipelineError> {
     let (observation_tx, observation_rx) = bounded::<BallObservation>(OBSERVATION_CHANNEL_CAPACITY);
-    let target: Arc<ArrayQueue<Target>> = Arc::new(ArrayQueue::new(1));
+    let predictions: Arc<ArrayQueue<Prediction>> = Arc::new(ArrayQueue::new(1));
     let shutdown = Arc::new(AtomicBool::new(false));
     let mut handles: Vec<(PipelineThread, JoinHandle<()>)> = Vec::new();
 
@@ -71,9 +71,9 @@ pub fn run(
             thread::spawn(move || {
                 pin_to_performance_core();
                 let mut detector = InlineDetector;
-                while let Some((camera_id, frame, timestamp)) = camera.next() {
+                while let Some((camera_id, hint, timestamp)) = camera.next() {
                     let _span = info_span!("detect", ?camera_id).entered();
-                    if let Some(pixel) = detector.detect(frame, roi_for(camera_id)) {
+                    if let Some(pixel) = detector.detect(hint) {
                         if sender
                             .send(BallObservation {
                                 pixel,
@@ -91,7 +91,7 @@ pub fn run(
     }
     drop(observation_tx);
 
-    let slot = Arc::clone(&target);
+    let slot = Arc::clone(&predictions);
     let telemetry_estimation = Arc::clone(&telemetry);
     let hit_plane = config.hit_plane;
     let calibration = config.calibration;
@@ -141,7 +141,7 @@ pub fn run(
                         estimator.update(point, sync_time);
                         if let Some(prediction) = estimator.predict_to(hit_plane) {
                             telemetry_estimation.log(TelemetryEvent::Prediction(prediction));
-                            let _ = slot.force_push(Target { prediction });
+                            let _ = slot.force_push(prediction);
                         }
                     }
                     Err(_) => {
@@ -153,7 +153,7 @@ pub fn run(
         }),
     ));
 
-    let slot = Arc::clone(&target);
+    let slot = Arc::clone(&predictions);
     let telemetry_control = Arc::clone(&telemetry);
     let shutdown_control = Arc::clone(&shutdown);
     let arm = Arc::clone(&config.arm);
@@ -164,14 +164,13 @@ pub fn run(
             pin_to_performance_core();
             let mut last_plan_warn = Instant::now() - Duration::from_secs(10);
             loop {
-                if let Some(target) = slot.pop() {
+                if let Some(prediction) = slot.pop() {
                     let _span = info_span!("control").entered();
                     if hardware.is_busy() {
                         // sim 물리 스레드가 이미 plan_swing 중 — 늦은 예측으로 InsufficientTime 스팸 방지
                         continue;
                     }
-                    // 발사 직후·긴 lead는 버리고, commit 창에 들어온 예측만 계획
-                    if !in_swing_commit_window(target.prediction.time_to_impact_secs) {
+                    if !in_swing_commit_window(prediction.time_to_impact_secs) {
                         continue;
                     }
                     let start = match hardware.read_pose() {
@@ -181,7 +180,7 @@ pub fn run(
                             continue;
                         }
                     };
-                    match plan_swing(&arm, target, &start) {
+                    match plan_swing(&arm, prediction, &start) {
                         Ok(trajectory) => {
                             telemetry_control.log(TelemetryEvent::SwingCommand(trajectory.clone()));
                             if let Err(error) = hardware.command(&trajectory) {
@@ -198,7 +197,6 @@ pub fn run(
                             // 이미 늦은 예측 — 버림
                         }
                         Err(error) => {
-                            // 재큐 금지: 실패 타겟을 force_push하면 100Hz 로그 스팸
                             let now = Instant::now();
                             if now.duration_since(last_plan_warn) >= Duration::from_secs(1) {
                                 warn!(%error, "스윙 계획 실패");
@@ -230,17 +228,13 @@ pub fn run(
 struct InlineDetector;
 
 impl Detector for InlineDetector {
-    fn detect(&mut self, frame: FrameRef, _roi: Option<Roi>) -> Option<PixelPoint> {
-        return frame.pixel();
+    fn detect(&mut self, hint: Option<PixelPoint>) -> Option<PixelPoint> {
+        return hint;
     }
 }
 
-fn roi_for(_camera_id: pingpong_domain::CameraId) -> Option<Roi> {
-    return None;
-}
-
 fn pin_to_performance_core() {
-    // 2단계: core_affinity로 성능 코어(P-core) 고정 (plan §4)
+    // 나중에 core_affinity 로 P-core 고정
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

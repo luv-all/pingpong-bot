@@ -1,4 +1,4 @@
-//! 런타임·측정 툴이 공유하는 물리 계수 (`config.toml` `[physics]`).
+//! 런타임/측정 툴이 공유하는 물리 계수 (`config.toml` `[physics]`).
 
 use std::fs;
 use std::io;
@@ -15,11 +15,11 @@ use crate::constants::{
 /// 해석된 물리 계수 (항상 concrete 값).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PhysicsParams {
-    /// 반발 \(e\)
+    /// 반발 e
     pub restitution: f64,
-    /// 접선 마찰 \(\mu\)
+    /// 접선 마찰 mu
     pub friction: f64,
-    /// 이차 항력 \(k\)
+    /// 이차 항력 k
     pub drag: f64,
 }
 
@@ -28,7 +28,7 @@ impl Default for PhysicsParams {
         return Self {
             restitution: RESTITUTION,
             friction: TABLE_BOUNCE_FRICTION,
-            // sim Rapier에는 이차 항력이 없음 — EKF 기본도 0
+            // sim Rapier에는 이차 항력이 없음 - EKF 기본도 0
             drag: 0.0,
         };
     }
@@ -45,7 +45,7 @@ impl PhysicsParams {
     }
 }
 
-/// TOML `[physics]` 섹션 — 필드별 optional (부분 갱신).
+/// TOML `[physics]` 섹션 - 필드별 optional (부분 갱신).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PhysicsConfig {
     pub restitution: Option<f64>,
@@ -71,7 +71,7 @@ impl PhysicsConfig {
 
 /// `path`의 `[physics]`에 측정값을 merge한다. 파일이 없으면 최소 config를 만든다.
 ///
-/// 주석·다른 키는 `toml_edit`으로 최대한 보존한다.
+/// 주석/다른 키는 `toml_edit`으로 최대한 보존한다.
 pub fn merge_physics_into_config(
     path: impl AsRef<Path>,
     patch: &PhysicsConfig,

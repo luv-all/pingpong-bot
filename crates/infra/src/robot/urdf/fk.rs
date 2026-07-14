@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use nalgebra::{Isometry3, Quaternion, Translation3, UnitQuaternion, Vector3};
 use pingpong_domain::types::Point3;
-use pingpong_domain::{RacketPose, World};
+use pingpong_domain::{RacketPose};
 use urdf_rs::{Joint, JointType, Robot};
 
 /// root → `ee_link` 관절 인덱스 (parent→child 순).
@@ -92,7 +92,7 @@ fn iso_to_pose_tuple(name: &str, iso: Isometry3<f64>) -> (String, [f64; 3], [f64
 }
 
 fn racket_pose_from_iso(iso: Isometry3<f64>) -> RacketPose {
-    let position = Point3::<World>::new(iso.translation.x, iso.translation.y, iso.translation.z);
+    let position = Point3::new(iso.translation.x, iso.translation.y, iso.translation.z);
     let rot = iso.rotation.to_rotation_matrix();
     let normal = rot * Vector3::new(1.0, 0.0, 0.0);
     let q = iso.rotation.quaternion();

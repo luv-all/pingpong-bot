@@ -2,30 +2,22 @@
 
 use std::time::{Duration, Instant};
 
-use pingpong_domain::{CameraSource, CameraId, Clock, FrameRef, PixelPoint};
+use pingpong_domain::{CameraId, CameraSource, Clock, PixelPoint};
 
 use crate::clock::SystemClock;
 
-/// sin/cos로 움직이는 픽셀을 생성하는 레거시 가짜 카메라.
+/// sin/cos 로 움직이는 픽셀을 만드는 레거시 가짜 카메라.
 pub struct SyntheticCamera {
-    /// 카메라 ID
     camera_id: CameraId,
-    /// OS 시계
     clock: SystemClock,
-    /// 프레임 간격 (~120Hz)
     frame_interval: Duration,
-    /// 남은 프레임 수
     remaining: u64,
-    /// 픽셀 x 기준값
     base_x: f64,
-    /// 픽셀 y 기준값
     base_y: f64,
-    /// 직전 프레임 시각
     last_tick: Option<Instant>,
 }
 
 impl SyntheticCamera {
-    /// ID·프레임 수로 가짜 카메라를 만든다.
     pub fn new(camera_id: CameraId, frames: u64) -> Self {
         let index = f64::from(camera_id.index());
         let base_x = 320.0 + index * 320.0;
@@ -44,7 +36,7 @@ impl SyntheticCamera {
 }
 
 impl CameraSource for SyntheticCamera {
-    fn next(&mut self) -> Option<(CameraId, FrameRef, Instant)> {
+    fn next(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)> {
         if self.remaining == 0 {
             return None;
         }
@@ -66,6 +58,6 @@ impl CameraSource for SyntheticCamera {
             self.base_y + phase.cos() * 10.0,
         );
 
-        return Some((self.camera_id, FrameRef::sim(pixel), timestamp));
+        return Some((self.camera_id, Some(pixel), timestamp));
     }
 }

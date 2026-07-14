@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use pingpong_domain::{CameraId, CameraSource, Clock, FrameRef};
+use pingpong_domain::{CameraId, CameraSource, Clock, PixelPoint};
 use rapier3d::prelude::Vector;
 
 use super::projection::CameraView;
@@ -57,7 +57,7 @@ impl SimCamera {
 }
 
 impl CameraSource for SimCamera {
-    fn next(&mut self) -> Option<(CameraId, FrameRef, Instant)> {
+    fn next(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)> {
         if self.shutdown.load(Ordering::Acquire) {
             return None;
         }
@@ -81,19 +81,14 @@ impl CameraSource for SimCamera {
 
         let world = self.world.lock().expect("sim 월드");
         let ball = world.ball_position();
-        let frame = frame_for_ball(ball, &self.view);
-        return Some((self.camera_id, frame, timestamp));
+        let pixel = pixel_for_ball(ball, &self.view);
+        return Some((self.camera_id, pixel, timestamp));
     }
 }
 
-/// Rapier 공 위치 → `FrameRef`.
-///
-/// 시야 밖이면 빈 프레임 (더미 픽셀로 삼각측량을 오염시키지 않음).
-fn frame_for_ball(ball: Vector, view: &CameraView) -> FrameRef {
-    if let Some(pixel) = view.project(ball) {
-        return FrameRef::sim(pixel);
-    }
-    return FrameRef::empty();
+/// Rapier 공 위치 -> 픽셀. 시야 밖이면 None.
+fn pixel_for_ball(ball: Vector, view: &CameraView) -> Option<PixelPoint> {
+    return view.project(ball);
 }
 
 #[cfg(test)]

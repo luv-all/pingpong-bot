@@ -1,10 +1,10 @@
-//! 확장 칼만 필터 (plan §6.1–§6.2).
+//! 확장 칼만 필터.
 //!
-//! 상태 `x = [p, v]`, 측정은 삼각측량 3D 위치.
-//! 짧은 전파·hit-plane 예측 모두 반암시적 오일러 ([`super::ballistics`]).
+//! 상태 x = [p, v], 측정은 삼각측량 3D 위치.
+//! 짧은 전파와 hit-plane 예측은 반암시적 오일러 (`ballistics`).
 //!
-//! sim Rapier는 이차 항력이 없으므로 파이프라인은 [`BallEkf::new(0.0)`]을 쓴다.
-//! `with_defaults`(DEFAULT_DRAG)는 실측 k가 있을 때.
+//! sim Rapier에는 이차 항력이 없어서 파이프라인은 BallEkf::new(0.0) 을 쓴다.
+//! with_defaults(DEFAULT_DRAG) 는 실측 k 가 있을 때.
 
 use std::time::Instant;
 
@@ -16,9 +16,9 @@ use crate::constants::estimator::{Q_POS, Q_VEL, R_MEAS};
 use crate::constants::DEFAULT_DRAG;
 use crate::physics_config::PhysicsParams;
 use crate::ports::Estimator;
-use crate::types::{HitPlane, Point3, Prediction, World};
+use crate::types::{HitPlane, Point3, Prediction};
 
-/// EKF 상태: 위치·속도 + 공분산.
+/// EKF 상태: 위치/속도 + 공분산.
 #[derive(Debug, Clone)]
 pub struct BallEkf {
     position: Vector3<f64>,
@@ -69,7 +69,7 @@ impl BallEkf {
     }
 
     /// 현재 위치 추정.
-    pub fn position(&self) -> Option<Point3<World>> {
+    pub fn position(&self) -> Option<Point3> {
         if !self.initialized {
             return None;
         }
@@ -84,7 +84,7 @@ impl BallEkf {
         return Some(self.velocity);
     }
 
-    /// 테스트·sim 오라클용: 상태 직접 설정.
+    /// 테스트/sim 오라클용: 상태 직접 설정.
     pub fn set_state(&mut self, position: Vector3<f64>, velocity: Vector3<f64>, time: Instant) {
         self.position = position;
         self.velocity = velocity;
@@ -95,18 +95,18 @@ impl BallEkf {
     }
 
     /// 3D 관측으로 보정한다.
-    pub fn update_position(&mut self, measured: Point3<World>, timestamp: Instant) {
+    pub fn update_position(&mut self, measured: Point3, timestamp: Instant) {
         if let Some(prev) = self.last_time {
             let dt = timestamp.duration_since(prev).as_secs_f64();
             if dt < 0.0 {
                 return;
             }
-            // 긴 공백(세션 공백·프레임 드롭) → 하드 리셋
+            // 긴 공백(세션 공백/프레임 드롭) -> 하드 리셋
             if dt >= 0.5 {
                 self.reset();
             } else if self.initialized && self.velocity_seeded && dt > 1e-4 {
                 self.predict_step(dt);
-                // 주차↔발사 텔레포트: 예측 후에도 잔차가 크면 리셋
+                // 주차<->발사 텔레포트: 예측 후에도 잔차가 크면 리셋
                 if (measured.v - self.position).norm() > EKF_MEAS_JUMP_M {
                     self.reset();
                 }
@@ -194,7 +194,7 @@ fn process_noise(dt: f64) -> Matrix6<f64> {
 }
 
 impl Estimator for BallEkf {
-    fn update(&mut self, position: Point3<World>, timestamp: Instant) {
+    fn update(&mut self, position: Point3, timestamp: Instant) {
         self.update_position(position, timestamp);
     }
 
@@ -259,7 +259,7 @@ mod tests {
         let v = ekf.velocity().expect("seeded");
         assert!(
             (v.y - (-0.05 / 0.008)).abs() < 1.0,
-            "finite-diff vy≈-6.25, got {}",
+            "finite-diff vy~=-6.25, got {}",
             v.y
         );
     }
@@ -278,7 +278,7 @@ mod tests {
             Point3::new(0.7, 2.5, 1.0),
             t0 + Duration::from_millis(16),
         );
-        // 리셋 후 첫 측정만 — 속도 미시드
+        // 리셋 후 첫 측정만 - 속도 미시드
         assert!(ekf.velocity().is_none());
     }
 

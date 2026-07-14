@@ -1,14 +1,14 @@
-//! 물리 계수 식별 — 반발 \(e\), 마찰 \(\mu\), 항력 \(k\) (plan §3.4·§6.1).
+//! 물리 계수 식별: 반발 e, 마찰 mu, 항력 k.
 //!
-//! 카메라/실측 파이프라인은 `tools/measure_*`가 샘플을 모아 여기 공식에 넣는다.
+//! tools/measure_* 가 샘플을 모으면 여기 공식에 넣는다.
 
 use nalgebra::Vector3;
 
 use crate::constants::G;
 
-/// 연속 바운스 최고 높이 [m]로 \(e \approx \sqrt{h_{i+1}/h_i}\) 평균.
+/// 연속 바운스 최고 높이로 반발계수 평균. e ~= sqrt(h1/h0).
 ///
-/// `heights`는 테이블 면 기준 정점 높이(공 중심이면 반지름 보정은 호출 측).
+/// heights 는 테이블 면 기준 정점 높이. 공 중심이면 반지름 보정은 호출 쪽에서.
 pub fn restitution_from_bounce_heights(heights: &[f64]) -> Option<f64> {
     if heights.len() < 2 {
         return None;
@@ -24,7 +24,7 @@ pub fn restitution_from_bounce_heights(heights: &[f64]) -> Option<f64> {
     return mean_positive(&ratios);
 }
 
-/// 바운스 직전·직후 법선 속도 쌍 \((|v_n^{in}|, |v_n^{out}|)\) → \(e = v_{out}/v_{in}\).
+/// 바운스 직전/직후 법선 속력 쌍으로 e = v_out / v_in.
 pub fn restitution_from_normal_speeds(pairs: &[(f64, f64)]) -> Option<f64> {
     let mut samples = Vec::new();
     for &(vin, vout) in pairs {
@@ -36,7 +36,7 @@ pub fn restitution_from_normal_speeds(pairs: &[(f64, f64)]) -> Option<f64> {
     return mean_positive(&samples);
 }
 
-/// 접선 속력 쌍 \((|v_t^{in}|, |v_t^{out}|)\) → \(\mu = 1 - v_{out}/v_{in}\) (plan §6.1).
+/// 접선 속력 쌍으로 mu = 1 - v_out / v_in.
 pub fn friction_from_tangential_speeds(pairs: &[(f64, f64)]) -> Option<f64> {
     let mut samples = Vec::new();
     for &(vin, vout) in pairs {
@@ -48,12 +48,12 @@ pub fn friction_from_tangential_speeds(pairs: &[(f64, f64)]) -> Option<f64> {
     return mean_clamped(&samples, 0.0, 1.0);
 }
 
-/// 궤적 샘플 `(t, p)`로 이차 항력 \(k\)를 최소제곱 적합.
+/// 궤적 샘플 (t, p) 로 이차 항력 k 를 최소제곱 적합.
 ///
-/// \( \mathbf a \approx \mathbf g - k\lVert\mathbf v\rVert\mathbf v \)  
-/// \( k = -\dfrac{\sum(\mathbf a-\mathbf g)\cdot(\lVert v\rVert v)}{\sum\lVert\lVert v\rVert v\rVert^2} \)
+/// a ~= g - k * |v| * v 이므로
+/// k = -sum((a-g)*(|v|v)) / sum(||v|v||^2).
 ///
-/// `samples`는 시간 오름차순, 길이 ≥ 3, dt > 0.
+/// samples 는 시간 오름차순, 길이 3 이상, dt > 0.
 pub fn drag_from_trajectory(samples: &[(f64, Vector3<f64>)]) -> Option<f64> {
     if samples.len() < 3 {
         return None;
@@ -79,10 +79,10 @@ pub fn drag_from_trajectory(samples: &[(f64, Vector3<f64>)]) -> Option<f64> {
         let v = 0.5 * (v0 + v1);
         let speed = v.norm();
         if speed < 0.3 {
-            // 거의 정지 — 항력 시그널 약함
+            // 거의 멈춰 있으면 항력 신호가 약하다
             continue;
         }
-        let drag_dir = speed * v; // |v| v
+        let drag_dir = speed * v; // |v| * v
         let residual = a - G;
         num += residual.dot(&drag_dir);
         den += drag_dir.dot(&drag_dir);
@@ -90,7 +90,7 @@ pub fn drag_from_trajectory(samples: &[(f64, Vector3<f64>)]) -> Option<f64> {
     if den < 1e-9 {
         return None;
     }
-    // residual ≈ -k |v|v  →  k = -num/den
+    // residual ~= -k * |v| * v => k = -num / den
     let k = -num / den;
     if !k.is_finite() || k < 0.0 {
         return None;
@@ -122,11 +122,11 @@ fn mean_clamped(xs: &[f64], lo: f64, hi: f64) -> Option<f64> {
     return Some(ok.iter().sum::<f64>() / ok.len() as f64);
 }
 
-/// 측정값을 TOML 스니펫으로 포맷 (Config / constants 반영용).
+/// 측정값을 TOML 스니펫으로 포맷. config / constants 반영용.
 pub fn physics_coeffs_toml(restitution: Option<f64>, friction: Option<f64>, drag: Option<f64>) -> String {
     let mut lines = vec![
         "# pingpong physics coeffs (tools/measure_*)".to_string(),
-        "# domain::constants::ball / physics 또는 향후 [physics] 섹션에 반영".to_string(),
+        "# domain::constants::ball / physics 또는 [physics] 섹션에 반영".to_string(),
     ];
     if let Some(e) = restitution {
         lines.push(format!("restitution = {e:.6}"));
@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn restitution_from_equal_height_ratio() {
-        // e=0.9 → h1/h0 = 0.81
+        // e=0.9 이면 h1/h0 = 0.81
         let h0 = 1.0;
         let h1 = 0.81;
         let e = restitution_from_bounce_heights(&[h0, h1]).unwrap();
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn friction_from_tangential() {
-        // vt_out = 0.7 vt_in → μ = 0.3
+        // vt_out = 0.7 * vt_in 이면 mu = 0.3
         let mu = friction_from_tangential_speeds(&[(1.0, 0.7), (2.0, 1.4)]).unwrap();
         assert!((mu - 0.3).abs() < 1e-9);
     }

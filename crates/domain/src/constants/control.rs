@@ -1,34 +1,34 @@
-//! 스윙·관절 제어 한계.
+//! 스윙, 관절 제어 한계.
 
 /// 스윙을 시작하기 위해 필요한 최소 리드 타임 [s].
 pub const MIN_SWING_SECS: f64 = 0.08;
 
-/// 권장 스윙 궤적 길이 [s] — commit 창 중앙 근처.
+/// 권장 스윙 궤적 길이 [s]. commit 창 중앙 근처.
 pub const SWING_DURATION_SECS: f64 = 0.15;
 
 /// 스윙 commit 상한 [s].
 ///
-/// 이보다 긴 lead면 대기한다 (발사 직후 전 비행 구간 quintic → 조기 완료 방지).
-/// 실제 duration은 commit 시점의 `time_to_impact`를 쓴다.
+/// lead 가 이보다 길면 기다린다. 발사 직후 전 비행을 quintic 으로 잡으면
+/// 너무 일찍 끝나기 쉽다. 실제 duration 은 commit 시점 time_to_impact.
 pub const SWING_COMMIT_MAX_SECS: f64 = 0.20;
 
-/// 스윙 commit 허용 최대 공 y — `LENGTH_Y`에 대한 비율 (네트 통과 후).
+/// 스윙 commit 허용 최대 공 y. LENGTH_Y 대비 비율 (네트 지난 뒤).
 ///
-/// oracle·EKF control 공통 (decisions C4). 상대 코트면 탄도·추정이 아직 흔들린다.
+/// oracle / EKF control 공통. 상대 코트에서는 탄도 추정이 아직 흔들린다.
 pub const SWING_COMMIT_MAX_BALL_Y_FRAC: f64 = 0.55;
 
-/// 측정이 예측에서 이 거리[m] 이상 벗어나면 EKF 하드 리셋 (주차↔발사 텔레포트).
+/// 측정이 예측에서 이 거리[m] 이상 벗어나면 EKF 하드 리셋.
+/// 주차에서 발사로 텔레포트할 때 등에 쓴다.
 pub const EKF_MEAS_JUMP_M: f64 = 0.6;
 
-/// §7.4 실행 가능성 근사 — 관절 각가속도 상한 [rad/s²] (토크 모델 전).
+/// 관절 각가속도 상한 [rad/s^2]. 토크 모델 붙이기 전 실행 가능성 근사.
 pub const MAX_JOINT_ACCEL: f64 = 120.0;
 
-/// §7.4 대각 관성 근사 토크 상한 [N·m] (관절당, 시뮬).
+/// 대각 관성 근사 토크 상한 [N*m]. 관절당, 시뮬용.
 pub const MAX_JOINT_TORQUE: f64 = 12.0;
 
-/// 관절 유효 관성 근사 [kg·m²] (토크 ≈ I α, 링크별 동일 스텁).
+/// 관절 유효 관성 근사 [kg*m^2]. torque ~= I * alpha, 링크마다 같은 스텁.
 pub const JOINT_INERTIA: f64 = 0.05;
 
-/// 라켓 면 기본 open pitch [rad] — 손목 관절 초기각.
-/// decisions D1: 이제 관절로 조절, 이 값은 default만.
+/// 라켓 면 기본 open pitch [rad]. 손목 관절 초기값.
 pub const RACKET_OPEN_PITCH: f64 = 0.45;

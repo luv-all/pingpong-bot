@@ -1,7 +1,7 @@
-//! 물리·규격 상수 — sim·real·제어가 공통으로 쓴다 (ITTF 등).
+//! 물리/규격 상수. sim, real, 제어가 같이 쓴다 (ITTF 등).
 //!
-//! 튜닝·측정 숫자도 여기 SSOT. 알고리즘 모듈에 `const`를 두지 않는다.
-//! infra(Rapier·OpenCV)는 필요 시 `f32`로 캐스트만 한다.
+//! 튜닝/측정 숫자도 여기만 둔다. 알고리즘 모듈에 const 를 흩뿌리지 말 것.
+//! infra(Rapier/OpenCV)는 필요할 때 f32 로만 캐스트.
 
 pub mod arm;
 pub mod ball;
@@ -26,7 +26,7 @@ pub use control::{
     RACKET_OPEN_PITCH, SWING_COMMIT_MAX_BALL_Y_FRAC, SWING_COMMIT_MAX_SECS, SWING_DURATION_SECS,
 };
 pub use estimator::{INTEGRATE_DT, MAX_LEAD, MIN_LEAD, Q_POS, Q_VEL, R_MEAS};
-pub use impact::{COOPERATIVE_RETURN_SCALE, LOFT_TIME_TO_NET, MAX_RETURN_SPEED, NET_CLEARANCE};
+pub use impact::{LOFT_TIME_TO_NET, MAX_RETURN_SPEED, NET_CLEARANCE};
 pub use physics::{DEFAULT_DRAG, G, G_Z};
 pub use table::{
     DEFAULT_HIT_PLANE_Y as TABLE_DEFAULT_HIT_PLANE_Y, HALF_THICKNESS as TABLE_HALF_THICKNESS,

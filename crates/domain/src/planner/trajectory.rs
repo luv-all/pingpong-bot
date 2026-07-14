@@ -1,10 +1,10 @@
-//! 관절 quintic 궤적 (plan §7.5).
+//! 관절 quintic 궤적.
 
 use nalgebra::{Matrix3, Vector3 as NaVector3};
 
 use crate::types::{Joints, RailMotion, SwingTrajectory};
 
-/// 관절 1축 quintic — 위치·속도 경계, 시작/끝 가속 0.
+/// 관절 1축 quintic - 위치/속도 경계, 시작/끝 가속 0.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct QuinticSegment {
     q0: f64,
@@ -157,15 +157,6 @@ impl SwingTrajectory {
         return Joints { values };
     }
 
-    /// `t` [s]에서 관절 각속도 [rad/s].
-    pub fn sample_velocities_at(&self, t: f64) -> Vec<f64> {
-        return self
-            .segments()
-            .into_iter()
-            .map(|segment| segment.sample(t).1)
-            .collect();
-    }
-
     /// 궤적 전 구간 최대 관절 각속도 [rad/s].
     pub fn peak_joint_speed(&self) -> f64 {
         return self
@@ -175,7 +166,7 @@ impl SwingTrajectory {
             .fold(0.0_f64, f64::max);
     }
 
-    /// 궤적 전 구간 최대 관절 각가속도 [rad/s²].
+    /// 궤적 전 구간 최대 관절 각가속도 [rad/s^2].
     pub fn peak_joint_acceleration(&self) -> f64 {
         return self
             .segments()

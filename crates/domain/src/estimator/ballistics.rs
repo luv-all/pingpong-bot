@@ -1,17 +1,17 @@
-//! 공 탄도 적분 — hit-plane 교차 예측 (plan §6.3).
+//! 공 탄도 적분. hit-plane 교차 예측.
 //!
-//! EKF 짧은 전파와 hit-plane 예측 모두 **반암시적(세미-임플리싯) 오일러**.
+//! EKF 짧은 전파랑 hit-plane 예측 둘 다 반암시적(세미-임플리싯) 오일러.
 
 use nalgebra::Vector3;
 
 use crate::constants::{ball, estimator as est, table};
 use crate::physics_config::PhysicsParams;
 use crate::planner::physics::accel;
-use crate::types::{HitPlane, Point3, Prediction, World};
+use crate::types::{HitPlane, Point3, Prediction};
 
-/// 위치·속도에서 접수 평면 교차를 반암시적 오일러(+바운스)로 예측한다.
+/// 위치/속도에서 접수 평면 교차를 반암시적 오일러(+바운스)로 예측한다.
 ///
-/// 테이블 위 구름·너무 낮은 궤적은 `None` (제어 스팸·도달 불가 IK 방지).
+/// 테이블 위 구름/너무 낮은 궤적은 `None` (제어 스팸/도달 불가 IK 방지).
 pub fn predict_hit_plane(
     position: Vector3<f64>,
     velocity: Vector3<f64>,
@@ -29,7 +29,7 @@ pub fn predict_hit_plane(
     );
 }
 
-/// [`PhysicsParams`]로 항력·바운스를 지정한 hit-plane 예측.
+/// [`PhysicsParams`]로 항력/바운스를 지정한 hit-plane 예측.
 pub fn predict_hit_plane_with(
     position: Vector3<f64>,
     velocity: Vector3<f64>,
@@ -82,7 +82,7 @@ pub fn predict_hit_plane_with(
             }
             return Some(Prediction {
                 time_to_impact_secs: t_cross,
-                impact_position: Point3::<World>::from_vector(impact),
+                impact_position: Point3::from_vector(impact),
                 incoming_velocity: vel,
             });
         }
@@ -95,7 +95,7 @@ fn rest_height() -> f64 {
     return table::SURFACE_Z + ball::RADIUS;
 }
 
-/// 테이블에 붙어 느리게 구르는 상태 (비행·바운스 중이면 false).
+/// 테이블에 붙어 느리게 구르는 상태 (비행/바운스 중이면 false).
 fn is_table_rolling(position: Vector3<f64>, velocity: Vector3<f64>) -> bool {
     let on_table = position.z <= rest_height() + est::MIN_STRIKE_CLEARANCE;
     let flat = velocity.z.abs() < 0.5;
@@ -104,7 +104,7 @@ fn is_table_rolling(position: Vector3<f64>, velocity: Vector3<f64>) -> bool {
 
 /// 반암시적 오일러: `v += a dt`, 그다음 `p += v_new dt` (+ 테이블 바운스).
 ///
-/// 바운스 \(e,\mu\)는 [`PhysicsParams::default`]. 항력만 `drag_coefficient`.
+/// 바운스 e,mu는 [`PhysicsParams::default`]. 항력만 `drag_coefficient`.
 pub fn semi_implicit_euler(
     pos: Vector3<f64>,
     vel: Vector3<f64>,
@@ -122,7 +122,7 @@ pub fn semi_implicit_euler(
     );
 }
 
-/// [`PhysicsParams`]로 항력·바운스를 지정한 적분 스텝.
+/// [`PhysicsParams`]로 항력/바운스를 지정한 적분 스텝.
 pub fn semi_implicit_euler_with(
     pos: Vector3<f64>,
     vel: Vector3<f64>,

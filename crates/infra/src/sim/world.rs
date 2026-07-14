@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use pingpong_domain::{
-    Arm, DomainError, HitPlane, Prediction, RobotPose, RobotState, Target,
+    Arm, DomainError, HitPlane, Prediction, RobotPose, RobotState,
     ball_past_midcourt_for_commit,
     constants::{ball, table},
     in_swing_commit_window, plan_swing, PhysicsParams,
@@ -360,7 +360,7 @@ impl SimWorld {
         }
 
         let start = RobotPose::new(self.robot.rail_x(), self.robot.joints().clone());
-        let target = Target { prediction };
+        let target = prediction;
         let trajectory = match plan_swing(&self.arm, target, &start) {
             Ok(trajectory) => trajectory,
             Err(DomainError::InfeasibleSwing(ref err)) => {
@@ -615,7 +615,7 @@ mod tests {
 
     use crate::sim::BallShooterSettings;
 
-    use pingpong_domain::{Arm, RobotPose, Target, constants::table};
+    use pingpong_domain::{Arm, RobotPose, constants::table};
 
     fn test_arm() -> Arc<Arm> {
         return Arc::new(Arm::competition().expect("테스트용 4DOF arm"));
@@ -724,12 +724,10 @@ mod tests {
         let start = RobotPose::new(rail_x, world.robot().joints().clone());
         let traj = plan_swing(
             &arm,
-            Target {
-                prediction: pingpong_domain::Prediction {
-                    time_to_impact_secs: 0.25,
-                    impact_position: impact,
-                    incoming_velocity: nalgebra::Vector3::new(0.0, -7.5, -0.5),
-                },
+            pingpong_domain::Prediction {
+                time_to_impact_secs: 0.25,
+                impact_position: impact,
+                incoming_velocity: nalgebra::Vector3::new(0.0, -7.5, -0.5),
             },
             &start,
         )
@@ -743,7 +741,7 @@ mod tests {
 
     #[test]
     fn quintic_swing_moves_robot_joints() {
-        use pingpong_domain::{HitPlane, Target, plan_swing};
+        use pingpong_domain::{HitPlane, plan_swing};
 
         let arm = test_arm();
         let mut world = SimWorld::new(arm.clone(), None);
@@ -761,7 +759,7 @@ mod tests {
         let reachable = arm
             .forward_kinematics_with_rail(world.robot().rail_x(), world.robot().joints())
             .expect("FK");
-        let impact = pingpong_domain::Point3::<pingpong_domain::World>::new(
+        let impact = pingpong_domain::Point3::new(
             impact_x,
             hit_plane.y,
             reachable.position.v.z,
@@ -769,16 +767,14 @@ mod tests {
         let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
         let trajectory = plan_swing(
             &arm,
-            Target {
-                prediction: pingpong_domain::Prediction {
-                    time_to_impact_secs: t,
-                    impact_position: impact,
-                    incoming_velocity: nalgebra::Vector3::new(
-                        f64::from(vel.x),
-                        f64::from(vel.y),
-                        f64::from(vel.z),
-                    ),
-                },
+            pingpong_domain::Prediction {
+                time_to_impact_secs: t,
+                impact_position: impact,
+                incoming_velocity: nalgebra::Vector3::new(
+                    f64::from(vel.x),
+                    f64::from(vel.y),
+                    f64::from(vel.z),
+                ),
             },
             &start,
         )

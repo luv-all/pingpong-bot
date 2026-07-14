@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use nalgebra::Vector3;
 use pingpong_domain::ballistics::predict_hit_plane;
-use pingpong_domain::{BallEkf, Estimator, HitPlane, Point3, Prediction, World};
+use pingpong_domain::{BallEkf, Estimator, HitPlane, Point3, Prediction};
 
 use crate::sim::shooter::BallState;
 use crate::sim::world::SimWorld;
@@ -59,7 +59,7 @@ fn snapshot_from_world(world: &SimWorld) -> Option<BallSnapshot> {
 }
 
 impl Estimator for SimBallEstimator {
-    fn update(&mut self, _position: Point3<World>, timestamp: Instant) {
+    fn update(&mut self, _position: Point3, timestamp: Instant) {
         let snapshot = self
             .world
             .lock()

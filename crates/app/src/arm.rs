@@ -17,7 +17,7 @@ use pingpong_domain::{
             BASE_Y, ELBOW_DEFAULT, ELBOW_MAX, ELBOW_MIN, LINK_FOREARM, LINK_UPPER, LINK_WRIST_STUB,
             MAX_JOINT_SPEED, RAIL_MAX_SPEED, SHOULDER_DEFAULT, SHOULDER_MAX, SHOULDER_MIN,
             WRIST_MAX, WRIST_MIN, YAW_DEFAULT, YAW_MAX, YAW_MIN,
-        },
+},
         table,
     },
 };

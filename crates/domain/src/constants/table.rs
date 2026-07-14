@@ -1,6 +1,6 @@
-//! ITTF 탁구대 규격 [m] — Z-up, 꼭짓점 원점.
+//! ITTF 탁구대 규격 [m] - Z-up, 꼭짓점 원점.
 //!
-//! 원점 = 로봇 쪽 꼭짓점(바닥). **+X** = 너비(좁은 변), **+Y** = 길이(긴 변), **+Z** = 고도.
+//! 원점 = 로봇 쪽 꼭짓점(바닥). +X = 너비(좁은 변), +Y = 길이(긴 변), +Z = 고도.
 
 /// 플레이 면 너비 (x, 좁은 변).
 pub const WIDTH_X: f64 = 1.525;
@@ -12,6 +12,6 @@ pub const SURFACE_Z: f64 = 0.76;
 pub const HALF_THICKNESS: f64 = 0.0125;
 /// 네트 중심 높이 (테이블 면 기준).
 pub const NET_HEIGHT: f64 = 0.08;
-/// 기본 접수 평면 y [m] — 로봇(y≈0) 앞에서 공을 맞출 깊이.
-/// decisions E1: `Arm::competition()` 도달(~0.38 m)에 맞춘 **스펙 확정값**.
+/// 기본 접수 평면 y [m]. 로봇(y~0) 앞에서 공을 맞출 깊이.
+/// Arm::competition 도달(~0.38 m)에 맞춘 값.
 pub const DEFAULT_HIT_PLANE_Y: f64 = 0.30;

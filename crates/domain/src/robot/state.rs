@@ -1,0 +1,133 @@
+//! 런타임 관절 상태 - sim/real encoder 읽기가 같은 타입을 채운다.
+
+use super::{Arm, RacketPose};
+use crate::types::Joints;
+
+/// 런타임 관절 상태 - sim `RobotState`/real encoder 읽기가 같은 타입을 채운다.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RobotState {
+    /// 리니어 레일 x [m]
+    rail_x: f64,
+    /// 리니어 목표 x [m]
+    rail_target: f64,
+    /// 현재 관절각
+    angles: Joints,
+    /// 추종 목표 관절각 (궤적 없을 때)
+    targets: Joints,
+    /// quintic 스윙 재생
+    active_swing: Option<SwingPlayback>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct SwingPlayback {
+    trajectory: crate::types::SwingTrajectory,
+    elapsed: f64,
+}
+
+impl RobotState {
+    /// 초기 관절각/레일 x로 상태를 만든다.
+    pub fn new(initial: Joints, rail_x: f64) -> Self {
+        return Self {
+            rail_x,
+            rail_target: rail_x,
+            targets: initial.clone(),
+            angles: initial,
+            active_swing: None,
+        };
+    }
+
+    /// 리니어 레일 x [m].
+    pub fn rail_x(&self) -> f64 {
+        return self.rail_x;
+    }
+
+    /// 스윙 궤적 재생 중인지.
+    pub fn is_swinging(&self) -> bool {
+        return self.active_swing.is_some();
+    }
+
+    /// 현재 관절각.
+    pub fn joints(&self) -> &Joints {
+        return &self.angles;
+    }
+
+    /// 목표 관절각.
+    pub fn targets(&self) -> &Joints {
+        return &self.targets;
+    }
+
+    /// 목표 관절각을 직접 설정한다.
+    pub fn set_targets(&mut self, targets: Joints) {
+        self.targets = targets;
+    }
+
+    /// quintic 스윙 궤적을 시작한다 (이미 스윙 중이면 무시).
+    pub fn begin_swing(&mut self, trajectory: crate::types::SwingTrajectory) {
+        if self.active_swing.is_some() {
+            return;
+        }
+        self.replace_swing(trajectory);
+    }
+
+    /// 스윙을 현재 포즈 기준 새 궤적으로 교체한다 (elapsed=0).
+    pub fn replace_swing(&mut self, trajectory: crate::types::SwingTrajectory) {
+        self.targets = trajectory.end.clone();
+        self.rail_target = trajectory.rail.end;
+        self.active_swing = Some(SwingPlayback {
+            trajectory,
+            elapsed: 0.0,
+        });
+    }
+
+    /// 진행 중 스윙을 취소한다 (다음 공 발사 전).
+    pub fn cancel_swing(&mut self) {
+        self.active_swing = None;
+    }
+
+    /// quintic 궤적을 `dt`만큼 진행한다. 완료 시 `true`.
+    ///
+    /// 샘플 직후 테이블 OBB 클램프로 관통 자세를 올린다.
+    pub fn advance_swing(&mut self, arm: &Arm, dt: f64) -> bool {
+        let Some(playback) = &mut self.active_swing else {
+            return false;
+        };
+        playback.elapsed += dt;
+        let t = playback.elapsed.min(playback.trajectory.duration_secs);
+        let sampled = playback.trajectory.sample_at(t);
+        self.rail_x = playback.trajectory.sample_rail_at(t);
+        self.angles = crate::planner::collision::clamp_above_table(arm, self.rail_x, &sampled);
+        if playback.elapsed >= playback.trajectory.duration_secs {
+            self.active_swing = None;
+            return true;
+        }
+        return false;
+    }
+
+    /// 목표 관절각을 `max_speed` [rad/s]로 추종한다 (궤적 없을 때 폴백).
+    pub fn step_toward_targets(&mut self, arm: &Arm, dt: f64) {
+        if self.active_swing.is_some() {
+            let _ = self.advance_swing(arm, dt);
+            return;
+        }
+        if let Some(rail) = &arm.rail {
+            let diff = self.rail_target - self.rail_x;
+            let step = (rail.max_speed * dt).min(diff.abs());
+            self.rail_x += diff.signum() * step;
+        }
+        let n = self.angles.values.len().min(self.targets.values.len());
+        for i in 0..n {
+            let diff = self.targets.values[i] - self.angles.values[i];
+            let step = (arm.max_joint_speed * dt).min(diff.abs());
+            self.angles.values[i] += diff.signum() * step;
+        }
+        self.angles = crate::planner::collision::clamp_above_table(arm, self.rail_x, &self.angles);
+    }
+
+    /// 현재 관절각으로 FK 라켓 자세를 계산한다.
+    pub fn racket_pose(&self, arm: &Arm) -> Option<RacketPose> {
+        if arm.rail.is_some() {
+            return arm.forward_kinematics_with_rail(self.rail_x, &self.angles);
+        }
+        return arm.forward_kinematics(&self.angles);
+    }
+}

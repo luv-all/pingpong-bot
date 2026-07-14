@@ -1,6 +1,6 @@
 //! 핀홀 카메라 투영 (sim 전용) — domain `CameraParams`와 동일 모델.
 
-use pingpong_domain::{CameraId, CameraParams, PixelPoint, Point3, World};
+use pingpong_domain::{CameraId, CameraParams, PixelPoint, Point3};
 use rapier3d::prelude::Vector;
 
 /// 카메라 시야 — domain 캘리브의 얇은 래퍼.
@@ -20,7 +20,7 @@ impl CameraView {
 
     /// 월드 좌표 [m] → 픽셀. 시야 밖·카메라 뒤면 `None`.
     pub fn project(&self, world: Vector) -> Option<PixelPoint> {
-        let point = Point3::<World>::new(f64::from(world.x), f64::from(world.y), f64::from(world.z));
+        let point = Point3::new(f64::from(world.x), f64::from(world.y), f64::from(world.z));
         return self.params.project_world(point);
     }
 }

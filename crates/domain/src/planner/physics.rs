@@ -1,4 +1,4 @@
-//! 순수 물리·스윙 계획 (plan §7).
+//! 순수 물리/스윙 계획.
 
 use nalgebra::Vector3;
 
@@ -9,9 +9,9 @@ use crate::constants::{
 use crate::error::{DomainError, SwingPlanError};
 use super::impact::{loft_return_velocity, required_racket_velocity};
 use crate::robot::Arm;
-use crate::types::{Joints, RailMotion, RobotPose, SwingTrajectory, Target};
+use crate::types::{Joints, Prediction, RailMotion, RobotPose, SwingTrajectory};
 
-/// 공기 저항을 포함한 공 가속도 [m/s²].
+/// 공기 저항을 포함한 공 가속도 [m/s^2].
 pub fn accel(velocity: Vector3<f64>, drag_coefficient: f64) -> Vector3<f64> {
     return G - drag_coefficient * velocity.norm() * velocity;
 }
@@ -23,18 +23,17 @@ pub fn in_swing_commit_window(time_to_impact_secs: f64) -> bool {
     return (MIN_SWING_SECS..=SWING_COMMIT_MAX_SECS).contains(&time_to_impact_secs);
 }
 
-/// 네트 통과 후인지 — oracle·EKF control 공통 commit 게이트 (decisions C4).
+/// 네트 통과 후인지 - oracle/EKF control 공통 commit 게이트.
 pub fn ball_past_midcourt_for_commit(ball_y: f64) -> bool {
     return ball_y <= table::LENGTH_Y * SWING_COMMIT_MAX_BALL_Y_FRAC;
 }
 
-/// 타겟 예측·현재 포즈로 quintic 스윙 궤적을 계획한다 (plan §7.1–§7.5).
+/// 예측/현재 포즈로 quintic 스윙 궤적을 계획한다.
 pub fn plan_swing(
     arm: &Arm,
-    target: Target,
+    prediction: Prediction,
     start: &RobotPose,
 ) -> Result<SwingTrajectory, DomainError> {
-    let prediction = target.prediction;
     let time_to_impact = prediction.time_to_impact_secs;
     if time_to_impact < MIN_SWING_SECS {
         return Err(DomainError::InfeasibleSwing(
@@ -99,7 +98,7 @@ pub fn plan_swing(
         .joint_velocities_for_ee_velocity(&end, v_r)
         .map_err(DomainError::InfeasibleSwing)?;
 
-    let trajectory = build_feasible_trajectory(
+    return build_feasible_trajectory(
         arm,
         &start.joints,
         end,
@@ -108,78 +107,13 @@ pub fn plan_swing(
         time_to_impact,
         rail_motion,
     )
-    .map_err(DomainError::InfeasibleSwing)?;
-
-    verify_torque_limits(arm, &trajectory)?;
-
-    return Ok(trajectory);
+    .map_err(DomainError::InfeasibleSwing);
 }
 
-/// §7.4 대각 관성 근사 토크. `fit_end_velocity`가 `MAX_JOINT_TORQUE`까지 스케일한다.
+/// 속도/가속 한계 안에 들어오는 quintic을 만든다.
 ///
-/// 잔여 초과는 B1(타격 속도 유지)에 따라 허용 — 하드 리젝트하지 않는다.
-pub fn verify_torque_limits(_arm: &Arm, trajectory: &SwingTrajectory) -> Result<(), DomainError> {
-    let _ = peak_required_torque(trajectory);
-    return Ok(());
-}
-
-/// sim 접촉용 — 목표 **위치**에만 도달 (종료 속도·토크 검증 생략).
-///
-/// `plan_swing`은 리턴 스윙 속도까지 맞추려다 관절 한계에서 부분 궤적(5% 등)로
-/// 떨어져 라켓이 공 앞을 지나갈 수 있다. 접촉 검증 단계에서는 위치만 맞춘다.
-pub fn plan_contact_swing(
-    arm: &Arm,
-    target: Target,
-    start: &RobotPose,
-) -> Result<SwingTrajectory, DomainError> {
-    let prediction = target.prediction;
-    let time_to_impact = prediction.time_to_impact_secs;
-    if time_to_impact < MIN_SWING_SECS {
-        return Err(DomainError::InfeasibleSwing(
-            SwingPlanError::InsufficientTime {
-                time_to_impact_secs: time_to_impact,
-                min_swing_secs: MIN_SWING_SECS,
-            },
-        ));
-    }
-
-    let (rail_end, impact_position, rail_motion) = if let Some(rail) = &arm.rail {
-        let (rail_end, impact) = arm.clamp_impact_for_rail(rail, prediction.impact_position);
-        let motion = RailMotion {
-            start: start.rail_x,
-            end: rail_end,
-            start_velocity: 0.0,
-            end_velocity: 0.0,
-        };
-        (rail_end, impact, motion)
-    } else {
-        let impact = arm.clamp_to_reach(prediction.impact_position);
-        (start.rail_x, impact, RailMotion::fixed(start.rail_x))
-    };
-
-    let end = if let Some(rail) = &arm.rail {
-        arm.inverse_kinematics_with_rail(rail, rail_end, impact_position, Some(&start.joints))
-    } else {
-        arm.inverse_kinematics_near(impact_position, Some(&start.joints))
-    }
-    .map_err(DomainError::InfeasibleSwing)?;
-    let end = crate::planner::collision::clamp_above_table(arm, rail_end, &end);
-
-    let zero = vec![0.0; start.joints.values.len()];
-    return Ok(SwingTrajectory::new(
-        start.joints.clone(),
-        end,
-        zero.clone(),
-        zero,
-        time_to_impact,
-        rail_motion,
-    ));
-}
-
-/// 속도·가속 한계 안에 들어오는 quintic을 만든다.
-///
-/// 종료 **위치**는 항상 임팩트 IK 해. 끝속도는 한계 안으로 스케일하되,
-/// 타격 모드에서는 **0으로 버리지 않는다** (최소 스케일 유지).
+/// 종료 위치는 항상 임팩트 IK 해. 끝속도는 한계 안으로 스케일하되
+/// 타격 모드에서는 0으로 버리지 않는다 (최소 스케일 유지).
 fn build_feasible_trajectory(
     arm: &Arm,
     start: &Joints,
@@ -223,7 +157,7 @@ fn trajectory_within_limits(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
     return joints_ok && rail_ok;
 }
 
-/// quintic이 관절 한계 안에 들어오도록 임팩트 각속도를 점진적으로 줄인다 (§7.4 근사).
+/// quintic이 관절 한계 안에 들어오도록 임팩트 각속도를 점진적으로 줄인다 ( 근사).
 fn fit_end_velocity(
     arm: &Arm,
     start: &Joints,
@@ -295,19 +229,17 @@ mod tests {
         return RobotPose::new(rail_x, arm.default_joints.clone());
     }
 
-    fn sample_target(time_to_impact_secs: f64) -> Target {
+    fn sample_prediction(time_to_impact_secs: f64) -> Prediction {
         let arm = sample_three_dof_arm();
         let rail_x = arm.rail.as_ref().map(|r| r.default_x()).unwrap_or(0.0);
         let impact_position = arm
             .forward_kinematics_with_rail(rail_x, &arm.default_joints)
             .expect("기본 자세 FK")
             .position;
-        return Target {
-            prediction: Prediction {
-                time_to_impact_secs,
-                impact_position,
-                incoming_velocity: Vector3::new(0.0, -4.0, -0.2),
-            },
+        return Prediction {
+            time_to_impact_secs,
+            impact_position,
+            incoming_velocity: Vector3::new(0.0, -4.0, -0.2),
         };
     }
 
@@ -332,15 +264,15 @@ mod tests {
     fn plan_swing_reaches_impact_with_end_velocity() {
         let arm = sample_three_dof_arm();
         let start = sample_start(&arm);
-        let target = sample_target(0.35);
-        let trajectory = plan_swing(&arm, target, &start).expect("스윙 계획");
+        let prediction = sample_prediction(0.35);
+        let trajectory = plan_swing(&arm, prediction, &start).expect("스윙 계획");
         let pose = arm
             .forward_kinematics_with_rail(trajectory.rail.end, trajectory.goal_joints())
             .expect("FK");
-        assert!((pose.position.v.x - target.prediction.impact_position.v.x).abs() < 1e-4);
-        assert!((pose.position.v.y - target.prediction.impact_position.v.y).abs() < 1e-4);
+        assert!((pose.position.v.x - prediction.impact_position.v.x).abs() < 1e-4);
+        assert!((pose.position.v.y - prediction.impact_position.v.y).abs() < 1e-4);
         assert!(
-            pose.position.v.z + 1e-4 >= target.prediction.impact_position.v.z,
+            pose.position.v.z + 1e-4 >= prediction.impact_position.v.z,
             "테이블 클램프로 z만 올라갈 수 있음"
         );
         assert!(
@@ -359,31 +291,6 @@ mod tests {
     }
 
     #[test]
-    fn plan_contact_swing_is_position_only() {
-        let arm = sample_three_dof_arm();
-        let start = sample_start(&arm);
-        let target = sample_target(0.35);
-        let trajectory = plan_contact_swing(&arm, target, &start).expect("contact");
-        assert!(trajectory.end_velocity.iter().all(|v| *v == 0.0));
-        let pose = arm
-            .forward_kinematics_with_rail(trajectory.rail.end, trajectory.goal_joints())
-            .expect("FK");
-        assert!((pose.position.v.x - target.prediction.impact_position.v.x).abs() < 1e-4);
-        assert!((pose.position.v.y - target.prediction.impact_position.v.y).abs() < 1e-4);
-        assert!(
-            pose.position.v.z + 1e-4 >= target.prediction.impact_position.v.z,
-            "테이블 클램프로 z만 올라갈 수 있음"
-        );
-        assert!(
-            crate::planner::collision::table_penetration(
-                &arm,
-                trajectory.rail.end,
-                trajectory.goal_joints()
-            ) < 1e-3
-        );
-    }
-
-    #[test]
     fn plan_swing_moves_rail_to_impact_x() {
         let arm = sample_three_dof_arm();
         let start = RobotPose::new(0.1, arm.default_joints.clone());
@@ -393,14 +300,12 @@ mod tests {
             .position;
         let impact =
             crate::types::Point3::new(reachable.v.x, table::DEFAULT_HIT_PLANE_Y, reachable.v.z);
-        let target = Target {
-            prediction: Prediction {
-                time_to_impact_secs: 0.3,
-                impact_position: impact,
-                incoming_velocity: Vector3::new(0.0, -5.0, -0.2),
-            },
+        let prediction = Prediction {
+            time_to_impact_secs: 0.3,
+            impact_position: impact,
+            incoming_velocity: Vector3::new(0.0, -5.0, -0.2),
         };
-        let trajectory = plan_swing(&arm, target, &start).expect("스윙 계획");
+        let trajectory = plan_swing(&arm, prediction, &start).expect("스윙 계획");
         assert!((trajectory.rail.end - impact.v.x).abs() < 1e-6);
         assert!((trajectory.rail.start - 0.1).abs() < 1e-6);
     }
@@ -408,7 +313,7 @@ mod tests {
     #[test]
     fn plan_swing_fails_when_insufficient_time() {
         let arm = sample_three_dof_arm();
-        let err = plan_swing(&arm, sample_target(0.05), &sample_start(&arm)).unwrap_err();
+        let err = plan_swing(&arm, sample_prediction(0.05), &sample_start(&arm)).unwrap_err();
         let DomainError::InfeasibleSwing(SwingPlanError::InsufficientTime {
             time_to_impact_secs,
             min_swing_secs,
@@ -430,14 +335,12 @@ mod tests {
             .expect("FK")
             .position;
         let start = RobotPose::new(rail_x, arm.default_joints.clone());
-        let target = Target {
-            prediction: Prediction {
-                time_to_impact_secs: 0.22,
-                impact_position: far_impact,
-                incoming_velocity: Vector3::new(0.0, -7.5, -0.3),
-            },
+        let prediction = Prediction {
+            time_to_impact_secs: 0.22,
+            impact_position: far_impact,
+            incoming_velocity: Vector3::new(0.0, -7.5, -0.3),
         };
-        let trajectory = plan_swing(&arm, target, &start).expect("슈터→로봇 기본 샷");
+        let trajectory = plan_swing(&arm, prediction, &start).expect("슈터->로봇 기본 샷");
         assert!((trajectory.rail.end - far_impact.v.x).abs() < 1e-6);
         assert!(trajectory.peak_joint_speed() <= arm.max_joint_speed);
         assert_ne!(

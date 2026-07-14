@@ -146,7 +146,7 @@ cargo run -p pingpong-bin -- --no-gui --frames 60 --shoot-on-start --sim-speed 5
 - GUI: yaw/pitch/roll 조준·속도·top/side/drill spin·시간배율 + 발사/회수 버튼
 - **kiss3d 3D + egui 패널** (단일 창 — macOS EventLoop 제약)
 
-제어 루프는 100 Hz. `Target` 슬롯은 1칸(최신 예측만 유지).
+제어 루프는 100 Hz. `Prediction` 슬롯은 1칸(최신 예측만 유지).
 
 ---
 
