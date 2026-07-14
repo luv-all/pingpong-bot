@@ -70,6 +70,9 @@ cargo run -p pingpong-bin
 # 프리셋: mesh = urdf-test, 제어 = competition 빌더
 cargo run -p pingpong-bin -- --robot urdf-test
 
+# 프리셋: CAD 4DOF mesh
+cargo run -p pingpong-bin -- --robot 4-dof
+
 # config + CLI가 robot을 덮어씀
 cargo run -p pingpong-bin -- --config config/example.toml --robot competition-urdf
 
@@ -114,6 +117,7 @@ plan.md     기술 마스터 플랜
 | `competition` | 없음 (빌더만) | competition 빌더 |
 | `urdf-test` | `assets/robots/urdf-test/.../urdf-test.urdf` | 동일 빌더 |
 | `competition-urdf` | `assets/robots/competition_arm.urdf` | 동일 빌더 |
+| `4-dof` | `assets/robots/4-dof/urdf/all-4-export.urdf` | 동일 빌더 |
 
 ```toml
 # config/example.toml

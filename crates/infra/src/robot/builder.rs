@@ -229,4 +229,22 @@ mod tests {
         assert_eq!(robot.arm.joint_count(), 4);
         assert_eq!(robot.urdf.as_ref().unwrap().joint_count(), 3);
     }
+
+    #[test]
+    fn all_4_export_builds_with_mesh() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/robots/4-dof/urdf/all-4-export.urdf");
+        if !path.exists() {
+            return;
+        }
+        let robot = RobotBuilder::new()
+            .urdf(&path)
+            .ee_link("pingpong_paddle_v5_1")
+            .mount_preset(MountPreset::Rep103AtTableEnd)
+            .build_with_arm_fallback(test_fallback_arm())
+            .expect("4-dof");
+        assert!(robot.urdf.is_some());
+        assert_eq!(robot.arm.joint_count(), 4);
+        assert_eq!(robot.urdf.as_ref().unwrap().joint_count(), 4);
+    }
 }
