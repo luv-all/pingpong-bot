@@ -1,21 +1,17 @@
 //! # pingpong-domain
 //!
-//! 순수 도메인. OpenCV/모터 SDK 없이 타입, 포트, 물리/EKF만.
-//! 다른 crate는 이쪽으로만 의존한다.
+//! 추정·제어·로봇 수학. 비전(캘리브·DLT·캡처)은 `pingpong_infra::vision`.
 //!
 //! 상수는 `constants::table::...` 경로를 쓴다. 루트에 펼치면
 //! estimator / impact 같은 모듈 이름과 겹친다.
 
-pub mod camera;
 pub mod constants;
-pub mod detector;
 pub mod error;
 pub mod estimator;
 pub mod physics_config;
 pub mod planner;
 pub mod ports;
 pub mod robot;
-pub mod triangulator;
 pub mod types;
 
 /// 레거시 경로: `pingpong_domain::ballistics::*`
@@ -36,11 +32,9 @@ pub use planner::{
     loft_return_velocity, plan_swing, required_racket_velocity, robot_obbs, table_penetration,
     verify_impact_model,
 };
-pub use ports::{CameraSource, Clock, Detector, Estimator, Hardware, Telemetry};
+pub use ports::{Clock, Estimator, Hardware, Telemetry};
 pub use robot::rail::LinearRail;
 pub use robot::{
     Arm, ArmBuildError, ArmBuilder, JointLimit, RacketPose, RobotState, SUPPORTED_FK_JOINTS,
 };
-pub use triangulator::{dlt_triangulate, sample_at, triangulate_projections, triangulate_synced};
 pub use types::*;
-pub use camera::{Calibration, CameraParams};

@@ -110,6 +110,7 @@ pub static ROBOTS: LazyLock<Vec<RobotEntry>> = LazyLock::new(|| {
             urdf_rel: Some("assets/robots/4-dof/urdf/all-4-export.urdf"),
             ee_link: Some("pingpong_paddle_v5_1"),
             max_joint_speed: 2.5,
+            control_to_urdf: None,
             build: build_competition,
         },
     ];

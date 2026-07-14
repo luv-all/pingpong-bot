@@ -1,8 +1,8 @@
 //! ChArUco 등 카메라 번들 캘리브레이션.
 
 use nalgebra::Vector3;
-
-use crate::types::{CameraId, PixelPoint, Point3};
+use pingpong_domain::constants::table;
+use pingpong_domain::{CameraId, PixelPoint, Point3};
 
 /// ChArUco 등으로 측정한 카메라 번들. `cameras[i]` <-> `CameraId(i)`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -50,9 +50,9 @@ impl CameraParams {
         let radius = 2.2;
         let height = 1.85;
         let table_center = Vector3::new(
-            crate::constants::table::WIDTH_X * 0.5,
-            crate::constants::table::LENGTH_Y * 0.5,
-            crate::constants::table::SURFACE_Z,
+            table::WIDTH_X * 0.5,
+            table::LENGTH_Y * 0.5,
+            table::SURFACE_Z,
         );
         let eye = table_center + Vector3::new(radius * angle.cos(), radius * angle.sin(), height);
         let width = 640_u32;

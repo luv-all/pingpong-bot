@@ -4,12 +4,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use pingpong_domain::{CameraId, CameraSource, Clock, PixelPoint};
+use pingpong_domain::{CameraId, Clock, PixelPoint};
 use rapier3d::prelude::Vector;
 
 use super::projection::CameraView;
 use crate::sim::session::SimClockHandle;
 use crate::sim::world::SimWorld;
+use crate::vision::FrameSource;
 
 /// Rapier 월드 공을 픽셀로 투영하는 가상 카메라.
 pub struct SimCamera {
@@ -56,7 +57,7 @@ impl SimCamera {
     }
 }
 
-impl CameraSource for SimCamera {
+impl FrameSource for SimCamera {
     fn next(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)> {
         if self.shutdown.load(Ordering::Acquire) {
             return None;

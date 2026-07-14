@@ -2,9 +2,10 @@
 
 use std::time::{Duration, Instant};
 
-use pingpong_domain::{CameraId, CameraSource, Clock, PixelPoint};
+use pingpong_domain::{CameraId, Clock, PixelPoint};
 
 use crate::clock::SystemClock;
+use crate::vision::FrameSource;
 
 /// sin/cos 로 움직이는 픽셀을 만드는 레거시 가짜 카메라.
 pub struct SyntheticCamera {
@@ -35,7 +36,7 @@ impl SyntheticCamera {
     }
 }
 
-impl CameraSource for SyntheticCamera {
+impl FrameSource for SyntheticCamera {
     fn next(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)> {
         if self.remaining == 0 {
             return None;

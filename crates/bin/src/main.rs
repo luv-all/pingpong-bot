@@ -18,10 +18,10 @@ use std::thread;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use pingpong_app::{find_robot, robot_ids_csv, PipelineConfig, DEFAULT_ROBOT_ID};
-use pingpong_domain::{Arm, BallEkf, Calibration, CameraId, HitPlane, PhysicsParams, constants::table};
+use pingpong_domain::{Arm, BallEkf, CameraId, HitPlane, PhysicsParams, constants::table};
 use pingpong_infra::{
     RobotBuilder, SimRuntimeControls, SimSession, SimSessionConfig, SimViewerOptions,
-    TracingTelemetry, new_shutdown_flag, run_sim_viewer,
+    TracingTelemetry, Calibration, FrameSource, new_shutdown_flag, run_sim_viewer,
 };
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -203,11 +203,8 @@ fn run_sim(args: Args, calibration: Calibration, physics: PhysicsParams) -> Resu
 
     let frame_count = if gui { 0 } else { args.frames };
 
-    let cameras: Vec<Box<dyn pingpong_domain::CameraSource>> = (0..args.camera_count)
-        .map(|i| {
-            Box::new(session.camera(CameraId::new(i), frame_count))
-                as Box<dyn pingpong_domain::CameraSource>
-        })
+    let cameras: Vec<Box<dyn FrameSource>> = (0..args.camera_count)
+        .map(|i| Box::new(session.camera(CameraId::new(i), frame_count)) as Box<dyn FrameSource>)
         .collect();
 
     let estimator = Box::new(BallEkf::with_physics(physics));

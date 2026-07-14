@@ -11,17 +11,17 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
 use pingpong_domain::{
-    Arm, BallObservation, Calibration, CameraId, CameraSource, Detector, DomainError, Estimator,
-    Hardware, HitPlane, PixelPoint, Prediction, SwingPlanError, Telemetry, TelemetryEvent,
-    constants::table, in_swing_commit_window, plan_swing, triangulate_synced,
+    Arm, BallObservation, CameraId, DomainError, Estimator, Hardware, HitPlane, Prediction,
+    SwingPlanError, Telemetry, TelemetryEvent, constants::table, in_swing_commit_window, plan_swing,
 };
+use pingpong_infra::{passthrough_detect, triangulate_synced, Calibration, FrameSource};
+use tracing::{info, info_span, warn};
 
 mod arm;
 pub use arm::{
     competition_arm, find_robot, robot_ids_csv, shared_competition_arm, RobotEntry,
     DEFAULT_ROBOT_ID, ROBOTS,
 };
-use tracing::{info, info_span, warn};
 
 const OBSERVATION_CHANNEL_CAPACITY: usize = 64;
 const CONTROL_HZ: f64 = 100.0;
@@ -53,7 +53,7 @@ impl Default for PipelineConfig {
 
 /// 카메라·추정·제어 스레드를 띄우고 파이프라인을 실행한다.
 pub fn run(
-    cameras: Vec<Box<dyn CameraSource>>,
+    cameras: Vec<Box<dyn FrameSource>>,
     mut estimator: Box<dyn Estimator>,
     mut hardware: Box<dyn Hardware>,
     config: PipelineConfig,
@@ -70,10 +70,9 @@ pub fn run(
             PipelineThread::Camera,
             thread::spawn(move || {
                 pin_to_performance_core();
-                let mut detector = InlineDetector;
                 while let Some((camera_id, hint, timestamp)) = camera.next() {
                     let _span = info_span!("detect", ?camera_id).entered();
-                    if let Some(pixel) = detector.detect(hint) {
+                    if let Some(pixel) = passthrough_detect(hint) {
                         if sender
                             .send(BallObservation {
                                 pixel,
@@ -223,14 +222,6 @@ pub fn run(
 
     info!("파이프라인 종료");
     return Ok(());
-}
-
-struct InlineDetector;
-
-impl Detector for InlineDetector {
-    fn detect(&mut self, hint: Option<PixelPoint>) -> Option<PixelPoint> {
-        return hint;
-    }
 }
 
 fn pin_to_performance_core() {

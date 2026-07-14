@@ -1,9 +1,11 @@
-//! 핀홀 카메라 투영 (sim 전용) — domain `CameraParams`와 동일 모델.
+//! 핀홀 카메라 투영 (sim 전용) — `vision::CameraParams`와 동일 모델.
 
-use pingpong_domain::{CameraId, CameraParams, PixelPoint, Point3};
+use pingpong_domain::{CameraId, PixelPoint, Point3};
 use rapier3d::prelude::Vector;
 
-/// 카메라 시야 — domain 캘리브의 얇은 래퍼.
+use crate::vision::CameraParams;
+
+/// 카메라 시야 — vision 캘리브의 얇은 래퍼.
 #[derive(Debug, Clone)]
 pub struct CameraView {
     /// 공유 핀홀 파라미터

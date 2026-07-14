@@ -98,9 +98,10 @@
 | ID | 현재 | 위치 | 상태 |
 |----|------|------|------|
 | F1 | `BallEkf` | `domain/ekf.rs` | ✅ |
-| F2 | DLT `triangulate_synced` | `triangulation.rs` | ✅ |
-| F3 | 검출 패스스루 (sim은 투영 픽셀) | `infra/detector.rs` | ✅ Phase2 — OpenCV는 실물 |
+| F2 | DLT / OpenCV triangulate | `infra::vision` | ✅ DLT 폴백; `opencv` feature 시 `triangulatePoints`(2뷰) |
+| F3 | 검출 패스스루 (sim은 투영 픽셀) | `infra::vision` | ✅ Phase2 — 다음: OpenCV 원/공 검출 |
 | F4 | 대각 관성 토크 검증 `Iα` | `physics::verify_torque_limits` | ✅ 스텁(풀 동역학은 후속) |
+| F5 | **비전 SSOT = OpenCV(infra)** | `infra::vision` | ✅ Calibration·삼각측량·`FrameSource` 이전. domain `CameraSource`/`Detector` 제거 |
 
 ---
 
@@ -120,19 +121,18 @@
 
 ## H. 모듈 역할명
 
-**결정 (2026-07):** 폴더 = 포트 역할명.
+**결정 (2026-07):** 비전은 `pingpong_infra::vision`. domain은 추정·제어.
 
 | 모듈 | 역할 |
 |------|------|
-| `camera` | Calibration · SimCamera |
-| `detector` | 이미지 → 2D |
-| `triangulator` | 2D → 3D (DLT) |
-| `estimator` | 상태·hit-plane 예측 |
+| `infra::vision` | Calibration · triangulate · FrameSource · (OpenCV) ChArUco |
+| `infra` camera | SimCamera / SyntheticCamera |
+| `estimator` | 상태·hit-plane 예측 (domain) |
 | `planner` | plan_swing · impact · collision |
 | `robot` | Arm · URDF |
 | `hardware` / `telemetry` | infra 어댑터 |
 
-파이프라인: Detector → Triangulator → Estimator → Planner.
+파이프라인: vision(detect→triangulate) → Estimator → Planner.
 
 ---
 
@@ -142,7 +142,7 @@
 2. **B** — 속도 폴백 ✅  
 3. **C** — 스윙 권한 ✅  
 4. **D / E** — 면·팔·hit plane ✅  
-5. **F** — 관측·토크 ✅ (OpenCV·Rerun·Dynamixel은 실물 마일스톤)
+5. **F** — 관측(infra vision) ✅ · Rerun·Dynamixel은 실물 마일스톤
 
 ---
 
@@ -160,4 +160,4 @@
 - [x] E1 hit plane y = 0.30
 - [x] G1–G3 테이블 OBB 클램프 (전완·라켓)
 
-작성 기준: 대화 중 식별된 자체 판단·애매 코드 (2026-07-11).
+작성 기준: 대화 중 식별된 자체 판단·애매 코드 (2026-07-11). F5·thin types 갱신 2026-07-15.

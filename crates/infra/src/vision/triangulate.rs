@@ -1,15 +1,13 @@
 //! 다중 카메라 삼각측량.
-//!
-//! - `sample_at`: 타임스탬프 동기화를 위한 선형 보간
-//! - `triangulate_synced`: 동기화 시각에 N대 관측을 맞춘 뒤 DLT로 3D 복원
 
 use std::time::Instant;
 
 use nalgebra::{DMatrix, Matrix3x4};
+use pingpong_domain::{
+    BallObservation, CameraId, DomainError, ObservationError, PixelPoint, Point3,
+};
 
-use crate::error::{DomainError, ObservationError};
-use crate::types::{BallObservation, CameraId, PixelPoint, Point3};
-use crate::camera::{Calibration, CameraParams};
+use super::calib::{Calibration, CameraParams};
 
 /// 관측 시계열에서 `sync_time`에 해당하는 픽셀 위치를 선형 보간한다.
 pub fn sample_at(observations: &[BallObservation], sync_time: Instant) -> Option<PixelPoint> {
@@ -43,7 +41,7 @@ pub fn sample_at(observations: &[BallObservation], sync_time: Instant) -> Option
     return None;
 }
 
-/// 카메라별 관측 스트림을 `sync_time`으로 정렬한 뒤 DLT로 3D 위치를 복원한다.
+/// 카메라별 관측 스트림을 `sync_time`으로 정렬한 뒤 3D 위치를 복원한다.
 pub fn triangulate_synced(
     observations_by_camera: &[(CameraId, &[BallObservation])],
     sync_time: Instant,
@@ -74,9 +72,21 @@ pub fn triangulate_synced(
         views.push((params.projection_matrix(), pixel));
     }
 
-    return dlt_triangulate(&views).ok_or(DomainError::InvalidObservation(
+    return triangulate_views(&views).ok_or(DomainError::InvalidObservation(
         ObservationError::TriangulationFailed,
     ));
+}
+
+/// OpenCV 또는 nalgebra DLT로 뷰를 합친다.
+pub fn triangulate_views(views: &[(Matrix3x4<f64>, PixelPoint)]) -> Option<Point3> {
+    #[cfg(feature = "opencv")]
+    {
+        return crate::vision::opencv_tri::triangulate_views(views);
+    }
+    #[cfg(not(feature = "opencv"))]
+    {
+        return dlt_triangulate(views);
+    }
 }
 
 /// 알려진 픽셀/투영행렬로 DLT 삼각측량 (동차 SVD).
@@ -112,7 +122,7 @@ pub fn dlt_triangulate(views: &[(Matrix3x4<f64>, PixelPoint)]) -> Option<Point3>
     return Some(Point3::new(x, y, z));
 }
 
-/// 테스트/디버그용: Calibration의 카메라들로 점을 투영한 뒤 DLT로 복원한다.
+/// 테스트/디버그용: Calibration의 카메라들로 점을 투영한 뒤 복원한다.
 pub fn triangulate_projections(
     calibration: &Calibration,
     camera_ids: &[CameraId],
@@ -124,16 +134,18 @@ pub fn triangulate_projections(
         let pixel = params.project_world(point)?;
         views.push((params.projection_matrix(), pixel));
     }
-    return dlt_triangulate(&views);
+    return triangulate_views(&views);
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 
+    use pingpong_domain::constants::table;
+    use pingpong_domain::{BallObservation, CameraId, DomainError, ObservationError, PixelPoint, Point3};
+
     use super::*;
-    use crate::constants::table;
-    use crate::types::CameraId;
+    use crate::vision::Calibration;
 
     fn observation(
         camera_id: CameraId,
@@ -183,11 +195,7 @@ mod tests {
             table::LENGTH_Y * 0.4,
             table::SURFACE_Z + 0.2,
         );
-        let ids = [
-            CameraId::new(0),
-            CameraId::new(1),
-            CameraId::new(2),
-        ];
+        let ids = [CameraId::new(0), CameraId::new(1), CameraId::new(2)];
         let recovered = triangulate_projections(&calibration, &ids, truth).expect("DLT");
         let err = (recovered.v - truth.v).norm();
         assert!(
@@ -245,10 +253,8 @@ mod tests {
                 ],
             ));
         }
-        let refs: Vec<(CameraId, &[BallObservation])> = series
-            .iter()
-            .map(|(id, s)| (*id, s.as_slice()))
-            .collect();
+        let refs: Vec<(CameraId, &[BallObservation])> =
+            series.iter().map(|(id, s)| (*id, s.as_slice())).collect();
         let mid = base + Duration::from_millis(5);
         let recovered = triangulate_synced(&refs, mid, &calibration).expect("synced DLT");
         assert!((recovered.v - truth.v).norm() < 1e-3);

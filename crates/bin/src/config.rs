@@ -4,7 +4,8 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use pingpong_domain::{Calibration, PhysicsConfig, PhysicsParams};
+use pingpong_domain::{PhysicsConfig, PhysicsParams};
+use pingpong_infra::Calibration;
 use serde::Deserialize;
 
 /// `pingpong-bot --config` 로 로드하는 설정.

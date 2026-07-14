@@ -1,7 +1,7 @@
 # pingpong-bot
 
 사람과 오래 협력 랠리를 이어가는 핑퐁 로봇 런타임.  
-Rust 헥사고날 아키텍처(ports & adapters)로 domain / app / infra / bin을 분리했다.
+Rust 경연 바이너리. 크레이트는 domain / app / infra / bin으로 나누되, **비전은 OpenCV SSOT로 infra**에 두고 헥사 포트로 감싸지 않는다.
 
 상세 설계는 [`plan.md`](plan.md)를 본다.
 
@@ -96,9 +96,9 @@ RUST_LOG=pingpong_app=debug,info cargo run -p pingpong-bin -- --frames 30
 
 ```
 crates/
-  domain/   순수 도메인 — 타입, `Arm`/FK, `constants/`(ITTF 규격), 포트 trait
+  domain/   추정·제어 — 타입, `Arm`/FK/EKF, `constants/`, Hardware 등 포트
   app/      파이프라인 오케스트레이션 — 카메라·추정·제어 스레드, 채널
-  infra/    어댑터 — Rapier sim, TracingTelemetry, SyntheticCamera(레거시) 등
+  infra/    비전(`vision`: Calibration·삼각측량·FrameSource) + Rapier sim + 텔레메트리
   bin/      CLI 진입점 — sim/real 모드 DI
 
 tools/      실험·캘리브·검증용 독립 바이너리
@@ -106,7 +106,7 @@ plan.md     기술 마스터 플랜
 TODO.md     실행 체크리스트
 ```
 
-의존 방향: `bin` → `app` / `infra` → `domain`
+의존 방향: `bin` → `app` → `infra` → `domain` (비전은 app이 infra를 직접 호출)
 
 **로봇**
 - 기구학·제어 `Arm` 타입은 `domain/robot/`에만 있다. 부팅 시 `Arc<Arm>`으로 sim·real·제어가 같은 불변 객체를 공유한다.
@@ -156,11 +156,11 @@ cargo run -p pingpong-bin -- --no-gui --frames 60 --shoot-on-start --sim-speed 5
 
 ## 실험 도구 (`tools/`)
 
-각 도구는 `domain`/`infra`와 같은 타입·포트를 공유한다.
+각 도구는 `domain`/`infra`와 같은 타입을 공유한다. 비전 산출물은 `pingpong_infra::Calibration`.
 
 | crate | 바이너리 | 상태 | 용도 |
 |-------|----------|------|------|
-| `calib-charuco` | `calib_charuco` | ✅ | ChArUco 보정 (`--emit-sim` / `--validate`) |
+| `calib-charuco` | `calib_charuco` | ✅ | ChArUco (`--emit-sim` / `--validate` / `--features opencv --from-images`) |
 | `measure-restitution` | `measure_restitution` | ✅ | 반발계수 \(e\), 항력 \(k\) |
 | `measure-friction` | `measure_friction` | ✅ | 마찰계수 \(\mu\) |
 | `jog-axis` | `jog_axis` | ⏳ 스텁 | 축 수동 조그 |
@@ -175,7 +175,15 @@ cargo run -p pingpong-bin -- --no-gui --frames 60 --shoot-on-start --sim-speed 5
 ```bash
 cargo run -p calib-charuco -- --emit-sim 3 -o calibration.json
 cargo run -p calib-charuco -- --validate calibration.json
+# 시스템 OpenCV 필요:
+# cargo run -p calib-charuco --features opencv -- --from-images ./boards -o calibration.json
 cargo run -p pingpong-bin -- --config config/example.toml
+```
+
+infra 삼각측량에 OpenCV를 쓰려면:
+
+```bash
+cargo test -p pingpong-infra --features opencv
 ```
 
 ### 물리 계수 측정 (`measure_*`)
@@ -257,12 +265,13 @@ cargo build -p pingpong-bin --release
 | **BallScript** (시간·위치·속도·임펄스 스케줄) | ✅ |
 | **RobotBuilder** (URDF mesh + sim 마운트) | ✅ |
 | `sample_at` 타임스탬프 보간 | ✅ |
-| DLT 삼각측량, ChArUco 캘리브레이션 | ✅ (sim emit / validate) |
+| DLT 삼각측량 (`infra::vision`, `opencv` feature 시 triangulatePoints) | ✅ |
+| ChArUco (`calib_charuco --emit-sim` / `--features opencv --from-images`) | ✅ 초안 |
 | EKF / 궤적 추정 | ✅ (sim; `--ekf-swing` 실험, 기본은 오라클) |
 | `measure_restitution` / `measure_friction` (e·μ·k) | ✅ |
 | `--config` TOML | ✅ |
-| OpenCV 검출, 실 카메라 | ⏳ 2단계 |
-| Rerun 시각화, Dynamixel/AXL real | ⏳ 2단계 |
+| OpenCV 원/공 검출, 실 카메라 `VideoCapture` | ⏳ |
+| Rerun 시각화, Dynamixel/AXL real | ⏳ |
 | `--mode real` | ⏳ 2단계 |
 
 sim에서는 **실제 3D 물리**로 공이 날고, 오라클(또는 `--ekf-swing`)로 라켓이 움직인다.
