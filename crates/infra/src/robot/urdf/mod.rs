@@ -354,6 +354,38 @@ mod tests {
     }
 
     #[test]
+    fn loads_4dof_export_with_package_meshes() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/robots/4-dof/urdf/all-4-export.urdf");
+        if !path.exists() {
+            return;
+        }
+
+        let urdf =
+            UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
+        assert_eq!(urdf.name, "all-4-export");
+        assert_eq!(urdf.joint_count(), 4);
+        assert_eq!(
+            urdf.joint_names(),
+            ["Revolute 6", "Revolute 9", "Revolute 13", "Revolute 18"]
+        );
+
+        for vis in urdf.link_visuals() {
+            if let UrdfGeometry::Mesh { path, .. } = &vis.geometry {
+                assert!(
+                    path.exists(),
+                    "mesh 미존재 (절대경로·package 해석 확인): {}",
+                    path.display()
+                );
+            }
+        }
+
+        // 4축 mesh → domain Arm FK 변환 가능 (제어는 여전히 카탈로그 competition 권장)
+        let arm = urdf.try_into_arm(2.5).expect("4축 Arm 변환");
+        assert_eq!(arm.joint_count(), 4);
+    }
+
+    #[test]
     fn loads_urdf_from_string_via_tempfile() {
         let dir = std::env::temp_dir().join("pingpong_bot_urdf_test");
         let _ = std::fs::create_dir_all(&dir);

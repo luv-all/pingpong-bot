@@ -53,10 +53,11 @@ impl SimRobotMount {
 }
 
 pub(crate) fn default_sim_mount(robot_name: &str) -> SimRobotMount {
-    if robot_name == "urdf-test" {
-        return SimRobotMount::rep103_z_up_at_table_end();
-    }
-    return SimRobotMount::competition_placed();
+    // CAD/Onshape export (REP-103 Z-up) — 탁구대 로봇 끝에 base 배치
+    return match robot_name {
+        "urdf-test" | "all-4-export" => SimRobotMount::rep103_z_up_at_table_end(),
+        _ => SimRobotMount::competition_placed(),
+    };
 }
 
 #[cfg(test)]
@@ -105,6 +106,42 @@ mod tests {
             "베이스가 탁구대 아래로 꺼지지 않음: base_z={} ee_z={}",
             base[2],
             ee.position.v.z
+        );
+    }
+
+    #[test]
+    fn all_4_export_mount_points_arm_toward_table() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/robots/4-dof/urdf/all-4-export.urdf");
+        if !path.exists() {
+            return;
+        }
+        let urdf =
+            UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
+        assert_eq!(urdf.mount.rpy, [0.0, 0.0, 0.0]);
+        assert_eq!(urdf.name, "all-4-export");
+
+        let joints = urdf.default_joints().values;
+        let base = urdf
+            .link_poses_in_sim(joints.as_slice())
+            .into_iter()
+            .find(|(n, _, _)| n == "base_link")
+            .map(|(_, p, _)| p)
+            .expect("base");
+        let ee = urdf
+            .end_effector_pose_in_sim(joints.as_slice())
+            .expect("ee");
+
+        assert!(
+            (base[2] - table::SURFACE_Z).abs() < 0.01,
+            "base z≈탁구대 면: {}",
+            base[2]
+        );
+        assert!(
+            ee.position.v.y > base[1],
+            "4-dof 팔이 테이블(+y)로: base_y={} ee_y={}",
+            base[1],
+            ee.position.v.y
         );
     }
 }

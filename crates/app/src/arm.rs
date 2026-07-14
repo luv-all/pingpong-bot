@@ -105,6 +105,13 @@ pub static ROBOTS: LazyLock<Vec<RobotEntry>> = LazyLock::new(|| {
             control_to_urdf: Some(MAP_4_TO_3),
             build: build_competition,
         },
+        RobotEntry {
+            id: "4-dof",
+            urdf_rel: Some("assets/robots/4-dof/urdf/all-4-export.urdf"),
+            ee_link: Some("pingpong_paddle_v5_1"),
+            max_joint_speed: 2.5,
+            build: build_competition,
+        },
     ];
 });
 
@@ -144,6 +151,8 @@ mod tests {
         assert_eq!(ROBOTS[0].id, DEFAULT_ROBOT_ID);
         let path = find_robot("urdf-test").unwrap().urdf_path(".").unwrap();
         assert!(path.ends_with("urdf-test.urdf"));
+        let path4 = find_robot("4-dof").unwrap().urdf_path(".").unwrap();
+        assert!(path4.ends_with("all-4-export.urdf"));
     }
 
     #[test]
@@ -157,5 +166,6 @@ mod tests {
     fn unknown_id() {
         assert!(find_robot("nope").is_none());
         assert!(robot_ids_csv().contains("urdf-test"));
+        assert!(robot_ids_csv().contains("4-dof"));
     }
 }
