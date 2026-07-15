@@ -6,5 +6,5 @@ pub mod physics;
 pub mod trajectory;
 
 pub use collision::{OrientedBox, clamp_above_table, robot_obbs, table_penetration};
-pub use impact::{loft_return_velocity, required_racket_velocity, verify_impact_model};
+pub use impact::{rally_return_velocity, required_racket_velocity, verify_impact_model};
 pub use physics::{accel, ball_past_midcourt_for_commit, in_swing_commit_window, plan_swing};

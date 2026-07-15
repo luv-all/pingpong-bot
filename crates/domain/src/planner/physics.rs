@@ -2,12 +2,12 @@
 
 use nalgebra::Vector3;
 
+use super::impact::{rally_return_velocity, required_racket_velocity};
 use crate::constants::{
     DEFAULT_RESTITUTION, G, JOINT_INERTIA, MAX_JOINT_ACCEL, MAX_JOINT_TORQUE, MIN_SWING_SECS,
     SWING_COMMIT_MAX_BALL_Y_FRAC, SWING_COMMIT_MAX_SECS, table,
 };
 use crate::error::{DomainError, SwingPlanError};
-use super::impact::{loft_return_velocity, required_racket_velocity};
 use crate::robot::Arm;
 use crate::types::{Joints, Prediction, RailMotion, RobotPose, SwingTrajectory};
 
@@ -23,7 +23,7 @@ pub fn in_swing_commit_window(time_to_impact_secs: f64) -> bool {
     return (MIN_SWING_SECS..=SWING_COMMIT_MAX_SECS).contains(&time_to_impact_secs);
 }
 
-/// 네트 통과 후인지 - oracle/EKF control 공통 commit 게이트.
+/// 네트 통과 후인지 - ground truth/EKF control 공통 commit 게이트.
 pub fn ball_past_midcourt_for_commit(ball_y: f64) -> bool {
     return ball_y <= table::LENGTH_Y * SWING_COMMIT_MAX_BALL_Y_FRAC;
 }
@@ -59,19 +59,19 @@ pub fn plan_swing(
     };
 
     let v_in = prediction.incoming_velocity;
-    let v_out = loft_return_velocity(impact_position, v_in);
+    let v_out = rally_return_velocity(impact_position, v_in);
 
+    // 라켓 open을 IK seed에 먼저 반영한다. URDF 손목은 EE offset도 움직이므로
+    // 위치 IK 뒤에 관절값을 덮어쓰면 실제 타격점이 어긋난다.
+    let ik_hint = arm
+        .with_wrist_open(&start.joints, Arm::wrist_open_for_return(v_out))
+        .map_err(DomainError::InfeasibleSwing)?;
     let mut end = if let Some(rail) = &arm.rail {
-        arm.inverse_kinematics_with_rail(rail, rail_end, impact_position, Some(&start.joints))
+        arm.inverse_kinematics_with_rail(rail, rail_end, impact_position, Some(&ik_hint))
     } else {
-        arm.inverse_kinematics_near(impact_position, Some(&start.joints))
+        arm.inverse_kinematics_near(impact_position, Some(&ik_hint))
     }
     .map_err(DomainError::InfeasibleSwing)?;
-
-    // 손목 open: 리턴 탄도 방향에 맞춤 (면 각 조절)
-    end = arm
-        .with_wrist_open(&end, Arm::wrist_open_for_return(v_out))
-        .map_err(DomainError::InfeasibleSwing)?;
 
     // 임팩트 자세가 테이블을 뚫지 않게 OBB 클램프
     end = crate::planner::collision::clamp_above_table(arm, rail_end, &end);
