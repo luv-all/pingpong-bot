@@ -9,16 +9,14 @@ mod detect;
 mod triangulate;
 
 #[cfg(feature = "opencv")]
-mod opencv_tri;
-#[cfg(feature = "opencv")]
 mod charuco;
+#[cfg(feature = "opencv")]
+mod opencv_tri;
 
 pub use calib::{Calibration, CameraParams};
 pub use capture::FrameSource;
-pub use detect::{passthrough_detect, PassthroughDetector};
-pub use triangulate::{
-    dlt_triangulate, sample_at, triangulate_projections, triangulate_synced,
-};
+pub use detect::{PassthroughDetector, passthrough_detect};
+pub use triangulate::{dlt_triangulate, sample_at, triangulate_projections, triangulate_synced};
 
 #[cfg(feature = "opencv")]
 pub use charuco::calibrate_charuco_draft;

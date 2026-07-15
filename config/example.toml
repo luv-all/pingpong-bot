@@ -1,24 +1,71 @@
 # pingpong-bot 런타임 설정 예시
 #
-#   cargo run -p pingpong-bin -- --config config/example.toml
-#   cargo run -p pingpong-bin -- --mode sim --robot urdf-test
+# 기본 실행:
+#   cargo run -p pingpong-bin
 #
-# robot = ROBOTS id (crates/app/src/arm.rs). CLI `--robot` / `--urdf`가 덮어씀.
+# 이 파일을 직접 실행:
+#   cargo run -p pingpong-bin -- config/example.toml
 #
-# Calibration JSON은 `calib_charuco --emit-sim 3 -o calibration.json` 으로 생성.
+# 실험 설정 만들기:
+#   cp config/example.toml config/experiment.toml
 #
-# 물리 계수 — measure_* 가 [physics]에 자동 merge:
-#   cargo run -p measure-restitution -- --heights 0.40,0.29,0.21
-#   cargo run -p measure-friction -- --vt-pairs 2.0:1.4
-#   cargo run -p measure-restitution -- --drag-csv traj.csv
-# (--config 기본값 = 이 파일. --dry-run 이면 쓰기 생략)
+# 상대 파일 경로는 이 TOML이 있는 디렉터리를 기준으로 해석한다.
 
+# 실행 모드: "sim" | "real"
+# real은 Dynamixel/AXL 연동 후 사용한다.
+mode = "sim"
+
+# 로봇이 공을 맞힐 평면의 y 좌표 [m].
 hit_plane_y = 0.30
+
+# 가상/실제 카메라 대수. 삼각측량에는 최소 2대가 필요하다.
 camera_count = 3
+
+# crates/app/src/arm.rs의 ROBOTS id.
 robot = "competition"
+
+# ChArUco 등으로 만든 Calibration JSON.
+# 생성 예:
+#   cargo run -p calib-charuco -- --emit-sim 3 -o config/calibration.json
 # calibration_path = "calibration.json"
 
+# ROBOTS 프리셋 대신 커스텀 URDF를 직접 쓸 때 지정한다.
+# config/ 기준 상대 경로이므로 assets/에는 ../로 접근한다.
+# urdf_path = "../assets/robots/custom/robot.urdf"
+# ee_link = "racket_link"
+
+[sim]
+# true면 kiss3d/egui 창, false면 headless.
+gui = true
+
+# headless에서 카메라가 만들 프레임 수. GUI에서는 무시한다.
+frames = 300
+
+# 시뮬레이션 시간 배율. 1.0은 실시간.
+speed = 1.0
+
+# Rapier 물리 적분 주파수 [Hz].
+physics_hz = 1000.0
+
+# 가상 카메라 프레임률 [Hz].
+frame_hz = 120.0
+
+# headless 시작 시 공을 한 번 자동 발사한다.
+shoot_on_start = false
+
+# true면 Rapier가 가진 정확한 공 상태로 타격한다.
+# false면 카메라 -> 삼각측량 -> EKF -> control 경로로 타격한다.
+use_ground_truth = true
+
 [physics]
+# 반발계수 e (0..=1).
+# measure-restitution이 기본 config/default.toml의 값을 갱신한다.
 restitution = 0.85
+
+# 바운스 접선 마찰계수 mu (0..=1).
+# measure-friction이 기본 config/default.toml의 값을 갱신한다.
 friction = 0.15
+
+# 이차 항력 계수 k (0 이상).
+# measure-restitution --drag-csv가 갱신한다.
 drag = 0.0

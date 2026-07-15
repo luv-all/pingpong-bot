@@ -33,22 +33,16 @@ pub enum BallAction {
         angular_velocity: BallVec3,
     },
     /// 선형 임펄스 [N·s] (공이 dynamic일 때).
-    Impulse {
-        impulse: BallVec3,
-    },
+    Impulse { impulse: BallVec3 },
     /// 속도를 직접 덮어쓴다 (dynamic).
     SetVelocity {
         linear_velocity: BallVec3,
         angular_velocity: BallVec3,
     },
     /// 위치만 순간이동 (dynamic 유지).
-    Teleport {
-        position: BallVec3,
-    },
+    Teleport { position: BallVec3 },
     /// 주차 — `None`이면 현재 위치에 고정.
-    Park {
-        position: Option<BallVec3>,
-    },
+    Park { position: Option<BallVec3> },
 }
 
 /// `sim_time >= at_time` 일 때 한 번 실행되는 이벤트.
@@ -151,7 +145,12 @@ mod tests {
     fn events_stay_sorted_by_time() {
         let mut script = BallScript::new();
         script.impulse_at(0.5, BallVec3::new(0.0, 1.0, 0.0));
-        script.launch_at(0.0, BallVec3::ZERO, BallVec3::new(0.0, -5.0, 0.0), BallVec3::ZERO);
+        script.launch_at(
+            0.0,
+            BallVec3::ZERO,
+            BallVec3::new(0.0, -5.0, 0.0),
+            BallVec3::ZERO,
+        );
         assert!(script.events()[0].at_time < script.events()[1].at_time);
     }
 }

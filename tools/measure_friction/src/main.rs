@@ -1,6 +1,6 @@
 //! 접선 속도 변화로 마찰계수 μ를 측정 (plan §3.4).
 //!
-//! 산출물: `config.toml` `[physics].friction` (기본 `config/example.toml`)
+//! 산출물: `config.toml` `[physics].friction` (기본 `config/default.toml`)
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ struct Args {
     sim: bool,
 
     /// 갱신할 런타임 config
-    #[arg(long, value_name = "PATH", default_value = "config/example.toml")]
+    #[arg(long, value_name = "PATH", default_value = "config/default.toml")]
     config: PathBuf,
 
     /// config에 쓰지 않고 stdout 스니펫만
@@ -51,8 +51,7 @@ fn main() -> Result<()> {
 
     if let Some(ref raw) = args.vt_pairs {
         let pairs = parse_pairs(raw)?;
-        let mu = friction_from_tangential_speeds(&pairs)
-            .context("접선 쌍으로부터 μ 추정 실패")?;
+        let mu = friction_from_tangential_speeds(&pairs).context("접선 쌍으로부터 μ 추정 실패")?;
         println!("friction μ = {mu:.6}  (from {} vt pairs)", pairs.len());
         patch.friction = Some(mu);
     }
@@ -70,7 +69,7 @@ fn main() -> Result<()> {
             "입력이 없습니다. 예:\n  \
              --vt-pairs 2.0:1.4,1.5:1.05\n  \
              --sim\n  \
-             (기본 --config config/example.toml, --dry-run 으로 쓰기 생략)"
+             (기본 --config config/default.toml, --dry-run 으로 쓰기 생략)"
         );
     }
 
@@ -97,7 +96,7 @@ fn main() -> Result<()> {
 fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
     let arm = Arc::new(Arm::competition().context("competition arm")?);
     let mut world = SimWorld::new(arm, None);
-    world.set_oracle_auto_swing(false);
+    world.set_use_ground_truth(false);
 
     let x = table::WIDTH_X * 0.5;
     let y = table::LENGTH_Y * 0.35;

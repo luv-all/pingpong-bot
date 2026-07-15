@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use nalgebra::{Isometry3, Quaternion, Translation3, UnitQuaternion, Vector3};
+use pingpong_domain::RacketPose;
 use pingpong_domain::types::Point3;
-use pingpong_domain::{RacketPose};
 use urdf_rs::{Joint, JointType, Robot};
 
 /// root → `ee_link` 관절 인덱스 (parent→child 순).
@@ -50,7 +50,7 @@ pub fn link_world_poses_in_sim(
         .collect();
 }
 
-/// 엔드이펙터 link → `RacketPose` (link +x 를 면 법선으로 사용).
+/// 엔드이펙터 link → `RacketPose` (4-dof paddle mesh의 얇은 local +Y를 면 법선으로 사용).
 pub fn end_effector_pose(
     robot: &Robot,
     ee_link: &str,
@@ -84,18 +84,19 @@ pub(crate) fn mount_to_iso(position: [f64; 3], rpy: [f64; 3]) -> Isometry3<f64> 
 fn iso_to_pose_tuple(name: &str, iso: Isometry3<f64>) -> (String, [f64; 3], [f64; 4]) {
     let t = iso.translation.vector;
     let q = iso.rotation.quaternion();
-    return (
-        name.to_string(),
-        [t.x, t.y, t.z],
-        [q.w, q.i, q.j, q.k],
-    );
+    return (name.to_string(), [t.x, t.y, t.z], [q.w, q.i, q.j, q.k]);
 }
 
 fn racket_pose_from_iso(iso: Isometry3<f64>) -> RacketPose {
     let position = Point3::new(iso.translation.x, iso.translation.y, iso.translation.z);
     let rot = iso.rotation.to_rotation_matrix();
-    let normal = rot * Vector3::new(1.0, 0.0, 0.0);
-    let q = iso.rotation.quaternion();
+    let normal = rot * Vector3::y();
+    let link_from_racket = UnitQuaternion::from_axis_angle(
+        &nalgebra::Unit::new_normalize(Vector3::new(0.0, 1.0, 1.0)),
+        std::f64::consts::PI,
+    );
+    let canonical = iso.rotation * link_from_racket;
+    let q = canonical.quaternion();
     return RacketPose {
         position,
         normal: Vector3::new(normal.x, normal.y, normal.z),
@@ -178,7 +179,7 @@ fn joint_transform(joint: &Joint, q: f64) -> Isometry3<f64> {
     return origin * motion;
 }
 
-fn pose_to_iso(pose: &urdf_rs::Pose) -> Isometry3<f64> {
+pub(crate) fn pose_to_iso(pose: &urdf_rs::Pose) -> Isometry3<f64> {
     let t = Vector3::new(pose.xyz[0], pose.xyz[1], pose.xyz[2]);
     let r = rpy_to_quat(pose.rpy[0], pose.rpy[1], pose.rpy[2]);
     return Isometry3::from_parts(t.into(), r);

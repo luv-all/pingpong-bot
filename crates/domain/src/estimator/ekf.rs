@@ -11,9 +11,9 @@ use std::time::Instant;
 use nalgebra::{Matrix3, Matrix6, Vector3, Vector6};
 
 use super::ballistics::{predict_hit_plane_with, semi_implicit_euler};
+use crate::constants::DEFAULT_DRAG;
 use crate::constants::control::EKF_MEAS_JUMP_M;
 use crate::constants::estimator::{Q_POS, Q_VEL, R_MEAS};
-use crate::constants::DEFAULT_DRAG;
 use crate::physics_config::PhysicsParams;
 use crate::ports::Estimator;
 use crate::types::{HitPlane, Point3, Prediction};
@@ -84,7 +84,7 @@ impl BallEkf {
         return Some(self.velocity);
     }
 
-    /// 테스트/sim 오라클용: 상태 직접 설정.
+    /// 테스트/sim ground truth 경로용: 상태 직접 설정.
     pub fn set_state(&mut self, position: Vector3<f64>, velocity: Vector3<f64>, time: Instant) {
         self.position = position;
         self.velocity = velocity;
@@ -169,8 +169,7 @@ impl BallEkf {
     }
 
     fn predict_step(&mut self, dt: f64) {
-        let (pos, vel) =
-            semi_implicit_euler(self.position, self.velocity, dt, self.physics.drag);
+        let (pos, vel) = semi_implicit_euler(self.position, self.velocity, dt, self.physics.drag);
         self.position = pos;
         self.velocity = vel;
 
@@ -252,10 +251,7 @@ mod tests {
         let t0 = Instant::now();
         ekf.update_position(Point3::new(0.7, 2.0, 0.95), t0);
         assert!(ekf.velocity().is_none());
-        ekf.update_position(
-            Point3::new(0.7, 1.95, 0.95),
-            t0 + Duration::from_millis(8),
-        );
+        ekf.update_position(Point3::new(0.7, 1.95, 0.95), t0 + Duration::from_millis(8));
         let v = ekf.velocity().expect("seeded");
         assert!(
             (v.y - (-0.05 / 0.008)).abs() < 1.0,
@@ -274,10 +270,7 @@ mod tests {
             t0,
         );
         // 슈터로 텔레포트
-        ekf.update_position(
-            Point3::new(0.7, 2.5, 1.0),
-            t0 + Duration::from_millis(16),
-        );
+        ekf.update_position(Point3::new(0.7, 2.5, 1.0), t0 + Duration::from_millis(16));
         // 리셋 후 첫 측정만 - 속도 미시드
         assert!(ekf.velocity().is_none());
     }

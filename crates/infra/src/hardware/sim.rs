@@ -39,9 +39,9 @@ impl Hardware for SimHardware {
     fn command(&mut self, trajectory: &SwingTrajectory) -> Result<(), HwError> {
         {
             let mut world = self.world.lock().expect("sim 월드");
-            // EKF control은 아직 불안정 — 오라클 모드에서는 물리 스레드만 타격
-            if world.oracle_auto_swing() {
-                debug!("oracle 타격 모드 — control 스윙 명령 무시");
+            // ground truth 모드에서는 물리 스레드만 타격
+            if world.use_ground_truth() {
+                debug!("ground truth 타격 모드 — control 스윙 명령 무시");
                 return Ok(());
             }
             if world.robot().is_swinging() {
@@ -52,7 +52,7 @@ impl Hardware for SimHardware {
                 debug!("이번 공에 이미 스윙 commit — 재계획 무시");
                 return Ok(());
             }
-            // decisions C4: 네트 통과 전 commit 금지 (oracle과 동일, commit 표시 안 함)
+            // decisions C4: 네트 통과 전 commit 금지 (ground truth 경로와 동일)
             let ball_y = f64::from(world.ball_position().y);
             if !ball_past_midcourt_for_commit(ball_y) {
                 debug!(ball_y, "상대 코트 — EKF control commit 대기");
@@ -85,9 +85,7 @@ impl Hardware for SimHardware {
 
     fn is_busy(&mut self) -> bool {
         let world = self.world.lock().expect("sim 월드");
-        // 오라클 타격 중이면 control이 plan_swing을 돌리지 않게 한다
-        return world.oracle_auto_swing()
-            || world.swing_committed()
-            || world.robot().is_swinging();
+        // ground truth 타격 중이면 control이 plan_swing을 돌리지 않게 한다
+        return world.use_ground_truth() || world.swing_committed() || world.robot().is_swinging();
     }
 }

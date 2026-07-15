@@ -123,7 +123,11 @@ fn mean_clamped(xs: &[f64], lo: f64, hi: f64) -> Option<f64> {
 }
 
 /// 측정값을 TOML 스니펫으로 포맷. config / constants 반영용.
-pub fn physics_coeffs_toml(restitution: Option<f64>, friction: Option<f64>, drag: Option<f64>) -> String {
+pub fn physics_coeffs_toml(
+    restitution: Option<f64>,
+    friction: Option<f64>,
+    drag: Option<f64>,
+) -> String {
     let mut lines = vec![
         "# pingpong physics coeffs (tools/measure_*)".to_string(),
         "# domain::constants::ball / physics 또는 [physics] 섹션에 반영".to_string(),

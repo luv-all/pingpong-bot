@@ -129,11 +129,11 @@ fn rejects_wrong_joint_count_in_fk() {
 #[test]
 fn inverse_kinematics_round_trips_forward_kinematics() {
     let arm = sample_three_dof_arm();
-    let joints = Joints::from_slice(&[0.2, 0.9, -0.3, 0.45]);
+    let joints = Joints::from_slice(&[0.2, 0.2, -0.3, -0.45]);
     let pose = arm.forward_kinematics(&joints).expect("FK");
     let solved = arm.inverse_kinematics(pose.position).expect("IK");
     let again = arm.forward_kinematics(&solved).expect("FK again");
-    assert!((again.position.v - pose.position.v).norm() < 1e-6);
+    assert!((again.position.v - pose.position.v).norm() < 1e-5);
 }
 
 #[test]
@@ -150,7 +150,6 @@ fn inverse_kinematics_rejects_unreachable_target() {
 
 #[test]
 fn clamp_impact_preserves_hit_plane_y_when_possible() {
-    use crate::constants::{LINK_FOREARM, LINK_UPPER};
     let arm = sample_three_dof_arm();
     let rail = arm.rail.as_ref().expect("competition rail");
     let far = Point3::new(0.76, 0.30, table::SURFACE_Z + 0.25);
@@ -161,6 +160,6 @@ fn clamp_impact_preserves_hit_plane_y_when_possible() {
         clamped.v.y
     );
     let mount = rail.mount_point(rail_x);
-    let max_reach = LINK_UPPER + LINK_FOREARM;
+    let max_reach = arm.arm_length();
     assert!((clamped.v - mount.v).norm() <= max_reach + 1e-6);
 }

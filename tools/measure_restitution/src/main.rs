@@ -1,6 +1,6 @@
 //! 공 낙하 바운스 전후 속도비로 반발계수 e를 측정 (plan §3.4).
 //!
-//! 산출물: `config.toml` `[physics].restitution` / `drag` (기본 `config/example.toml`)
+//! 산출물: `config.toml` `[physics].restitution` / `drag` (기본 `config/default.toml`)
 
 use std::fs;
 use std::path::PathBuf;
@@ -43,7 +43,7 @@ struct Args {
     drag_csv: Option<PathBuf>,
 
     /// 갱신할 런타임 config
-    #[arg(long, value_name = "PATH", default_value = "config/example.toml")]
+    #[arg(long, value_name = "PATH", default_value = "config/default.toml")]
     config: PathBuf,
 
     /// config에 쓰지 않고 stdout 스니펫만
@@ -77,17 +77,14 @@ fn main() -> Result<()> {
 
     if let Some(ref raw) = args.vz_pairs {
         let pairs = parse_pairs(raw)?;
-        let e =
-            restitution_from_normal_speeds(&pairs).context("속도 쌍으로부터 e 추정 실패")?;
+        let e = restitution_from_normal_speeds(&pairs).context("속도 쌍으로부터 e 추정 실패")?;
         println!("restitution e = {e:.6}  (from {} vz pairs)", pairs.len());
         patch.restitution = Some(e);
     }
 
     if args.sim_ballistics {
         let e = measure_e_ballistics(args.drop_height)?;
-        println!(
-            "restitution e = {e:.6}  (ballistics; configured={TABLE_BOUNCE_RESTITUTION})"
-        );
+        println!("restitution e = {e:.6}  (ballistics; configured={TABLE_BOUNCE_RESTITUTION})");
         patch.restitution = Some(e);
     }
 
@@ -107,7 +104,7 @@ fn main() -> Result<()> {
              --sim\n  \
              --sim-ballistics\n  \
              --drag-csv traj.csv\n  \
-             (기본 --config config/example.toml, --dry-run 으로 쓰기 생략)"
+             (기본 --config config/default.toml, --dry-run 으로 쓰기 생략)"
         );
     }
 
@@ -167,7 +164,7 @@ fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
 fn measure_e_in_sim(drop_height: f64) -> Result<f64> {
     let arm = Arc::new(Arm::competition().context("competition arm")?);
     let mut world = SimWorld::new(arm, None);
-    world.set_oracle_auto_swing(false);
+    world.set_use_ground_truth(false);
 
     let x = table::WIDTH_X * 0.5;
     let y = table::LENGTH_Y * 0.35;
@@ -220,7 +217,10 @@ fn parse_f64_list(raw: &str) -> Result<Vec<f64>> {
         if s.is_empty() {
             continue;
         }
-        out.push(s.parse::<f64>().with_context(|| format!("숫자 아님: {s}"))?);
+        out.push(
+            s.parse::<f64>()
+                .with_context(|| format!("숫자 아님: {s}"))?,
+        );
     }
     return Ok(out);
 }

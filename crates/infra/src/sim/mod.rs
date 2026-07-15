@@ -29,6 +29,6 @@ pub use ball_script::{BallAction, BallEvent, BallScript, BallVec3};
 pub use controls::{SimRuntimeControls, new_shutdown_flag};
 pub use session::{SimSession, SimSessionConfig};
 pub use shooter::{BallShooterSettings, BallState, ShooterLayout};
-pub use world::SimWorld;
 #[cfg(feature = "gui")]
 pub use viewer::{SimViewerOptions, run as run_sim_viewer};
+pub use world::SimWorld;

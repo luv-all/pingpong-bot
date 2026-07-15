@@ -1,6 +1,6 @@
 //! 탁구대 옆 리니어 모터 (X축 슬라이드).
 
-use crate::types::{Point3};
+use crate::types::Point3;
 
 /// 탁구대 한쪽 변에 설치된 X축 리니어 레일.
 ///

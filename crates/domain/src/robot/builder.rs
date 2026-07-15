@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::{Arm, JointLimit};
+use super::{Arm, ArmKinematics, JointLimit, SerialChain};
 use crate::robot::rail::LinearRail;
 use crate::types::{Joints, Point3};
 
@@ -27,6 +27,8 @@ pub struct ArmBuilder {
     phase: ChainPhase,
     /// link/revolute 순서 위반 등 조립 중 첫 오류
     chain_error: Option<ArmBuildError>,
+    /// arbitrary-axis 직렬 체인. 설정하면 legacy planar DSL 대신 사용한다.
+    serial_model: Option<(SerialChain, Vec<Option<JointLimit>>, Joints)>,
 }
 
 /// 빌더가 기대하는 다음 체인 요소.
@@ -72,6 +74,12 @@ pub enum ArmBuildError {
     UnsupportedKinematics {
         joint_count: usize,
         supported: usize,
+    },
+    /// 체인·한계·기본 관절각 개수가 서로 다름
+    KinematicsJointCountMismatch {
+        chain: usize,
+        limits: usize,
+        defaults: usize,
     },
     /// max_joint_speed <= 0
     NonPositiveMaxJointSpeed { value: f64 },
@@ -120,6 +128,16 @@ impl fmt::Display for ArmBuildError {
                     "현재 FK는 {supported}축만 지원합니다 (요청: {joint_count}축)"
                 );
             }
+            Self::KinematicsJointCountMismatch {
+                chain,
+                limits,
+                defaults,
+            } => {
+                return write!(
+                    f,
+                    "기구학 관절 개수가 다릅니다: chain={chain}, limits={limits}, defaults={defaults}"
+                );
+            }
             Self::NonPositiveMaxJointSpeed { value } => {
                 return write!(f, "max_joint_speed는 양수여야 합니다: {value}");
             }
@@ -141,6 +159,7 @@ impl ArmBuilder {
             max_joint_speed: None,
             phase: ChainPhase::NeedBase,
             chain_error: None,
+            serial_model: None,
         };
     }
 
@@ -238,6 +257,17 @@ impl ArmBuilder {
         return self;
     }
 
+    /// 이미 검증된 일반 직렬 체인을 이 빌더의 기구학으로 사용한다.
+    pub fn serial_chain(
+        mut self,
+        chain: SerialChain,
+        limits: Vec<Option<JointLimit>>,
+        default_joints: Joints,
+    ) -> Self {
+        self.serial_model = Some((chain, limits, default_joints));
+        return self;
+    }
+
     /// 검증 후 `Arm`을 만든다.
     pub fn build(self) -> Result<Arm, ArmBuildError> {
         if let Some(err) = self.chain_error {
@@ -245,6 +275,23 @@ impl ArmBuilder {
         }
 
         let base = self.base.ok_or(ArmBuildError::MissingBase)?;
+        let max_joint_speed = self.max_joint_speed.unwrap_or(2.5);
+        if max_joint_speed <= 0.0 {
+            return Err(ArmBuildError::NonPositiveMaxJointSpeed {
+                value: max_joint_speed,
+            });
+        }
+
+        if let Some((chain, limits, default_joints)) = self.serial_model {
+            return Arm::from_serial_chain(
+                base,
+                self.rail,
+                chain,
+                limits,
+                default_joints,
+                max_joint_speed,
+            );
+        }
 
         if self.link_lengths.is_empty() {
             return Err(ArmBuildError::EmptyChain);
@@ -288,20 +335,14 @@ impl ArmBuilder {
             }
         }
 
-        let max_joint_speed = self.max_joint_speed.unwrap_or(2.5);
-        if max_joint_speed <= 0.0 {
-            return Err(ArmBuildError::NonPositiveMaxJointSpeed {
-                value: max_joint_speed,
-            });
-        }
-
         return Ok(Arm {
             base,
             rail: self.rail,
             link_lengths: self.link_lengths,
-            limits: self.limits,
+            limits: self.limits.into_iter().map(Some).collect(),
             default_joints,
             max_joint_speed,
+            kinematics: ArmKinematics::Canonical4Dof,
         });
     }
 }

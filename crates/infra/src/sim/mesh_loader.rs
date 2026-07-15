@@ -12,12 +12,10 @@ use crate::robot::urdf::UrdfGeometry;
 /// URDF visual geometry를 kiss3d 노드로 추가한다. 실패 시 작은 placeholder cube.
 pub fn add_geometry(scene: &mut SceneNode3d, geometry: &UrdfGeometry, color: Color) -> SceneNode3d {
     return match geometry {
-        UrdfGeometry::Box { size } => scene
-            .add_cube(size[0], size[1], size[2])
-            .set_color(color),
-        UrdfGeometry::Cylinder { radius, length } => scene
-            .add_cylinder(*radius, *length)
-            .set_color(color),
+        UrdfGeometry::Box { size } => scene.add_cube(size[0], size[1], size[2]).set_color(color),
+        UrdfGeometry::Cylinder { radius, length } => {
+            scene.add_cylinder(*radius, *length).set_color(color)
+        }
         UrdfGeometry::Sphere { radius } => scene.add_sphere(*radius).set_color(color),
         UrdfGeometry::Mesh { path, scale } => load_mesh_or_placeholder(scene, path, *scale, color),
     };

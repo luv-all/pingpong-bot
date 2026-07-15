@@ -1,7 +1,7 @@
 //! OpenCV `triangulatePoints` 경로 (feature = "opencv").
 
 use nalgebra::Matrix3x4;
-use opencv::core::{Mat, MatTraitConst, Point2d, Vector, CV_64F};
+use opencv::core::{CV_64F, Mat, MatTraitConst, Point2d, Vector};
 use opencv::prelude::*;
 use pingpong_domain::{PixelPoint, Point3};
 

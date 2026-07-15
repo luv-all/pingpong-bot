@@ -14,7 +14,7 @@ pub const SWING_COMMIT_MAX_SECS: f64 = 0.20;
 
 /// 스윙 commit 허용 최대 공 y. LENGTH_Y 대비 비율 (네트 지난 뒤).
 ///
-/// oracle / EKF control 공통. 상대 코트에서는 탄도 추정이 아직 흔들린다.
+/// ground truth / EKF control 공통. 상대 코트에서는 탄도 추정이 아직 흔들린다.
 pub const SWING_COMMIT_MAX_BALL_Y_FRAC: f64 = 0.55;
 
 /// 측정이 예측에서 이 거리[m] 이상 벗어나면 EKF 하드 리셋.

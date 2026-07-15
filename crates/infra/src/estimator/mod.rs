@@ -70,8 +70,7 @@ impl Estimator for SimBallEstimator {
             return;
         };
         // 진실 위치·속도로 EKF를 리셋해 파이프라인 예측이 스윙과 맞게 유지
-        self.ekf
-            .set_state(snap.position, snap.velocity, timestamp);
+        self.ekf.set_state(snap.position, snap.velocity, timestamp);
     }
 
     fn predict_to(&self, plane: HitPlane) -> Option<Prediction> {
@@ -112,7 +111,8 @@ mod tests {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        let pred = predict_hit_plane(snap.position, snap.velocity, plane, 0.0).expect("슈터 기본 샷 예측");
+        let pred =
+            predict_hit_plane(snap.position, snap.velocity, plane, 0.0).expect("슈터 기본 샷 예측");
         assert!(
             (pred.impact_position.v.y - plane.y).abs() < 1e-5,
             "y={}",

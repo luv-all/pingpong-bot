@@ -5,7 +5,7 @@ use std::io;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use toml_edit::{value, DocumentMut, Item, Table};
+use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::constants::{
     ball::{RESTITUTION, TABLE_BOUNCE_FRICTION},
@@ -132,7 +132,9 @@ fn load_physics_section(doc: &DocumentMut) -> PhysicsConfig {
 }
 
 fn toml_float(item: &Item) -> Option<f64> {
-    return item.as_float().or_else(|| item.as_integer().map(|i| i as f64));
+    return item
+        .as_float()
+        .or_else(|| item.as_integer().map(|i| i as f64));
 }
 
 #[cfg(test)]

@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use kiss3d::egui;
 
-use super::controls::SimRuntimeControls;
 use super::ball_script::BallScript;
+use super::controls::SimRuntimeControls;
 use super::shooter::{BallShooterSettings, BallState};
 use super::world::SimWorld;
 use pingpong_domain::Prediction;
@@ -196,28 +196,27 @@ pub fn draw(
                     "vel: ({:.2}, {:.2}, {:.2}) m/s",
                     status.ball_vel.0, status.ball_vel.1, status.ball_vel.2
                 ));
-                ui.label(format!("pending ball events: {}", status.pending_ball_events));
+                ui.label(format!(
+                    "pending ball events: {}",
+                    status.pending_ball_events
+                ));
                 ui.label(format!("joints [rad]: {:?}", status.joints));
                 ui.separator();
                 ui.heading("Hit plane prediction");
                 if let Some(pred) = &status.debug_prediction {
                     let p = pred.impact_position.v;
                     ui.label(format!("t_impact: {:.3} s", pred.time_to_impact_secs));
-                    ui.label(format!(
-                        "impact: ({:.3}, {:.3}, {:.3}) m",
-                        p.x, p.y, p.z
-                    ));
+                    ui.label(format!("impact: ({:.3}, {:.3}, {:.3}) m", p.x, p.y, p.z));
                     ui.label(format!(
                         "v_in: ({:.2}, {:.2}, {:.2}) m/s",
                         pred.incoming_velocity.x,
                         pred.incoming_velocity.y,
                         pred.incoming_velocity.z
                     ));
-                    ui.label("3D 디버그: 마젠타=예측 접수 높이, 노랑=테이블 위 (x,y) — 로봇·라켓 아님");
-                    ui.label(format!(
-                        "hit plane y = {:.2} m (robot at y≈0)",
-                        p.y
-                    ));
+                    ui.label(
+                        "3D 디버그: 마젠타=예측 접수 높이, 노랑=테이블 위 (x,y) — 로봇·라켓 아님",
+                    );
+                    ui.label(format!("hit plane y = {:.2} m (robot at y≈0)", p.y));
                 } else {
                     ui.label("no prediction (ball parked or not crossing plane)");
                 }
@@ -248,11 +247,7 @@ pub fn draw(
                 let mut script = BallScript::new();
                 script.impulse_at(
                     status.sim_time + f64::from(ui_state.script_delay_s),
-                    super::ball_script::BallVec3::new(
-                        0.0,
-                        -ui_state.script_impulse_ns,
-                        0.0,
-                    ),
+                    super::ball_script::BallVec3::new(0.0, -ui_state.script_impulse_ns, 0.0),
                 );
                 ctrl.enqueue_ball_script(script);
             }

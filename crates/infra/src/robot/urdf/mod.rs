@@ -2,7 +2,6 @@
 
 mod arm_from_urdf;
 mod fk;
-mod joint_map;
 mod mount;
 mod visual;
 
@@ -12,9 +11,6 @@ use pingpong_domain::{Arm, JointLimit, Joints, RacketPose};
 use thiserror::Error;
 use urdf_rs::{JointType, Robot};
 
-pub use joint_map::{
-    map_control_joints_or_truncate, map_control_joints_to_urdf, validate_control_to_urdf_map,
-};
 pub use mount::SimRobotMount;
 pub use visual::{UrdfGeometry, UrdfLinkVisual};
 
@@ -130,7 +126,7 @@ impl UrdfRobot {
     }
 
     /// 관절 한계 (actuated 순서).
-    pub fn joint_limits(&self) -> Vec<JointLimit> {
+    pub fn joint_limits(&self) -> Vec<Option<JointLimit>> {
         return self
             .actuated_chain
             .iter()
@@ -141,13 +137,6 @@ impl UrdfRobot {
     /// root link 이름.
     pub fn root_link_name(&self) -> String {
         return fk::find_root_link(&self.robot);
-    }
-
-    /// actuated chain 상 i번째 관절 origin 길이 [m].
-    pub fn joint_origin_length(&self, actuated_index: usize) -> f64 {
-        let idx = self.actuated_chain[actuated_index];
-        let xyz = &self.robot.joints[idx].origin.xyz;
-        return (xyz[0].powi(2) + xyz[1].powi(2) + xyz[2].powi(2)).sqrt();
     }
 
     /// kiss3d용 link visual 목록.
@@ -280,13 +269,16 @@ fn default_joint_angle(joint: &urdf_rs::Joint) -> f64 {
     return 0.0;
 }
 
-fn limit_from_joint(joint: &urdf_rs::Joint) -> JointLimit {
+fn limit_from_joint(joint: &urdf_rs::Joint) -> Option<JointLimit> {
+    if joint.joint_type == JointType::Continuous {
+        return None;
+    }
     let lower = joint.limit.lower;
     let upper = joint.limit.upper;
     if lower < upper {
-        return JointLimit::new(lower, upper);
+        return Some(JointLimit::new(lower, upper));
     }
-    return JointLimit::new(-std::f64::consts::PI, std::f64::consts::PI);
+    return None;
 }
 
 #[cfg(test)]
@@ -350,7 +342,20 @@ mod tests {
             mesh.display()
         );
 
-        assert!(urdf.try_into_arm(2.5).is_err());
+        let arm = urdf.try_into_arm(2.5).expect("3축 URDF Arm 변환");
+        assert_eq!(arm.joint_count(), urdf.joint_count());
+        let joints = urdf.default_joints();
+        let expected = urdf
+            .end_effector_pose_in_sim(&joints.values)
+            .expect("URDF FK");
+        let actual = arm.forward_kinematics(&joints).expect("domain FK");
+        assert!((actual.position.v - expected.position.v).norm() < 1e-9);
+        assert!((actual.normal - expected.normal).norm() < 1e-9);
+        assert_eq!(
+            arm.with_wrist_open(&joints, 0.7).expect("3축 no-op"),
+            joints,
+            "별도 손목이 없는 3축 체인의 위치 관절을 racket-open으로 덮지 않아야 함"
+        );
     }
 
     #[test]
@@ -361,8 +366,7 @@ mod tests {
             return;
         }
 
-        let urdf =
-            UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
+        let urdf = UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
         assert_eq!(urdf.name, "all-4-export");
         assert_eq!(urdf.joint_count(), 4);
         assert_eq!(
@@ -380,9 +384,92 @@ mod tests {
             }
         }
 
-        // 4축 mesh → domain Arm FK 변환 가능 (제어는 여전히 카탈로그 competition 권장)
+        // URDF에서 만든 domain Arm은 원본 URDF의 FK와 정확히 같아야 한다.
         let arm = urdf.try_into_arm(2.5).expect("4축 Arm 변환");
         assert_eq!(arm.joint_count(), 4);
+        assert_eq!(
+            arm.joint_limit(0),
+            None,
+            "continuous 축은 가짜 한계가 없어야 함"
+        );
+        for values in [
+            urdf.default_joints().values,
+            vec![0.1, 0.4, -0.3, 0.2],
+            vec![-0.2, 0.8, 0.15, -0.4],
+        ] {
+            let expected = urdf.end_effector_pose_in_sim(&values).expect("URDF FK");
+            let actual = arm
+                .forward_kinematics(&Joints { values })
+                .expect("domain FK");
+            assert!(
+                (actual.position.v - expected.position.v).norm() < 1e-9,
+                "URDF/domain EE position mismatch: actual={:?} expected={:?}",
+                actual.position,
+                expected.position
+            );
+            assert!(
+                (actual.normal - expected.normal).norm() < 1e-9,
+                "URDF/domain EE normal mismatch: actual={:?} expected={:?}",
+                actual.normal,
+                expected.normal
+            );
+            let [w, x, y, z] = actual.orientation;
+            let orientation =
+                nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(w, x, y, z));
+            assert!(
+                (orientation * nalgebra::Vector3::z() - actual.normal).norm() < 1e-9,
+                "domain 라켓 local +Z가 면 법선이어야 함"
+            );
+        }
+
+        let hint = urdf.default_joints();
+        let mut target_joints = hint.clone();
+        for (index, value) in target_joints.values.iter_mut().take(3).enumerate() {
+            let offset = *value + 0.08;
+            *value = arm
+                .joint_limit(index)
+                .map_or(offset, |limit| offset.clamp(limit.min, limit.max));
+        }
+        let target = arm
+            .forward_kinematics(&target_joints)
+            .expect("target FK")
+            .position;
+        let solved = arm
+            .inverse_kinematics_near(target, Some(&hint))
+            .expect("URDF 수치 IK");
+        let solved_pose = arm.forward_kinematics(&solved).expect("solved FK");
+        assert!((solved_pose.position.v - target.v).norm() < 1e-5);
+    }
+
+    #[test]
+    fn competition_primitive_matches_simplified_4dof_urdf_chain() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/robots/4-dof/urdf/all-4-export.urdf");
+        if !path.exists() {
+            return;
+        }
+
+        let urdf = UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
+        let primitive = Arm::competition().expect("competition primitive");
+        for values in [
+            vec![0.0, 0.0, -0.25, 0.0],
+            vec![0.15, 0.2, -0.4, 0.35],
+            vec![-0.3, -0.2, 0.5, -0.45],
+        ] {
+            let expected = urdf.end_effector_pose_in_sim(&values).expect("URDF FK");
+            let actual = primitive
+                .forward_kinematics(&Joints {
+                    values: values.clone(),
+                })
+                .expect("primitive FK");
+            assert!(
+                (actual.position.v - expected.position.v).norm() < 1e-9,
+                "values={values:?}, actual={:?}, expected={:?}",
+                actual.position,
+                expected.position
+            );
+            assert!((actual.normal - expected.normal).norm() < 1e-9);
+        }
     }
 
     #[test]

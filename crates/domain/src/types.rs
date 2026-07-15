@@ -46,7 +46,9 @@ impl PixelPoint {
 }
 
 /// 카메라 식별자.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct CameraId(pub u8);
 
 impl CameraId {

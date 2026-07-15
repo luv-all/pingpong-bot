@@ -21,20 +21,19 @@ pub use clock::{SimClock, SystemClock};
 pub use estimator::SimBallEstimator;
 pub use hardware::SimHardware;
 pub use robot::{
-    map_control_joints_or_truncate, map_control_joints_to_urdf, validate_control_to_urdf_map,
     MountPreset, RobotBuildError, RobotBuilder, SimRobot, UrdfGeometry, UrdfLinkVisual,
     UrdfLoadError, UrdfRobot,
 };
 pub use sim::{
-    new_shutdown_flag, BallAction, BallEvent, BallScript, BallShooterSettings, BallState,
-    BallVec3, SimRuntimeControls, SimSession, SimSessionConfig, SimWorld, ShooterLayout,
+    BallAction, BallEvent, BallScript, BallShooterSettings, BallState, BallVec3, ShooterLayout,
+    SimRuntimeControls, SimSession, SimSessionConfig, SimWorld, new_shutdown_flag,
 };
 #[cfg(feature = "gui")]
-pub use sim::{run_sim_viewer, SimViewerOptions};
+pub use sim::{SimViewerOptions, run_sim_viewer};
 pub use telemetry::{NoopTelemetry, TracingTelemetry};
 pub use vision::{
-    passthrough_detect, sample_at, triangulate_projections, triangulate_synced, Calibration,
-    CameraParams, FrameSource, PassthroughDetector,
+    Calibration, CameraParams, FrameSource, PassthroughDetector, passthrough_detect, sample_at,
+    triangulate_projections, triangulate_synced,
 };
 
 #[cfg(feature = "opencv")]

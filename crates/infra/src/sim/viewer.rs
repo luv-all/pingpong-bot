@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 
 use kiss3d::prelude::*;
 use pingpong_domain::constants::{ball, table};
-use pingpong_domain::{Arm, Joints};
 use rapier3d::prelude::{Rotation, Vector};
 use tracing::info;
 
@@ -33,14 +32,10 @@ pub fn run(options: SimViewerOptions) -> Result<(), String> {
 }
 
 struct DynamicNodes {
-    ball: SceneNode3d,
-    shooter: SceneNode3d,
     racket: SceneNode3d,
     arm_base: SceneNode3d,
-    /// 팔 링크 2개 (urdf-test와 동일)
-    links: [SceneNode3d; 2],
-    /// 어깨·손목 관절 마커
-    joints: [SceneNode3d; 2],
+    links: Vec<SceneNode3d>,
+    joints: Vec<SceneNode3d>,
 }
 
 struct UrdfVisualNode {
@@ -183,32 +178,26 @@ fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfRobot>) -> Sc
 fn build_primitive_robot_nodes(scene: &mut SceneNode3d) -> DynamicNodes {
     let link_color = Color::new(0.25, 0.45, 0.85, 1.0);
     let joint_color = Color::new(0.95, 0.85, 0.1, 1.0);
+    let links = (0..5)
+        .map(|_| scene.add_cylinder(0.022, 1.0).set_color(link_color))
+        .collect();
+    let joints = (0..5)
+        .map(|_| scene.add_sphere(0.024).set_color(joint_color))
+        .collect();
 
     return DynamicNodes {
-        ball: scene
-            .add_sphere(ball::RADIUS as f32)
-            .set_color(Color::new(1.0, 0.55, 0.05, 1.0)),
-        shooter: scene
-            .add_cube(0.24, 0.5, 0.36)
-            .set_color(Color::new(0.45, 0.45, 0.5, 1.0)),
         racket: scene
-            .add_cube(0.12, 0.14, 0.010)
+            .add_cube(
+                (pingpong_domain::constants::geometry::RACKET_HALF_X * 2.0) as f32,
+                (pingpong_domain::constants::geometry::RACKET_HALF_Y * 2.0) as f32,
+                (pingpong_domain::constants::geometry::RACKET_HALF_Z * 2.0) as f32,
+            )
             .set_color(Color::new(0.85, 0.15, 0.12, 1.0)),
         arm_base: scene
             .add_cylinder(0.06, 0.05)
             .set_color(Color::new(0.2, 0.25, 0.55, 1.0)),
-        links: [
-            scene
-                .add_cylinder(0.025, pingpong_domain::constants::LINK_UPPER as f32)
-                .set_color(link_color),
-            scene
-                .add_cylinder(0.022, pingpong_domain::constants::LINK_FOREARM as f32)
-                .set_color(link_color),
-        ],
-        joints: [
-            scene.add_sphere(0.028).set_color(joint_color),
-            scene.add_sphere(0.024).set_color(joint_color),
-        ],
+        links,
+        joints,
     };
 }
 
@@ -284,15 +273,6 @@ fn sync_impact_debug_markers(nodes: &mut SceneDynamics, world: &SimWorld) {
 }
 
 fn sync_primitive_robot(nodes: &mut DynamicNodes, world: &SimWorld) {
-    let ball = world.ball_position();
-    nodes.ball.set_position(to_vec3(ball));
-
-    let (sh_pos, sh_rot) = world.shooter_pose();
-    nodes
-        .shooter
-        .set_position(to_vec3(sh_pos))
-        .set_rotation(to_quat(sh_rot));
-
     let (rk_pos, rk_rot) = world.racket_pose();
     nodes
         .racket
@@ -301,13 +281,29 @@ fn sync_primitive_robot(nodes: &mut DynamicNodes, world: &SimWorld) {
 
     let arm = world.arm();
     let joints = world.robot().joints();
-    let points = arm_chain_points(arm, world.robot().rail_x(), joints);
+    let Some(points) = arm.chain_points(world.robot().rail_x(), joints) else {
+        return;
+    };
+    let points: Vec<Vec3> = points
+        .into_iter()
+        .map(|point| Vec3::new(point.x as f32, point.y as f32, point.z as f32))
+        .collect();
     nodes.arm_base.set_position(points[0]);
 
-    let lengths = [arm.link_lengths[0] as f32, arm.link_lengths[1] as f32];
-    for i in 0..2 {
-        nodes.joints[i].set_position(points[i + 1]);
-        place_link(&mut nodes.links[i], points[i], points[i + 1], lengths[i]);
+    const HIDDEN: Vec3 = Vec3::new(0.0, 0.0, -10.0);
+    for (index, (link, joint)) in nodes
+        .links
+        .iter_mut()
+        .zip(nodes.joints.iter_mut())
+        .enumerate()
+    {
+        let Some((&from, &to)) = points.get(index).zip(points.get(index + 1)) else {
+            link.set_position(HIDDEN);
+            joint.set_position(HIDDEN);
+            continue;
+        };
+        joint.set_position(to);
+        place_link(link, from, to);
     }
 }
 
@@ -391,33 +387,9 @@ fn rpy_to_quat(rpy: [f64; 3]) -> Quat {
     return Quat::from_xyzw(q.i as f32, q.j as f32, q.k as f32, q.w as f32);
 }
 
-fn arm_chain_points(arm: &Arm, rail_x: f64, joints: &Joints) -> [Vec3; 3] {
-    let yaw = joints.values[0] as f32;
-    let a1 = joints.values[1] as f32;
-    let a2 = joints.values[2] as f32;
-    let elbow = a1 + a2;
-    let l1 = arm.link_lengths[0] as f32;
-    let l2 = arm.link_lengths[1] as f32;
-
-    let mount = arm.mount_at_rail(rail_x);
-    let base = Vec3::new(mount.v.x as f32, mount.v.y as f32, mount.v.z as f32);
-
-    let to_world = |reach: f32, height: f32| -> Vec3 {
-        return base + Vec3::new(reach * yaw.sin(), reach * yaw.cos(), height);
-    };
-
-    return [
-        base,
-        to_world(l1 * a1.cos(), l1 * a1.sin()),
-        to_world(
-            l1 * a1.cos() + l2 * elbow.cos(),
-            l1 * a1.sin() + l2 * elbow.sin(),
-        ),
-    ];
-}
-
-fn place_link(node: &mut SceneNode3d, from: Vec3, to: Vec3, length: f32) {
+fn place_link(node: &mut SceneNode3d, from: Vec3, to: Vec3) {
     let dir = to - from;
+    let length = dir.length();
     let mid = (from + to) * 0.5;
     node.set_position(mid);
     if dir.length_squared() > 1e-8 {
@@ -425,7 +397,7 @@ fn place_link(node: &mut SceneNode3d, from: Vec3, to: Vec3, length: f32) {
         let quat = Quat::from_rotation_arc(Vec3::Y, axis);
         node.set_rotation(quat);
     }
-    let _ = length;
+    node.set_local_scale(1.0, length, 1.0);
 }
 
 fn to_vec3(v: Vector) -> Vec3 {

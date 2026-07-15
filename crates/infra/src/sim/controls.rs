@@ -1,7 +1,7 @@
 //! sim GUI·물리 스레드가 공유하는 런타임 제어.
 
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use super::ball_script::BallScript;
 use super::shooter::BallShooterSettings;

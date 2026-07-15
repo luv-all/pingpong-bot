@@ -99,8 +99,7 @@ impl BallShooterSettings {
     /// 슈터 본체 회전 (조준 + roll).
     pub fn orientation(&self) -> Rotation {
         let forward = self.aim_direction();
-        let aim =
-            Rotation::from_rotation_arc(Vector::new(0.0, -1.0, 0.0), forward);
+        let aim = Rotation::from_rotation_arc(Vector::new(0.0, -1.0, 0.0), forward);
         let roll = self.roll_deg.to_radians() as f32;
         let roll_q = Rotation::from_axis_angle(forward, roll);
         return roll_q * aim;

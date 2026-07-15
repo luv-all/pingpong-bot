@@ -1,10 +1,10 @@
 //! 라켓/링크 충돌 근사(OBB) 치수 - sim Rapier/뷰어와 맞춤.
 
-/// 라켓 half-extents [m] - Rapier `cuboid(0.06, 0.07, 0.005)`와 동일.
-pub const RACKET_HALF_X: f64 = 0.06;
-pub const RACKET_HALF_Y: f64 = 0.07;
+/// 4-dof paddle 단순 박스의 half-extents [m].
+pub const RACKET_HALF_X: f64 = 0.075;
+pub const RACKET_HALF_Y: f64 = 0.125;
 /// 면 법선(local +Z) 방향 반두께.
-pub const RACKET_HALF_Z: f64 = 0.005;
+pub const RACKET_HALF_Z: f64 = 0.0114;
 
 /// 상완 링크 단면 반경 근사 [m] (뷰어 실린더 0.025).
 pub const LINK_UPPER_RADIUS: f64 = 0.025;

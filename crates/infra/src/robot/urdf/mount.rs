@@ -116,8 +116,7 @@ mod tests {
         if !path.exists() {
             return;
         }
-        let urdf =
-            UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
+        let urdf = UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
         assert_eq!(urdf.mount.rpy, [0.0, 0.0, 0.0]);
         assert_eq!(urdf.name, "all-4-export");
 

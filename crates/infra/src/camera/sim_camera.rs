@@ -98,8 +98,8 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
 
-    use crate::sim::SimSession;
     use crate::sim::SimRuntimeControls;
+    use crate::sim::SimSession;
     use crate::sim::SimSessionConfig;
     use pingpong_domain::Arm;
 

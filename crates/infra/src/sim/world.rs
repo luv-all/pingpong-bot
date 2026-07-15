@@ -6,18 +6,18 @@
 use std::sync::Arc;
 
 use pingpong_domain::{
-    Arm, DomainError, HitPlane, Prediction, RobotPose, RobotState,
+    Arm, DomainError, HitPlane, PhysicsParams, Prediction, RobotPose, RobotState,
     ball_past_midcourt_for_commit,
     constants::{ball, table},
-    in_swing_commit_window, plan_swing, PhysicsParams,
+    in_swing_commit_window, plan_swing,
 };
 use rapier3d::prelude::*;
 use tracing::{debug, warn};
 
 use super::ball_script::{BallAction, BallEvent, BallScript, BallVec3};
-use crate::estimator::predict_impact;
 use super::rapier_convert::racket_pose_to_rapier;
 use super::shooter::{BallShooterSettings, BallState, ShooterLayout};
+use crate::estimator::predict_impact;
 
 /// 한 물리 스텝 입력 — `controls` 뮤텍스를 물리 연산 동안 잡지 않기 위함.
 pub struct SimStepInput<'a> {
@@ -65,8 +65,6 @@ pub struct SimWorld {
     pub physics: PhysicsParams,
     /// URDF 기반 FK·뷰어 (선택)
     pub urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>,
-    /// 제어 관절 → URDF actuated 매핑 (`None`이면 앞쪽 truncate)
-    control_to_urdf: Option<Vec<Option<usize>>>,
     /// 런타임 관절 상태
     pub robot: RobotState,
     /// sim 경과 시간 [s]
@@ -81,9 +79,9 @@ pub struct SimWorld {
     debug_prediction: Option<Prediction>,
     /// 접수 평면 — 물리 스텝에서 즉시 스윙 계획에 사용
     hit_plane: HitPlane,
-    /// true면 Rapier 진실 상태로 자동 스윙 (sim 기본).
-    /// false면 카메라→DLT→EKF→control이 타격 (`--ekf-swing`).
-    oracle_auto_swing: bool,
+    /// true면 Rapier ground truth로 자동 스윙 (sim 기본).
+    /// false면 카메라→DLT→EKF→control이 타격.
+    use_ground_truth: bool,
     /// 이번 비행에서 스윙을 이미 commit했는지 (재계획·팔 떨림 방지)
     swing_committed: bool,
 }
@@ -91,8 +89,7 @@ pub struct SimWorld {
 impl SimWorld {
     /// 탁구대·슈터·주차된 공·로봇 라켓을 배치한다.
     ///
-    /// 제어·Rapier 라켓은 항상 `arm` SSOT. URDF는 뷰어 mesh용이며
-    /// `set_control_to_urdf`로 관절 매핑을 줄 수 있다.
+    /// 제어·Rapier 라켓·URDF 뷰어는 같은 관절 순서와 기구학을 사용한다.
     pub fn new(arm: Arc<Arm>, urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>) -> Self {
         return Self::with_physics(arm, urdf, PhysicsParams::default());
     }
@@ -170,10 +167,14 @@ impl SimWorld {
             .pose(Pose::from_parts(racket_pos, racket_rot))
             .build();
         let racket_handle = rigid_body_set.insert(racket_body);
-        let racket_collider = ColliderBuilder::cuboid(0.06, 0.07, 0.005)
-            .restitution(physics.restitution as f32)
-            .friction(0.5)
-            .build();
+        let racket_collider = ColliderBuilder::cuboid(
+            pingpong_domain::constants::geometry::RACKET_HALF_X as f32,
+            pingpong_domain::constants::geometry::RACKET_HALF_Y as f32,
+            pingpong_domain::constants::geometry::RACKET_HALF_Z as f32,
+        )
+        .restitution(physics.restitution as f32)
+        .friction(0.5)
+        .build();
         collider_set.insert_with_parent(racket_collider, racket_handle, &mut rigid_body_set);
 
         let muzzle = default_shooter.muzzle_position();
@@ -204,7 +205,6 @@ impl SimWorld {
             arm,
             physics,
             urdf,
-            control_to_urdf: None,
             robot,
             sim_time: 0.0,
             ball_state: BallState::Parked,
@@ -214,38 +214,31 @@ impl SimWorld {
             hit_plane: HitPlane {
                 y: table::DEFAULT_HIT_PLANE_Y,
             },
-            oracle_auto_swing: true,
+            use_ground_truth: true,
             swing_committed: false,
         };
         world.sync_shooter_pose(&default_shooter);
         return world;
     }
 
-    /// 제어→URDF 관절 매핑 (뷰어 FK). `None`이면 truncate fallback.
-    pub fn set_control_to_urdf(&mut self, map: Option<Vec<Option<usize>>>) {
-        self.control_to_urdf = map;
-    }
-
-    /// 뷰어용 URDF 관절각 (제어 `Joints` + 매핑).
+    /// 뷰어용 URDF 관절각. 제어 모델과 축 순서가 정확히 같아야 한다.
     pub fn urdf_joint_values(&self) -> Option<Vec<f64>> {
         let urdf = self.urdf.as_ref()?;
-        let sources = self.control_to_urdf.as_deref();
-        return Some(crate::robot::urdf::map_control_joints_or_truncate(
-            self.robot.joints().values.as_slice(),
-            urdf.joint_count(),
-            sources,
-            0.0,
-        ));
+        let values = &self.robot.joints().values;
+        if values.len() != urdf.joint_count() {
+            return None;
+        }
+        return Some(values.clone());
     }
 
-    /// Rapier 진실 상태 자동 스윙 on/off.
-    pub fn set_oracle_auto_swing(&mut self, enabled: bool) {
-        self.oracle_auto_swing = enabled;
+    /// Rapier ground truth 자동 스윙 on/off.
+    pub fn set_use_ground_truth(&mut self, enabled: bool) {
+        self.use_ground_truth = enabled;
     }
 
-    /// 진실 상태 기반 자동 스윙(오라클) 여부.
-    pub fn oracle_auto_swing(&self) -> bool {
-        return self.oracle_auto_swing;
+    /// ground truth 기반 자동 스윙 여부.
+    pub fn use_ground_truth(&self) -> bool {
+        return self.use_ground_truth;
     }
 
     /// 이번 공에 스윙을 이미 commit했는지.
@@ -253,7 +246,7 @@ impl SimWorld {
         return self.swing_committed;
     }
 
-    /// control/oracle이 스윙을 commit했음을 표시한다.
+    /// control/ground truth 경로가 스윙을 commit했음을 표시한다.
     pub fn mark_swing_committed(&mut self) {
         self.swing_committed = true;
     }
@@ -328,9 +321,9 @@ impl SimWorld {
     ///
     /// 발사 직후(긴 lead)에는 대기하고, 네트 통과 후
     /// `time_to_impact ∈ [MIN_SWING, COMMIT_MAX]`일 때 시작한다.
-    /// sim 기본은 오라클(진실 상태). `--ekf-swing`이면 control 경로가 타격.
+    /// `use_ground_truth`가 true면 정확한 sim 상태, false면 control 경로가 타격.
     fn try_auto_swing(&mut self) {
-        if !self.oracle_auto_swing {
+        if !self.use_ground_truth {
             // 디버그 마커만 갱신
             if self.ball_state == BallState::InFlight {
                 if let Some(prediction) = predict_impact(self, self.hit_plane) {
@@ -580,7 +573,10 @@ impl SimWorld {
         if let Some(rail) = self.arm.rail.as_ref() {
             return crate::robot::urdf::SimRobotMount {
                 position: [self.robot.rail_x(), rail.mount_y, rail.mount_z],
-                rpy: [0.0, 0.0, 0.0],
+                rpy: self
+                    .urdf
+                    .as_ref()
+                    .map_or([0.0, 0.0, 0.0], |urdf| urdf.mount.rpy),
             };
         }
         if let Some(urdf) = self.urdf.as_ref() {
@@ -595,7 +591,7 @@ impl SimWorld {
     /// FK 결과로 키네마틱 라켓 위치를 갱신한다.
     ///
     /// Rapier 충돌은 **제어 IK와 동일한 `Arm` FK**만 사용한다.
-    /// URDF mesh FK는 링크 길이가 달라 공과 맞지 않는다 (mesh는 뷰어 전용).
+    /// URDF 로봇도 부팅 시 같은 `Arm` 직렬 체인으로 변환된다.
     fn sync_racket_kinematic(&mut self) {
         let Some(pose) = self.robot.racket_pose(&self.arm) else {
             return;
@@ -651,7 +647,7 @@ mod tests {
     fn contact_swing_reaches_impact_fk_at_duration() {
         let arm = test_arm();
         let mut world = SimWorld::new(arm.clone(), None);
-        world.set_oracle_auto_swing(true);
+        world.set_use_ground_truth(true);
         world.shoot_ball(&BallShooterSettings::default());
 
         let mut min_dist = f64::MAX;
@@ -676,7 +672,7 @@ mod tests {
         let arm = test_arm();
         assert!(arm.rail.is_some(), "테스트 arm은 리니어 포함");
         let mut world = SimWorld::new(arm, None);
-        world.set_oracle_auto_swing(true);
+        world.set_use_ground_truth(true);
         let settings = BallShooterSettings::default();
         assert_eq!(world.robot().rail_x(), 0.0, "대기 위치 x=0");
         world.shoot_ball(&settings);
@@ -759,11 +755,7 @@ mod tests {
         let reachable = arm
             .forward_kinematics_with_rail(world.robot().rail_x(), world.robot().joints())
             .expect("FK");
-        let impact = pingpong_domain::Point3::new(
-            impact_x,
-            hit_plane.y,
-            reachable.position.v.z,
-        );
+        let impact = pingpong_domain::Point3::new(impact_x, hit_plane.y, reachable.position.v.z);
         let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
         let trajectory = plan_swing(
             &arm,
@@ -807,27 +799,32 @@ mod tests {
     }
 
     #[test]
-    fn urdf_joint_values_use_control_map() {
+    fn urdf_joint_values_are_the_control_joint_values() {
         use std::path::PathBuf;
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/robots/urdf-test/urdf-test_description/urdf/urdf-test.urdf");
         if !path.exists() {
             return;
         }
-        let urdf = Arc::new(
-            crate::robot::UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("urdf"),
-        );
-        let arm = Arc::new(Arm::competition().expect("arm"));
-        let mut world = SimWorld::new(arm, Some(urdf));
-        world.set_control_to_urdf(Some(vec![Some(0), Some(1), Some(2)]));
+        let built = crate::robot::RobotBuilder::new()
+            .urdf(path)
+            .ee_link("pingpong_paddle_v5_1")
+            .mount_xyz_rpy(
+                [0.0, 0.02, pingpong_domain::constants::table::SURFACE_Z],
+                [0.1, -0.2, 0.3],
+            )
+            .build()
+            .expect("robot");
+        let mut world = SimWorld::new(built.arm, built.urdf);
         let rail = world.robot().rail_x();
         *world.robot_mut() = RobotState::new(
             pingpong_domain::Joints {
-                values: vec![0.11, 0.22, 0.33, 0.44],
+                values: vec![0.11, 0.22, 0.33],
             },
             rail,
         );
-        let q = world.urdf_joint_values().expect("mapped");
+        let q = world.urdf_joint_values().expect("same joints");
         assert_eq!(q, vec![0.11, 0.22, 0.33]);
+        assert_eq!(world.effective_sim_mount().rpy, [0.1, -0.2, 0.3]);
     }
 }

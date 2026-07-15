@@ -55,8 +55,7 @@ pub fn predict_hit_plane_with(
 
     while t < est::MAX_LEAD {
         let prev_y = pos.y;
-        let (next_pos, next_vel) =
-            semi_implicit_euler_with(pos, vel, est::INTEGRATE_DT, physics);
+        let (next_pos, next_vel) = semi_implicit_euler_with(pos, vel, est::INTEGRATE_DT, physics);
         pos = next_pos;
         vel = next_vel;
         t += est::INTEGRATE_DT;

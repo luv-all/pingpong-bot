@@ -1,6 +1,6 @@
 //! ChArUco 보드 촬영 → 코너 검출 → 카메라 내부/외부 파라미터 계산 (plan §3.4).
 //!
-//! 산출물: `Calibration` JSON → 런타임 `--config` / `calibration_path`로 로드.
+//! 산출물: `Calibration` JSON → 런타임 TOML의 `calibration_path`로 로드.
 //! OpenCV 실보정: `cargo run -p calib-charuco --features opencv -- --from-images DIR`
 
 use std::fs;
@@ -34,8 +34,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     if let Some(path) = args.validate {
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("읽기 실패: {}", path.display()))?;
+        let text =
+            fs::read_to_string(&path).with_context(|| format!("읽기 실패: {}", path.display()))?;
         let calib: Calibration = serde_json::from_str(&text)?;
         println!(
             "ok: {} cameras, min_triangulation={}",
@@ -61,8 +61,8 @@ fn main() -> Result<()> {
     if let Some(dir) = args.from_images {
         #[cfg(feature = "opencv")]
         {
-            let calib = pingpong_infra::calibrate_charuco_draft(&dir)
-                .map_err(anyhow::Error::msg)?;
+            let calib =
+                pingpong_infra::calibrate_charuco_draft(&dir).map_err(anyhow::Error::msg)?;
             let json = serde_json::to_string_pretty(&calib)?;
             fs::write(&args.output, json)
                 .with_context(|| format!("쓰기 실패: {}", args.output.display()))?;

@@ -160,32 +160,6 @@ impl RobotBuilder {
             urdf: Some(Arc::new(urdf)),
         });
     }
-
-    /// URDF FK·뷰어는 유지하고 제어만 fallback `Arm`으로 빌드한다.
-    pub fn build_with_arm_fallback(self, fallback: Arc<Arm>) -> Result<SimRobot, RobotBuildError> {
-        if self.use_competition_primitive {
-            return Ok(Self::build_primitive(fallback));
-        }
-
-        let path = self
-            .urdf_path
-            .as_ref()
-            .ok_or(RobotBuildError::MissingUrdfPath)?;
-
-        let ee = self.ee_link.as_deref();
-        let mut urdf = UrdfRobot::from_file(path, ee)?;
-        urdf.mount = self.resolve_mount(&urdf.name);
-
-        let arm = match urdf.try_into_arm(self.max_joint_speed) {
-            Ok(arm) => Arc::new(arm),
-            Err(_) => fallback,
-        };
-
-        return Ok(SimRobot {
-            arm,
-            urdf: Some(Arc::new(urdf)),
-        });
-    }
 }
 
 impl Default for RobotBuilder {
@@ -203,10 +177,8 @@ mod tests {
     }
 
     #[test]
-    fn primitive_builds_with_fallback() {
-        let robot = RobotBuilder::competition()
-            .build_with_arm_fallback(test_fallback_arm())
-            .expect("competition");
+    fn primitive_builds_from_explicit_arm() {
+        let robot = RobotBuilder::build_primitive(test_fallback_arm());
         assert!(robot.urdf.is_none());
         assert_eq!(robot.arm.joint_count(), 4);
     }
@@ -218,15 +190,14 @@ mod tests {
         if !path.exists() {
             return;
         }
-        // urdf-test mesh는 3축 — 제어 Arm은 4DOF competition fallback
         let robot = RobotBuilder::new()
             .urdf(&path)
             .ee_link("pingpong_paddle_v5_1")
             .mount_preset(MountPreset::Rep103AtTableEnd)
-            .build_with_arm_fallback(test_fallback_arm())
+            .build()
             .expect("urdf-test");
         assert!(robot.urdf.is_some());
-        assert_eq!(robot.arm.joint_count(), 4);
+        assert_eq!(robot.arm.joint_count(), 3);
         assert_eq!(robot.urdf.as_ref().unwrap().joint_count(), 3);
     }
 
@@ -241,7 +212,7 @@ mod tests {
             .urdf(&path)
             .ee_link("pingpong_paddle_v5_1")
             .mount_preset(MountPreset::Rep103AtTableEnd)
-            .build_with_arm_fallback(test_fallback_arm())
+            .build()
             .expect("4-dof");
         assert!(robot.urdf.is_some());
         assert_eq!(robot.arm.joint_count(), 4);

@@ -116,7 +116,13 @@ impl RobotState {
         }
         let n = self.angles.values.len().min(self.targets.values.len());
         for i in 0..n {
-            let diff = self.targets.values[i] - self.angles.values[i];
+            let raw_diff = self.targets.values[i] - self.angles.values[i];
+            let diff = if arm.joint_limit(i).is_none() {
+                (raw_diff + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                    - std::f64::consts::PI
+            } else {
+                raw_diff
+            };
             let step = (arm.max_joint_speed * dt).min(diff.abs());
             self.angles.values[i] += diff.signum() * step;
         }

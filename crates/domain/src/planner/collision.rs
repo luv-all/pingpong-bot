@@ -7,8 +7,8 @@ use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
 use crate::constants::{
     geometry::{
-        LINK_FOREARM_RADIUS, RACKET_HALF_X, RACKET_HALF_Y, RACKET_HALF_Z, TABLE_CLEARANCE,
-        TABLE_CLAMP_ITERS,
+        LINK_FOREARM_RADIUS, RACKET_HALF_X, RACKET_HALF_Y, RACKET_HALF_Z, TABLE_CLAMP_ITERS,
+        TABLE_CLEARANCE,
     },
     table,
 };
@@ -96,12 +96,14 @@ impl OrientedBox {
 ///
 /// 상완은 테이블 끝 마운트에 붙어 면과 겹칠 수 있어 제외한다.
 pub fn robot_obbs(arm: &Arm, rail_x: f64, joints: &Joints) -> Vec<OrientedBox> {
-    let Some((_base, elbow, wrist)) = arm.chain_points(rail_x, joints) else {
+    let Some(points) = arm.chain_points(rail_x, joints) else {
         return Vec::new();
     };
-    let mut boxes = Vec::with_capacity(2);
-    if let Some(fore) = OrientedBox::from_segment(elbow, wrist, LINK_FOREARM_RADIUS) {
-        boxes.push(fore);
+    let mut boxes = Vec::with_capacity(points.len());
+    for segment in points.windows(2).skip(1) {
+        if let Some(link) = OrientedBox::from_segment(segment[0], segment[1], LINK_FOREARM_RADIUS) {
+            boxes.push(link);
+        }
     }
     if let Some(pose) = arm.forward_kinematics_with_rail(rail_x, joints) {
         boxes.push(OrientedBox::from_racket(&pose));
@@ -120,9 +122,9 @@ pub fn table_penetration(arm: &Arm, rail_x: f64, joints: &Joints) -> f64 {
 /// 관통 시 EE를 들어 올려 재IK - 손목 open/yaw 힌트 유지.
 pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
     let mut current = joints.clone();
-    let wrist = joints
-        .values
-        .get(3)
+    let wrist_index = arm.wrist_joint_index();
+    let wrist = wrist_index
+        .and_then(|index| joints.values.get(index))
         .copied()
         .unwrap_or(crate::constants::RACKET_OPEN_PITCH);
 
@@ -146,15 +148,23 @@ pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
         }) else {
             // IK 실패 시 어깨를 살짝 올려 폴백
             if current.values.len() > 1 {
-                let lim = arm.limits[1];
-                current.values[1] = (current.values[1] + 0.08).clamp(lim.min, lim.max);
+                let raised = current.values[1] + 0.08;
+                current.values[1] = arm
+                    .joint_limit(1)
+                    .map_or(raised, |limit| raised.clamp(limit.min, limit.max));
             }
             continue;
         };
         // 면이 테이블을 찌르면 open을 조금 줄여 모서리를 듦
         let mut open = wrist;
-        if table_penetration(arm, rail_x, &solved) > 1e-4 && solved.values.len() > 3 {
-            open = (solved.values[3] - 0.1).max(arm.limits[3].min);
+        if table_penetration(arm, rail_x, &solved) > 1e-4 {
+            if let Some(index) = wrist_index {
+                open = arm
+                    .joint_limit(index)
+                    .map_or(solved.values[index] - 0.1, |limit| {
+                        (solved.values[index] - 0.1).max(limit.min)
+                    });
+            }
         }
         if let Ok(with_wrist) = arm.with_wrist_open(&solved, open) {
             solved = with_wrist;
@@ -199,8 +209,22 @@ mod tests {
     fn deep_racket_penetrates_table() {
         let arm = Arm::competition().expect("arm");
         let rail_x = arm.rail.as_ref().map(|r| r.home_x()).unwrap_or(0.0);
-        // 어깨를 거의 수평 아래로 -> EE가 테이블 근처/아래
-        let joints = Joints::from_slice(&[-0.2, -0.15, -0.2, 0.9]);
+        let mut joints = arm.default_joints.clone();
+        let mut deepest = 0.0;
+        for q0 in [-1.0, 0.0, 1.0] {
+            for q1 in [-0.5, 0.0, 0.5] {
+                for q2 in [-2.0, -1.0, 0.0, 1.4] {
+                    for q3 in [-2.0, -1.0, 0.0, 1.0, 2.0] {
+                        let candidate = Joints::from_slice(&[q0, q1, q2, q3]);
+                        let depth = table_penetration(&arm, rail_x, &candidate);
+                        if depth > deepest {
+                            deepest = depth;
+                            joints = candidate;
+                        }
+                    }
+                }
+            }
+        }
         let before = table_penetration(&arm, rail_x, &joints);
         assert!(before > 0.0, "의도적 저자세는 관통해야 함: {before}");
         let clamped = clamp_above_table(&arm, rail_x, &joints);

@@ -142,7 +142,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use pingpong_domain::constants::table;
-    use pingpong_domain::{BallObservation, CameraId, DomainError, ObservationError, PixelPoint, Point3};
+    use pingpong_domain::{
+        BallObservation, CameraId, DomainError, ObservationError, PixelPoint, Point3,
+    };
 
     use super::*;
     use crate::vision::Calibration;
@@ -210,12 +212,9 @@ mod tests {
     fn dlt_works_with_two_cameras() {
         let calibration = Calibration::sim(3);
         let truth = Point3::new(0.6, 1.0, 0.9);
-        let recovered = triangulate_projections(
-            &calibration,
-            &[CameraId::new(0), CameraId::new(2)],
-            truth,
-        )
-        .expect("2-view DLT");
+        let recovered =
+            triangulate_projections(&calibration, &[CameraId::new(0), CameraId::new(2)], truth)
+                .expect("2-view DLT");
         assert!((recovered.v - truth.v).norm() < 1e-3);
     }
 
