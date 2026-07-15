@@ -15,13 +15,13 @@
 | 4DOF IK + 리니어 레일 | ✅ | yaw·어깨·팔꿈치(2R)·손목 open |
 | quintic 스윙 + 관절 한계 | ✅ | `domain::trajectory`, `plan_swing` |
 | 임팩트 역산 + 로프트 \(v_{out}\) | ✅ | `domain::impact` |
-| 본선 타격 = sim 오라클 (기본) | ✅ | `--ekf-swing`으로 EKF control 실험 |
-| oracle 자동 스윙 | ✅ | commit 창(0.08–0.20s) + 네트 통과 후 |
+| 본선 타격 = sim ground truth (기본) | ✅ | `sim.use_ground_truth=false`로 EKF control 실험 |
+| ground truth 자동 스윙 | ✅ | commit 창(0.08–0.20s) + 네트 통과 후 |
 | 탄도 예측 (적분+바운스) | ✅ | `domain::ballistics` |
 | DLT + sim 핀홀 Calibration | ✅ | `CameraParams::sim_layout` |
 | EKF hit-plane | ✅ | `BallEkf` |
 | 토크 한계 (대각 \(I\alpha\)) | ✅ | `verify_torque_limits` |
-| `--config` TOML | ✅ | `bin/config.rs` + Calibration JSON |
+| TOML 단일 설정 | ✅ | `config/default.toml` + `bin/config.rs` + Calibration JSON |
 | 상수 SSOT | ✅ | `domain::constants` |
 | 역할 모듈 | ✅ | camera·detector·triangulator·estimator·planner·robot |
 | OpenCV 검출 / ChArUco 실보정 | ⏳ | 실물 — `calib_charuco --emit-sim`만 |
@@ -48,7 +48,7 @@
 | 1.2 | DLT `triangulate_synced` | ✅ |
 | 1.3 | OpenCV 원 검출 | ⏳ 실물 (sim은 투영 픽셀) |
 | 1.4 | sim 카메라 = domain Calibration | ✅ |
-| 1.5 | `--config` TOML | ✅ |
+| 1.5 | TOML 단일 설정 | ✅ |
 
 **완료 기준 (sim):** 카메라→DLT→3D — 달성. RMSE 튜닝은 측정 후.
 
@@ -91,7 +91,7 @@
 |---|------|------|
 | 5.1 | UVC 카메라 | ⏳ |
 | 5.2 | Dynamixel `RealHardware` | ⏳ `NotImplemented` |
-| 5.3 | `--mode real` | ⏳ |
+| 5.3 | TOML `mode = "real"` | ⏳ |
 
 ---
 
@@ -100,7 +100,7 @@
 - [x] 관측: DLT + sim Calibration 공유
 - [x] 추정: BallEkf + hit-plane
 - [x] 타격: loft + commit-once + control 본선
-- [x] 설정: `--config` TOML
+- [x] 설정: 선택적 TOML 경로 하나 (`config/default.toml`)
 - [x] 결정: A–F 문서화
 - [ ] 실물 OpenCV·모터·Rerun — **Phase 2.5 / 마일스톤 4–5**
 
@@ -109,6 +109,6 @@
 1. 스핀·Magnus 모델 스펙  
 2. OpenCV Detector + ChArUco 실보정  
 3. Rerun Telemetry  
-4. Dynamixel / `--mode real`
+4. Dynamixel / TOML `mode = "real"`
 
 각 마일스톤마다 `cargo test --workspace` + sim GUI 스모크.

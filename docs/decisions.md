@@ -9,18 +9,17 @@
 
 ## A. 타격 목표 \(v_{out}\) (최우선)
 
-**결정 (2026-07):** 옵션 2+로프트 — `loft_return_velocity`  
-임팩트 → 네트 `y=LENGTH_Y/2`, `z ≥ SURFACE_Z+NET_HEIGHT+NET_CLEARANCE` 를  
-`LOFT_TIME_TO_NET` 탄도로 역산. `plan_swing` 본선 사용.  
+**결정 (2026-07):** 랠리 중앙 리턴 — `rally_return_velocity`
+임팩트 → 상대 코트 중앙 `(WIDTH/2, 3·LENGTH/4)` 바운드를
+`RALLY_TIME_TO_BOUNCE` 중력 탄도로 역산하며 네트 여유 높이도 검증한다.
 `cooperative_return_velocity`는 레거시/테스트용.
 
 | ID | 현재 | 위치 | 상태 |
 |----|------|------|------|
-| A1 | ~~`v_out = -0.35 × v_in`~~ → loft 탄도 | `impact.rs` `loft_return_velocity` | ✅ |
-| A2 | loft 최소 `v_y≥1`, `v_z≥0.5` | `loft_return_velocity` | ✅ (시뮬 상수, 추후 측정) |
+| A1 | ~~`v_out = -0.35 × v_in`~~ → 상대 코트 중앙 바운드 탄도 | `impact.rs` `rally_return_velocity` | ✅ |
+| A2 | 바운드 시간 `0.65 s`, 네트 clearance 검증 | `rally_return_velocity` | ✅ (시뮬 상수, 추후 측정) |
 | A3 | `‖v_out‖ ≤ 6` | `MAX_RETURN_SPEED` | 잠정 (구 4→6) |
 | A4 | `e = 0.85` | `DEFAULT_RESTITUTION` | 툴 준비 ✅ / 실측 후 갱신 |
-
 
 ---
 
@@ -28,7 +27,7 @@
 
 **결정 (2026-07):** 타격 모드에서 끝속도 0 폴백·contact 폴백 금지.  
 한계 초과 시 스케일만 하고 스케일된 \(v_r\) 유지.  
-**갱신:** commit은 `[MIN_SWING, SWING_COMMIT_MAX]` 창 + (oracle) 네트 통과 후에만.
+**갱신:** commit은 `[MIN_SWING, SWING_COMMIT_MAX]` 창 + (ground truth 경로) 네트 통과 후에만.
 
 | ID | 현재 | 위치 | 상태 |
 |----|------|------|------|
@@ -49,33 +48,35 @@
 | ID | 현재 | 위치 | 상태 |
 |----|------|------|------|
 | C1 | commit-once + **commit 창 대기** | `world.rs` / `app` | ✅ |
-| C2 | sim 기본 = 오라클 타격 / `--ekf-swing` = control | `world` / `bin` | ✅ (승격 조건 ↓) |
+| C2 | sim 기본 = ground truth / `sim.use_ground_truth=false` = control | `world` / `bin` | ✅ (승격 조건 ↓) |
 | C3 | `is_busy`면 타겟 discard | `app/lib.rs` | 유지 |
-| C4 | oracle **및 EKF control**: `ball_y ≤ 0.55·LENGTH` 후 commit | `world` / `SimHardware` | ✅ |
+| C4 | ground truth **및 EKF control**: `ball_y ≤ 0.55·LENGTH` 후 commit | `world` / `SimHardware` | ✅ |
 
-### C2 — 기본 모드를 oracle → EKF로 올리는 조건
+### C2 — 기본 모드를 ground truth → EKF로 올리는 조건
 
-`--ekf-swing`이 실험 플래그가 아니라 **sim 기본**이 되려면 아래를 만족한다. 미달이면 오라클 유지.
+`sim.use_ground_truth=false`가 **sim 기본**이 되려면 아래를 만족한다. 미달이면 ground truth 유지.
 
 1. **예측**: commit 창 + 미드코트 게이트에서 EKF impact vs Rapier/탄도 진실 RMSE **&lt; 8 cm** (단위 테스트 `tracked_ballistic_impact_near_truth_in_commit_window`로 회귀).
-2. **타격**: headless `--ekf-swing`으로 기본 슈터 N발 중 리턴/접촉 성공률이 오라클의 **≥ 80%** (TODO §6 스모크와 연동, 수치 확정 전 수동 확인).
+2. **타격**: headless TOML에서 `sim.use_ground_truth=false`로 기본 슈터 N발 중 리턴/접촉 성공률이 ground truth 경로의 **≥ 80%** (TODO §6 스모크와 연동, 수치 확정 전 수동 확인).
 3. **재발사**: 주차→발사 텔레포트 후 EKF가 점프 리셋되어 속도 시드가 다시 된다.
 4. **물리 정합**: sim 파이프라인 EKF drag는 Rapier와 같이 **0** (`BallEkf::new(0.0)`). 실측 \(k\)는 §0.3 이후 `with_defaults`/설정으로.
 
-현재(2026-07-13): (1)(3)(4) 코드 반영. (2)는 수동/`--ekf-swing` 확인 후 승격.
+현재(2026-07-13): (1)(3)(4) 코드 반영. (2)는 수동/`sim.use_ground_truth=false` 확인 후 승격.
 
 ---
 
 ## D. 라켓 면·기구학
 
-**결정 (2026-07):** **4DOF** — yaw + 어깨 + 팔꿈치(2R 접힘) + 손목 open. Dynamixel 접힘과 동일.
+**결정 (2026-07):** `competition`은 기존 4DOF primitive, URDF 프리셋은
+URDF `origin`·축·한계·EE 변환을 보존한 일반 revolute 직렬 체인을 제어 SSOT로 쓴다.
+FK는 행렬 체인, 위치 IK·속도 역산은 Jacobian 감쇠 최소제곱을 사용한다.
 
 | ID | 현재 | 위치 | 상태 |
 |----|------|------|------|
 | D1 | `q3` 손목 open | `Arm::competition` | ✅ |
 | D2 | `racket_face_toward_opponent(yaw, open)` | `robot.rs` | ✅ |
 | D3 | 링크 0.18/0.18 + stub×2 | `constants/arm` | ✅ |
-| D4 | urdf-test 3축 mesh / 제어 4DOF primitive | `bin` | ✅ |
+| D4 | URDF 제어·FK·IK·뷰어 SSOT, 변환 실패 시 시작 오류 | `domain::robot::serial` / `infra::robot::urdf` | ✅ |
 
 ---
 
@@ -152,11 +153,11 @@
 - [x] A4 \(e\) 측정 계획 — `tools/measure_restitution` (`--heights` / `--vz-pairs` / `--sim`)
 - [x] B1–B3 타격 모드에서 속도 0 폴백 금지
 - [x] C1 임팩트 전 스윙 동결 — commit 창 + once
-- [x] C2 본선 = app control (oracle off) / sim 기본 oracle
+- [x] C2 본선 = app control (ground truth off) / sim 기본 ground truth
 - [x] B5/B6 짧은 스윙 창·y 보존 clamp
 - [x] E5 Rapier↔탄도 restitution
 - [x] D1 면 법선 = 손목 open 관절
-- [x] D3/D4 URDF mesh / competition 제어 분리
+- [x] D3/D4 competition primitive / URDF 제어 SSOT 분리
 - [x] E1 hit plane y = 0.30
 - [x] G1–G3 테이블 OBB 클램프 (전완·라켓)
 
