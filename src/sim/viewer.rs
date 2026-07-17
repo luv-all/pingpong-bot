@@ -35,6 +35,8 @@ struct DynamicNodes {
     racket: SceneNode3d,
     arm_base: SceneNode3d,
     links: Vec<SceneNode3d>,
+    /// `links[i]` 반지름 [m]. `place_link`가 local_scale을 통째로 덮어쓰므로 보관.
+    link_radii: Vec<f32>,
     joints: Vec<SceneNode3d>,
 }
 
@@ -139,9 +141,11 @@ fn build_static_scene(scene: &mut SceneNode3d) {
         .set_position(Vec3::new(tcx, tcy, 0.01));
 
     let rail_y = 0.02_f32;
-    let rail_z = (table::SURFACE_Z - 0.02) as f32;
+    let rail_h = crate::constants::geometry::RAIL_VISUAL_HEIGHT as f32;
+    let rail_w = crate::constants::geometry::RAIL_VISUAL_WIDTH as f32;
+    let rail_z = (table::SURFACE_Z as f32) - rail_h * 0.5;
     scene
-        .add_cube(table::WIDTH_X as f32, 0.06, 0.04)
+        .add_cube(table::WIDTH_X as f32, rail_w, rail_h)
         .set_color(Color::new(0.35, 0.38, 0.42, 1.0))
         .set_position(Vec3::new((table::WIDTH_X * 0.5) as f32, rail_y, rail_z));
 }
@@ -154,10 +158,10 @@ fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfRobot>) -> Sc
         .add_cube(0.24, 0.5, 0.36)
         .set_color(Color::new(0.45, 0.45, 0.5, 1.0));
     let impact_marker = scene
-        .add_sphere(0.035)
+        .add_sphere(0.018)
         .set_color(Color::new(1.0, 0.15, 0.95, 0.95));
     let impact_ring = scene
-        .add_cube(0.08, 0.08, 0.004)
+        .add_cube(0.05, 0.05, 0.004)
         .set_color(Color::new(1.0, 0.95, 0.1, 0.9));
 
     let robot = if let Some(model) = urdf {
@@ -176,27 +180,42 @@ fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfRobot>) -> Sc
 }
 
 fn build_primitive_robot_nodes(scene: &mut SceneNode3d) -> DynamicNodes {
+    use crate::constants::geometry::{
+        ARM_BASE_HEIGHT, ARM_BASE_RADIUS, JOINT_MARKER_RADIUS, LINK_FOREARM_RADIUS,
+        LINK_UPPER_RADIUS, RACKET_BLADE_RADIUS, RACKET_HALF_Z,
+    };
+
     let link_color = Color::new(0.25, 0.45, 0.85, 1.0);
     let joint_color = Color::new(0.95, 0.85, 0.1, 1.0);
-    let links = (0..5)
-        .map(|_| scene.add_cylinder(0.022, 1.0).set_color(link_color))
+    // 상완·전완 반경을 번갈아 쓴다 (체인 세그먼트 0=베이스→q0는 상완 쪽).
+    let link_radii = [
+        LINK_UPPER_RADIUS,
+        LINK_UPPER_RADIUS,
+        LINK_FOREARM_RADIUS,
+        LINK_FOREARM_RADIUS,
+        LINK_FOREARM_RADIUS,
+    ];
+    let links = link_radii
+        .iter()
+        .map(|&radius| scene.add_cylinder(radius as f32, 1.0).set_color(link_color))
         .collect();
-    let joints = (0..5)
-        .map(|_| scene.add_sphere(0.024).set_color(joint_color))
+    let joints = (0..link_radii.len())
+        .map(|_| {
+            scene
+                .add_sphere(JOINT_MARKER_RADIUS as f32)
+                .set_color(joint_color)
+        })
         .collect();
 
     return DynamicNodes {
         racket: scene
-            .add_cube(
-                (crate::constants::geometry::RACKET_HALF_X * 2.0) as f32,
-                (crate::constants::geometry::RACKET_HALF_Y * 2.0) as f32,
-                (crate::constants::geometry::RACKET_HALF_Z * 2.0) as f32,
-            )
+            .add_cylinder(RACKET_BLADE_RADIUS as f32, (RACKET_HALF_Z * 2.0) as f32)
             .set_color(Color::new(0.85, 0.15, 0.12, 1.0)),
         arm_base: scene
-            .add_cylinder(0.06, 0.05)
+            .add_cylinder(ARM_BASE_RADIUS as f32, ARM_BASE_HEIGHT as f32)
             .set_color(Color::new(0.2, 0.25, 0.55, 1.0)),
         links,
+        link_radii: link_radii.iter().map(|&r| r as f32).collect(),
         joints,
     };
 }
@@ -277,7 +296,7 @@ fn sync_primitive_robot(nodes: &mut DynamicNodes, world: &SimWorld) {
     nodes
         .racket
         .set_position(to_vec3(rk_pos))
-        .set_rotation(to_quat(rk_rot));
+        .set_rotation(racket_disc_world_rotation(rk_rot));
 
     let arm = world.arm();
     let joints = world.robot().joints();
@@ -303,7 +322,8 @@ fn sync_primitive_robot(nodes: &mut DynamicNodes, world: &SimWorld) {
             continue;
         };
         joint.set_position(to);
-        place_link(link, from, to);
+        let radius = nodes.link_radii.get(index).copied().unwrap_or(0.015);
+        place_link(link, from, to, radius);
     }
 }
 
@@ -387,9 +407,9 @@ fn rpy_to_quat(rpy: [f64; 3]) -> Quat {
     return Quat::from_xyzw(q.i as f32, q.j as f32, q.k as f32, q.w as f32);
 }
 
-fn place_link(node: &mut SceneNode3d, from: Vec3, to: Vec3) {
+fn place_link(node: &mut SceneNode3d, from: Vec3, to: Vec3, radius: f32) {
     let dir = to - from;
-    let length = dir.length();
+    let length = dir.length().max(1e-4);
     let mid = (from + to) * 0.5;
     node.set_position(mid);
     if dir.length_squared() > 1e-8 {
@@ -397,7 +417,16 @@ fn place_link(node: &mut SceneNode3d, from: Vec3, to: Vec3) {
         let quat = Quat::from_rotation_arc(Vec3::Y, axis);
         node.set_rotation(quat);
     }
-    node.set_local_scale(1.0, length, 1.0);
+    // kiss3d unit cylinder는 local_scale=(diameter, height, diameter).
+    // XZ를 1로 두면 지름 1 m 원반이 된다.
+    let diameter = radius * 2.0;
+    node.set_local_scale(diameter, length, diameter);
+}
+
+fn racket_disc_world_rotation(orientation: Rotation) -> Quat {
+    // kiss3d 실린더 축은 Y. 라켓 계약은 local +Z = 면 법선.
+    let disc = Quat::from_rotation_arc(Vec3::Y, Vec3::Z);
+    return to_quat(orientation) * disc;
 }
 
 fn to_vec3(v: Vector) -> Vec3 {

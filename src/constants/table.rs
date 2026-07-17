@@ -10,8 +10,8 @@ pub const LENGTH_Y: f64 = 2.74;
 pub const SURFACE_Z: f64 = 0.76;
 /// 테이블 두께의 절반.
 pub const HALF_THICKNESS: f64 = 0.0125;
-/// 네트 중심 높이 (테이블 면 기준).
-pub const NET_HEIGHT: f64 = 0.08;
+/// 네트 상단 높이 (테이블 면 기준). ITTF 15.25 cm.
+pub const NET_HEIGHT: f64 = 0.1525;
 /// 기본 접수 평면 y [m]. 로봇(y~0) 앞에서 공을 맞출 깊이.
 /// Arm::competition 도달(~0.38 m)에 맞춘 값.
 pub const DEFAULT_HIT_PLANE_Y: f64 = 0.30;
