@@ -13,16 +13,16 @@
 |------|------|------|
 | 접수 평면 `HitPlane { y }` | ✅ | `DEFAULT_HIT_PLANE_Y = 0.30` |
 | 4DOF IK + 리니어 레일 | ✅ | yaw·어깨·팔꿈치(2R)·손목 open |
-| quintic 스윙 + 관절 한계 | ✅ | `domain::trajectory`, `plan_swing` |
-| 임팩트 역산 + 로프트 \(v_{out}\) | ✅ | `domain::impact` |
+| quintic 스윙 + 관절 한계 | ✅ | `planner::trajectory`, `plan_swing` |
+| 임팩트 역산 + 로프트 \(v_{out}\) | ✅ | `planner::impact` |
 | 본선 타격 = sim ground truth (기본) | ✅ | `sim.use_ground_truth=false`로 EKF control 실험 |
 | ground truth 자동 스윙 | ✅ | commit 창(0.08–0.20s) + 네트 통과 후 |
-| 탄도 예측 (적분+바운스) | ✅ | `domain::ballistics` |
+| 탄도 예측 (적분+바운스) | ✅ | `estimator::ballistics` |
 | DLT + sim 핀홀 Calibration | ✅ | `CameraParams::sim_layout` |
 | EKF hit-plane | ✅ | `BallEkf` |
 | 토크 한계 (대각 \(I\alpha\)) | ✅ | `verify_torque_limits` |
 | TOML 단일 설정 | ✅ | `config/default.toml` + `bin/config.rs` + Calibration JSON |
-| 상수 SSOT | ✅ | `domain::constants` |
+| 상수 SSOT | ✅ | `constants` |
 | 역할 모듈 | ✅ | camera·detector·triangulator·estimator·planner·robot |
 | OpenCV 검출 / ChArUco 실보정 | ⏳ | 실물 — `calib_charuco --emit-sim`만 |
 | Rerun / Dynamixel | ⏳ | 마일스톤 4–5 |

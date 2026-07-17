@@ -1,9 +1,0 @@
-[package]
-name = "pingpong-domain"
-edition.workspace = true
-version.workspace = true
-
-[dependencies]
-nalgebra = { version = "0.35.0", features = ["serde-serialize"] }
-serde = { version = "1.0", features = ["derive"] }
-toml_edit = "0.22.27"

@@ -121,7 +121,7 @@ Keep `sample_at` as-is for time sync before DLT.
 2. Implement DLT + unit tests  
 3. Point `SimCamera` / `CameraView` at shared projection; drop dummy pixel  
 4. Update `Calibration::default` and any broken call sites  
-5. Run `cargo test -p pingpong-domain` and `cargo test -p pingpong-infra --features gui`
+5. Run `cargo test -p pingpong-bot --lib` and `cargo test -p pingpong-bot --features gui`
 
 ---
 

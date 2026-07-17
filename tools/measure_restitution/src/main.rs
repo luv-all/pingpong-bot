@@ -6,15 +6,15 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use nalgebra::Vector3;
-use pingpong_domain::constants::{ball, table, TABLE_BOUNCE_RESTITUTION};
-use pingpong_domain::{
-    drag_from_trajectory, merge_physics_into_config, physics_coeffs_toml,
-    restitution_from_bounce_heights, restitution_from_normal_speeds, Arm, PhysicsConfig,
+use pingpong_bot::constants::{TABLE_BOUNCE_RESTITUTION, ball, table};
+use pingpong_bot::{
+    Arm, PhysicsConfig, drag_from_trajectory, merge_physics_into_config, physics_coeffs_toml,
+    restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
-use pingpong_infra::{BallVec3, SimWorld};
+use pingpong_bot::{BallVec3, SimWorld};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -129,7 +129,7 @@ fn main() -> Result<()> {
 }
 
 fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
-    use pingpong_domain::ballistics::semi_implicit_euler;
+    use pingpong_bot::ballistics::semi_implicit_euler;
 
     let floor = table::SURFACE_Z + ball::RADIUS;
     let mut pos = Vector3::new(

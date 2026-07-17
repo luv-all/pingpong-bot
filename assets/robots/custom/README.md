@@ -52,7 +52,7 @@ cp config/example.toml config/custom-robot.toml
 # config/custom-robot.toml:
 # urdf_path = "../assets/robots/custom/robot.urdf"
 # ee_link = "racket_link"
-cargo run -p pingpong-bin -- config/custom-robot.toml
+cargo run -p pingpong-bot -- config/custom-robot.toml
 ```
 
 ## 지원 형식

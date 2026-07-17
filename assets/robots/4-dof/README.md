@@ -20,7 +20,7 @@ ROS install의 절대 `file:///Users/...` 경로를 넣지 말 것.
 ```bash
 cp config/example.toml config/4-dof.toml
 # config/4-dof.toml에서 robot = "4-dof"
-cargo run -p pingpong-bin -- config/4-dof.toml
+cargo run -p pingpong-bot -- config/4-dof.toml
 ```
 
 ## 관절

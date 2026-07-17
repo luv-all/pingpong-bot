@@ -1,19 +1,19 @@
 //! ChArUco 보드 촬영 → 코너 검출 → 카메라 내부/외부 파라미터 계산 (plan §3.4).
 //!
 //! 산출물: `Calibration` JSON → 런타임 TOML의 `calibration_path`로 로드.
-//! OpenCV 실보정: `cargo run -p calib-charuco --features opencv -- --from-images DIR`
+//! OpenCV 실보정: `cargo run -p calib-charuco -- --from-images DIR`
 
 use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use pingpong_infra::Calibration;
+use pingpong_bot::Calibration;
 
 #[derive(Parser)]
 #[command(name = "calib_charuco", about = "ChArUco 카메라 보정 도구")]
 struct Args {
-    /// sim 기본 배치 Calibration JSON을 내보낸다 (OpenCV 없이 파이프라인 검증용)
+    /// sim 기본 배치 Calibration JSON을 내보낸다.
     #[arg(long)]
     emit_sim: Option<u8>,
 
@@ -25,7 +25,7 @@ struct Args {
     #[arg(long)]
     validate: Option<PathBuf>,
 
-    /// OpenCV ChArUco 검출 후 Calibration 초안 (`opencv` feature 필요)
+    /// OpenCV ChArUco 검출 후 Calibration 초안
     #[arg(long)]
     from_images: Option<PathBuf>,
 }
@@ -59,28 +59,16 @@ fn main() -> Result<()> {
     }
 
     if let Some(dir) = args.from_images {
-        #[cfg(feature = "opencv")]
-        {
-            let calib =
-                pingpong_infra::calibrate_charuco_draft(&dir).map_err(anyhow::Error::msg)?;
-            let json = serde_json::to_string_pretty(&calib)?;
-            fs::write(&args.output, json)
-                .with_context(|| format!("쓰기 실패: {}", args.output.display()))?;
-            println!("wrote OpenCV ChArUco draft → {}", args.output.display());
-            return Ok(());
-        }
-        #[cfg(not(feature = "opencv"))]
-        {
-            let _ = dir;
-            anyhow::bail!(
-                "OpenCV ChArUco는 `--features opencv`로 빌드하세요. \
-                 파이프라인 검증은 `--emit-sim 3 -o calib.json`."
-            );
-        }
+        let calib = pingpong_bot::calibrate_charuco_draft(&dir).map_err(anyhow::Error::msg)?;
+        let json = serde_json::to_string_pretty(&calib)?;
+        fs::write(&args.output, json)
+            .with_context(|| format!("쓰기 실패: {}", args.output.display()))?;
+        println!("wrote OpenCV ChArUco draft → {}", args.output.display());
+        return Ok(());
     }
 
     anyhow::bail!(
         "사용법: `--emit-sim 3 -o calib.json` 또는 `--validate path` \
-         또는 (`opencv` feature) `--from-images DIR -o calib.json`."
+         또는 `--from-images DIR -o calib.json`."
     );
 }

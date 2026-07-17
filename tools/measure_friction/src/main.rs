@@ -5,14 +5,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
-use pingpong_domain::constants::{ball, table, TABLE_BOUNCE_FRICTION};
-use pingpong_domain::{
-    friction_from_tangential_speeds, merge_physics_into_config, physics_coeffs_toml, Arm,
-    PhysicsConfig,
+use pingpong_bot::constants::{TABLE_BOUNCE_FRICTION, ball, table};
+use pingpong_bot::{
+    Arm, PhysicsConfig, friction_from_tangential_speeds, merge_physics_into_config,
+    physics_coeffs_toml,
 };
-use pingpong_infra::{BallVec3, SimWorld};
+use pingpong_bot::{BallVec3, SimWorld};
 
 #[derive(Parser, Debug)]
 #[command(

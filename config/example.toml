@@ -1,10 +1,10 @@
 # pingpong-bot 런타임 설정 예시
 #
 # 기본 실행:
-#   cargo run -p pingpong-bin
+#   cargo run -p pingpong-bot
 #
 # 이 파일을 직접 실행:
-#   cargo run -p pingpong-bin -- config/example.toml
+#   cargo run -p pingpong-bot -- config/example.toml
 #
 # 실험 설정 만들기:
 #   cp config/example.toml config/experiment.toml
@@ -15,13 +15,10 @@
 # real은 Dynamixel/AXL 연동 후 사용한다.
 mode = "sim"
 
-# 로봇이 공을 맞힐 평면의 y 좌표 [m].
-hit_plane_y = 0.30
-
 # 가상/실제 카메라 대수. 삼각측량에는 최소 2대가 필요하다.
 camera_count = 3
 
-# crates/app/src/arm.rs의 ROBOTS id.
+# src/robot/catalog.rs의 ROBOTS id.
 robot = "competition"
 
 # ChArUco 등으로 만든 Calibration JSON.
@@ -33,6 +30,12 @@ robot = "competition"
 # config/ 기준 상대 경로이므로 assets/에는 ../로 접근한다.
 # urdf_path = "../assets/robots/custom/robot.urdf"
 # ee_link = "racket_link"
+
+[intercept]
+# 로봇 앞에서 실제 도달 가능한 타격점을 찾을 y 구간 [m].
+y_min = 0.20
+y_max = 0.55
+sample_step = 0.05
 
 [sim]
 # true면 kiss3d/egui 창, false면 headless.
