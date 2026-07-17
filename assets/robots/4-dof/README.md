@@ -1,6 +1,8 @@
 # 4-DOF 로봇 (`all-4-export`)
 
-CAD(Onshape/Fusion) → URDF 내보내기본. sim에서는 **mesh 시각화**용이고, 제어·IK는 `competition` 빌더를 쓴다.
+CAD(Onshape/Fusion) → URDF 내보내기본. 이 파일이 관절 origin·축·한계,
+FK·IK·제어와 mesh 시각화의 단일 모델이다. 로드/변환 실패 시 `competition`
+빌더로 대체하지 않고 런타임 시작이 실패한다.
 
 ## 레이아웃
 
@@ -16,11 +18,9 @@ ROS install의 절대 `file:///Users/...` 경로를 넣지 말 것.
 ## 실행
 
 ```bash
-cargo run -p pingpong-bin -- --robot 4-dof
-# 또는
-cargo run -p pingpong-bin -- \
-  --urdf assets/robots/4-dof/urdf/all-4-export.urdf \
-  --ee-link pingpong_paddle_v5_1
+cp config/example.toml config/4-dof.toml
+# config/4-dof.toml에서 robot = "4-dof"
+cargo run -p pingpong-bot -- config/4-dof.toml
 ```
 
 ## 관절

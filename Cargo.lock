@@ -646,7 +646,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "pingpong-domain",
+ "pingpong-bot",
  "serde_json",
 ]
 
@@ -682,8 +682,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "pingpong-domain",
- "pingpong-infra",
 ]
 
 [[package]]
@@ -695,7 +693,7 @@ dependencies = [
  "find-msvc-tools",
  "jobserver",
  "libc",
- "shlex",
+ "shlex 2.0.1",
 ]
 
 [[package]]
@@ -709,6 +707,26 @@ name = "cfg_aliases"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
+
+[[package]]
+name = "clang"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84c044c781163c001b913cd018fc95a628c50d0d2dfea8bca77dad71edb16e37"
+dependencies = [
+ "clang-sys",
+ "libc",
+]
+
+[[package]]
+name = "clang-sys"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b023947811758c97c59bf9d1c188fd619ad4718dcaa767947df1cadb14f39f4"
+dependencies = [
+ "glob",
+ "libc",
+]
 
 [[package]]
 name = "clap"
@@ -962,8 +980,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "pingpong-domain",
- "pingpong-infra",
 ]
 
 [[package]]
@@ -972,8 +988,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "pingpong-domain",
- "pingpong-infra",
 ]
 
 [[package]]
@@ -982,8 +996,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "pingpong-domain",
- "pingpong-infra",
 ]
 
 [[package]]
@@ -992,8 +1004,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "pingpong-domain",
- "pingpong-infra",
 ]
 
 [[package]]
@@ -1070,6 +1080,12 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
+
+[[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "ecolor"
@@ -1578,6 +1594,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+
+[[package]]
 name = "glow"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2019,8 +2041,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "pingpong-domain",
- "pingpong-infra",
 ]
 
 [[package]]
@@ -2394,8 +2414,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "pingpong-domain",
- "pingpong-infra",
+ "pingpong-bot",
 ]
 
 [[package]]
@@ -2404,8 +2423,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "pingpong-domain",
- "pingpong-infra",
+ "nalgebra",
+ "pingpong-bot",
 ]
 
 [[package]]
@@ -2968,6 +2987,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfe21416a02c693fb9f980befcb230ecc70b0b3d1cc4abf88b9675c4c1457f0c"
 
 [[package]]
+name = "opencv"
+version = "0.98.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c607a407be5ff2484f55d2eb289bffd01de84f962779b8470e76f035dd3563d"
+dependencies = [
+ "cc",
+ "dunce",
+ "jobserver",
+ "libc",
+ "num-traits",
+ "opencv-binding-generator",
+ "pkg-config",
+ "semver",
+ "shlex 1.3.0",
+ "vcpkg",
+ "windows",
+]
+
+[[package]]
+name = "opencv-binding-generator"
+version = "0.101.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "833f00c6deee8dd615249af42fa35ff030c5c73ee3c13e44baf1135a4d57af86"
+dependencies = [
+ "clang",
+ "clang-sys",
+ "dunce",
+ "percent-encoding",
+ "regex",
+ "shlex 1.3.0",
+]
+
+[[package]]
 name = "orbclient"
 version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3148,51 +3200,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "pingpong-app"
-version = "0.1.0"
-dependencies = [
- "crossbeam-channel",
- "crossbeam-queue",
- "pingpong-domain",
- "tracing",
-]
-
-[[package]]
-name = "pingpong-bin"
+name = "pingpong-bot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "pingpong-app",
- "pingpong-domain",
- "pingpong-infra",
- "serde",
- "serde_json",
- "toml",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "pingpong-domain"
-version = "0.1.0"
-dependencies = [
- "nalgebra",
- "serde",
-]
-
-[[package]]
-name = "pingpong-infra"
-version = "0.1.0"
-dependencies = [
+ "crossbeam-channel",
+ "crossbeam-queue",
  "kiss3d",
  "nalgebra",
- "pingpong-domain",
+ "opencv",
  "pollster",
  "rapier3d",
+ "serde",
+ "serde_json",
  "stl_io",
  "thiserror 2.0.18",
+ "toml",
+ "toml_edit 0.22.27",
  "tracing",
+ "tracing-subscriber",
  "urdf-rs",
 ]
 
@@ -3894,6 +3921,12 @@ dependencies = [
 
 [[package]]
 name = "shlex"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
+
+[[package]]
+name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
@@ -4506,6 +4539,12 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vello_common"

@@ -23,9 +23,9 @@ urdf-test_description/
 ## 실행
 
 ```bash
-cargo run -p pingpong-bin -- \
-  --urdf assets/robots/urdf-test/urdf-test_description/urdf/urdf-test.urdf \
-  --ee-link pingpong_paddle_v5_1
+cp config/example.toml config/urdf-test.toml
+# config/urdf-test.toml에서 robot = "urdf-test"
+cargo run -p pingpong-bot -- config/urdf-test.toml
 ```
 
 3축 revolute/continuous 체인이므로 `plan_swing`용 domain `Arm` 변환도 시도합니다.

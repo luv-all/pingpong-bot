@@ -1,10 +1,10 @@
 # 핑퐁 로봇 — 기술 마스터 플랜
 
 > **트랙** GIST Robot AX 경진 · 트랙 1 · 팀 *Love all*
-> **스택** Rust · OpenCV(인프라 한정) · Rapier3d · Rerun
+> **스택** Rust · OpenCV(비전 SSOT, infra) · Rapier3d · Rerun
 > **목적** 사람과 최대한 오래 랠리를 이어간다 — 경쟁이 아니라 협력.
 
-목표는 이기는 것이 아니라 **사람과 오래, 꾸준히 랠리를 주고받는 것**이다. 따라서 모든 결정은 일관성·신뢰성·지구력을 공격성·정밀 타격보다 우선한다. 구현은 직접 만들기보다 **검증된 라이브러리**(OpenCV, Rapier3d, Rerun, rustypot, nalgebra, ort)를 최대한 동원한다.
+목표는 이기는 것이 아니라 **사람과 오래, 꾸준히 랠리를 주고받는 것**이다. 따라서 모든 결정은 일관성·신뢰성·지구력을 공격성·정밀 타격보다 우선한다. 구현은 직접 만들기보다 **검증된 라이브러리**(OpenCV, Rapier3d, Rerun, rustypot, nalgebra, ort)를 최대한 동원한다. 경연 바이너리이므로 비전을 라이브러리용 헥사로 감싸지 않고 OpenCV를 infra에서 직통으로 쓴다.
 
 ---
 
@@ -23,15 +23,13 @@ flowchart LR
   C["카메라 ×3"] --> V["영상 인식"] --> E["궤적 추정 (EKF)"] --> P["제어"] --> H["하드웨어 (팔·리니어)"]
 ```
 
-### 2.1 헥사고날 구조 (ports & adapters)
+### 2.1 경계 (경연 바이너리)
 
-순수한 도메인 로직을 중심에 두고, 변하는 것(하드웨어·카메라·추정 방식·시각화)은 전부 **포트**(인터페이스, Rust에서는 trait) 뒤로 밀어낸다. 도메인은 OpenCV나 모터 SDK가 무엇인지 모른다. 모든 의존성은 코어를 향한다. 이렇게 하면 sim과 실물을 어댑터 교체만으로 바꿔 끼울 수 있고, 도메인은 하드웨어 없이도 테스트할 수 있다.
+크레이트 넷은 유지하되, **비전을 `CameraSource`/`Detector` 포트로 감싸지 않는다.** 캡처·검출·보정·삼각측량은 infra `vision`(OpenCV)이 SSOT이고, domain은 EKF·Arm·`plan_swing` 등 추정·제어에 집중한다. 모터·시계·추정기·텔레메트리처럼 sim/real 교체가 아직 의미 있는 곳만 포트로 둔다.
 
 ```rust
-// 도메인이 정의하는 포트. infra가 이걸 구현한다.
+// 남는 포트 예. 비전은 infra 구체 타입을 app이 직접 호출.
 pub trait Clock: Send { fn now(&self) -> Instant; }
-pub trait CameraSource: Send { fn next(&mut self) -> Option<(CamId, FrameRef, Instant)>; }
-pub trait Detector: Send { fn detect(&mut self, f: FrameRef, roi: Option<Roi>) -> Option<PixelPoint>; }
 pub trait Estimator: Send { fn update(&mut self, obs: BallObs); fn predict_to(&self, p: HitPlane) -> Option<Prediction>; }
 pub trait Hardware: Send { fn command(&mut self, t: &SwingTrajectory) -> Result<(), HwError>; fn read_joints(&mut self) -> Result<Joints, HwError>; }
 pub trait Telemetry: Send { fn log(&self, ev: TelemetryEvent); }
@@ -39,7 +37,7 @@ pub trait Telemetry: Send { fn log(&self, ev: TelemetryEvent); }
 
 ### 2.2 crate 구성
 
-작업공간을 네 crate로 쪼갠다. `domain`은 순수 코어(타입·물리·기구학·포트), `app`은 스레드와 채널 같은 오케스트레이션, `infra`는 어댑터(카메라·모터·sim·시각화), `bin`은 어댑터를 골라 주입하는 최종 런타임이다. `domain`의 의존성 목록에 OpenCV·Rapier·모터 SDK를 아예 넣지 않으면, 도메인이 그것들을 import하는 순간 컴파일이 깨진다. 즉 "도메인은 순수해야 한다"는 규칙을 컴파일러가 강제한다. 다루기 까다로운 부분(OpenCV의 `Mat`, 모터 SDK의 FFI)은 전부 `infra`에 가둔다.
+작업공간을 네 crate로 쪼갠다. `domain`은 타입·물리·기구학·추정·플래너, `app`은 스레드·채널 오케스트레이션, `infra`는 OpenCV 비전·모터·sim·시각화, `bin`은 최종 런타임이다. OpenCV·Rapier·모터 SDK는 `infra`에 둔다. 비전 수학(캘리브·삼각측량)도 infra로 모은다(sim만 당분간 nalgebra DLT 폴백).
 
 최종 런타임은 바이너리 하나지만, 거기 도달하기까지 캘리브레이션·계수 측정·검출 비교 같은 **실험·검증 바이너리가 여럿** 필요하다. 이들은 `tools/` 아래 독립 실행 파일로 두되, 전부 `domain`/`infra`에 의존시켜 같은 타입·같은 포트를 공유한다(§3.4). 의존성 방향은 그대로다 — `tools/`는 코어에 의존하지만 코어는 `tools/`를 모른다.
 
@@ -59,15 +57,11 @@ pingpong/
 
 ### 2.3 상태는 한 곳에서만 관리한다
 
-공의 상태(위치·속도 추정)는 `Estimator` 하나만 소유한다. 다른 곳은 그 사본(스냅샷)만 채널로 받지, 공유 참조를 갖지 않는다. 로봇 모델·카메라 캘리브레이션·튜닝 설정도 부팅 때 한 번 만들어 불변값으로 공유한다. 좌표계 혼동은 버그가 자주 나는 지점이라, 타입으로 막는다 — 월드 좌표와 카메라 좌표를 다른 타입으로 두면 둘을 섞는 코드가 컴파일되지 않는다.
-
-```rust
-struct Point3<F>(Vector3<f64>, PhantomData<F>);   // Point3<World> ≠ Point3<CamLeft>
-```
+공의 상태(위치·속도 추정)는 `Estimator` 하나만 소유한다. 다른 곳은 그 사본(스냅샷)만 채널로 받지, 공유 참조를 갖지 않는다. 로봇 모델·카메라 캘리브레이션·튜닝 설정도 부팅 때 한 번 만들어 불변값으로 공유한다. 월드 3D는 `Point3 { v: Vector3 }` 하나로 두고, 이미지 좌표는 `PixelPoint`로 구분한다. 제어가 읽는 최신 목표는 `Prediction` 1칸 슬롯이다.
 
 ### 2.4 trait냐 enum이냐
 
-경우의 수가 정해져 있고 내가 다 관리하면 **enum**(예: 관절 종류, 상태 머신, 채널 메시지) — 빠짐없는 분기 처리가 보장된다. 구현을 갈아 끼우는 경계이고 테스트용 가짜 구현이 필요하면 **trait**(예: 위의 포트들). trait은 구현이 둘 이상이거나 가짜 구현이 있을 때만 쓴다. 하나뿐인데 trait으로 감싸는 건 군더더기다.
+경우의 수가 정해져 있고 내가 다 관리하면 **enum**(예: 관절 종류, 상태 머신, 채널 메시지) — 빠짐없는 분기 처리가 보장된다. sim/real 하드웨어처럼 구현 교체가 필요할 때만 **trait**. 비전 한 경로를 trait으로 감싸지 않는다.
 
 ---
 
@@ -116,7 +110,7 @@ struct RealHardware {
 impl Hardware for RealHardware { /* command / read_joints */ }
 ```
 
-> 확인 항목: 올해 제공되는 리니어가 AXL인지 장비 수령 시 점검한다. 시리얼 기반으로 바뀌면 이 폐쇄 경로가 사라지고 전부 순수 Rust로 정리된다.
+> 확정: 리니어는 시리얼이 아니라 폐쇄형 Ajinextek AXL이다. Windows 전용 `cfg` 격리와 `libloading` DLL 경로가 필수이며, 순수 Rust 시리얼 경로로 바꿀 여지는 없다.
 
 ### 3.3 OS와 라이브러리
 
@@ -130,11 +124,11 @@ flowchart LR
   B["measure_restitution"] --> CFG["Config (e, μ)"]
   D["measure_friction"] --> CFG
   CFG --> RT
-  E["detect_ 4종"] --> EP["Detector 포트"] --> RT
+  E["detect_ 4종"] --> EP["infra vision"] --> RT
   F["jog_axis"] --> FP["Hardware 포트"] --> RT
 ```
 
-최종 파이프라인 하나만 만드는 게 아니다. 거기 도달하려면 카메라 보정, 물리 계수 측정, 검출 방식 비교, 하드웨어 구동 검증 같은 중간 단계 실험이 많이 필요하다. 핵심 원칙은 **실험을 버리는 코드로 두지 않는 것**이다 — 각 실험이 검증한 결과가 그대로 런타임의 자산(포트 구현·상수·캘리브 산출물)이 되도록 같은 crate를 공유시킨다.
+최종 파이프라인 하나만 만드는 게 아니다. 거기 도달하려면 카메라 보정, 물리 계수 측정, 검출 방식 비교, 하드웨어 구동 검증 같은 중간 단계 실험이 많이 필요하다. 핵심 원칙은 **실험을 버리는 코드로 두지 않는 것**이다 — 각 실험이 검증한 결과가 그대로 런타임의 자산(vision 구현·상수·캘리브 산출물)이 되도록 같은 crate를 공유시킨다.
 
 각 도구는 입력과 출력(산출물)이 명확하고, 그 산출물이 런타임의 어느 부분으로 흘러가는지가 정해져 있다:
 
@@ -145,12 +139,12 @@ flowchart LR
 | `measure_friction` | 접선 속도 변화로 마찰계수 측정 | `μ` → §6.1 바운스 식 |
 | `jog_axis` | 계산 대신 사용자 입력대로 각 축을 수동 구동, 배선·방향·한계 검증 | `Hardware` 포트를 그대로 사용 → 런타임과 같은 코드 경로 |
 | `capture_flying_ball` | 글로벌 셔터로 비행하는 공을 촬영·저장(데이터셋) | 검출·EKF 튜닝과 학습 데이터의 입력 |
-| `detect_bgsub` | 배경 차분만으로 검출 | `Detector` 포트 구현 |
-| `detect_colormask` | RGB·HSL·YCrCb + AWB 비교로 검출 | `Detector` 포트 구현 |
-| `detect_contour` | contour + 형상 게이팅으로 검출 | `Detector` 포트 구현 |
-| `detect_roi` | ROI 추적으로 속도 측정 | `Detector` 포트 구현 |
+| `detect_bgsub` | 배경 차분만으로 검출 | infra `vision` 후보 구현 |
+| `detect_colormask` | RGB·HSL·YCrCb + AWB 비교로 검출 | infra `vision` 후보 구현 |
+| `detect_contour` | contour + 형상 게이팅으로 검출 | infra `vision` 후보 구현 |
+| `detect_roi` | 관심 창 추적으로 속도 측정 | infra `vision` 후보 구현 |
 
-검출 실험 네 개가 전부 같은 `Detector` 포트를 구현하므로, 같은 입력으로 비교해보고 이긴 구현을 런타임 `infra`에 **그대로** 꽂는다(옮길 코드가 없다). `calib_charuco`가 저장하는 타입은 런타임이 읽는 타입과 동일하고, 계수 측정값은 `Config`로 흘러간다. 빠른 일회성 실험·시각화는 `tools/` 대신 `examples/`로 두어 `cargo run --example detect_roi`처럼 가볍게 돌릴 수도 있다.
+검출 실험 네 개를 같은 입력으로 비교한 뒤 이긴 구현을 런타임 infra `vision`에 꽂는다. `calib_charuco`가 저장하는 타입은 런타임이 읽는 타입과 동일하고, 계수 측정값은 `Config`로 흘러간다. 빠른 일회성 실험·시각화는 `tools/` 대신 `examples/`로 두어 `cargo run --example detect_roi`처럼 가볍게 돌릴 수도 있다.
 
 ---
 
@@ -159,7 +153,7 @@ flowchart LR
 ```mermaid
 flowchart LR
   CAM["카메라 스레드 ×3"] -->|"BallObs : 채널 (FIFO, 다 모음)"| EST["추정 스레드 (EKF)"]
-  EST -->|"Target : 1칸 슬롯 (최신만 덮어씀)"| CTRL["제어 스레드 (100Hz)"]
+  EST -->|"Prediction : 1칸 슬롯 (최신만 덮어씀)"| CTRL["제어 스레드 (100Hz)"]
 ```
 
 영상 인식·추정·제어가 각자 다른 주기로 돈다(카메라 120Hz, 제어 100Hz). 셋이 같은 메모리를 `Mutex`로 공유하면 락 순서가 꼬여 경쟁 상태(data race)나 교착(deadlock)에 빠지기 쉽다. 그래서 메모리를 공유하지 않고 **값의 소유권을 채널로 넘긴다.** Rust에서 채널에 값을 `send`하면 소유권이 이동(move)해 보낸 쪽은 그 값을 더 만질 수 없고, 받은 쪽만 소유한다. 공유 가변 상태가 없으니 data race가 **타입 수준에서 불가능**하다 — 어기는 코드는 컴파일되지 않는다.
@@ -173,12 +167,12 @@ use crossbeam_channel::{bounded, Sender, Receiver};
 use crossbeam::queue::ArrayQueue;
 use std::sync::Arc;
 
-fn run(cameras: Vec<Box<dyn CameraSource>>,
+fn run(cameras: Vec<VisionCamera>, // infra vision (OpenCV / sim)
        mut ekf: Ekf,
        mut hw: Box<dyn Hardware>,
        hit_plane: HitPlane) {
     let (obs_tx, obs_rx) = bounded::<BallObs>(64);   // 관측 스트림(FIFO)
-    let target = Arc::new(ArrayQueue::<Target>::new(1)); // 최신 목표(1칸)
+    let slot = Arc::new(ArrayQueue::<Prediction>::new(1)); // 최신 예측(1칸)
     let mut handles = Vec::new();
 
     // ── 생산: 카메라 스레드(대당 1개). obs_tx 를 clone 해 각자 들고 send ──
@@ -188,7 +182,7 @@ fn run(cameras: Vec<Box<dyn CameraSource>>,
             pin_to_p_core();
             let mut det = make_detector();
             while let Some((id, frame, t)) = cam.next() {
-                if let Some(px) = det.detect(frame, roi_for(id)) {
+                if let Some(px) = det.detect(&frame, hint_for(id)) {
                     if tx.send(BallObs { px, cam: id, t }).is_err() { break; } // move
                 }
             }
@@ -197,23 +191,23 @@ fn run(cameras: Vec<Box<dyn CameraSource>>,
     drop(obs_tx); // 원본 송신 끝도 버려야, 카메라가 다 끝나면 obs_rx.recv() 가 Err 로 종료됨
 
     // ── 추정: obs_rx 로 관측을 받아 EKF 갱신, 최신 예측만 슬롯에 덮어씀 ──
-    let slot = target.clone();
+    let pred_slot = slot.clone();
     handles.push(std::thread::spawn(move || {
         pin_to_p_core();
         while let Ok(obs) = obs_rx.recv() {           // 빌 때 블록, 송신자 다 끊기면 Err
             ekf.update(obs);
             if let Some(t) = ekf.predict_to(hit_plane) {
-                let _ = slot.force_push(t);           // 가득 차도 옛 값을 밀어내고 최신으로
+                let _ = pred_slot.force_push(t);      // 가득 차도 옛 값을 밀어내고 최신으로
             }
         }
     }));
 
     // ── 소비: 제어 루프(100Hz). 막히지 않게 최신값만 집어 스윙 ──
-    let slot = target.clone();
+    let pred_slot = slot.clone();
     handles.push(std::thread::spawn(move || {
         pin_to_p_core();
         loop {
-            if let Some(t) = slot.pop() {
+            if let Some(t) = pred_slot.pop() {
                 if let Ok(traj) = plan_swing(t) { let _ = hw.command(&traj); }
             }
             spin_until_next_tick();                   // recv 로 블로킹하지 않음
@@ -263,11 +257,11 @@ flowchart LR
 - **배경 차분(background subtraction)** — 공은 움직이고 배경·사람은 (거의) 가만히 있다. 프레임 간 차분이나 MOG2로 정지 영역을 지워 움직이는 것만 남긴다.
 - **형상 게이팅** — 남은 후보의 윤곽에서 circularity(원형도)나 타원 피팅의 이심률(eccentricity)을 따져 둥글지 않은 것을 버린다. 전역 셔터라 빠른 공도 원형을 유지하므로 이 판정이 신뢰할 만하다.
 
-나중에 학습 기반 검출기를 붙이더라도 같은 `Detector` 포트의 다른 구현으로 갈아 끼우면 된다.
+나중에 학습 기반 검출기를 붙이더라도 같은 infra vision API의 다른 구현으로 갈아 끼우면 된다.
 
 ### 5.4 3D 위치 복원
 
-여러 카메라가 각자 2D로 본 공을 하나의 3D 좌표로 합친다. 카메라 위치를 알면 각 카메라의 픽셀은 "3D 공간의 어떤 직선 위"라는 제약을 주고, 그 직선들의 교점을 푸는 것이 삼각측량(이 선형 풀이를 DLT, Direct Linear Transform이라 한다). OpenCV는 카메라 어댑터 안에서만 쓰고, 결과는 도메인 타입으로 바꿔 내보낸다.
+여러 카메라가 각자 2D로 본 공을 하나의 3D 좌표로 합친다. 카메라 위치를 알면 각 카메라의 픽셀은 "3D 공간의 어떤 직선 위"라는 제약을 주고, 그 직선들의 교점을 푸는 것이 삼각측량이다. **SSOT는 OpenCV `triangulatePoints`(infra)** 이고, OpenCV 없이 sim만 돌릴 때는 같은 infra API 아래 nalgebra DLT 폴백을 둔다. 결과는 domain 타입 `Point3` / `BallObservation`으로 넘긴다.
 
 **타임스탬프 동기화.** 공이 시속 30~50km로 날면 120fps에서도 프레임 사이 7~12cm를 이동한다. 세 카메라가 같은 순간을 찍지 않으면, 삼각측량은 *서로 다른 시점의 위치 세 개*를 한 점이라 우기는 꼴이라 3D 좌표가 통째로 틀어진다 — 카메라당 1ms만 어긋나도 cm급 오차다. 그런데 이 카메라들(UVC 모듈)은 하드웨어 트리거 동기를 지원하지 않아 각자 자유 구동(free-running)으로 프레임이 어긋난다. 그래서 소프트웨어로 맞춘다.
 
@@ -282,9 +276,9 @@ fn sample_at(obs: &[BallObs], t_star: Instant) -> Option<PixelPoint> {
 }
 // 세 카메라를 같은 t* 로 정렬한 뒤 삼각측량
 fn triangulate_synced(cams: [&[BallObs]; 3], t_star: Instant, cal: &Calibration)
-    -> Option<Point3<World>> {
+    -> Option<Point3> {
     let pts = [sample_at(cams[0], t_star)?, sample_at(cams[1], t_star)?, sample_at(cams[2], t_star)?];
-    Some(dlt(&pts, cal))
+    Some(infra_vision::triangulate(&pts, cal)) // OpenCV 또는 DLT 폴백
 }
 ```
 
@@ -367,7 +361,7 @@ $$
 
 ```rust
 struct EkfState { p: Vector3<f64>, v: Vector3<f64> }          // x = [p, v]
-struct Prediction { t_c: f64, p_c: Point3<World>, v_in: Vector3<f64> }
+struct Prediction { t_c: f64, p_c: Point3, v_in: Vector3<f64> }
 
 fn accel(v: Vector3<f64>, k: f64) -> Vector3<f64> {          // g - k|v|v
     G - k * v.norm() * v
@@ -420,7 +414,7 @@ $$\boldsymbol\tau = M(\mathbf q)\,\ddot{\mathbf q} + C(\mathbf q,\dot{\mathbf q}
 
 $M$은 관성행렬, $C$는 원심·코리올리 항, $\mathbf g$는 중력 보상이다. 두 가지를 해준다:
 
-- **① 실행 가능성** — 스윙 궤적의 $\ddot{\mathbf q}$를 넣어 나온 $\boldsymbol\tau$가 모터 한계를 넘으면($|\tau_i| > \tau_{i,\max}$) 그 스윙은 불가능하다. 무거운 라켓($M$ 큼)을 빠르게 휘두르면($\ddot{\mathbf q}$ 큼) 토크가 한계를 넘어 모터가 상하니, 답은 소프트웨어가 아니라 라켓 경량화(§8)다.
+- **① 실행 가능성** — 스윙 궤적의 $\ddot{\mathbf q}$를 넣어 나온 $\boldsymbol\tau$가 모터 한계를 넘으면($|\tau_i| > \tau_{i,\max}$) 그 스윙은 불가능하다. 라켓을 한계 이상으로 빠르게 휘두르면($\ddot{\mathbf q}$ 큼) 토크가 한계를 넘어 모터가 상하니, 이를 고려하여 소프트웨어를 설계한다.
 - **② 정확한 타격** — 위 $\boldsymbol\tau$를 토크 피드포워드로 미리 넣어주면 관성을 거슬러 원하는 $t_c$·$\mathbf p_c$·속도로 라켓을 통과시킨다(위치 PD만 쓰면 빠른 스윙에서 관성 때문에 뒤처진다).
 
 ### 7.5 전체 흐름 (거꾸로 푼다)
@@ -444,7 +438,7 @@ $$
 
 ```rust
 fn racket_for_return(v_in: Velocity, v_out: Velocity, e: f64) -> (Velocity, Normal); // 7.1
-fn ik(model: &Arm, p: Point3<World>) -> Option<Joints>;                              // 7.2
+fn ik(model: &Arm, p: Point3) -> Option<Joints>;                              // 7.2
 fn joint_vel(model: &Arm, q: Joints, v_r: Velocity) -> JointVels;                    // q̇ = J⁺ v_r
 fn required_torque(traj: &SwingTrajectory) -> Torques;                               // τ = Mq̈+Cq̇+g
 fn is_feasible(tau: &Torques, lim: &MotorLimits) -> bool;
@@ -546,7 +540,7 @@ let _g = info_span!("detect").entered();   // 이 구간 소요시간이 자동 
 
 ## 12. 위험과 대비
 
-학습 모델이 덜 되면 고전 방식으로 폴백한다(포트 교체). 리니어가 폐쇄형 AXL이면 cfg로 격리하고, 시리얼 기반이면 그 부담이 사라진다. 카메라 동기가 부족하면 타임스탬프 보간을 강화한다. Windows OpenCV 빌드는 contrib를 빼서 시간을 줄이고 환경을 미리 고정해 둔다. 긴 세션 발열·드리프트는 모니터링과 재보정, 페이스 낮추기로 대비한다. sim과 실물의 차이는 물리 엔진 보정과 실측 맞춤, 미리 시작해 보정하는 방식으로 좁힌다.
+학습 모델이 덜 되면 고전 방식으로 폴백한다(vision API 교체). 리니어는 폐쇄형 AXL이므로 Windows `cfg`로 격리하고 DLL 로드 실패·보드 미장착에 대비한다. 카메라 동기가 부족하면 타임스탬프 보간을 강화한다. Windows OpenCV 빌드는 contrib를 빼서 시간을 줄이고 환경을 미리 고정해 둔다. 긴 세션 발열·드리프트는 모니터링과 재보정, 페이스 낮추기로 대비한다. sim과 실물의 차이는 물리 엔진 보정과 실측 맞춤, 미리 시작해 보정하는 방식으로 좁힌다.
 
 ---
 

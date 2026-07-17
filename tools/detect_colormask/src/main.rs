@@ -1,4 +1,4 @@
-//! YCrCb 등 색 공간 마스크로 공 검출 — `Detector` 포트 실험 (plan §5.3, §3.4).
+//! YCrCb 등 색 공간 마스크로 공 검출 — infra vision 실험 (plan §5.3, §3.4).
 
 use clap::Parser;
 

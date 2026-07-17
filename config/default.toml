@@ -1,0 +1,24 @@
+# 실제 기본 런타임 설정. 필드 설명은 config/example.toml 참고.
+
+mode = "sim"
+camera_count = 3
+robot = "competition"
+
+[intercept]
+y_min = 0.20
+y_max = 0.55
+sample_step = 0.05
+
+[sim]
+gui = true
+frames = 300
+speed = 1.0
+physics_hz = 1000.0
+frame_hz = 120.0
+shoot_on_start = false
+use_ground_truth = true
+
+[physics]
+restitution = 0.85
+friction = 0.15
+drag = 0.0
