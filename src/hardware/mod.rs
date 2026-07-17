@@ -4,14 +4,17 @@ use crate::error::HwError;
 use crate::planner::SwingTrajectory;
 use crate::robot::RobotPose;
 
+pub mod dynamixel;
 mod sim;
 
-#[cfg(all(windows, feature = "real"))]
+#[cfg(feature = "real")]
+mod rail_stub;
+#[cfg(feature = "real")]
 mod real;
 
 pub use sim::SimHardware;
 
-#[cfg(all(windows, feature = "real"))]
+#[cfg(feature = "real")]
 pub use real::RealHardware;
 
 /// 로봇 팔과 리니어 구동 인터페이스.

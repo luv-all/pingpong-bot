@@ -32,3 +32,17 @@ cargo run -p pingpong-bot -- config/4-dof.toml
 | Revolute 13 | revolute | elbow |
 | Revolute 18 | revolute | wrist |
 | EE | `pingpong_paddle_v5_1` | 라켓 |
+
+## 실물 Dynamixel 매핑
+
+URDF movable joint 순서와 모터 ID 순서는 고정이다.
+
+| URDF joint | Dynamixel ID | sign |
+|------------|--------------|------|
+| Revolute 6 | 1 | -1 |
+| Revolute 9 | 3 | +1 |
+| Revolute 13 | 4 | +1 |
+| Revolute 18 | 5 | +1 |
+
+통신·절대각 리밋의 SSOT는 `config/real-hardware.toml`의
+`[hardware.dynamixel]`이다. AXL 레일은 현재 `rail_x=0` 스텁이다.

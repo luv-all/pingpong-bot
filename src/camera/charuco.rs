@@ -10,8 +10,8 @@ use std::path::Path;
 
 use opencv::core::{Size, Vector};
 use opencv::objdetect::{
-    CharucoBoard, CharucoDetector, CharucoParameters, DetectorParameters,
-    PredefinedDictionaryType, RefineParameters, get_predefined_dictionary,
+    CharucoBoard, CharucoDetector, CharucoParameters, DetectorParameters, PredefinedDictionaryType,
+    RefineParameters, get_predefined_dictionary,
 };
 use opencv::prelude::*;
 use opencv::{imgcodecs, imgproc};
@@ -24,7 +24,8 @@ pub fn calibrate_charuco_draft(dir: &Path) -> Result<Calibration, String> {
         .map_err(|e| format!("dictionary: {e}"))?;
     let board = CharucoBoard::new_def(Size::new(5, 7), 0.04, 0.02, &dict)
         .map_err(|e| format!("board: {e}"))?;
-    let charuco_params = CharucoParameters::default().map_err(|e| format!("charuco_params: {e}"))?;
+    let charuco_params =
+        CharucoParameters::default().map_err(|e| format!("charuco_params: {e}"))?;
     let detector_params =
         DetectorParameters::default().map_err(|e| format!("detector_params: {e}"))?;
     let refine_params = RefineParameters::new_def().map_err(|e| format!("refine_params: {e}"))?;

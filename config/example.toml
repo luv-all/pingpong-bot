@@ -12,7 +12,7 @@
 # 상대 파일 경로는 이 TOML이 있는 디렉터리를 기준으로 해석한다.
 
 # 실행 모드: "sim" | "real"
-# real은 Dynamixel/AXL 연동 후 사용한다.
+# real은 Dynamixel 4축 연결 스모크까지 지원한다(AXL·실카메라는 예정).
 mode = "sim"
 
 # 가상/실제 카메라 대수. 삼각측량에는 최소 2대가 필요하다.
@@ -59,6 +59,14 @@ shoot_on_start = false
 # true면 Rapier가 가진 정확한 공 상태로 타격한다.
 # false면 카메라 -> 삼각측량 -> EKF -> control 경로로 타격한다.
 use_ground_truth = true
+
+# mode="real"이면 필요. 전체 예시는 config/real-hardware.toml 참고.
+# [hardware.dynamixel]
+# port = "COM8"
+# motor_ids = [1, 3, 4, 5]       # Revolute 6/9/13/18 순서
+# joint_signs = [-1, 1, 1, 1]
+# joint_offsets_rad = [0.0, 0.0, 0.0, 0.0]
+# motor_angle_limits_deg = [[90, 220], [135, 225], [92, 230], [120, 220]]
 
 [physics]
 # 반발계수 e (0..=1).

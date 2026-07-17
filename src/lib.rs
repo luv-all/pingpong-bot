@@ -36,7 +36,7 @@ pub use estimator::{
     restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
 pub use geometry::Point3;
-#[cfg(all(windows, feature = "real"))]
+#[cfg(feature = "real")]
 pub use hardware::RealHardware;
 pub use hardware::{Hardware, SimHardware};
 pub use physics_config::{

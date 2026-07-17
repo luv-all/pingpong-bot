@@ -23,7 +23,7 @@ required-features = ["gui"]
 default = ["sim", "gui"]
 sim = []
 gui = ["sim", "dep:kiss3d", "dep:pollster", "dep:stl_io"]
-real = []
+real = ["dep:rustypot", "dep:serialport"]
 
 [dependencies]
 anyhow = "1.0.103"
@@ -42,8 +42,10 @@ opencv = { version = "0.98.2", default-features = false, features = [
 ] }
 pollster = { version = "0.4", optional = true }
 rapier3d = "0.34.0"
+rustypot = { version = "1.5.0", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serialport = { version = "4.8.1", optional = true }
 stl_io = { version = "0.8", optional = true }
 thiserror = "2.0.18"
 toml = "0.8"

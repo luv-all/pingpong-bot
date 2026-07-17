@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use pingpong_bot::Calibration;
+use pingpong_bot::hardware::dynamixel::DynamixelConfig;
 use pingpong_bot::{InterceptWindow, PhysicsParams};
 use serde::Deserialize;
 
@@ -48,6 +49,13 @@ impl InterceptConfig {
     }
 }
 
+/// 실물 하드웨어 설정. sim에서는 비어 있어도 된다.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct HardwareConfig {
+    pub dynamixel: Option<DynamixelConfig>,
+}
+
 /// TOML 하나로 로드하는 전체 런타임 설정.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuntimeConfig {
@@ -64,6 +72,8 @@ pub struct RuntimeConfig {
     /// 커스텀 URDF 엔드이펙터 링크.
     pub ee_link: Option<String>,
     pub sim: SimConfig,
+    #[serde(default)]
+    pub hardware: HardwareConfig,
     /// 물리 계수 — `tools/measure_*`가 `[physics]`에 merge
     pub physics: PhysicsParams,
     /// 상대 asset 경로의 기준 디렉터리.
@@ -136,6 +146,17 @@ impl RuntimeConfig {
             self.physics.drag.is_finite() && self.physics.drag >= 0.0,
             "physics.drag는 0 이상이어야 합니다"
         );
+        if self.mode == RuntimeMode::Real {
+            let dynamixel = self
+                .hardware
+                .dynamixel
+                .as_ref()
+                .context("mode=real에는 [hardware.dynamixel] 설정이 필요합니다")?;
+            dynamixel
+                .validate()
+                .map_err(anyhow::Error::msg)
+                .context("hardware.dynamixel")?;
+        }
         return Ok(());
     }
 
@@ -280,6 +301,26 @@ drag = 0.01
     }
 
     #[test]
+    fn real_mode_requires_and_parses_dynamixel_config() {
+        let real = CONFIG.replace("mode = \"sim\"", "mode = \"real\"")
+            + r#"
+
+[hardware.dynamixel]
+port = "COM9"
+motor_ids = [1, 3, 4, 5]
+"#;
+        let config =
+            RuntimeConfig::from_toml(&real, Path::new("config/real.toml")).expect("real 설정");
+        let dynamixel = config.hardware.dynamixel.as_ref().expect("Dynamixel 설정");
+        assert_eq!(dynamixel.port, "COM9");
+        assert_eq!(dynamixel.motor_ids, [1, 3, 4, 5]);
+
+        let missing = CONFIG.replace("mode = \"sim\"", "mode = \"real\"");
+        let error = RuntimeConfig::from_toml(&missing, Path::new("config/real.toml")).unwrap_err();
+        assert!(format!("{error:#}").contains("hardware.dynamixel"));
+    }
+
+    #[test]
     fn repository_default_toml_is_complete() {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
         let config =
@@ -290,5 +331,17 @@ drag = 0.01
         let example =
             RuntimeConfig::load(&workspace.join("config/example.toml")).expect("예시 설정 로드");
         assert_eq!(example.mode, RuntimeMode::Sim);
+
+        let real = RuntimeConfig::load(&workspace.join("config/real-hardware.toml"))
+            .expect("real 하드웨어 설정 로드");
+        assert_eq!(real.mode, RuntimeMode::Real);
+        assert_eq!(
+            real.hardware
+                .dynamixel
+                .as_ref()
+                .expect("Dynamixel")
+                .motor_ids,
+            [1, 3, 4, 5]
+        );
     }
 }

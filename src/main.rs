@@ -22,6 +22,8 @@ use pingpong_bot::{
     FrameSource, RobotBuilder, SimRuntimeControls, SimSession, SimSessionConfig, SimViewerOptions,
     TracingTelemetry, new_shutdown_flag, run_sim_viewer,
 };
+#[cfg(feature = "real")]
+use pingpong_bot::{Hardware, RealHardware};
 use pingpong_bot::{PipelineConfig, find_robot, robot_ids_csv};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -61,7 +63,7 @@ fn main() -> Result<()> {
 
     match runtime.mode {
         RuntimeMode::Sim => run_sim(runtime)?,
-        RuntimeMode::Real => run_real()?,
+        RuntimeMode::Real => run_real(runtime)?,
     }
 
     return Ok(());
@@ -171,11 +173,29 @@ fn run_sim(runtime: RuntimeConfig) -> Result<()> {
     return Ok(());
 }
 
-/// real 모드: Dynamixel + AXL (마일스톤 5, Windows 전용).
-fn run_real() -> Result<()> {
-    anyhow::bail!(
-        "real 모드는 아직 미구현입니다. Windows에서 `--features real` + Dynamixel/AXL 연동 후 사용 (plan.md §3.2)."
+/// real 모드 1단계: Dynamixel 연결·현재 관절 읽기 스모크.
+#[cfg(feature = "real")]
+fn run_real(runtime: RuntimeConfig) -> Result<()> {
+    let dynamixel = runtime
+        .hardware
+        .dynamixel
+        .clone()
+        .context("mode=real에는 [hardware.dynamixel] 설정이 필요합니다")?;
+    let mut hardware = RealHardware::new(dynamixel).context("Dynamixel 초기화 실패")?;
+    let pose = hardware
+        .read_pose()
+        .context("Dynamixel 현재 관절 읽기 실패")?;
+    info!(
+        joints_rad = ?pose.joints.values,
+        rail_x = pose.rail_x,
+        "real 하드웨어 연결 스모크 완료 — 카메라 pipeline은 다음 단계"
     );
+    return Ok(());
+}
+
+#[cfg(not(feature = "real"))]
+fn run_real(_runtime: RuntimeConfig) -> Result<()> {
+    anyhow::bail!("real 모드는 `--features real`로 빌드해야 합니다 (Dynamixel 4축, AXL은 스텁).");
 }
 
 fn load_robot(
