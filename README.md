@@ -11,124 +11,44 @@ Rapier·실물 하드웨어 경계는 feature와 모듈로 격리한다.
 
 ## 요구 사항
 
-- [Rust](https://rustup.rs/) (edition 2024 — 최신 stable 권장)
-- Cargo (workspace)
-- 시스템 **OpenCV 4.x** + `libclang` (`opencv` crate `0.98.2+` 빌드 시 필요)
+- [Rust](https://rustup.rs/) (edition 2024)
+- 시스템 **OpenCV 4.x** + `libclang` (`opencv` crate **0.98.2+**)
+- sim: macOS/Linux. real(카메라·모터): Windows — 2단계
 
-macOS·Linux에서 **sim 모드**로 end-to-end 파이프라인을 돌릴 수 있다.  
-**real 모드**(실 카메라·모터)는 Windows + `real` feature — 2단계 예정.
+**주의:** OpenCV **5.x** 금지. Homebrew는 `opencv@4`. crate 0.98.2 미만이면 LLVM 22에서 바인딩이 깨진다.
 
-> OpenCV 5.x(`brew install opencv`)는 쓰지 말고 **`opencv@4`** 를 쓴다.  
-> Homebrew LLVM 22와 맞추려면 Rust `opencv` crate도 **0.98.2 이상**이어야 한다
-> (그 이하면 `as_raw_*` 메서드 누락 에러가 대량으로 난다).
+### OpenCV · libclang
 
-### OpenCV · libclang (macOS)
+환경 변수는 [`.envrc`](.envrc)에 두고 `direnv allow .` (권장). `~/.zshrc`에 넣지 않는다.
 
-```bash
-brew install llvm opencv@4 pkgconf
-# 이미 OpenCV 5를 깔았다면:
-# brew uninstall opencv && brew install opencv@4
-```
-
-환경 변수는 프로젝트 [`.envrc`](.envrc)에 둔다 (`direnv` 권장). `~/.zshrc`에
-넣지 않는다.
+**macOS**
 
 ```bash
-brew install direnv
-# ~/.zshrc 에 한 줄: eval "$(direnv hook zsh)"
-cd /path/to/pingpong-bot
-direnv allow .
-```
-
-수동으로 넣을 때 (Apple Silicon / Intel 공통 — `brew --prefix` 사용):
-
-```bash
-export LIBCLANG_PATH="$(brew --prefix llvm)/lib"
-export PKG_CONFIG_PATH="$(brew --prefix opencv@4)/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix llvm)/lib:$(brew --prefix opencv@4)/lib:${DYLD_FALLBACK_LIBRARY_PATH:-}"
-```
-
-확인 (이 셸에 direnv가 켜져 있어야 함 — `echo $LIBCLANG_PATH`가 비면 안 됨):
-
-```bash
-echo "$LIBCLANG_PATH"
-test -f "$LIBCLANG_PATH/libclang.dylib" && echo "libclang ok"
-pkg-config --modversion opencv4   # 4.x 여야 함
-cargo clean
+brew install llvm opencv@4 pkgconf direnv
+# OpenCV 5가 있으면: brew uninstall opencv && brew install opencv@4
+# ~/.zshrc: eval "$(direnv hook zsh)"  →  cd 프로젝트  →  direnv allow .
+pkg-config --modversion opencv4   # 4.x
 cargo check --workspace
 ```
 
-### OpenCV · libclang (Windows)
+수동 export는 `.envrc`와 동일 (`LIBCLANG_PATH`, `PKG_CONFIG_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`).
 
-로컬에서 실행 검증은 못 했고, [`opencv` crate INSTALL](https://docs.rs/crate/opencv/0.98.2/source/INSTALL.md) ·
-[vcpkg `opencv4`](https://vcpkg.io/en/package/opencv4.html) ·
-이슈 가이드를 기준으로 정리했다.
-
-필요 조건:
-
-- [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ 워크로드) 또는 Visual Studio
-- LLVM (`libclang.dll`) — [공식 설치](https://github.com/llvm/llvm-project/releases) 또는 `choco install llvm`
-- **OpenCV 4.x** (OpenCV 5 금지)
-
-#### 권장: vcpkg (자동 탐색)
-
-공식 INSTALL의 Windows 경로다. `VCPKG_ROOT` + `VCPKGRS_DYNAMIC=1`이면
-`OPENCV_LINK_*`를 수동으로 안 잡아도 된다.
+**Windows** (로컬 미검증 — [opencv INSTALL](https://docs.rs/crate/opencv/0.98.2/source/INSTALL.md) 기준)
 
 ```powershell
-# vcpkg 루트에서
-# Charuco/ArUco는 OpenCV 4.7+ 메인 objdetect에 있음 → contrib 불필요
+# VS C++ Build Tools + LLVM + vcpkg opencv4 (contrib 불필요, Charuco는 메인 objdetect)
 vcpkg install opencv4:x64-windows
-
-$env:VCPKG_ROOT = "C:\path\to\vcpkg"   # 실제 vcpkg 클론 경로
-$env:VCPKGRS_DYNAMIC = "1"             # 동적 링크 — 없으면 링크 에러가 흔함
-# LLVM은 PATH에 bin이 잡혀 있어야 한다 (설치 시 옵션 또는 수동 추가)
+$env:VCPKG_ROOT = "C:\path\to\vcpkg"          # installed\... 가 아니라 vcpkg 루트
+$env:VCPKGRS_DYNAMIC = "1"
 $env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
 $env:PATH = "C:\Program Files\LLVM\bin;$env:VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
-```
-
-`VCPKG_ROOT`는 vcpkg 저장소 루트(예: `C:\src\vcpkg`)여야 한다.
-`installed\x64-windows`가 아니라 **vcpkg 루트**다.
-
-확인:
-
-```powershell
-Test-Path "$env:LIBCLANG_PATH\libclang.dll"
-cargo clean
 cargo check --workspace
 ```
 
-실행 시 `STATUS_DLL_NOT_FOUND`(0xc0000135)가 나면 OpenCV DLL 경로가 PATH에
-없거나, 바이너리 옆에 DLL이 없는 경우다. `installed\x64-windows\bin`을 PATH에
-넣었는지 다시 본다.
-
-#### 대안: 공식 OpenCV 바이너리 (수동 링크)
-
-[OpenCV Releases](https://opencv.org/releases/)의 Windows 패키지를 쓸 때는
-라이브러리 이름이 버전에 묶인다. 예: OpenCV **4.12.0** → `opencv_world4120`
-(`opencv_world4`가 아님).
-
-```powershell
-$env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
-$env:OPENCV_INCLUDE_PATHS = "C:\opencv\build\include"
-$env:OPENCV_LINK_PATHS = "C:\opencv\build\x64\vc16\lib"
-$env:OPENCV_LINK_LIBS = "opencv_world4120"   # 설치한 버전에 맞게 수정
-$env:PATH = "C:\Program Files\LLVM\bin;C:\opencv\build\x64\vc16\bin;$env:PATH"
-```
-
-`include` 아래 `opencv2\core\version.hpp`가 보여야 버전 탐지가 된다.
-
-#### 주의
-
-- vcpkg 기본 `opencv4`에는 **`world` feature가 꺼져 있다**.
-  그래서 README에 `OPENCV_LINK_LIBS=opencv_world4`만 적으면 대개 실패한다.
-  vcpkg를 쓸 때는 위처럼 `VCPKG_ROOT`/`VCPKGRS_DYNAMIC` 자동 탐색을 권장한다.
-- `world`를 쓰려면 `vcpkg install "opencv4[world]:x64-windows"` 후
-  `OPENCV_LINK_LIBS=opencv_world4`(Debug는 `opencv_world4d`)처럼 수동 지정한다.
-- Chocolatey `choco install llvm opencv`도 INSTALL에 나오지만, 그 경우에도
-  `OPENCV_INCLUDE_PATHS` / `OPENCV_LINK_PATHS` / `OPENCV_LINK_LIBS`를
-  설치 경로·버전명에 맞게 잡아야 한다.
-- 영구 설정은 사용자/시스템 환경 변수에 등록한다.
+공식 OpenCV zip을 쓸 때만 `OPENCV_INCLUDE_PATHS` / `OPENCV_LINK_PATHS` /
+`OPENCV_LINK_LIBS=opencv_world4120`(버전에 맞게)를 수동 지정한다.
+vcpkg 기본은 `world`가 꺼져 있어 `opencv_world4`만으로는 실패하기 쉽다.
+DLL 못 찾으면 `installed\x64-windows\bin`이 PATH에 있는지 본다.
 
 ---
 
@@ -180,6 +100,127 @@ RUST_LOG=debug cargo run -p pingpong-bot
 RUST_LOG=pingpong_bot=debug,info cargo run -p pingpong-bot -- config/experiment.toml
 ```
 
+### Dynamixel 4축 (Windows)
+
+`config/real-hardware.toml`은 Python `test-manipulator`에서 확인한 COM8·ID
+1/3/4/5·방향·tick 리밋을 그대로 쓴다. 각도는 모터 절대각이 아니라 **URDF 관절각**이다.
+
+```powershell
+# 통신 없이 전체 경로 확인
+cargo run -p jog-axis -- --config config/real-hardware.toml --angles-deg 0,0,0,0 --dry-run
+
+# 실기는 작은 단축 이동부터 (예: URDF joint 0 → 5°)
+cargo run -p jog-axis -- --config config/real-hardware.toml --joint 0 --angle-deg 5
+
+# 포트 연결 + 현재 4축 읽기 스모크
+cargo run -p pingpong-bot --features real -- config/real-hardware.toml
+```
+
+AXL 레일은 아직 `rail_x=0` 스텁이며, 비영 레일 궤적은 경고 후 팔 4축만 실행한다.
+실카메라 pipeline은 다음 단계다.
+
+---
+
+## 아키텍처
+
+도메인 핫패스는 모드 공통. `sim`/`real`은 **프레임·하드웨어만** 갈아 끼우고,
+`pipeline`이 스레드·채널로 돌린다.
+
+### 도메인
+
+```mermaid
+flowchart TB
+  subgraph adapters ["① 모드 어댑터 — FrameSource + Hardware 주입"]
+    direction LR
+    sim["<b>sim</b><br/>Rapier 트윈 · 가상캠 · 뷰어"]
+    real["<b>real</b><br/>Dynamixel 구현 · 실캠 예정"]
+  end
+
+  subgraph hot ["② 핫패스 — 관측 → 추정 → 계획 → 명령"]
+    direction LR
+    camera["<b>camera</b><br/>캘리브 · 삼각측량 · 프레임"]
+    detector["<b>detector</b><br/>픽셀에서 공 검출"]
+    estimator["<b>estimator</b><br/>궤적 · 타격 예측"]
+    planner["<b>planner</b><br/>인터셉트 · 스윙"]
+    hardware["<b>hardware</b><br/>관절 명령 · 포즈"]
+    camera --> detector --> estimator --> planner --> hardware
+  end
+
+  robot["<b>robot</b><br/>Arm · FK/IK · URDF"]
+  robot -.->|기구학| planner
+  hardware -.->|상태| robot
+
+  sim -->|가상 프레임| camera
+  sim -->|SimHardware| hardware
+  real -.->|실 프레임| camera
+  real -.->|RealHardware| hardware
+
+  subgraph support ["③ 지원"]
+    direction LR
+    pipeline["<b>pipeline</b><br/>스레드 · 채널"]
+    telemetry["<b>telemetry</b><br/>예측 · 스윙 로그"]
+    constants["<b>constants</b><br/>ITTF · 제어 상수"]
+  end
+
+  pipeline -.->|오케스트레이션| hot
+  estimator --> telemetry
+  planner --> telemetry
+  constants -.-> hot
+```
+
+### 파이프라인 스레드
+
+`pipeline`의 공통 워커는 카메라당 1 + 추정 1 + 제어 1이다.
+
+```mermaid
+flowchart LR
+  frames["<b>FrameSource × N</b><br/>SimCamera 또는 실 카메라"]
+  camT["<b>Camera worker × N</b><br/>프레임 취득 · 공 검출"]
+  estT["<b>Estimation worker × 1</b><br/>동기화 · 삼각측량 · EKF"]
+  ctrlT["<b>Control worker × 1</b><br/>100 Hz · 인터셉트 · 스윙"]
+  actuator["<b>Hardware</b><br/>SimHardware 또는 RealHardware"]
+  telemetry["<b>Telemetry</b><br/>예측 · 스윙 로그"]
+
+  frames --> camT
+  camT -->|"채널 · BallObservation"| estT
+  estT -->|"최신값 슬롯 1칸 · Prediction[]"| ctrlT
+  ctrlT --> actuator
+  estT -.-> telemetry
+  ctrlT -.-> telemetry
+```
+
+모드에 따라 공통 워커 바깥의 구현과 추가 스레드만 달라진다.
+
+```mermaid
+flowchart LR
+  subgraph simSide ["sim 모드"]
+    direction LR
+    viewer["<b>Viewer</b><br/>메인 스레드 · GUI"]
+    physics["<b>Physics</b><br/>별도 스레드 · Rapier"]
+    simCamera["<b>SimCamera</b><br/>공유 월드에서 프레임 생성"]
+    simHardware["<b>SimHardware</b><br/>공유 월드에 관절 명령"]
+    viewer -.->|표시 · 슈터| physics
+    physics --> simCamera
+    simHardware --> physics
+  end
+
+  common["<b>공통 pipeline workers</b><br/>Camera × N → Estimation → Control"]
+  simCamera --> common --> simHardware
+
+  subgraph realSide ["real 모드 · 예정"]
+    direction LR
+    realCamera["<b>실 카메라</b><br/>UVC · 멀티캠"]
+    realHardware["<b>RealHardware</b><br/>Dynamixel · AXL 스텁"]
+  end
+
+  realCamera -.-> common -.-> realHardware
+```
+
+GUI sim에서는 `Viewer`가 메인 스레드이고 `pipeline` 전체가 백그라운드에서 돈다.
+`use_ground_truth`면 `Physics`가 타격까지 처리하고, 아니면 `Control` 명령을 사용한다.
+
+결정은 [`docs/decisions.md`](docs/decisions.md).
+
 ---
 
 ## 프로젝트 구조
@@ -192,8 +233,9 @@ src/
   robot/      Arm·FK/IK·URDF·프리셋
   sim/        Rapier 월드·슈터·뷰어·sim 어댑터
   planner/    충돌·임팩트·스윙 궤적
+  pipeline/   카메라→추정→제어 오케스트레이션
+  hardware/   SimHardware / RealHardware
   constants/  공·탁구대·로봇·제어 상수
-  pipeline.rs 카메라→추정→제어 오케스트레이션
   config.rs   TOML 런타임 설정
   main.rs     CLI와 sim/real 조립
 
@@ -202,14 +244,11 @@ plan.md     기술 마스터 플랜
 TODO.md     실행 체크리스트
 ```
 
-단일 크레이트이지만 `planner`·`estimator`·로봇 기구학은 OpenCV와 Rapier를
-직접 참조하지 않는다. 외부 구현은 `camera`, `sim`, `hardware`에 둔다.
-
 **로봇**
-- 기구학·제어 `Arm` 타입은 `src/robot/`에만 있다. 부팅 시 `Arc<Arm>`으로 sim·real·제어가 같은 불변 객체를 공유한다.
-- **프리셋 목록**은 [`src/robot/catalog.rs`](src/robot/catalog.rs)의 `ROBOTS`다. id·URDF 경로·EE 링크·최대 속도는 여기서 고친다.
-- URDF 프리셋은 `origin xyz/rpy`, 축, 한계, EE 고정 변환을 보존한 일반 직렬 체인으로 변환한다. 제어·FK·수치 IK·충돌 검사·mesh 뷰어가 같은 URDF 관절 순서를 쓴다.
-- `competition`만 URDF가 없으므로 기존 4DOF primitive 빌더를 사용한다. URDF 로드/변환 실패는 다른 모델로 대체하지 않고 시작 오류로 반환한다.
+- 기구학·제어 `Arm`은 `src/robot/`에만 있다. 부팅 시 `Arc<Arm>`으로 공유한다.
+- **프리셋**은 [`src/robot/catalog.rs`](src/robot/catalog.rs) `ROBOTS`.
+- URDF 프리셋은 origin·축·한계·EE를 보존한 직렬 체인으로 변환한다. 실패 시 시작 오류.
+- `competition`만 메시 없음 — `4-dof`와 같은 단순화 체인.
 
 | id | 모델 | 제어·FK·IK |
 |----|------|------------|
@@ -372,8 +411,9 @@ cargo build -p pingpong-bot --release
 | `measure_restitution` / `measure_friction` (e·μ·k) | ✅ |
 | TOML 단일 설정 (`config/default.toml`) | ✅ |
 | OpenCV 원/공 검출, 실 카메라 `VideoCapture` | ⏳ |
-| Rerun 시각화, Dynamixel/AXL real | ⏳ |
-| TOML `mode = "real"` | ⏳ 2단계 |
+| Dynamixel 4축 `RealHardware` · `jog-axis` | ✅ (Windows 실기 재검증 필요) |
+| AXL 레일, Rerun 시각화 | ⏳ (AXL은 x=0 스텁) |
+| TOML `mode = "real"` | ✅ 연결·현재각 스모크 (실캠 pipeline 예정) |
 
 sim에서는 **실제 3D 물리**로 공이 날고, ground truth 또는 EKF control로 라켓이 움직인다.
 
