@@ -7,25 +7,25 @@
 
 ---
 
-## 현재 진도 (2026-07-11)
+## 현재 진도 (2026-07-18)
 
 | 영역 | 상태 | 비고 |
 |------|------|------|
 | 접수 평면 `HitPlane { y }` | ✅ | `DEFAULT_HIT_PLANE_Y = 0.30` |
-| 4DOF IK + 리니어 레일 | ✅ | yaw·어깨·팔꿈치(2R)·손목 open |
+| 4DOF IK + 리니어 레일 | ✅ | yaw·어깨·팔꿈치·손목 |
 | quintic 스윙 + 관절 한계 | ✅ | `planner::trajectory`, `plan_swing` |
 | 임팩트 역산 + 로프트 \(v_{out}\) | ✅ | `planner::impact` |
 | 본선 타격 = sim ground truth (기본) | ✅ | `sim.use_ground_truth=false`로 EKF control 실험 |
-| ground truth 자동 스윙 | ✅ | commit 창(0.08–0.20s) + 네트 통과 후 |
+| ground truth 자동 스윙 | ✅ | commit 창 + 네트 통과 후 |
 | 탄도 예측 (적분+바운스) | ✅ | `estimator::ballistics` |
 | DLT + sim 핀홀 Calibration | ✅ | `CameraParams::sim_layout` |
 | EKF hit-plane | ✅ | `BallEkf` |
 | 토크 한계 (대각 \(I\alpha\)) | ✅ | `verify_torque_limits` |
-| TOML 단일 설정 | ✅ | `config/default.toml` + `bin/config.rs` + Calibration JSON |
+| TOML 단일 설정 | ✅ | `config/default.toml` |
 | 상수 SSOT | ✅ | `constants` |
-| 역할 모듈 | ✅ | camera·detector·triangulator·estimator·planner·robot |
-| OpenCV 검출 / ChArUco 실보정 | ⏳ | 실물 — `calib_charuco --emit-sim`만 |
-| Rerun / Dynamixel | ⏳ | 마일스톤 4–5 |
+| Dynamixel `RealHardware` / `jog-axis` | ✅ | AXL은 stub |
+| OpenCV 검출 / ChArUco 실보정 / UVC | ✅ | [비전 스펙](superpowers/specs/2026-07-18-vision-pipeline-design.md) |
+| Rerun | ⏳ | 마일스톤 4 |
 
 ---
 
@@ -44,11 +44,12 @@
 
 | # | 작업 | 상태 |
 |---|------|------|
-| 1.1 | ChArUco CLI (`--emit-sim` / `--validate`) | ✅ 스텁+emit |
+| 1.1 | ChArUco CLI (`--emit-sim` / `--validate`) | ✅ |
 | 1.2 | DLT `triangulate_synced` | ✅ |
-| 1.3 | OpenCV 원 검출 | ⏳ 실물 (sim은 투영 픽셀) |
+| 1.3 | OpenCV 원 검출 (`BallDetector` + `detect_*`) | ✅ |
 | 1.4 | sim 카메라 = domain Calibration | ✅ |
 | 1.5 | TOML 단일 설정 | ✅ |
+| 1.6 | ChArUco 인트린식+`dist` (`calibrate_camera` + match_image_points) | ✅ |
 
 **완료 기준 (sim):** 카메라→DLT→3D — 달성. RMSE 튜닝은 측정 후.
 
@@ -89,9 +90,9 @@
 
 | # | 작업 | 상태 |
 |---|------|------|
-| 5.1 | UVC 카메라 | ⏳ |
-| 5.2 | Dynamixel `RealHardware` | ⏳ `NotImplemented` |
-| 5.3 | TOML `mode = "real"` | ⏳ |
+| 5.1 | UVC `VideoCapture` + `[vision]` | ✅ |
+| 5.2 | Dynamixel `RealHardware` | ✅ (`jog-axis`, AXL stub) |
+| 5.3 | TOML `mode = "real"` | ✅ 모터 스모크 / `[vision]` pipeline |
 
 ---
 
@@ -104,11 +105,11 @@
 - [x] 결정: A–F 문서화
 - [ ] 실물 OpenCV·모터·Rerun — **Phase 2.5 / 마일스톤 4–5**
 
-## 다음 (스핀/Magnus 문서 후)
+## 다음
 
-1. 스핀·Magnus 모델 스펙  
-2. OpenCV Detector + ChArUco 실보정  
+1. **관측 파이프라인** — [비전 스펙](superpowers/specs/2026-07-18-vision-pipeline-design.md): ChArUco 실보정 → `BallDetector` → UVC → `[vision]` 런타임  
+2. 스핀·Magnus 모델 스펙  
 3. Rerun Telemetry  
-4. Dynamixel / TOML `mode = "real"`
+4. AXL 레일 · 멀티캠 동기 · 외부 pose 자동
 
 각 마일스톤마다 `cargo test --workspace` + sim GUI 스모크.

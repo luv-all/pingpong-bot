@@ -1,82 +1,76 @@
 # pingpong-bot 런타임 설정 예시
 #
-# 기본 실행:
 #   cargo run -p pingpong-bot
-#
-# 이 파일을 직접 실행:
 #   cargo run -p pingpong-bot -- config/example.toml
-#
-# 실험 설정 만들기:
 #   cp config/example.toml config/experiment.toml
 #
-# 상대 파일 경로는 이 TOML이 있는 디렉터리를 기준으로 해석한다.
+# 상대 경로는 이 TOML 위치 기준.
 
-# 실행 모드: "sim" | "real"
-# real은 Dynamixel 4축 연결 스모크까지 지원한다(AXL·실카메라는 예정).
+# "sim" | "real"
 mode = "sim"
 
-# 가상/실제 카메라 대수. 삼각측량에는 최소 2대가 필요하다.
+# 삼각측량 최소 2대.
 camera_count = 3
 
-# src/robot/catalog.rs의 ROBOTS id.
 robot = "competition"
 
-# ChArUco 등으로 만든 Calibration JSON.
-# 생성 예:
+# 보정 JSON 하나 = 안에 cameras[] (캠마다 K·dist).
+# 캠별로 --from-images 돌린 뒤 cameras[]를 합친다.
+#   cargo run -p calib-charuco -- --from-images ./boards/cam0 -o config/cam0.json
 #   cargo run -p calib-charuco -- --emit-sim 3 -o config/calibration.json
 # calibration_path = "calibration.json"
 
-# ROBOTS 프리셋 대신 커스텀 URDF를 직접 쓸 때 지정한다.
-# config/ 기준 상대 경로이므로 assets/에는 ../로 접근한다.
 # urdf_path = "../assets/robots/custom/robot.urdf"
 # ee_link = "racket_link"
 
 [intercept]
-# 로봇 앞에서 실제 도달 가능한 타격점을 찾을 y 구간 [m].
 y_min = 0.20
 y_max = 0.55
 sample_step = 0.05
 
 [sim]
-# true면 kiss3d/egui 창, false면 headless.
 gui = true
-
-# headless에서 카메라가 만들 프레임 수. GUI에서는 무시한다.
 frames = 300
-
-# 시뮬레이션 시간 배율. 1.0은 실시간.
 speed = 1.0
-
-# Rapier 물리 적분 주파수 [Hz].
 physics_hz = 1000.0
-
-# 가상 카메라 프레임률 [Hz].
 frame_hz = 120.0
-
-# headless 시작 시 공을 한 번 자동 발사한다.
 shoot_on_start = false
-
-# true면 Rapier가 가진 정확한 공 상태로 타격한다.
-# false면 카메라 -> 삼각측량 -> EKF -> control 경로로 타격한다.
+# true=ground truth / false=EKF control
 use_ground_truth = true
 
-# mode="real"이면 필요. 전체 예시는 config/real-hardware.toml 참고.
+# real 모터 — config/real-hardware.toml 참고
 # [hardware.dynamixel]
 # port = "COM8"
-# motor_ids = [1, 3, 4, 5]       # Revolute 6/9/13/18 순서
+# motor_ids = [1, 3, 4, 5]
 # joint_signs = [-1, 1, 1, 1]
 # joint_offsets_rad = [0.0, 0.0, 0.0, 0.0]
 # motor_angle_limits_deg = [[90, 220], [135, 225], [92, 230], [120, 220]]
 
+# real + calibration_path 일 때 실캠 (device = 웹캠 번호).
+#
+# [vision]
+# detector = "colormask"   # bgsub | colormask | contour | roi
+#
+# [[vision.cameras]]
+# id = 0
+# device = 0
+#
+# [[vision.cameras]]
+# id = 1
+# device = 1
+#
+# [vision.colormask]
+# space = "ycrcb"
+# y_min = 0
+# y_max = 255
+# cr_min = 133
+# cr_max = 173
+# cb_min = 77
+# cb_max = 127
+# min_area_px = 20
+# max_area_px = 20000
+
 [physics]
-# 반발계수 e (0..=1).
-# measure-restitution이 기본 config/default.toml의 값을 갱신한다.
 restitution = 0.85
-
-# 바운스 접선 마찰계수 mu (0..=1).
-# measure-friction이 기본 config/default.toml의 값을 갱신한다.
 friction = 0.15
-
-# 이차 항력 계수 k (0 이상).
-# measure-restitution --drag-csv가 갱신한다.
 drag = 0.0

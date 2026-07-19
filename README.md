@@ -295,83 +295,50 @@ cargo run -p pingpong-bot -- config/experiment.toml
 
 ## 실험 도구 (`tools/`)
 
-각 도구는 루트 `pingpong_bot` 라이브러리와 같은 타입을 공유한다. 카메라
-캘리브레이션 산출물은 `pingpong_bot::Calibration`이다.
+라이브러리와 타입을 공유한다. 사용법은 각 툴 README.
 
-| crate | 바이너리 | 상태 | 용도 |
-|-------|----------|------|------|
-| `calib-charuco` | `calib_charuco` | ✅ | ChArUco (`--emit-sim` / `--validate` / `--from-images`) |
-| `measure-restitution` | `measure_restitution` | ✅ | 반발계수 \(e\), 항력 \(k\) |
-| `measure-friction` | `measure_friction` | ✅ | 마찰계수 \(\mu\) |
-| `jog-axis` | `jog_axis` | ⏳ 스텁 | 축 수동 조그 |
-| `capture-flying-ball` | `capture_flying_ball` | ⏳ 스텁 | 비행 공 캡처 데이터셋 |
-| `detect-bgsub` | `detect_bgsub` | ⏳ 스텁 | 배경 차분 검출 |
-| `detect-colormask` | `detect_colormask` | ⏳ 스텁 | 색상 마스크 검출 |
-| `detect-contour` | `detect_contour` | ⏳ 스텁 | contour·원형도 검출 |
-| `detect-roi` | `detect_roi` | ⏳ 스텁 | ROI 추적 검출 |
+| crate | 상태 | README |
+|-------|------|--------|
+| `calib-charuco` | ✅ | [calib_charuco](tools/calib_charuco/README.md) |
+| `detect-colormask` | ✅ | [detect_colormask](tools/detect_colormask/README.md) |
+| `detect-bgsub` | ✅ | [detect_bgsub](tools/detect_bgsub/README.md) |
+| `detect-contour` | ✅ | [detect_contour](tools/detect_contour/README.md) |
+| `detect-roi` | ✅ | [detect_roi](tools/detect_roi/README.md) |
+| `detect-compare` | ✅ | [detect_compare](tools/detect_compare/README.md) |
+| `measure-restitution` | ✅ | [measure_restitution](tools/measure_restitution/README.md) |
+| `measure-friction` | ✅ | [measure_friction](tools/measure_friction/README.md) |
+| `jog-axis` | ✅ | [jog_axis](tools/jog_axis/README.md) |
+| `capture-flying-ball` | ⏳ | [capture_flying_ball](tools/capture_flying_ball/README.md) |
 
-### 캘리브레이션
+### 실물 관측
 
-```bash
-cargo run -p calib-charuco -- --emit-sim 3 -o calibration.json
-cargo run -p calib-charuco -- --validate calibration.json
-# 시스템 OpenCV 필요:
-# cargo run -p calib-charuco -- --from-images ./boards -o calibration.json
-cargo run -p pingpong-bot
+보정은 오프라인 툴 → JSON. 런타임은 JSON 로드 + 웹캠(`device`)만.
+
+```mermaid
+flowchart LR
+  boards["보드 사진"] --> calib["calib-charuco"] --> json["Calibration JSON"]
+  frames["폴더/영상"] --> detect["detect_*"] --> pick["detector 선택"]
+  json --> runtime["runtime calibration_path"]
+  pick --> vision["TOML vision.device 웹캠"]
+  vision --> obs["BallObservation"]
 ```
 
-OpenCV는 모든 빌드에서 필수다:
-
-```bash
-cargo test -p pingpong-bot --lib
-```
+- 보정: [calib_charuco](tools/calib_charuco/README.md)
+- 검출: [colormask](tools/detect_colormask/README.md) · [bgsub](tools/detect_bgsub/README.md) · [contour](tools/detect_contour/README.md) · [roi](tools/detect_roi/README.md) · [compare](tools/detect_compare/README.md)
+- 실전 TOML: [config/example.toml](config/example.toml) `[vision]` · `calibration_path`
+- 설계: [비전 스펙](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md)
 
 ### 물리 계수 측정 (`measure_*`)
 
-공식은 `estimator::identify`, 기본 상수는 `constants::ball` / `physics`다.
-측정 결과는 TOML 스니펫으로 찍히며 `-o`로 저장한 뒤 constants에 반영한다.
-
-**반발계수 \(e\)** — \(e \approx \sqrt{h_{i+1}/h_i}\) 또는 \(e = |v_n'|/|v_n|\)
-
-측정값은 기본으로 [`config/default.toml`](config/default.toml)의 `[physics]`에 **merge**된다.
-다른 파일을 쓰려면 `--config path`, 쓰기 없이 확인만 하려면 `--dry-run`.
+멀티캠 영상/장치 + 캘리브로 $e$/$\mu$를 재고, 프리뷰에 $v_\mathrm{in}$/$v_\mathrm{out}$·전후 프레임 원을 그린다.
+수동 숫자·sim도 유지. 결과는 `[physics]`에 merge (`--dry-run` 미리보기).
+상세: [measure_restitution](tools/measure_restitution/README.md) · [measure_friction](tools/measure_friction/README.md)
 
 ```bash
-# 연속 바운스 정점 높이 [m] → config [physics].restitution
+cargo run -p measure-restitution -- --calibration calib.json --video a.mp4 --video b.mp4
+cargo run -p measure-friction -- --calibration calib.json --device 0 --device 1 --dry-run
 cargo run -p measure-restitution -- --heights 0.40,0.29,0.21
-
-# 법선 속력 쌍 |vin|:|vout|
-cargo run -p measure-restitution -- --vz-pairs 2.0:1.7,1.9:1.61
-
-# 탄도 적분으로 설정된 TABLE_BOUNCE_RESTITUTION 검증 (모델 SSOT)
-cargo run -p measure-restitution -- --sim-ballistics --dry-run
-
-# Rapier 낙하 — 솔버 실효 e
-cargo run -p measure-restitution -- --sim
-
-# 다른 config 파일에 쓰기
-cargo run -p measure-restitution -- --heights 0.40,0.29 --config config/my.toml
-```
-
-**마찰 \(\mu\)** — \(v_t' = (1-\mu)\,v_t\) → \(\mu = 1 - |v_t'|/|v_t|\)
-
-```bash
 cargo run -p measure-friction -- --vt-pairs 2.0:1.4,1.5:1.05
-cargo run -p measure-friction -- --sim
-cargo run -p measure-friction -- --sim --dry-run
-```
-
-**항력 \(k\)** — 비행 궤적 CSV `t,x,y,z` 최소제곱 (마일스톤 2.5)
-
-```bash
-cargo run -p measure-restitution -- --drag-csv traj.csv
-```
-
-런타임 반영:
-
-```bash
-cargo run -p pingpong-bot
-# → Rapier 반발 + BallEkf drag/friction/restitution 예측에 [physics] 사용
 ```
 
 런타임 필드는 TOML에서 명시한다. 누락되거나 타입이 틀리면 시작 전에 실패한다.
@@ -406,14 +373,14 @@ cargo build -p pingpong-bot --release
 | **RobotBuilder** (URDF mesh + sim 마운트) | ✅ |
 | `sample_at` 타임스탬프 보간 | ✅ |
 | DLT/OpenCV 삼각측량 (`camera`, 2뷰는 `triangulatePoints`) | ✅ |
-| ChArUco (`calib_charuco --emit-sim` / `--from-images`) | ✅ 초안 |
+| ChArUco (`calib_charuco` — emit-sim / from-images 인트린식+dist) | ✅ |
 | EKF / 궤적 추정 | ✅ (sim; 기본은 `sim.use_ground_truth=true`) |
 | `measure_restitution` / `measure_friction` (e·μ·k) | ✅ |
 | TOML 단일 설정 (`config/default.toml`) | ✅ |
-| OpenCV 원/공 검출, 실 카메라 `VideoCapture` | ⏳ |
+| OpenCV `BallDetector` 4종 · `VideoCapture` · `[vision]` | ✅ |
 | Dynamixel 4축 `RealHardware` · `jog-axis` | ✅ (Windows 실기 재검증 필요) |
 | AXL 레일, Rerun 시각화 | ⏳ (AXL은 x=0 스텁) |
-| TOML `mode = "real"` | ✅ 연결·현재각 스모크 (실캠 pipeline 예정) |
+| TOML `mode = "real"` | ✅ 모터 스모크 / `[vision]` 있으면 실캠 pipeline |
 
 sim에서는 **실제 3D 물리**로 공이 날고, ground truth 또는 EKF control로 라켓이 움직인다.
 
