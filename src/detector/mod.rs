@@ -4,7 +4,6 @@ mod bgsub;
 mod colormask;
 mod contour;
 mod roi;
-pub mod run_tool;
 mod undistort;
 
 use crate::PixelPoint;
@@ -14,7 +13,6 @@ pub use bgsub::BgSubDetector;
 pub use colormask::{ColorSpace, ColormaskConfig, ColormaskDetector};
 pub use contour::ContourDetector;
 pub use roi::RoiDetector;
-pub use run_tool::{DetectToolOptions, open_frame_source, run_detect_tool};
 pub use undistort::undistort_frame;
 
 /// 프레임에서 공 픽셀을 찾는다. `detect_*` 툴과 런타임이 공유한다.

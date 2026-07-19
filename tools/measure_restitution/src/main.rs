@@ -2,6 +2,8 @@
 //!
 //! 산출물: `config.toml` `[physics].restitution` / `drag` (기본 `config/default.toml`)
 
+mod capture_loop;
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,9 +13,9 @@ use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::constants::{TABLE_BOUNCE_RESTITUTION, ball, table};
 use pingpong_bot::{
-    Arm, DetectorKind, MeasureKind, MeasureVideoOptions, PhysicsConfig, drag_from_trajectory,
-    merge_physics_into_config, physics_coeffs_toml, restitution_from_bounce_heights,
-    restitution_from_normal_speeds, run_measure_video,
+    Arm, DEFAULT_CONFIG_PATH, DetectorKind, PhysicsConfig, drag_from_trajectory,
+    merge_physics_into_config, physics_coeffs_toml, resolve_calibration_path,
+    restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
 use pingpong_bot::{BallVec3, SimWorld};
 
@@ -23,65 +25,38 @@ use pingpong_bot::{BallVec3, SimWorld};
     about = "반발계수 e 측정 → config [physics]. 영상 멀티캠 또는 수동 숫자"
 )]
 struct Args {
-    /// 캘리브레이션 JSON (멀티캠 영상 모드)
+    /// Calibration JSON. 생략 시 --config 의 calibration_path
     #[arg(long, value_name = "PATH")]
     calibration: Option<PathBuf>,
-
-    /// 동기화된 카메라 영상 (반복, cam0·cam1… 순서 = calibration)
     #[arg(long = "video", value_name = "PATH")]
     videos: Vec<PathBuf>,
-
-    /// 라이브 장치 인덱스 (반복)
     #[arg(long = "device", value_name = "N")]
     devices: Vec<i32>,
-
-    /// 검출기: colormask|bgsub|contour|roi
     #[arg(long, default_value = "colormask")]
     detector: String,
-
-    /// highgui 끄기
     #[arg(long)]
     no_preview: bool,
-
     #[arg(long, default_value_t = 33)]
     wait_ms: i32,
-
     #[arg(long, default_value_t = 10_000)]
     max_frames: usize,
-
-    /// 파일 타임라인 FPS 덮어쓰기
     #[arg(long)]
     fps: Option<f64>,
-
-    /// 연속 바운스 정점 높이 [m] (쉼표)
     #[arg(long, value_name = "H0,H1,...")]
     heights: Option<String>,
-
-    /// 법선 속력 쌍 |vin|:|vout| 목록 (쉼표)
     #[arg(long, value_name = "VIN:VOUT,...")]
     vz_pairs: Option<String>,
-
-    /// Rapier sim 수직 낙하로 e 추정
     #[arg(long)]
     sim: bool,
-
-    /// 탄도 적분으로 설정된 e 검증
     #[arg(long)]
     sim_ballistics: bool,
-
-    /// 비행 궤적 CSV `t,x,y,z` → 항력 k 적합
     #[arg(long, value_name = "PATH")]
     drag_csv: Option<PathBuf>,
-
-    /// 갱신할 런타임 config
-    #[arg(long, value_name = "PATH", default_value = "config/default.toml")]
+    /// 런타임 TOML (calibration_path · [physics] merge)
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_CONFIG_PATH)]
     config: PathBuf,
-
-    /// config에 쓰지 않고 stdout 스니펫만
     #[arg(long)]
     dry_run: bool,
-
-    /// sim 낙하 초기 높이 (테이블 면 위) [m]
     #[arg(long, default_value_t = 0.40)]
     drop_height: f64,
 }
@@ -99,43 +74,27 @@ fn main() -> Result<()> {
     }
 
     if args.calibration.is_some() || !args.videos.is_empty() || !args.devices.is_empty() {
-        let cal = args
-            .calibration
-            .clone()
-            .context("--calibration PATH 필요 (영상/장치 모드)")?;
+        let cal = resolve_calibration_path(&args.config, args.calibration.clone())
+            .map_err(anyhow::Error::msg)?;
         let kind = DetectorKind::parse(&args.detector)
             .with_context(|| format!("unknown detector: {}", args.detector))?;
-        let result = run_measure_video(
-            MeasureKind::Restitution,
-            &MeasureVideoOptions {
-                calibration: cal,
-                videos: args.videos.clone(),
-                devices: args.devices.clone(),
-                detector: kind,
-                preview: !args.no_preview,
-                wait_ms: args.wait_ms,
-                max_frames: args.max_frames,
-                fps_override: args.fps,
-            },
+        let result = capture_loop::run_capture(
+            &cal,
+            &args.videos,
+            &args.devices,
+            kind,
+            !args.no_preview,
+            args.wait_ms,
+            args.max_frames,
+            args.fps,
         )?;
         for (i, b) in result.bounces.iter().enumerate() {
             println!(
-                "bounce[{i}] e={:.4}  v_in=({:.3},{:.3},{:.3})  v_out=({:.3},{:.3},{:.3})  contact=({:.3},{:.3},{:.3})",
-                b.e,
-                b.v_in.x,
-                b.v_in.y,
-                b.v_in.z,
-                b.v_out.x,
-                b.v_out.y,
-                b.v_out.z,
-                b.contact.v.x,
-                b.contact.v.y,
-                b.contact.v.z
+                "bounce[{i}] e={:.4}  v_in=({:.3},{:.3},{:.3})  v_out=({:.3},{:.3},{:.3})",
+                b.e, b.v_in.x, b.v_in.y, b.v_in.z, b.v_out.x, b.v_out.y, b.v_out.z
             );
         }
-        let e = result
-            .e
-            .context("바운스를 찾지 못함 — 낙하 영상·캘리브·검출 확인")?;
+        let e = result.e.context("바운스를 찾지 못함")?;
         println!(
             "restitution e = {e:.6}  (from {} bounces, traj={})",
             result.bounces.len(),
@@ -176,12 +135,10 @@ fn main() -> Result<()> {
     if patch.is_empty() {
         bail!(
             "입력이 없습니다. 예:\n  \
+             --device 0 --device 1   # calibration_path 는 --config TOML\n  \
              --calibration calib.json --video cam0.mp4 --video cam1.mp4\n  \
-             --calibration calib.json --device 0 --device 1\n  \
              --heights 0.40,0.29,0.21\n  \
-             --vz-pairs 2.0:1.7\n  \
-             --sim\n  \
-             --drag-csv traj.csv"
+             --sim"
         );
     }
 

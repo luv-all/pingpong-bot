@@ -9,7 +9,6 @@ use crate::geometry::Point3;
 pub mod ballistics;
 pub mod ekf;
 pub mod identify;
-pub mod measure_video;
 pub mod traj_measure;
 
 pub use ballistics::{predict_hit_plane, predict_hit_plane_with, semi_implicit_euler};
@@ -18,8 +17,9 @@ pub use identify::{
     drag_from_trajectory, friction_from_tangential_speeds, physics_coeffs_toml,
     restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
-pub use measure_video::{MeasureKind, MeasureVideoOptions, MeasureVideoResult, run_measure_video};
-pub use traj_measure::{BounceEvent, RollEvent, TrajPoint, detect_bounces, detect_rolls};
+pub use traj_measure::{
+    BounceEvent, RollEvent, TrajPoint, detect_bounces, detect_rolls, mean_bounce_e, mean_roll_mu,
+};
 
 /// 접수 평면. 월드 y [m] 하나.
 #[derive(Debug, Clone, Copy, PartialEq)]

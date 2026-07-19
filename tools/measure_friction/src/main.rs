@@ -1,6 +1,8 @@
-//! 테이블 위 롤(또는 바운스 접선)로 마찰계수 μ를 측정 (plan §3.4).
+//! 테이블 위 롤로 마찰계수 μ를 측정 (plan §3.4).
 //!
 //! 산출물: `config.toml` `[physics].friction` (기본 `config/default.toml`)
+
+mod capture_loop;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,9 +11,8 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use pingpong_bot::constants::{TABLE_BOUNCE_FRICTION, ball, table};
 use pingpong_bot::{
-    Arm, DetectorKind, MeasureKind, MeasureVideoOptions, PhysicsConfig,
-    friction_from_tangential_speeds, merge_physics_into_config, physics_coeffs_toml,
-    run_measure_video,
+    Arm, DEFAULT_CONFIG_PATH, DetectorKind, PhysicsConfig, friction_from_tangential_speeds,
+    merge_physics_into_config, physics_coeffs_toml, resolve_calibration_path,
 };
 use pingpong_bot::{BallVec3, SimWorld};
 
@@ -21,54 +22,34 @@ use pingpong_bot::{BallVec3, SimWorld};
     about = "테이블 마찰 μ 측정 → config [physics]. 영상 멀티캠 또는 수동 숫자"
 )]
 struct Args {
-    /// 캘리브레이션 JSON (멀티캠 영상 모드)
+    /// Calibration JSON. 생략 시 --config 의 calibration_path
     #[arg(long, value_name = "PATH")]
     calibration: Option<PathBuf>,
-
-    /// 동기화된 카메라 영상 (반복)
     #[arg(long = "video", value_name = "PATH")]
     videos: Vec<PathBuf>,
-
-    /// 라이브 장치 인덱스 (반복)
     #[arg(long = "device", value_name = "N")]
     devices: Vec<i32>,
-
     #[arg(long, default_value = "colormask")]
     detector: String,
-
     #[arg(long)]
     no_preview: bool,
-
     #[arg(long, default_value_t = 33)]
     wait_ms: i32,
-
     #[arg(long, default_value_t = 10_000)]
     max_frames: usize,
-
     #[arg(long)]
     fps: Option<f64>,
-
-    /// 접선 속력 쌍 |vin|:|vout| 목록 (쉼표)
     #[arg(long, value_name = "VIN:VOUT,...")]
     vt_pairs: Option<String>,
-
-    /// Rapier sim: 수평+하강 입사로 μ 추정
     #[arg(long)]
     sim: bool,
-
-    /// 갱신할 런타임 config
-    #[arg(long, value_name = "PATH", default_value = "config/default.toml")]
+    /// 런타임 TOML (calibration_path · [physics] merge)
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_CONFIG_PATH)]
     config: PathBuf,
-
-    /// config에 쓰지 않고 stdout 스니펫만
     #[arg(long)]
     dry_run: bool,
-
-    /// sim 입사 수평 속력 [m/s]
     #[arg(long, default_value_t = 2.0)]
     horiz_speed: f64,
-
-    /// sim 낙하 높이 (테이블 면 위) [m]
     #[arg(long, default_value_t = 0.25)]
     drop_height: f64,
 }
@@ -78,34 +59,27 @@ fn main() -> Result<()> {
     let mut patch = PhysicsConfig::default();
 
     if args.calibration.is_some() || !args.videos.is_empty() || !args.devices.is_empty() {
-        let cal = args
-            .calibration
-            .clone()
-            .context("--calibration PATH 필요 (영상/장치 모드)")?;
+        let cal = resolve_calibration_path(&args.config, args.calibration.clone())
+            .map_err(anyhow::Error::msg)?;
         let kind = DetectorKind::parse(&args.detector)
             .with_context(|| format!("unknown detector: {}", args.detector))?;
-        let result = run_measure_video(
-            MeasureKind::Friction,
-            &MeasureVideoOptions {
-                calibration: cal,
-                videos: args.videos.clone(),
-                devices: args.devices.clone(),
-                detector: kind,
-                preview: !args.no_preview,
-                wait_ms: args.wait_ms,
-                max_frames: args.max_frames,
-                fps_override: args.fps,
-            },
+        let result = capture_loop::run_capture(
+            &cal,
+            &args.videos,
+            &args.devices,
+            kind,
+            !args.no_preview,
+            args.wait_ms,
+            args.max_frames,
+            args.fps,
         )?;
         for (i, r) in result.rolls.iter().enumerate() {
             println!(
-                "roll[{i}] μ={:.4}  vt_in={:.3} vt_out={:.3}  p0=({:.3},{:.3},{:.3}) p1=({:.3},{:.3},{:.3})",
-                r.mu, r.vt_in, r.vt_out, r.p0.v.x, r.p0.v.y, r.p0.v.z, r.p1.v.x, r.p1.v.y, r.p1.v.z
+                "roll[{i}] μ={:.4}  vt_in={:.3} vt_out={:.3}",
+                r.mu, r.vt_in, r.vt_out
             );
         }
-        let mu = result
-            .mu
-            .context("롤 구간을 찾지 못함 — 테이블 위 구름 영상·캘리브·검출 확인")?;
+        let mu = result.mu.context("롤 구간을 찾지 못함")?;
         println!(
             "friction μ = {mu:.6}  (from {} rolls, traj={})",
             result.rolls.len(),
@@ -132,9 +106,9 @@ fn main() -> Result<()> {
     if patch.is_empty() {
         bail!(
             "입력이 없습니다. 예:\n  \
+             --device 0 --device 1   # calibration_path 는 --config TOML\n  \
              --calibration calib.json --video cam0.mp4 --video cam1.mp4\n  \
-             --calibration calib.json --device 0 --device 1\n  \
-             --vt-pairs 2.0:1.4,1.5:1.05\n  \
+             --vt-pairs 2.0:1.4\n  \
              --sim"
         );
     }

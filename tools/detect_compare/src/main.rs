@@ -167,7 +167,7 @@ fn main() -> Result<()> {
         if !args.no_preview {
             match show_bgr(window, &display, wait_ms)? {
                 PreviewAction::Quit => break,
-                PreviewAction::Continue => {}
+                PreviewAction::Continue | PreviewAction::Key(_) => {}
             }
         }
 
