@@ -1,13 +1,14 @@
 [package]
-name = "detect-roi"
+name = "detect-compare"
 edition.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "detect_roi"
+name = "detect_compare"
 path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.103"
 clap = { version = "4.6.1", features = ["derive"] }
+opencv = { version = "0.98.2", default-features = false, features = ["imgproc", "imgcodecs"] }
 pingpong-bot = { path = "../..", default-features = false }

@@ -1,6 +1,15 @@
-//! 배경 차분(background subtraction)만으로 공 검출 — infra vision 실험 (plan §3.4).
-//!
-//! 실험 후 `pingpong_bot::vision`에 이식.
-fn main() {
-    todo!("OpenCV bgsub 검출 — plan §3.4")
+//! 배경 차분 검출 실험 — 런타임 `BgSubDetector`와 동일.
+
+mod cli;
+
+use anyhow::Result;
+use clap::Parser;
+use pingpong_bot::BgSubDetector;
+
+use cli::{DetectArgs, run_detect};
+
+fn main() -> Result<()> {
+    let args = DetectArgs::parse();
+    let mut detector = BgSubDetector::new();
+    run_detect("bgsub", &args, &mut detector)
 }

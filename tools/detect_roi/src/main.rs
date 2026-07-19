@@ -1,14 +1,15 @@
-//! ROI 추적으로 공 검출·속도 측정 — infra vision 실험 (plan §5.3, §3.4).
-//!
-//! 전체 프레임 탐색 대신 직전 위치 주변만 처리해 120Hz를 유지한다.
+//! ROI 추적 검출 실험 — 런타임 `RoiDetector`와 동일.
 
+mod cli;
+
+use anyhow::Result;
 use clap::Parser;
+use pingpong_bot::RoiDetector;
 
-#[derive(Parser)]
-#[command(name = "detect_roi", about = "ROI 추적 검출 실험")]
-struct Args {}
+use cli::{DetectArgs, run_detect};
 
-fn main() {
-    let _args = Args::parse();
-    todo!("ROI 추적 검출 (plan.md §3.4)");
+fn main() -> Result<()> {
+    let args = DetectArgs::parse();
+    let mut detector = RoiDetector::new();
+    run_detect("roi", &args, &mut detector)
 }

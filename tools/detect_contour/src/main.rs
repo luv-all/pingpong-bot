@@ -1,12 +1,15 @@
-//! contour + 원형도(circularity) 게이팅으로 공 검출 — infra vision 실험 (plan §5.3).
+//! Contour·원형도 검출 실험 — 런타임 `ContourDetector`와 동일.
 
+mod cli;
+
+use anyhow::Result;
 use clap::Parser;
+use pingpong_bot::ContourDetector;
 
-#[derive(Parser)]
-#[command(name = "detect_contour", about = "contour 형상 게이팅 검출 실험")]
-struct Args {}
+use cli::{DetectArgs, run_detect};
 
-fn main() {
-    let _args = Args::parse();
-    todo!("contour 형상 게이팅 검출 (plan.md §3.4)");
+fn main() -> Result<()> {
+    let args = DetectArgs::parse();
+    let mut detector = ContourDetector::new();
+    run_detect("contour", &args, &mut detector)
 }

@@ -1,12 +1,15 @@
-//! YCrCb 등 색 공간 마스크로 공 검출 — infra vision 실험 (plan §5.3, §3.4).
+//! 색상 마스크로 공 검출 실험 — 런타임 `ColormaskDetector`와 동일.
 
+mod cli;
+
+use anyhow::Result;
 use clap::Parser;
+use pingpong_bot::{ColormaskConfig, ColormaskDetector};
 
-#[derive(Parser)]
-#[command(name = "detect_colormask", about = "색상 마스크 검출 실험")]
-struct Args {}
+use cli::{DetectArgs, run_detect};
 
-fn main() {
-    let _args = Args::parse();
-    todo!("색상 마스크 검출 (plan.md §3.4)");
+fn main() -> Result<()> {
+    let args = DetectArgs::parse();
+    let mut detector = ColormaskDetector::new(ColormaskConfig::default());
+    run_detect("colormask", &args, &mut detector)
 }
