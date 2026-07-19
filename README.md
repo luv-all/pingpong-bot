@@ -299,6 +299,7 @@ cargo run -p pingpong-bot -- config/experiment.toml
 
 | crate | 상태 | README |
 |-------|------|--------|
+| `cam-preview` | ✅ | [cam_preview](tools/cam_preview/README.md) |
 | `calib-charuco` | ✅ | [calib_charuco](tools/calib_charuco/README.md) |
 | `detect-colormask` | ✅ | [detect_colormask](tools/detect_colormask/README.md) |
 | `detect-bgsub` | ✅ | [detect_bgsub](tools/detect_bgsub/README.md) |

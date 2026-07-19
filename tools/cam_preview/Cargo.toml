@@ -1,0 +1,16 @@
+[package]
+name = "cam-preview"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "cam_preview"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.103"
+opencv = { version = "0.98.2", default-features = false, features = [
+    "highgui",
+    "imgproc",
+    "videoio",
+] }
