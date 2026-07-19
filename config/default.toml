@@ -3,6 +3,8 @@
 mode = "sim"
 camera_count = 3
 robot = "competition"
+# measure_* 기본 캘리브. 없으면 --calibration 필요.
+# calibration_path = "calibration.json"
 
 [intercept]
 y_min = 0.20

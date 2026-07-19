@@ -15,10 +15,10 @@ camera_count = 3
 robot = "competition"
 
 # 보정 JSON 하나 = 안에 cameras[] (캠마다 K·dist).
-# 캠별로 --from-images 돌린 뒤 cameras[]를 합친다.
-#   cargo run -p calib-charuco -- --from-images ./boards/cam0 -o config/cam0.json
-#   cargo run -p calib-charuco -- --emit-sim 3 -o config/calibration.json
-# calibration_path = "calibration.json"
+# measure_* / calib 는 이 경로를 기본으로 쓴다 (--calibration / -o 로 덮어쓰기).
+#   cargo run -p calib-charuco -- --device 0
+#   cargo run -p measure-restitution -- --device 0 --device 1
+calibration_path = "calibration.json"
 
 # urdf_path = "../assets/robots/custom/robot.urdf"
 # ee_link = "racket_link"

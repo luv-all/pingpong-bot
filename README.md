@@ -312,11 +312,11 @@ cargo run -p pingpong-bot -- config/experiment.toml
 
 ### 실물 관측
 
-보정은 오프라인 툴 → JSON. 런타임은 JSON 로드 + 웹캠(`device`)만.
+보정은 오프라인 **인터랙티브** 툴 → JSON. 런타임은 JSON 로드 + 웹캠(`device`)만.
 
 ```mermaid
 flowchart LR
-  boards["보드 사진"] --> calib["calib-charuco"] --> json["Calibration JSON"]
+  boards["라이브 Space 스냅"] --> calib["calib-charuco 확인·저장"] --> json["Calibration JSON"]
   frames["폴더/영상"] --> detect["detect_*"] --> pick["detector 선택"]
   json --> runtime["runtime calibration_path"]
   pick --> vision["TOML vision.device 웹캠"]
@@ -373,7 +373,7 @@ cargo build -p pingpong-bot --release
 | **RobotBuilder** (URDF mesh + sim 마운트) | ✅ |
 | `sample_at` 타임스탬프 보간 | ✅ |
 | DLT/OpenCV 삼각측량 (`camera`, 2뷰는 `triangulatePoints`) | ✅ |
-| ChArUco (`calib_charuco` — emit-sim / from-images 인트린식+dist) | ✅ |
+| ChArUco (`calib_charuco` — 인터랙티브 선별 + 인트린식/dist) | ✅ |
 | EKF / 궤적 추정 | ✅ (sim; 기본은 `sim.use_ground_truth=true`) |
 | `measure_restitution` / `measure_friction` (e·μ·k) | ✅ |
 | TOML 단일 설정 (`config/default.toml`) | ✅ |
