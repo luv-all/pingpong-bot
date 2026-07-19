@@ -9,13 +9,13 @@ use opencv::core::Scalar;
 use opencv::prelude::*;
 
 use crate::camera::preview::{
-    destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines, draw_world_velocity,
-    hstack_bgr, show_bgr, PreviewAction,
+    PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
+    draw_world_velocity, hstack_bgr, show_bgr,
+};
+use crate::estimator::traj_measure::{
+    BounceEvent, RollEvent, TrajPoint, detect_bounces, detect_rolls, mean_bounce_e, mean_roll_mu,
 };
 use crate::triangulate_views;
-use crate::estimator::traj_measure::{
-    detect_bounces, detect_rolls, mean_bounce_e, mean_roll_mu, BounceEvent, RollEvent, TrajPoint,
-};
 use crate::{
     BallDetector, Calibration, CameraId, ColormaskConfig, DetectorKind, FrameSource, OpenCvCapture,
     PixelPoint, Point3, build_detector,

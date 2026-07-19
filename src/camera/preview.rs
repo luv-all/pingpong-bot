@@ -3,7 +3,7 @@
 use opencv::core::{Mat, Point, Scalar, Size, Vector};
 use opencv::imgproc;
 use opencv::prelude::*;
-use opencv::{highgui, Result as CvResult};
+use opencv::{Result as CvResult, highgui};
 
 use crate::{CameraParams, PixelPoint, Point3};
 use nalgebra::Vector3;
@@ -38,12 +38,7 @@ pub fn hstack_bgr(panels: &[Mat]) -> CvResult<Mat> {
     if panels.len() == 1 {
         return panels[0].try_clone();
     }
-    let min_h = panels
-        .iter()
-        .map(|p| p.rows())
-        .min()
-        .unwrap_or(1)
-        .max(1);
+    let min_h = panels.iter().map(|p| p.rows()).min().unwrap_or(1).max(1);
     let mut resized = Vec::with_capacity(panels.len());
     for p in panels {
         if p.rows() == min_h {
@@ -140,16 +135,7 @@ pub fn draw_arrow_px(
         (from.y + uy * length_px).round() as i32,
     );
     let from_pt = Point::new(from.x.round() as i32, from.y.round() as i32);
-    imgproc::arrowed_line(
-        img,
-        from_pt,
-        to,
-        color,
-        2,
-        imgproc::LINE_8,
-        0,
-        0.25,
-    )?;
+    imgproc::arrowed_line(img, from_pt, to, color, 2, imgproc::LINE_8, 0, 0.25)?;
     return Ok(());
 }
 

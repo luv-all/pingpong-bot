@@ -9,7 +9,7 @@ use opencv::imgcodecs;
 use opencv::prelude::*;
 
 use crate::camera::preview::{
-    destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines, show_bgr, PreviewAction,
+    PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines, show_bgr,
 };
 use crate::{BallDetector, CameraId, FrameSource, ImageDirSource, OpenCvCapture, PixelPoint};
 
@@ -68,11 +68,13 @@ pub fn run_detect_tool(
 
     let mut source = open_frame_source(&opts.images, opts.device, &opts.path)?;
     let window = format!("detect:{name}");
-    let wait_ms = opts.wait_ms.unwrap_or(if opts.path.is_some() || opts.images.is_some() {
-        33
-    } else {
-        1
-    });
+    let wait_ms = opts
+        .wait_ms
+        .unwrap_or(if opts.path.is_some() || opts.images.is_some() {
+            33
+        } else {
+            1
+        });
 
     let mut n = 0usize;
     let mut hits = 0usize;
@@ -89,21 +91,9 @@ pub fn run_detect_tool(
         if let Some(p) = pixel {
             hits += 1;
             println!("{name}: frame={n} pixel=({:.1}, {:.1})", p.x, p.y);
-            draw_circle_px(
-                &mut panel,
-                p,
-                10,
-                Scalar::new(0.0, 255.0, 0.0, 0.0),
-                2,
-            )?;
+            draw_circle_px(&mut panel, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
             if let Some(prev) = prev_pixel {
-                draw_circle_px(
-                    &mut panel,
-                    prev,
-                    6,
-                    Scalar::new(0.0, 200.0, 255.0, 0.0),
-                    1,
-                )?;
+                draw_circle_px(&mut panel, prev, 6, Scalar::new(0.0, 200.0, 255.0, 0.0), 1)?;
             }
             prev_pixel = last_pixel;
             last_pixel = Some(p);

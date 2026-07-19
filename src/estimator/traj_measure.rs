@@ -159,7 +159,11 @@ fn push_roll(traj: &[TrajPoint], i0: usize, i1: usize, out: &mut Vec<RollEvent>)
 
 /// 바운스 e 평균.
 pub fn mean_bounce_e(events: &[BounceEvent]) -> Option<f64> {
-    let xs: Vec<f64> = events.iter().map(|e| e.e).filter(|e| e.is_finite() && *e > 0.0).collect();
+    let xs: Vec<f64> = events
+        .iter()
+        .map(|e| e.e)
+        .filter(|e| e.is_finite() && *e > 0.0)
+        .collect();
     if xs.is_empty() {
         return None;
     }
@@ -168,7 +172,11 @@ pub fn mean_bounce_e(events: &[BounceEvent]) -> Option<f64> {
 
 /// 롤 μ 평균.
 pub fn mean_roll_mu(events: &[RollEvent]) -> Option<f64> {
-    let xs: Vec<f64> = events.iter().map(|e| e.mu).filter(|m| m.is_finite()).collect();
+    let xs: Vec<f64> = events
+        .iter()
+        .map(|e| e.mu)
+        .filter(|m| m.is_finite())
+        .collect();
     if xs.is_empty() {
         return None;
     }

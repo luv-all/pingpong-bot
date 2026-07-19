@@ -92,10 +92,7 @@ impl OpenCvCapture {
     /// 파일 타임라인 FPS를 덮어쓴다 (속도 추정용).
     pub fn set_timeline_fps(&mut self, fps: f64) {
         if fps > 1e-3 {
-            let epoch = self
-                .timeline
-                .map(|(e, _)| e)
-                .unwrap_or_else(Instant::now);
+            let epoch = self.timeline.map(|(e, _)| e).unwrap_or_else(Instant::now);
             self.timeline = Some((epoch, fps));
         }
     }
