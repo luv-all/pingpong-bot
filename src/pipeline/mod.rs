@@ -8,11 +8,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::camera::{CameraParams, FrameSource, HintSource};
+use crate::detector::{BallDetector, passthrough_detect, undistort_frame};
 use crate::{
     Arm, BallObservation, CameraId, DomainError, Estimator, Hardware, InterceptWindow, Prediction,
     SwingPlanError, Telemetry, TelemetryEvent, plan_best_swing,
 };
-use crate::{Calibration, FrameSource, passthrough_detect, triangulate_synced};
+use crate::{Calibration, triangulate_synced};
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
 use tracing::{info, info_span, warn};
@@ -52,9 +54,21 @@ impl Default for PipelineConfig {
     }
 }
 
+/// 카메라 입력: sim 힌트 또는 실캠 프레임+검출.
+pub enum CameraFeed {
+    /// sim — 투영 픽셀을 그대로 observation으로.
+    Hint(Box<dyn HintSource>),
+    /// 실물 — capture → undistort → detect.
+    Detect {
+        source: Box<dyn FrameSource>,
+        detector: Box<dyn BallDetector>,
+        params: CameraParams,
+    },
+}
+
 /// 카메라·추정·제어 스레드를 띄우고 파이프라인을 실행한다.
 pub fn run(
-    cameras: Vec<Box<dyn FrameSource>>,
+    cameras: Vec<CameraFeed>,
     mut estimator: Box<dyn Estimator>,
     mut hardware: Box<dyn Hardware>,
     config: PipelineConfig,
@@ -65,24 +79,57 @@ pub fn run(
     let shutdown = Arc::new(AtomicBool::new(false));
     let mut handles: Vec<(PipelineThread, JoinHandle<()>)> = Vec::new();
 
-    for mut camera in cameras {
+    for feed in cameras {
         let sender = observation_tx.clone();
         handles.push((
             PipelineThread::Camera,
             thread::spawn(move || {
                 pin_to_performance_core();
-                while let Some((camera_id, hint, timestamp)) = camera.next() {
-                    let _span = info_span!("detect", ?camera_id).entered();
-                    if let Some(pixel) = passthrough_detect(hint) {
-                        if sender
-                            .send(BallObservation {
-                                pixel,
-                                camera_id,
-                                timestamp,
-                            })
-                            .is_err()
-                        {
-                            break;
+                match feed {
+                    CameraFeed::Hint(mut camera) => {
+                        while let Some((camera_id, hint, timestamp)) = camera.next_hint() {
+                            let _span = info_span!("detect", ?camera_id).entered();
+                            if let Some(pixel) = passthrough_detect(hint) {
+                                if sender
+                                    .send(BallObservation {
+                                        pixel,
+                                        camera_id,
+                                        timestamp,
+                                    })
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    CameraFeed::Detect {
+                        mut source,
+                        mut detector,
+                        params,
+                    } => {
+                        while let Some(frame) = source.next_frame() {
+                            let camera_id = frame.camera_id;
+                            let _span = info_span!("detect", ?camera_id).entered();
+                            let frame = match undistort_frame(&frame, &params) {
+                                Ok(f) => f,
+                                Err(err) => {
+                                    warn!(%err, "undistort 실패 — 프레임 스킵");
+                                    continue;
+                                }
+                            };
+                            if let Some(pixel) = detector.detect(&frame) {
+                                if sender
+                                    .send(BallObservation {
+                                        pixel,
+                                        camera_id,
+                                        timestamp: frame.timestamp,
+                                    })
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
                         }
                     }
                 }

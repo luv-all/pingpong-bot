@@ -17,18 +17,18 @@ use std::thread;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+#[cfg(feature = "real")]
+use pingpong_bot::RealHardware;
 use pingpong_bot::{Arm, BallEkf, CameraId};
 use pingpong_bot::{
-    FrameSource, RobotBuilder, SimRuntimeControls, SimSession, SimSessionConfig, SimViewerOptions,
+    CameraFeed, RobotBuilder, SimRuntimeControls, SimSession, SimSessionConfig, SimViewerOptions,
     TracingTelemetry, new_shutdown_flag, run_sim_viewer,
 };
-#[cfg(feature = "real")]
-use pingpong_bot::{Hardware, RealHardware};
 use pingpong_bot::{PipelineConfig, find_robot, robot_ids_csv};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use config::{DEFAULT_CONFIG_PATH, RuntimeConfig, RuntimeMode};
+use config::{DEFAULT_CONFIG_PATH, RuntimeConfig, RuntimeMode, VisionConfig};
 
 /// CLI 인자.
 #[derive(Parser)]
@@ -127,8 +127,8 @@ fn run_sim(runtime: RuntimeConfig) -> Result<()> {
 
     let frame_count = if gui { 0 } else { runtime.sim.frames };
 
-    let cameras: Vec<Box<dyn FrameSource>> = (0..runtime.camera_count)
-        .map(|i| Box::new(session.camera(CameraId::new(i), frame_count)) as Box<dyn FrameSource>)
+    let cameras: Vec<CameraFeed> = (0..runtime.camera_count)
+        .map(|i| CameraFeed::Hint(Box::new(session.camera(CameraId::new(i), frame_count))))
         .collect();
 
     let estimator = Box::new(BallEkf::with_physics(physics));
@@ -173,7 +173,7 @@ fn run_sim(runtime: RuntimeConfig) -> Result<()> {
     return Ok(());
 }
 
-/// real 모드 1단계: Dynamixel 연결·현재 관절 읽기 스모크.
+/// real 모드: Dynamixel 스모크, `[vision]`이 있으면 캡처·검출 파이프라인.
 #[cfg(feature = "real")]
 fn run_real(runtime: RuntimeConfig) -> Result<()> {
     let dynamixel = runtime
@@ -181,6 +181,11 @@ fn run_real(runtime: RuntimeConfig) -> Result<()> {
         .dynamixel
         .clone()
         .context("mode=real에는 [hardware.dynamixel] 설정이 필요합니다")?;
+
+    if let Some(vision) = runtime.vision.clone() {
+        return run_real_with_vision(runtime, dynamixel, vision);
+    }
+
     let mut hardware = RealHardware::new(dynamixel).context("Dynamixel 초기화 실패")?;
     let pose = hardware
         .read_pose()
@@ -188,8 +193,73 @@ fn run_real(runtime: RuntimeConfig) -> Result<()> {
     info!(
         joints_rad = ?pose.joints.values,
         rail_x = pose.rail_x,
-        "real 하드웨어 연결 스모크 완료 — 카메라 pipeline은 다음 단계"
+        "real 하드웨어 연결 스모크 완료 — [vision] 없으면 카메라 pipeline 생략"
     );
+    return Ok(());
+}
+
+#[cfg(feature = "real")]
+fn run_real_with_vision(
+    runtime: RuntimeConfig,
+    dynamixel: pingpong_bot::hardware::dynamixel::DynamixelConfig,
+    vision: VisionConfig,
+) -> Result<()> {
+    use pingpong_bot::{CameraFeed, DetectorKind, OpenCvCapture, TracingTelemetry, build_detector};
+
+    let calibration = runtime.calibration().context("Calibration 로드")?;
+    let kind = DetectorKind::parse(&vision.detector).context("vision.detector")?;
+    let colormask = vision.colormask.to_config()?;
+
+    let mut feeds = Vec::new();
+    for cam in &vision.cameras {
+        let camera_id = CameraId::new(cam.id);
+        let source: Box<dyn pingpong_bot::FrameSource> = if let Some(device) = cam.device {
+            Box::new(
+                OpenCvCapture::from_device(camera_id, device)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("카메라 device {device} 열기"))?,
+            )
+        } else {
+            let path = cam.path.as_ref().context("path")?;
+            let resolved = runtime.resolve_asset(path);
+            Box::new(
+                OpenCvCapture::from_path(camera_id, &resolved)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("카메라 path {} 열기", resolved.display()))?,
+            )
+        };
+        let params = calibration
+            .params(camera_id)
+            .cloned()
+            .with_context(|| format!("{camera_id} Calibration 없음"))?;
+        feeds.push(CameraFeed::Detect {
+            source,
+            detector: build_detector(kind, colormask.clone()),
+            params,
+        });
+    }
+
+    let (arm, _) = load_robot(
+        &runtime.robot,
+        runtime.urdf_path().as_deref(),
+        runtime.ee_link.as_deref(),
+    )?;
+    let hardware = RealHardware::new(dynamixel).context("Dynamixel 초기화")?;
+    let estimator = Box::new(BallEkf::with_physics(runtime.physics_params()));
+    let telemetry = Arc::new(TracingTelemetry);
+    let config = PipelineConfig {
+        intercept: runtime.intercept.window(),
+        control_hz: 100.0,
+        arm,
+        calibration,
+    };
+    info!(
+        cameras = feeds.len(),
+        detector = kind.as_str(),
+        "real 비전 파이프라인 시작"
+    );
+    pingpong_bot::run(feeds, estimator, Box::new(hardware), config, telemetry)
+        .context("real 파이프라인 실행 실패")?;
     return Ok(());
 }
 

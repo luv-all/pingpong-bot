@@ -35,6 +35,7 @@ nalgebra = { version = "0.35.0", features = ["serde-serialize"] }
 # 0.98.2+: Homebrew LLVM 22(libclang)와 OpenCV 4.13 조합에서 바인딩 생성 깨짐 수정
 opencv = { version = "0.98.2", default-features = false, features = [
     "calib3d",
+    "highgui",
     "imgproc",
     "imgcodecs",
     "objdetect",

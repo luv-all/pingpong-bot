@@ -8,7 +8,7 @@ use crate::{CameraId, Clock, PixelPoint};
 use rapier3d::prelude::Vector;
 
 use super::projection::CameraView;
-use crate::camera::FrameSource;
+use crate::camera::HintSource;
 use crate::sim::session::SimClockHandle;
 use crate::sim::world::SimWorld;
 
@@ -57,8 +57,8 @@ impl SimCamera {
     }
 }
 
-impl FrameSource for SimCamera {
-    fn next(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)> {
+impl HintSource for SimCamera {
+    fn next_hint(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)> {
         if self.shutdown.load(Ordering::Acquire) {
             return None;
         }
@@ -125,7 +125,7 @@ mod tests {
             shutdown,
         );
         let mut camera = session.camera(CameraId::new(0), 3);
-        assert!(camera.next().is_some());
+        assert!(camera.next_hint().is_some());
         session.shutdown();
     }
 }

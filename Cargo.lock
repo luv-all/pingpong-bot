@@ -990,6 +990,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "pingpong-bot",
 ]
 
 [[package]]
@@ -998,6 +999,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "pingpong-bot",
+]
+
+[[package]]
+name = "detect-compare"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "opencv",
+ "pingpong-bot",
 ]
 
 [[package]]
@@ -1006,6 +1018,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "pingpong-bot",
 ]
 
 [[package]]
@@ -1014,6 +1027,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "pingpong-bot",
 ]
 
 [[package]]

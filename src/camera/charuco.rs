@@ -1,29 +1,66 @@
-//! OpenCV ChArUco 보드 검출 → Calibration JSON 초안.
+//! OpenCV ChArUco 보드 → 카메라 인트린식·왜곡 (`Calibration` JSON).
 //!
-//! 완전한 `calibrateCameraCharuco` 인트린식 피팅은 보드 규격·왜곡 모델이
-//! 확정된 뒤 채운다. 지금은 보드가 보이는 프레임을 OpenCV로 검증하고
-//! 이미지 크기를 반영한 Calibration을 내보낸다.
+//! 외부 R|t는 피팅하지 않는다. sim look-at을 자리표시자로 두고 K·dist만 덮어쓴다.
+//! 멀티캠 번들·월드 외부 pose는 후속.
 
 use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 
-use opencv::core::{Size, Vector};
+use opencv::core::{Point2f, Point3f, Size, TermCriteria, TermCriteria_Type, Vector};
 use opencv::objdetect::{
     CharucoBoard, CharucoDetector, CharucoParameters, DetectorParameters, PredefinedDictionaryType,
     RefineParameters, get_predefined_dictionary,
 };
 use opencv::prelude::*;
-use opencv::{imgcodecs, imgproc};
+use opencv::{calib3d, imgcodecs, imgproc};
 
 use super::Calibration;
+use crate::CameraId;
 
-/// `dir`의 이미지에서 ChArUco를 검출하고 Calibration 초안을 만든다.
-pub fn calibrate_charuco_draft(dir: &Path) -> Result<Calibration, String> {
+/// ChArUco 보드 규격 (CLI에서 덮어쓸 수 있음).
+#[derive(Debug, Clone, Copy)]
+pub struct CharucoBoardSpec {
+    pub squares_x: i32,
+    pub squares_y: i32,
+    pub square_length_m: f32,
+    pub marker_length_m: f32,
+}
+
+impl Default for CharucoBoardSpec {
+    fn default() -> Self {
+        return Self {
+            squares_x: 5,
+            squares_y: 7,
+            square_length_m: 0.04,
+            marker_length_m: 0.02,
+        };
+    }
+}
+
+/// 보정 결과 메타 (로그용).
+#[derive(Debug, Clone)]
+pub struct CharucoCalibReport {
+    pub rms: f64,
+    pub frames_used: usize,
+    pub frames_total: usize,
+}
+
+/// `dir`의 이미지에서 ChArUco를 모아 인트린식+dist를 피팅한다.
+pub fn calibrate_charuco(
+    dir: &Path,
+    board_spec: CharucoBoardSpec,
+    camera_id: CameraId,
+) -> Result<(Calibration, CharucoCalibReport), String> {
     let dict = get_predefined_dictionary(PredefinedDictionaryType::DICT_4X4_50)
         .map_err(|e| format!("dictionary: {e}"))?;
-    let board = CharucoBoard::new_def(Size::new(5, 7), 0.04, 0.02, &dict)
-        .map_err(|e| format!("board: {e}"))?;
+    let board = CharucoBoard::new_def(
+        Size::new(board_spec.squares_x, board_spec.squares_y),
+        board_spec.square_length_m,
+        board_spec.marker_length_m,
+        &dict,
+    )
+    .map_err(|e| format!("board: {e}"))?;
     let charuco_params =
         CharucoParameters::default().map_err(|e| format!("charuco_params: {e}"))?;
     let detector_params =
@@ -48,8 +85,10 @@ pub fn calibrate_charuco_draft(dir: &Path) -> Result<Calibration, String> {
         return Err(format!("이미지 없음: {}", dir.display()));
     }
 
-    let mut hits = 0usize;
+    let mut all_obj = Vector::<Vector<Point3f>>::new();
+    let mut all_img = Vector::<Vector<Point2f>>::new();
     let mut image_size = Size::default();
+    let mut frames_used = 0usize;
 
     for path in &entries {
         let Some(path_str) = path.to_str() else {
@@ -71,39 +110,116 @@ pub fn calibrate_charuco_draft(dir: &Path) -> Result<Calibration, String> {
         )
         .map_err(|e| format!("cvt_color: {e}"))?;
 
-        let mut charuco_corners = Vector::<opencv::core::Point2f>::new();
+        let mut charuco_corners = Vector::<Point2f>::new();
         let mut charuco_ids = Vector::<i32>::new();
-        let mut marker_corners = Vector::<Vector<opencv::core::Point2f>>::new();
-        let mut marker_ids = Vector::<i32>::new();
         detector
-            .detect_board(
-                &gray,
-                &mut charuco_corners,
-                &mut charuco_ids,
-                &mut marker_corners,
-                &mut marker_ids,
-            )
-            .map_err(|e| format!("detect_board: {e}"))?;
-        if charuco_ids.len() >= 4 {
-            hits += 1;
+            .detect_board_def(&gray, &mut charuco_corners, &mut charuco_ids)
+            .map_err(|e| format!("detect_board {}: {e}", path.display()))?;
+        if charuco_ids.len() < 4 {
+            continue;
         }
+
+        let mut obj_points = Vector::<Point3f>::new();
+        let mut img_points = Vector::<Point2f>::new();
+        board
+            .match_image_points(
+                &charuco_corners,
+                &charuco_ids,
+                &mut obj_points,
+                &mut img_points,
+            )
+            .map_err(|e| format!("match_image_points {}: {e}", path.display()))?;
+        if obj_points.len() < 4 {
+            continue;
+        }
+        all_obj.push(obj_points);
+        all_img.push(img_points);
+        frames_used += 1;
     }
 
-    if hits == 0 {
-        return Err("ChArUco 코너가 검출된 프레임이 없음".into());
+    if frames_used == 0 {
+        return Err("ChArUco 코너가 검출된 프레임이 없음 (최소 4 corners/frame)".into());
     }
+    if frames_used < 3 {
+        return Err(format!(
+            "보정에 프레임이 부족함: {frames_used} (권장 ≥3, 가능하면 ≥10)"
+        ));
+    }
+
+    let mut camera_matrix = opencv::core::Mat::default();
+    let mut dist_coeffs = opencv::core::Mat::default();
+    let mut rvecs = Vector::<opencv::core::Mat>::new();
+    let mut tvecs = Vector::<opencv::core::Mat>::new();
+    let criteria = TermCriteria::new(
+        TermCriteria_Type::COUNT as i32 + TermCriteria_Type::EPS as i32,
+        100,
+        1e-6,
+    )
+    .map_err(|e| format!("TermCriteria: {e}"))?;
+
+    let rms = calib3d::calibrate_camera(
+        &all_obj,
+        &all_img,
+        image_size,
+        &mut camera_matrix,
+        &mut dist_coeffs,
+        &mut rvecs,
+        &mut tvecs,
+        0,
+        criteria,
+    )
+    .map_err(|e| format!("calibrate_camera: {e}"))?;
+
+    let (fx, fy, cx, cy) = read_camera_matrix(&camera_matrix)?;
+    let dist = read_dist_coeffs(&dist_coeffs)?;
 
     let mut calib = Calibration::sim(1);
     let cam = &mut calib.cameras[0];
+    cam.camera_id = camera_id;
     cam.width = image_size.width.max(1) as u32;
     cam.height = image_size.height.max(1) as u32;
-    cam.fx = f64::from(cam.width) * 0.9;
-    cam.fy = cam.fx;
-    cam.cx = f64::from(cam.width) * 0.5;
-    cam.cy = f64::from(cam.height) * 0.5;
+    cam.fx = fx;
+    cam.fy = fy;
+    cam.cx = cx;
+    cam.cy = cy;
+    cam.dist = dist;
     cam.label = Some(format!(
-        "charuco-draft hits={hits}/{} (K heuristic; full calibCameraCharuco next)",
+        "charuco rms={rms:.4} frames={frames_used}/{}",
         entries.len()
     ));
+
+    return Ok((
+        calib,
+        CharucoCalibReport {
+            rms,
+            frames_used,
+            frames_total: entries.len(),
+        },
+    ));
+}
+
+fn read_camera_matrix(k: &opencv::core::Mat) -> Result<(f64, f64, f64, f64), String> {
+    let fx = *k.at_2d::<f64>(0, 0).map_err(|e| format!("K(0,0): {e}"))?;
+    let fy = *k.at_2d::<f64>(1, 1).map_err(|e| format!("K(1,1): {e}"))?;
+    let cx = *k.at_2d::<f64>(0, 2).map_err(|e| format!("K(0,2): {e}"))?;
+    let cy = *k.at_2d::<f64>(1, 2).map_err(|e| format!("K(1,2): {e}"))?;
+    return Ok((fx, fy, cx, cy));
+}
+
+fn read_dist_coeffs(d: &opencv::core::Mat) -> Result<Vec<f64>, String> {
+    let total = d.total() as usize;
+    let mut out = Vec::with_capacity(total);
+    for i in 0..total {
+        let v = *d
+            .at::<f64>(i as i32)
+            .map_err(|e| format!("dist[{i}]: {e}"))?;
+        out.push(v);
+    }
+    return Ok(out);
+}
+
+/// 하위 호환 이름 — [`calibrate_charuco`]와 동일.
+pub fn calibrate_charuco_draft(dir: &Path) -> Result<Calibration, String> {
+    let (calib, _) = calibrate_charuco(dir, CharucoBoardSpec::default(), CameraId(0))?;
     return Ok(calib);
 }

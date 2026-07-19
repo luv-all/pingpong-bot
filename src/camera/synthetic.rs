@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::{CameraId, Clock, PixelPoint};
 
-use crate::camera::FrameSource;
+use crate::camera::HintSource;
 use crate::clock::SystemClock;
 
 /// sin/cos 로 움직이는 픽셀을 만드는 레거시 가짜 카메라.
@@ -36,8 +36,8 @@ impl SyntheticCamera {
     }
 }
 
-impl FrameSource for SyntheticCamera {
-    fn next(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)> {
+impl HintSource for SyntheticCamera {
+    fn next_hint(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)> {
         if self.remaining == 0 {
             return None;
         }

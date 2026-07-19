@@ -7,17 +7,23 @@ mod calibration;
 mod capture;
 mod charuco;
 mod opencv_tri;
+pub mod preview;
 mod projection;
 mod sim;
 mod synthetic;
 mod triangulate;
 
 pub use calibration::{Calibration, CameraParams};
-pub use capture::FrameSource;
-pub use charuco::calibrate_charuco_draft;
+pub use capture::{Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture};
+pub use charuco::{
+    CharucoBoardSpec, CharucoCalibReport, calibrate_charuco, calibrate_charuco_draft,
+};
+pub use preview::{PreviewAction, destroy_window, draw_debug_lines, hstack_bgr, show_bgr};
 pub use sim::SimCamera;
 pub use synthetic::SyntheticCamera;
-pub use triangulate::{dlt_triangulate, sample_at, triangulate_projections, triangulate_synced};
+pub use triangulate::{
+    dlt_triangulate, sample_at, triangulate_projections, triangulate_synced, triangulate_views,
+};
 
 /// 이미지 픽셀 좌표.
 #[derive(Debug, Clone, Copy, PartialEq)]

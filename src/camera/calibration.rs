@@ -30,6 +30,8 @@ pub struct CameraParams {
     pub cx: f64,
     /// 주점 y [px]
     pub cy: f64,
+    /// OpenCV 왜곡 계수 (보통 5 또는 8). 빈 벡터 = 왜곡 없음.
+    pub dist: Vec<f64>,
     /// 월드 -> 카메라 회전 (행 = 카메라 축의 월드 방향)
     pub rotation: nalgebra::Matrix3<f64>,
     /// 월드 -> 카메라 평행이동: `X_cam = R X_world + t`
@@ -104,9 +106,15 @@ impl CameraParams {
             fy,
             cx,
             cy,
+            dist: Vec::new(),
             rotation,
             translation,
         };
+    }
+
+    /// 왜곡 계수가 있으면 true.
+    pub fn has_distortion(&self) -> bool {
+        return self.dist.iter().any(|c| c.abs() > f64::EPSILON);
     }
 
     /// `P = K [R|t]` (3x4).
@@ -163,5 +171,40 @@ impl Calibration {
 impl Default for Calibration {
     fn default() -> Self {
         return Self::sim(3);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sim_params_include_empty_dist() {
+        let cam = CameraParams::sim_layout(CameraId(0), 3);
+        assert!(cam.dist.is_empty());
+        assert!(!cam.has_distortion());
+    }
+
+    #[test]
+    fn camera_params_serde_requires_dist() {
+        let cam = CameraParams::sim_layout(CameraId(0), 1);
+        let json = serde_json::to_string(&cam).expect("serialize");
+        assert!(json.contains("\"dist\""));
+        let back: CameraParams = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.dist, cam.dist);
+
+        let without_dist = r#"{
+            "camera_id": 0,
+            "label": null,
+            "width": 640,
+            "height": 480,
+            "fx": 500.0,
+            "fy": 500.0,
+            "cx": 320.0,
+            "cy": 240.0,
+            "rotation": [1.0,0.0,0.0, 0.0,1.0,0.0, 0.0,0.0,1.0],
+            "translation": [0.0, 0.0, 0.0]
+        }"#;
+        assert!(serde_json::from_str::<CameraParams>(without_dist).is_err());
     }
 }
