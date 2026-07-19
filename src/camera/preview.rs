@@ -11,18 +11,27 @@ use nalgebra::Vector3;
 /// 프리뷰 키 입력.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreviewAction {
+    /// 키 없음 (timeout)
     Continue,
+    /// `q` / ESC
     Quit,
+    /// 그 외 키 (Space=32, 's'=115 등). OpenCV waitKey 코드.
+    Key(i32),
 }
 
 /// BGR 이미지를 창에 띄운다. `q` / ESC → Quit.
 pub fn show_bgr(window: &str, image: &Mat, wait_ms: i32) -> CvResult<PreviewAction> {
     highgui::imshow(window, image)?;
     let key = highgui::wait_key(wait_ms.max(1))?;
+    if key < 0 {
+        return Ok(PreviewAction::Continue);
+    }
+    // macOS 등에서 상위 비트가 붙는 경우 대비
+    let key = key & 0xff;
     if key == 27 || key == i32::from(b'q') || key == i32::from(b'Q') {
         return Ok(PreviewAction::Quit);
     }
-    return Ok(PreviewAction::Continue);
+    return Ok(PreviewAction::Key(key));
 }
 
 /// 창을 닫는다 (프로세스 종료 전 호출 권장).

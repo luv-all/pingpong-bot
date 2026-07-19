@@ -9,8 +9,8 @@ use std::path::Path;
 
 use opencv::core::{Point2f, Point3f, Size, TermCriteria, TermCriteria_Type, Vector};
 use opencv::objdetect::{
-    CharucoBoard, CharucoDetector, CharucoParameters, DetectorParameters, PredefinedDictionaryType,
-    RefineParameters, get_predefined_dictionary,
+    self, CharucoBoard, CharucoDetector, CharucoParameters, DetectorParameters,
+    PredefinedDictionaryType, RefineParameters, get_predefined_dictionary,
 };
 use opencv::prelude::*;
 use opencv::{calib3d, imgcodecs, imgproc};
@@ -222,4 +222,102 @@ fn read_dist_coeffs(d: &opencv::core::Mat) -> Result<Vec<f64>, String> {
 pub fn calibrate_charuco_draft(dir: &Path) -> Result<Calibration, String> {
     let (calib, _) = calibrate_charuco(dir, CharucoBoardSpec::default(), CameraId(0))?;
     return Ok(calib);
+}
+
+/// 한 프레임 ChArUco 검출 + 오버레이 (인터랙티브 calib용).
+#[derive(Debug, Clone)]
+pub struct CharucoFrameDetect {
+    /// 보정에 쓸 만한 코너 수 (≥ [`MIN_CHARUCO_CORNERS`])
+    pub corners: usize,
+    pub markers: usize,
+    pub ok: bool,
+}
+
+/// 프레임당 최소 ChArUco 코너 (저장·보정 후보).
+pub const MIN_CHARUCO_CORNERS: usize = 4;
+
+fn make_charuco_detector(
+    board_spec: CharucoBoardSpec,
+) -> Result<(CharucoBoard, CharucoDetector), String> {
+    let dict = get_predefined_dictionary(PredefinedDictionaryType::DICT_4X4_50)
+        .map_err(|e| format!("dictionary: {e}"))?;
+    let board = CharucoBoard::new_def(
+        Size::new(board_spec.squares_x, board_spec.squares_y),
+        board_spec.square_length_m,
+        board_spec.marker_length_m,
+        &dict,
+    )
+    .map_err(|e| format!("board: {e}"))?;
+    let charuco_params =
+        CharucoParameters::default().map_err(|e| format!("charuco_params: {e}"))?;
+    let detector_params =
+        DetectorParameters::default().map_err(|e| format!("detector_params: {e}"))?;
+    let refine_params = RefineParameters::new_def().map_err(|e| format!("refine_params: {e}"))?;
+    let detector = CharucoDetector::new(&board, &charuco_params, &detector_params, refine_params)
+        .map_err(|e| format!("detector: {e}"))?;
+    return Ok((board, detector));
+}
+
+/// BGR 프레임에 마커·ChArUco 코너를 그린다. `ok`면 저장 후보.
+pub fn detect_and_draw_charuco(
+    bgr: &Mat,
+    board_spec: CharucoBoardSpec,
+) -> Result<(Mat, CharucoFrameDetect), String> {
+    let (board, detector) = make_charuco_detector(board_spec)?;
+    let mut gray = Mat::default();
+    imgproc::cvt_color(
+        bgr,
+        &mut gray,
+        imgproc::COLOR_BGR2GRAY,
+        0,
+        opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
+    )
+    .map_err(|e| format!("cvt_color: {e}"))?;
+
+    let mut charuco_corners = Vector::<Point2f>::new();
+    let mut charuco_ids = Vector::<i32>::new();
+    let mut marker_corners = Vector::<Vector<Point2f>>::new();
+    let mut marker_ids = Vector::<i32>::new();
+    detector
+        .detect_board(
+            &gray,
+            &mut charuco_corners,
+            &mut charuco_ids,
+            &mut marker_corners,
+            &mut marker_ids,
+        )
+        .map_err(|e| format!("detect_board: {e}"))?;
+    let _board_alive = board;
+
+    let mut overlay = bgr.try_clone().map_err(|e| format!("clone: {e}"))?;
+    if !marker_corners.is_empty() {
+        objdetect::draw_detected_markers(
+            &mut overlay,
+            &marker_corners,
+            &marker_ids,
+            opencv::core::Scalar::new(0.0, 255.0, 0.0, 0.0),
+        )
+        .map_err(|e| format!("draw_markers: {e}"))?;
+    }
+    if !charuco_corners.is_empty() {
+        objdetect::draw_detected_corners_charuco(
+            &mut overlay,
+            &charuco_corners,
+            &charuco_ids,
+            opencv::core::Scalar::new(255.0, 0.0, 255.0, 0.0),
+        )
+        .map_err(|e| format!("draw_charuco: {e}"))?;
+    }
+
+    let corners = charuco_ids.len();
+    let markers = marker_ids.len();
+    let ok = corners >= MIN_CHARUCO_CORNERS;
+    return Ok((
+        overlay,
+        CharucoFrameDetect {
+            corners,
+            markers,
+            ok,
+        },
+    ));
 }

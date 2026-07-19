@@ -646,6 +646,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "opencv",
  "pingpong-bot",
  "serde_json",
 ]
@@ -990,6 +991,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "opencv",
  "pingpong-bot",
 ]
 
@@ -999,6 +1001,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "opencv",
  "pingpong-bot",
 ]
 
@@ -1018,6 +1021,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "opencv",
  "pingpong-bot",
 ]
 
@@ -1027,6 +1031,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "opencv",
  "pingpong-bot",
 ]
 
@@ -2508,7 +2513,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "opencv",
  "pingpong-bot",
+ "serde_json",
 ]
 
 [[package]]
@@ -2518,7 +2525,9 @@ dependencies = [
  "anyhow",
  "clap",
  "nalgebra",
+ "opencv",
  "pingpong-bot",
+ "serde_json",
 ]
 
 [[package]]

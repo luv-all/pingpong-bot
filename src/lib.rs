@@ -5,6 +5,7 @@
 
 pub mod camera;
 pub mod clock;
+pub mod config_resolve;
 pub mod constants;
 pub mod detector;
 pub mod error;
@@ -24,23 +25,27 @@ pub mod ballistics {
 
 pub use camera::{
     BallObservation, Calibration, CameraId, CameraParams, CharucoBoardSpec, CharucoCalibReport,
-    Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture, PixelPoint, PreviewAction,
-    SimCamera, SyntheticCamera, calibrate_charuco, calibrate_charuco_draft, destroy_window,
-    dlt_triangulate, draw_debug_lines, hstack_bgr, sample_at, show_bgr, triangulate_projections,
-    triangulate_synced, triangulate_views,
+    CharucoFrameDetect, Frame, FrameSource, HintSource, ImageDirSource, MIN_CHARUCO_CORNERS,
+    OpenCvCapture, PixelPoint, PreviewAction, SimCamera, SyntheticCamera, calibrate_charuco,
+    calibrate_charuco_draft, destroy_window, detect_and_draw_charuco, dlt_triangulate,
+    draw_cam_label, draw_circle_px, draw_debug_lines, draw_world_velocity, hstack_bgr, sample_at,
+    show_bgr, triangulate_projections, triangulate_synced, triangulate_views,
 };
 pub use clock::{Clock, SimClock, SystemClock};
+pub use config_resolve::{
+    DEFAULT_CONFIG_PATH, calibration_path_from_config, resolve_calibration_path,
+};
 pub use detector::{
     BallDetector, BgSubDetector, ColorSpace, ColormaskConfig, ColormaskDetector, ContourDetector,
-    DetectToolOptions, DetectorKind, PassthroughDetector, RoiDetector, build_detector,
-    open_frame_source, passthrough_detect, run_detect_tool, undistort_frame,
+    DetectorKind, PassthroughDetector, RoiDetector, build_detector, passthrough_detect,
+    undistort_frame,
 };
 pub use error::{DomainError, HwError, HwFailDetail, ObservationError, SwingPlanError};
 pub use estimator::{
-    BallEkf, BounceEvent, Estimator, HitPlane, MeasureKind, MeasureVideoOptions,
-    MeasureVideoResult, Prediction, RollEvent, TrajPoint, detect_bounces, detect_rolls,
-    drag_from_trajectory, friction_from_tangential_speeds, physics_coeffs_toml, predict_hit_plane,
-    restitution_from_bounce_heights, restitution_from_normal_speeds, run_measure_video,
+    BallEkf, BounceEvent, Estimator, HitPlane, Prediction, RollEvent, TrajPoint, detect_bounces,
+    detect_rolls, drag_from_trajectory, friction_from_tangential_speeds, mean_bounce_e,
+    mean_roll_mu, physics_coeffs_toml, predict_hit_plane, restitution_from_bounce_heights,
+    restitution_from_normal_speeds,
 };
 pub use geometry::Point3;
 #[cfg(feature = "real")]
