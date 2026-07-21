@@ -48,7 +48,10 @@ cargo check --workspace
 OPENCV_LINK_LIBS = "opencv_world4130"
 OPENCV_LINK_PATHS = "C:\\tools\\opencv\\build\\x64\\vc16\\lib"
 OPENCV_INCLUDE_PATHS = "C:\\tools\\opencv\\build\\include"
-._path = "C:\\tools\\opencv\\build\\x64\\vc16\\bin"
+._path = [
+   "C:\\tools\\opencv\\build\\x64\\vc16\\bin",
+   "<path to AXL library>"
+]
 ```
 
 ---
