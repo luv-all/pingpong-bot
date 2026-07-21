@@ -9,6 +9,9 @@ pub struct AxlRail {
     kind: RailKind,
 }
 
+#[cfg(all(windows, feature = "real"))]
+const MOVE_POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 enum RailKind {
     DryRun {
         position_m: f64,
@@ -183,7 +186,7 @@ impl AxlLive {
         if command_status == super::axl_ffi::AXT_RT_SUCCESS {
             return Ok(position_m);
         }
-        return Err(HwError::ReadFailed);
+        return Err(read_position_error(actual_status, command_status));
     }
 
     fn move_abs_m(&mut self, config: &RailConfig, commanded_m: f64) -> Result<(), HwError> {
@@ -200,6 +203,7 @@ impl AxlLive {
             )
         })?;
 
+        let deadline = std::time::Instant::now() + MOVE_POLL_TIMEOUT;
         loop {
             let mut in_motion = 0;
             check_axl("AxmStatusReadInMotion", unsafe {
@@ -207,6 +211,9 @@ impl AxlLive {
             })?;
             if in_motion == 0 {
                 return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(move_poll_timeout_error());
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -229,6 +236,25 @@ fn check_axl(name: &str, code: u32) -> Result<(), HwError> {
     return Err(HwError::InvalidConfig {
         reason: format!("AXL {name} code={code}"),
     });
+}
+
+#[cfg(all(windows, feature = "real"))]
+fn read_position_error(actual_status: u32, command_status: u32) -> HwError {
+    return HwError::InvalidConfig {
+        reason: format!(
+            "AXL AxmStatusGetActPos code={actual_status}; AxmStatusGetCmdPos code={command_status}"
+        ),
+    };
+}
+
+#[cfg(all(windows, feature = "real"))]
+fn move_poll_timeout_error() -> HwError {
+    return HwError::InvalidConfig {
+        reason: format!(
+            "AXL AxmStatusReadInMotion timeout after {}s",
+            MOVE_POLL_TIMEOUT.as_secs()
+        ),
+    };
 }
 
 #[cfg(test)]
@@ -260,5 +286,31 @@ mod tests {
         assert_eq!(rail.read_x_m().unwrap(), 0.4);
         let commanded = rail.move_rel_m(-0.1).unwrap();
         assert_eq!(commanded, 0.3);
+    }
+
+    #[cfg(all(windows, feature = "real"))]
+    #[test]
+    fn read_error_includes_both_axl_status_codes() {
+        let error = super::read_position_error(7, 9);
+
+        assert_eq!(
+            error,
+            crate::HwError::InvalidConfig {
+                reason: "AXL AxmStatusGetActPos code=7; AxmStatusGetCmdPos code=9".into(),
+            }
+        );
+    }
+
+    #[cfg(all(windows, feature = "real"))]
+    #[test]
+    fn move_poll_timeout_error_identifies_axl_operation() {
+        let error = super::move_poll_timeout_error();
+
+        assert_eq!(
+            error,
+            crate::HwError::InvalidConfig {
+                reason: "AXL AxmStatusReadInMotion timeout after 30s".into(),
+            }
+        );
     }
 }
