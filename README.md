@@ -33,12 +33,12 @@ cargo check --workspace
 
 수동 export는 `.envrc`와 동일 (`LIBCLANG_PATH`, `PKG_CONFIG_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`).
 
-**Windows** (로컬 미검증 — [opencv INSTALL](https://docs.rs/crate/opencv/0.98.2/source/INSTALL.md) 기준)
+**Windows**
 
 ```powershell
-# VS C++ Build Tools + LLVM + vcpkg opencv4 (contrib 불필요, Charuco는 메인 objdetect)
+# VS C++ Build Tools + LLVM + opencv4 (contrib 불필요, Charuco는 메인 objdetect)
 choco install llvm
-choco install opencv --version=4.12.0
+choco install opencv --version=4.13.0
 cargo check --workspace
 ```
 
@@ -48,7 +48,7 @@ cargo check --workspace
 OPENCV_LINK_LIBS = "opencv_world4130"
 OPENCV_LINK_PATHS = "C:\\tools\\opencv\\build\\x64\\vc16\\lib"
 OPENCV_INCLUDE_PATHS = "C:\\tools\\opencv\\build\\include"
-._path = "C:\\tools\\opencv\\build\\x64\\vc16\\bin"
+_.path = "C:\\tools\\opencv\\build\\x64\\vc16\\bin"
 ```
 
 ---
