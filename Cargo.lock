@@ -3293,6 +3293,7 @@ dependencies = [
  "crossbeam-channel",
  "crossbeam-queue",
  "kiss3d",
+ "libloading",
  "nalgebra",
  "opencv",
  "pollster",
