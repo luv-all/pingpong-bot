@@ -1,10 +1,10 @@
 [package]
-name = "detect-contour"
+name = "detect-full"
 edition.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "detect_contour"
+name = "detect_full"
 path = "src/main.rs"
 
 [dependencies]

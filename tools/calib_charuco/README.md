@@ -2,6 +2,12 @@
 
 ChArUco **인터랙티브** 보정. 라이브(또는 영상)에서 코너를 눈으로 확인한 뒤만 저장하고, 종료 시 `Calibration` JSON을 쓴다.
 
+| 파일 | 역할 |
+|------|------|
+| `interactive.rs` | Space/s/n/q 라이브 UX |
+| `cli.rs` | `--from-images` / `--emit-sim` / `--validate` |
+| `args.rs` | clap · 보드 스펙 · 출력 경로 |
+
 [hinguri-pingpong vision/pre](https://github.com/studio-void/hinguri-pingpong/tree/main/src/vision/pre)와 같은 확인 UX.
 
 ## 기본 (캡처 → 확인 → 보정)

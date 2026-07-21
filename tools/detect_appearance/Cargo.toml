@@ -1,10 +1,10 @@
 [package]
-name = "detect-roi"
+name = "detect-appearance"
 edition.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "detect_roi"
+name = "detect_appearance"
 path = "src/main.rs"
 
 [dependencies]

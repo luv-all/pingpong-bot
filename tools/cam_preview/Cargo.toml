@@ -9,8 +9,5 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.103"
-opencv = { version = "0.98.2", default-features = false, features = [
-    "highgui",
-    "imgproc",
-    "videoio",
-] }
+opencv = { version = "0.98.2", default-features = false, features = ["imgproc"] }
+pingpong-bot = { path = "../..", default-features = false }
