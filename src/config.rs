@@ -168,6 +168,9 @@ impl RuntimeConfig {
                 .as_ref()
                 .context("mode=real에는 [hardware.dynamixel] 설정이 필요합니다")?;
             dynamixel.validate().context("hardware.dynamixel")?;
+            if let Some(rail) = &self.hardware.rail {
+                rail.validate().context("hardware.rail")?;
+            }
             if !self.vision.cameras.is_empty() {
                 ensure!(
                     self.calibration_path.is_some(),
@@ -340,6 +343,26 @@ dll_path = "drivers/AXL.dll"
         assert!(
             RuntimeConfig::from_toml(&too_many_samples, Path::new("config/test.toml")).is_err()
         );
+    }
+
+    #[test]
+    fn rejects_invalid_rail_range_when_enabled() {
+        let real = CONFIG.replace("mode = \"sim\"", "mode = \"real\"")
+            + r#"
+
+[hardware.dynamixel]
+port = "COM9"
+motor_ids = [1, 3, 4, 5]
+
+[hardware.rail]
+enabled = true
+dll_path = "drivers/AXL.dll"
+x_min_m = 0.50
+x_max_m = 0.20
+"#;
+        let error =
+            RuntimeConfig::from_toml(&real, Path::new("config/real.toml")).unwrap_err();
+        assert!(format!("{error:#}").contains("hardware.rail"));
     }
 
     #[test]

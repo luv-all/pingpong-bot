@@ -189,7 +189,7 @@ fn run_real(runtime: RuntimeConfig) -> Result<()> {
         return run_real_with_vision(runtime, dynamixel, rail, vision);
     }
 
-    let mut hardware = RealHardware::new(dynamixel, rail).context("Dynamixel 초기화 실패")?;
+    let mut hardware = RealHardware::new(dynamixel, rail).context("RealHardware 초기화 실패")?;
     let pose = hardware
         .read_pose()
         .context("Dynamixel 현재 관절 읽기 실패")?;
@@ -246,7 +246,7 @@ fn run_real_with_vision(
         runtime.urdf_path().as_deref(),
         runtime.ee_link.as_deref(),
     )?;
-    let hardware = RealHardware::new(dynamixel, rail).context("Dynamixel 초기화")?;
+    let hardware = RealHardware::new(dynamixel, rail).context("RealHardware 초기화 실패")?;
     let estimator = Box::new(BallEkf::with_physics(runtime.physics));
     let telemetry = Arc::new(TracingTelemetry);
     let config = PipelineConfig {
