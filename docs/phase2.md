@@ -23,7 +23,7 @@
 | 토크 한계 (대각 \(I\alpha\)) | ✅ | `verify_torque_limits` |
 | TOML 단일 설정 | ✅ | `config/default.toml` |
 | 상수 SSOT | ✅ | `constants` |
-| Dynamixel `RealHardware` / `jog-axis` | ✅ | AXL은 stub |
+| Dynamixel `RealHardware` / `jog-axis` | ✅ | AXL `jog-rail` + `read_pose` (스윙 동기 후속) |
 | OpenCV 검출(fuse) / ChArUco / UVC | ✅ | [비전 스펙](superpowers/specs/2026-07-18-vision-pipeline-design.md) |
 | Rerun | ⏳ | 마일스톤 4 |
 
@@ -91,7 +91,7 @@
 | # | 작업 | 상태 |
 |---|------|------|
 | 5.1 | UVC `VideoCapture` + `[vision]` | ✅ |
-| 5.2 | Dynamixel `RealHardware` | ✅ (`jog-axis`, AXL stub) |
+| 5.2 | Dynamixel `RealHardware` | ✅ (`jog-axis`, AXL `jog-rail` + `read_pose`) |
 | 5.3 | TOML `mode = "real"` | ✅ 모터 스모크 / `[vision]` pipeline |
 
 ---

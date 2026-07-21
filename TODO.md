@@ -100,7 +100,8 @@ SSOT 매핑: `test-manipulator` `DynamixelConfig` (ID 1/3/4/5, signs, tick limit
 - [x] `SwingExecutor` — quintic `sample_at` → SyncWrite goal (200 Hz, `is_busy`)
 - [x] `jog-axis` — 단축·전축 목표각 (Python `goto` parity)
 - [x] `config/real-hardware.toml` + `run_real` 최소 연결·현재각 스모크 코드
-- [x] AXL 리니어 레일 — **스텁만** (`rail_x=0`, `RailMotion` 경고)
+- [x] AXL 리니어 레일 — `jog-rail` 조그 + `read_pose` 실측 `rail_x` (Windows + `[hardware.rail]`)
+- [ ] AXL 레일 스윙 동기 — `Hardware::command`의 비영 `RailMotion`은 경고만, 관절만 실행
 - [ ] `run_real` + 카메라·`pipeline` (하드웨어 검증 후)
 - [ ] Windows 벤치: `jog-axis` 단축 작은 각도 → 4축 → `run_real` 순서로 재검증
 - [ ] 실물 안전: E-stop 경로 (tick clamp·profile 속도/가속도는 적용됨)
