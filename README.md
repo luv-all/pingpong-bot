@@ -37,18 +37,19 @@ cargo check --workspace
 
 ```powershell
 # VS C++ Build Tools + LLVM + vcpkg opencv4 (contrib 불필요, Charuco는 메인 objdetect)
-vcpkg install opencv4:x64-windows
-$env:VCPKG_ROOT = "C:\path\to\vcpkg"          # installed\... 가 아니라 vcpkg 루트
-$env:VCPKGRS_DYNAMIC = "1"
-$env:LIBCLANG_PATH = "C:\Program Files\LLVM\bin"
-$env:PATH = "C:\Program Files\LLVM\bin;$env:VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
+choco install llvm
+choco install opencv --version=4.12.0
 cargo check --workspace
 ```
 
-공식 OpenCV zip을 쓸 때만 `OPENCV_INCLUDE_PATHS` / `OPENCV_LINK_PATHS` /
-`OPENCV_LINK_LIBS=opencv_world4120`(버전에 맞게)를 수동 지정한다.
-vcpkg 기본은 `world`가 꺼져 있어 `opencv_world4`만으로는 실패하기 쉽다.
-DLL 못 찾으면 `installed\x64-windows\bin`이 PATH에 있는지 본다.
+```toml
+# mise.local.toml
+[env]
+OPENCV_LINK_LIBS = "opencv_world4130"
+OPENCV_LINK_PATHS = "C:\\tools\\opencv\\build\\x64\\vc16\\lib"
+OPENCV_INCLUDE_PATHS = "C:\\tools\\opencv\\build\\include"
+._path = "C:\\tools\\opencv\\build\\x64\\vc16\\bin"
+```
 
 ---
 
