@@ -102,6 +102,12 @@ impl RuntimeConfig {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
+        if let Some(rail) = &mut config.hardware.rail
+            && rail.enabled
+            && rail.dll_path.is_relative()
+        {
+            rail.dll_path = config.source_dir.join(&rail.dll_path);
+        }
         config
             .validate()
             .with_context(|| format!("TOML 값 검증 실패: {}", path.display()))?;
@@ -281,6 +287,28 @@ drag = 0.01
         assert_eq!(
             config.urdf_path().as_deref(),
             Some(Path::new("config/robot.urdf"))
+        );
+    }
+
+    #[test]
+    fn resolves_relative_rail_dll_path_from_toml_directory() {
+        let real = CONFIG.replace("mode = \"sim\"", "mode = \"real\"")
+            + r#"
+
+[hardware.dynamixel]
+port = "COM9"
+motor_ids = [1, 3, 4, 5]
+
+[hardware.rail]
+enabled = true
+dll_path = "drivers/AXL.dll"
+"#;
+        let config =
+            RuntimeConfig::from_toml(&real, Path::new("config/real.toml")).expect("real 설정");
+
+        assert_eq!(
+            config.hardware.rail.expect("rail 설정").dll_path,
+            Path::new("config/drivers/AXL.dll")
         );
     }
 
