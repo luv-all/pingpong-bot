@@ -5,6 +5,7 @@ use crate::planner::SwingTrajectory;
 use crate::robot::RobotPose;
 
 pub mod dynamixel;
+pub mod rail;
 mod sim;
 
 #[cfg(feature = "real")]

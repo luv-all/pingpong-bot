@@ -7,6 +7,7 @@ use anyhow::{Context, Result, ensure};
 use pingpong_bot::Calibration;
 use pingpong_bot::VisionConfig;
 use pingpong_bot::hardware::dynamixel::DynamixelConfig;
+use pingpong_bot::hardware::rail::RailConfig;
 use pingpong_bot::{InterceptWindow, PhysicsParams};
 use serde::Deserialize;
 
@@ -55,6 +56,7 @@ impl From<InterceptConfig> for InterceptWindow {
 #[serde(default)]
 pub struct HardwareConfig {
     pub dynamixel: Option<DynamixelConfig>,
+    pub rail: Option<RailConfig>,
 }
 
 /// TOML 하나로 로드하는 전체 런타임 설정.
