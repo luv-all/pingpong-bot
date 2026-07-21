@@ -1,7 +1,10 @@
 # 핑퐁 로봇 — 기술 마스터 플랜
 
+> **상태:** 역사 문서. 현재 구조·결정은 [`README.md`](README.md)·[`docs/decisions.md`](docs/decisions.md)·[`TODO.md`](TODO.md)가 SSOT다.  
+> 아래 crate 분할(`domain`/`infra`/`app`)·`pin_to_p_core`·peer detector 등은 **폐기된 초안**이다.
+
 > **트랙** GIST Robot AX 경진 · 트랙 1 · 팀 *Love all*
-> **스택** Rust · OpenCV(비전 SSOT, infra) · Rapier3d · Rerun
+> **스택** Rust · OpenCV(비전 SSOT) · Rapier3d · Rerun
 > **목적** 사람과 최대한 오래 랠리를 이어간다 — 경쟁이 아니라 협력.
 
 목표는 이기는 것이 아니라 **사람과 오래, 꾸준히 랠리를 주고받는 것**이다. 따라서 모든 결정은 일관성·신뢰성·지구력을 공격성·정밀 타격보다 우선한다. 구현은 직접 만들기보다 **검증된 라이브러리**(OpenCV, Rapier3d, Rerun, rustypot, nalgebra, ort)를 최대한 동원한다. 경연 바이너리이므로 비전을 라이브러리용 헥사로 감싸지 않고 OpenCV를 infra에서 직통으로 쓴다.
@@ -51,8 +54,9 @@ pingpong/
 ├── crates/{domain, app, infra, bin}     # 코어 + 최종 런타임
 └── tools/                               # 실험·검증·캘리브 바이너리 (각각 독립 실행)
     ├── calib_charuco/        measure_restitution/   measure_friction/
-    ├── jog_axis/             capture_flying_ball/
-    └── detect_{bgsub, colormask, contour, roi}/
+    ├── jog_axis/
+    └── detect_{bgsub, colormask, contour}/
+    └── roi_track/
 ```
 
 ### 2.3 상태는 한 곳에서만 관리한다
@@ -138,13 +142,10 @@ flowchart LR
 | `measure_restitution` | 공을 떨어뜨려 바운스 전후 속도비로 반발계수 측정 | `e` → §6.1 바운스 식, `Config`(TOML) |
 | `measure_friction` | 접선 속도 변화로 마찰계수 측정 | `μ` → §6.1 바운스 식 |
 | `jog_axis` | 계산 대신 사용자 입력대로 각 축을 수동 구동, 배선·방향·한계 검증 | `Hardware` 포트를 그대로 사용 → 런타임과 같은 코드 경로 |
-| `capture_flying_ball` | 글로벌 셔터로 비행하는 공을 촬영·저장(데이터셋) | 검출·EKF 튜닝과 학습 데이터의 입력 |
-| `detect_bgsub` | 배경 차분만으로 검출 | infra `vision` 후보 구현 |
-| `detect_colormask` | RGB·HSL·YCrCb + AWB 비교로 검출 | infra `vision` 후보 구현 |
-| `detect_contour` | contour + 형상 게이팅으로 검출 | infra `vision` 후보 구현 |
-| `detect_roi` | 관심 창 추적으로 속도 측정 | infra `vision` 후보 구현 |
+| `detect_appearance` | appearance 좌우 (colormask\|contour) | `vision.appearance.*` · `vision.scorer` |
+| `detect_full` | fuse 본선 + ROI `r` 토글 | `fuse_from_vision` · `track` |
 
-검출 실험 네 개를 같은 입력으로 비교한 뒤 이긴 구현을 런타임 infra `vision`에 꽂는다. `calib_charuco`가 저장하는 타입은 런타임이 읽는 타입과 동일하고, 계수 측정값은 `Config`로 흘러간다. 빠른 일회성 실험·시각화는 `tools/` 대신 `examples/`로 두어 `cargo run --example detect_roi`처럼 가볍게 돌릴 수도 있다.
+런타임 검출은 항상 **fuse** (`generators` → Scorer → MotionPrior). 툴은 레이어/본선 디버그용이다. ROI는 화소 수를 줄이는 래퍼(가설 — [decisions J](docs/decisions.md)). `calib_charuco`가 저장하는 타입은 런타임이 읽는 타입과 동일하고, 계수 측정값은 `Config`로 흘러간다.
 
 ---
 
@@ -247,17 +248,19 @@ flowchart LR
 
 카메라마다 렌즈 왜곡과 위치·방향이 다르므로, 시작 전에 ChArUco 보드로 한 번 측정해 둔다. 이 값(내부 파라미터·왜곡·월드 좌표 변환)을 파일로 저장해 부팅 때 불변값으로 읽는다. 카메라는 단단히 고정돼 있어 매번 다시 잴 필요가 없다.
 
-### 5.3 공 검출: 전체 탐색이 아니라 ROI 추적
+### 5.3 공 검출: fuse + ROI 추적
 
-전체 프레임을 매번 처리하면 주사율이 떨어지고, 단순 color mask는 피부색·다른 공 같은 비슷한 색을 다 잡는다. 그래서 한 번 공을 잡으면 직전 위치 둘레의 **ROI(Region of Interest, 관심 영역)** 안에서만 검출한다. 처리 화소가 수십 분의 1로 줄어 120Hz가 유지된다. 공을 놓치면 전체 프레임 탐색으로 돌아가 재획득한다.
+전체 프레임을 매번 처리하면 주사율이 떨어지고, 단순 color mask는 피부색·다른 공 같은 비슷한 색을 다 잡는다. 그래서 한 번 공을 잡으면 직전 위치 둘레의 **ROI** 안에서만 검출한다. 공을 놓치면 전체 프레임으로 재획득한다 (`track`).
 
-색만으로는 부족해 세 가지를 함께 건다:
+검출 본체는 **fuse** 한 줄이다. peer “방법 선택”이 아니다.
 
-- **Color mask** — RGB나 HSL 임계값은 조명·날씨에 따라 휘도·색온도가 흔들려 마스크가 무너진다. 그래서 휘도(밝기)와 색차를 분리하는 YCrCb 공간으로 바꾸고, 밝기 채널(Y)은 버린 채 색차(Cr·Cb)만으로 임계 처리한다. 그림자가 져도 주황 공이 안정적으로 분리된다.
-- **배경 차분(background subtraction)** — 공은 움직이고 배경·사람은 (거의) 가만히 있다. 프레임 간 차분이나 MOG2로 정지 영역을 지워 움직이는 것만 남긴다.
-- **형상 게이팅** — 남은 후보의 윤곽에서 circularity(원형도)나 타원 피팅의 이심률(eccentricity)을 따져 둥글지 않은 것을 버린다. 전역 셔터라 빠른 공도 원형을 유지하므로 이 판정이 신뢰할 만하다.
+1. **Appearance** — YCrCb/HSV 색 마스크(또는 Canny)로 후보 blob
+2. **Scorer** — area · circularity hard cut + (optional) motion soft weight
+3. **MotionPrior** — 배경 차분은 독립 hit이 아니라 점수에만 반영
 
-나중에 학습 기반 검출기를 붙이더라도 같은 infra vision API의 다른 구현으로 갈아 끼우면 된다.
+`vision.generators`로 appearance를 고르고, `[vision.contour]`·`bgsub.motion_weight`로 Scorer/motion을 튜닝한다.
+
+나중에 학습 기반 generator를 붙이더라도 같은 `CandidateGenerator` / `Scorer` 자리에 끼운다.
 
 ### 5.4 3D 위치 복원
 

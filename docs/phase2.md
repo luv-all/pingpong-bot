@@ -24,7 +24,7 @@
 | TOML 단일 설정 | ✅ | `config/default.toml` |
 | 상수 SSOT | ✅ | `constants` |
 | Dynamixel `RealHardware` / `jog-axis` | ✅ | AXL은 stub |
-| OpenCV 검출 / ChArUco 실보정 / UVC | ✅ | [비전 스펙](superpowers/specs/2026-07-18-vision-pipeline-design.md) |
+| OpenCV 검출(fuse) / ChArUco / UVC | ✅ | [비전 스펙](superpowers/specs/2026-07-18-vision-pipeline-design.md) |
 | Rerun | ⏳ | 마일스톤 4 |
 
 ---
@@ -107,9 +107,10 @@
 
 ## 다음
 
-1. **관측 파이프라인** — [비전 스펙](superpowers/specs/2026-07-18-vision-pipeline-design.md): ChArUco 실보정 → `BallDetector` → UVC → `[vision]` 런타임  
-2. 스핀·Magnus 모델 스펙  
-3. Rerun Telemetry  
-4. AXL 레일 · 멀티캠 동기 · 외부 pose 자동
+1. 스핀·Magnus 모델 스펙  
+2. Rerun Telemetry  
+3. AXL 레일 · 멀티캠 동기 · 외부 pose 자동
+
+(비전: fuse + ChArUco + UVC는 완료 — [decisions J](decisions.md)·비전 스펙 참고)
 
 각 마일스톤마다 `cargo test --workspace` + sim GUI 스모크.

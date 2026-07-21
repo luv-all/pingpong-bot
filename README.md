@@ -75,7 +75,7 @@ cargo run -p pingpong-bot -- config/experiment.toml
 
 ```bash
 cargo run -p pingpong-bot                       # config/default.toml
-cargo run -p pingpong-bot -- config/test.toml  # 지정한 TOML
+cargo run -p pingpong-bot -- config/example.toml  # 지정한 TOML
 ```
 
 CLI는 선택적인 TOML 경로 하나만 받는다. 모드·로봇·카메라·sim·물리 값은
@@ -254,7 +254,6 @@ TODO.md     실행 체크리스트
 |----|------|------------|
 | `competition` | 없음 (빌더만) | `4-dof` URDF의 축·offset·한계를 보존한 단순화 체인 |
 | `urdf-test` | `assets/robots/urdf-test/.../urdf-test.urdf` | 해당 URDF |
-| `competition-urdf` | `assets/robots/competition_arm.urdf` | 해당 URDF |
 | `4-dof` | `assets/robots/4-dof/urdf/all-4-export.urdf` | 해당 URDF |
 
 ```toml
@@ -301,15 +300,11 @@ cargo run -p pingpong-bot -- config/experiment.toml
 |-------|------|--------|
 | `cam-preview` | ✅ | [cam_preview](tools/cam_preview/README.md) |
 | `calib-charuco` | ✅ | [calib_charuco](tools/calib_charuco/README.md) |
-| `detect-colormask` | ✅ | [detect_colormask](tools/detect_colormask/README.md) |
-| `detect-bgsub` | ✅ | [detect_bgsub](tools/detect_bgsub/README.md) |
-| `detect-contour` | ✅ | [detect_contour](tools/detect_contour/README.md) |
-| `detect-roi` | ✅ | [detect_roi](tools/detect_roi/README.md) |
-| `detect-compare` | ✅ | [detect_compare](tools/detect_compare/README.md) |
+| `detect-appearance` | ✅ | [detect_appearance](tools/detect_appearance/README.md) — colormask\|contour 좌우 |
+| `detect-full` | ✅ | [detect_full](tools/detect_full/README.md) — fuse + ROI `r` 토글 |
 | `measure-restitution` | ✅ | [measure_restitution](tools/measure_restitution/README.md) |
 | `measure-friction` | ✅ | [measure_friction](tools/measure_friction/README.md) |
 | `jog-axis` | ✅ | [jog_axis](tools/jog_axis/README.md) |
-| `capture-flying-ball` | ⏳ | [capture_flying_ball](tools/capture_flying_ball/README.md) |
 
 ### 실물 관측
 
@@ -318,14 +313,15 @@ cargo run -p pingpong-bot -- config/experiment.toml
 ```mermaid
 flowchart LR
   boards["라이브 Space 스냅"] --> calib["calib-charuco 확인·저장"] --> json["Calibration JSON"]
-  frames["폴더/영상"] --> detect["detect_*"] --> pick["detector 선택"]
+  frames["폴더/영상"] --> appearance["detect-appearance"] --> full["detect-full / fuse_from_vision"]
   json --> runtime["runtime calibration_path"]
-  pick --> vision["TOML vision.device 웹캠"]
+  full --> vision["TOML vision.appearance|scorer|motion"]
   vision --> obs["BallObservation"]
 ```
 
 - 보정: [calib_charuco](tools/calib_charuco/README.md)
-- 검출: [colormask](tools/detect_colormask/README.md) · [bgsub](tools/detect_bgsub/README.md) · [contour](tools/detect_contour/README.md) · [roi](tools/detect_roi/README.md) · [compare](tools/detect_compare/README.md)
+- appearance 비교: [detect-appearance](tools/detect_appearance/README.md)
+- fuse 본선 (+ROI): [detect-full](tools/detect_full/README.md) · [decisions J](docs/decisions.md)
 - 실전 TOML: [config/example.toml](config/example.toml) `[vision]` · `calibration_path`
 - 설계: [비전 스펙](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md)
 
@@ -378,7 +374,7 @@ cargo build -p pingpong-bot --release
 | EKF / 궤적 추정 | ✅ (sim; 기본은 `sim.use_ground_truth=true`) |
 | `measure_restitution` / `measure_friction` (e·μ·k) | ✅ |
 | TOML 단일 설정 (`config/default.toml`) | ✅ |
-| OpenCV `BallDetector` 4종 · `VideoCapture` · `[vision]` | ✅ |
+| OpenCV fuse(appearance→Scorer→motion) · `VideoCapture` · `[vision]` | ✅ |
 | Dynamixel 4축 `RealHardware` · `jog-axis` | ✅ (Windows 실기 재검증 필요) |
 | AXL 레일, Rerun 시각화 | ⏳ (AXL은 x=0 스텁) |
 | TOML `mode = "real"` | ✅ 모터 스모크 / `[vision]` 있으면 실캠 pipeline |

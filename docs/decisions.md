@@ -21,7 +21,7 @@
 | **F** | 관측 — OpenCV 필수, 검출은 아직 패스스루 |
 | **G** | 테이블 뚫지 않기 — OBB |
 | **H** | 구조 — `domain/infra/...` 없음, `src/` 모듈 |
-| **I** | 안 치는 경우(암묵 포기) — 문서화·검증 과제 |
+| **J** | 검출 = fuse(appearance·Scorer·motion) · ROI는 최적화 |
 
 ---
 
@@ -96,8 +96,7 @@
 
 - **`competition` (기본):** 메시 없는 stick. 관절 origin·축·한계·EE는  
   `all-4-export.urdf`(4-dof)와 **같은 직렬 체인**.  
-  (`LINK_UPPER/FOREARM = 0.18`은 **옛 planar 빌더**용 — competition FK에 안 씀.)
-- **`4-dof` / `competition-urdf` / `urdf-test`:** URDF가 제어·FK·IK·뷰어 SSOT.  
+- **`4-dof` / `urdf-test`:** URDF가 제어·FK·IK·뷰어 SSOT.  
   변환 실패 시 시작 오류 (competition으로 조용히 대체하지 않음).
 - 타격 IK: 레일 + 관절로 **위치 3 + 면법선 2**. roll은 안 맞춤.
 - 면 법선: 손목 open (`q3`). 제어/Rapier 라켓은 **local +Z = 면 법선**.
@@ -154,7 +153,7 @@
 |----|------|------|
 | F1 | `BallEkf` | ✅ |
 | F2 | OpenCV 2뷰 `triangulatePoints` + 3뷰↑ nalgebra DLT | ✅ |
-| F3 | 검출 = 패스스루 (sim은 투영 픽셀). 실검출은 TODO | 스텁 |
+| F3 | 검출 = fuse(`fuse_from_vision`). sim은 투영 픽셀 패스스루 | ✅ |
 | F4 | 토크 = 대각 \(I\alpha\) 스텁 | 스텁 |
 | F5 | OpenCV **필수**. 시스템 **4.x** (`opencv@4`). crate `0.98.2+`. 5.x 금지 | ✅ |
 | F6 | ChArUco는 초안(휴리스틱 K). 완전 `calibrateCameraCharuco`는 TODO | 초안 |
@@ -220,10 +219,48 @@
 - 시뮬 GUI 렉 원인
 - 구름 공 / 포기 조건 명문화 (위 I)
 - EKF 타격 스모크 → C2 승격
-- OpenCV 실검출 · 완전 ChArUco
 - A4 \(e\)·마찰·drag 실측값으로 constants 갱신
 
 자세한 체크리스트: [`TODO.md`](../TODO.md).
+
+---
+
+## J. 검출: appearance · Scorer · MotionPrior · ROI
+
+**결정:** 런타임은 항상 **fuse**. peer `DetectorKind` 없음.
+
+**조립 DSL:**
+
+```rust
+fuse(ColormaskDetector::new(cfg), Scorer::shape(20.0, 20_000.0, 0.55))
+    .with_motion(MotionPrior::new());
+
+fuse(generators![colormask, contour], Scorer::from(&scorer).with_motion_weight(0.5))
+    .with_motion_weight(0.5);
+
+track(fuse_from_vision(&vision)?, vision.roi_half_px);
+```
+
+| 레이어 | 역할 | TOML / 모듈 |
+|--------|------|-------------|
+| Appearance | `CandidateGenerator` | `vision.appearance.*` · `detector/appearance/` |
+| Scorer | area · circularity · motion soft | `vision.scorer` · `detector/scorer.rs` |
+| MotionPrior | 움직임 마스크 | `vision.motion.weight` · `detector/motion/` |
+| ROI | 탐색 최적화 | `track(..., vision.roi_half_px)` · `r` 토글 in detect-full |
+
+```rust
+let v = load_vision_from_config("config/default.toml")?;
+track(fuse_from_vision(&v)?, v.roi_half_px)
+```
+
+툴: `detect-appearance` (좌우) · `detect-full` (`build_detector`에 fuse DSL 인라인).  
+라이브러리 SSOT: `src/detector/dsl.rs` (`fuse_vision` / `track_vision`).
+
+| ID | 내용 | 상태 |
+|----|------|------|
+| J1 | ROI=`track` (+ enable 토글) | ✅ |
+| J2 | fuse = generators + Scorer + motion soft | ✅ |
+| J3 | 검출 튜닝 TOML SSOT (`[vision]` nested) | ✅ |
 
 ---
 
@@ -239,5 +276,8 @@
 - [x] H — 단일 크레이트 `src/`
 - [ ] I — 구름 공 포기 정책 확정
 - [ ] C2 — EKF 기본 승격 (스모크)
+- [x] J1 — 검출 방법 / ROI=`track` 분리
+- [ ] J2 — 캐스케이드·`roi_half_px` 벤치
+- [x] J3 — `[vision]` TOML 튜닝 SSOT
 
-작성: 2026-07-11. 갱신: 2026-07-15 (thin types) · **2026-07-17** (플랫 구조·인터셉트·geometry·포기 경로).
+작성: 2026-07-11. 갱신: 2026-07-15 (thin types) · **2026-07-17** (플랫 구조·인터셉트·geometry·포기 경로) · **2026-07-20** (검출 vs ROI · vision TOML SSOT).
