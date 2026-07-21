@@ -9,7 +9,6 @@ use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::constants::{
     ball::{RESTITUTION, TABLE_BOUNCE_FRICTION},
-    physics::DEFAULT_DRAG,
 };
 
 /// 해석된 물리 계수 (항상 concrete 값).
@@ -34,17 +33,6 @@ impl Default for PhysicsParams {
     }
 }
 
-impl PhysicsParams {
-    /// 컴파일 타임 상수 (실측 참고용 `DEFAULT_DRAG` 포함).
-    pub fn from_constants() -> Self {
-        return Self {
-            restitution: RESTITUTION,
-            friction: TABLE_BOUNCE_FRICTION,
-            drag: DEFAULT_DRAG,
-        };
-    }
-}
-
 /// TOML `[physics]` 섹션 - 필드별 optional (부분 갱신).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PhysicsConfig {
@@ -57,14 +45,15 @@ impl PhysicsConfig {
     pub fn is_empty(&self) -> bool {
         return self.restitution.is_none() && self.friction.is_none() && self.drag.is_none();
     }
+}
 
-    /// `None` 필드는 [`PhysicsParams::default`]로 채운다.
-    pub fn to_params(&self) -> PhysicsParams {
-        let d = PhysicsParams::default();
-        return PhysicsParams {
-            restitution: self.restitution.unwrap_or(d.restitution),
-            friction: self.friction.unwrap_or(d.friction),
-            drag: self.drag.unwrap_or(d.drag),
+impl From<&PhysicsConfig> for PhysicsParams {
+    fn from(c: &PhysicsConfig) -> Self {
+        let d = Self::default();
+        return Self {
+            restitution: c.restitution.unwrap_or(d.restitution),
+            friction: c.friction.unwrap_or(d.friction),
+            drag: c.drag.unwrap_or(d.drag),
         };
     }
 }

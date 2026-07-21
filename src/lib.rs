@@ -19,28 +19,27 @@ pub mod robot;
 pub mod sim;
 pub mod telemetry;
 
-pub mod ballistics {
-    pub use crate::estimator::ballistics::*;
-}
-
 pub use camera::{
     BallObservation, Calibration, CameraId, CameraParams, CharucoBoardSpec, CharucoCalibReport,
-    CharucoFrameDetect, Frame, FrameSource, HintSource, ImageDirSource, MIN_CHARUCO_CORNERS,
-    OpenCvCapture, PixelPoint, PreviewAction, SimCamera, SyntheticCamera, calibrate_charuco,
-    calibrate_charuco_draft, destroy_window, detect_and_draw_charuco, dlt_triangulate,
-    draw_cam_label, draw_circle_px, draw_debug_lines, draw_world_velocity, hstack_bgr, sample_at,
-    show_bgr, triangulate_projections, triangulate_synced, triangulate_views,
+    CharucoFrameDetect, ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource,
+    MIN_CHARUCO_CORNERS, OpenCvCapture, PixelPoint, PreviewAction, SimCamera, calibrate_charuco,
+    destroy_window, detect_and_draw_charuco, dlt_triangulate, draw_cam_label, draw_circle_px,
+    draw_debug_lines, draw_help_lines, draw_world_velocity, hstack_bgr, sample_at, show_bgr,
+    triangulate_projections, triangulate_synced, triangulate_views,
 };
-pub use clock::{Clock, SimClock, SystemClock};
+pub use clock::Clock;
 pub use config_resolve::{
     DEFAULT_CONFIG_PATH, calibration_path_from_config, resolve_calibration_path,
 };
 pub use detector::{
-    BallDetector, BgSubDetector, ColorSpace, ColormaskConfig, ColormaskDetector, ContourDetector,
-    DetectorKind, PassthroughDetector, RoiDetector, build_detector, passthrough_detect,
-    undistort_frame,
+    Appearance, AppearanceParams, BallDetector, Candidate, CandidateGenerator, ColorSpace,
+    ColormaskConfig, ColormaskDetector, ColormaskParams, ContourDetector, FuseDetector,
+    IntoCandidateGenerators, MotionParams, MotionPrior, ParseAppearanceError,
+    ParseColorSpaceError, RoiTrack, Scorer, ScorerParams, VisionCameraConfig, VisionConfig, fuse,
+    fuse_from_vision, fuse_vision, load_vision_from_config, passthrough_detect, scorer_from_vision,
+    track, track_vision, undistort_frame, vision_from_toml,
 };
-pub use error::{DomainError, HwError, HwFailDetail, ObservationError, SwingPlanError};
+pub use error::{DomainError, HwError, ObservationError, SwingPlanError};
 pub use estimator::{
     BallEkf, BounceEvent, Estimator, HitPlane, Prediction, RollEvent, TrajPoint, detect_bounces,
     detect_rolls, drag_from_trajectory, friction_from_tangential_speeds, mean_bounce_e,
@@ -56,7 +55,7 @@ pub use physics_config::{
 };
 pub use pipeline::{
     CameraFeed, DEFAULT_ROBOT_ID, PipelineConfig, PipelineError, PipelineThread, ROBOTS,
-    RobotEntry, competition_arm, find_robot, robot_ids_csv, run, shared_competition_arm,
+    RobotEntry, find_robot, robot_ids_csv, run, shared_competition_arm,
 };
 pub use planner::{
     InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox, RailMotion, SwingTrajectory, accel,
@@ -67,8 +66,8 @@ pub use planner::{
 pub use robot::rail::LinearRail;
 pub use robot::{
     Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, MountPreset, RacketPose, RobotBuildError,
-    RobotBuilder, RobotPose, RobotState, SUPPORTED_FK_JOINTS, SerialChain, SerialChainError,
-    SerialJoint, SimRobot, UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfRobot,
+    RobotBuilder, RobotPose, RobotState, SerialChain, SerialChainError, SerialJoint, SimRobot,
+    UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfRobot,
 };
 pub use sim::{
     BallAction, BallEvent, BallScript, BallShooterSettings, BallState, BallVec3, ShooterLayout,
@@ -77,4 +76,4 @@ pub use sim::{
 };
 #[cfg(feature = "gui")]
 pub use sim::{SimViewerOptions, run_sim_viewer};
-pub use telemetry::{NoopTelemetry, Telemetry, TelemetryEvent, TracingTelemetry};
+pub use telemetry::{Telemetry, TelemetryEvent, TracingTelemetry};

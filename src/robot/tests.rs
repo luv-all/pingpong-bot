@@ -5,13 +5,13 @@ use crate::constants::table;
 use crate::error::SwingPlanError;
 use crate::{Joints, Point3};
 
-fn sample_three_dof_arm() -> Arm {
+fn sample_competition_arm() -> Arm {
     return Arm::competition().expect("테스트용 4DOF arm");
 }
 
 #[test]
 fn wrist_open_tilts_racket_face() {
-    let arm = sample_three_dof_arm();
+    let arm = sample_competition_arm();
     let flat = arm
         .with_wrist_open(&arm.default_joints, 0.1)
         .expect("wrist");
@@ -28,7 +28,7 @@ fn wrist_open_tilts_racket_face() {
 
 #[test]
 fn racket_face_points_toward_opponent_not_ceiling() {
-    let arm = sample_three_dof_arm();
+    let arm = sample_competition_arm();
     let pose = arm.forward_kinematics(&arm.default_joints).expect("FK");
     assert!(
         pose.normal.y > 0.5,
@@ -49,59 +49,22 @@ fn racket_face_points_toward_opponent_not_ceiling() {
 
 #[test]
 fn builder_produces_three_dof_arm() {
-    let arm = sample_three_dof_arm();
+    let arm = sample_competition_arm();
     assert_eq!(arm.joint_count(), 4);
 }
 
 #[test]
-fn builder_rejects_link_without_following_revolute() {
+fn builder_rejects_missing_serial_chain() {
     let err = ArmBuilder::new()
         .base_xyz(table::WIDTH_X * 0.5, 0.0, table::SURFACE_Z)
-        .link(0.3)
-        .link(0.3)
         .build()
         .unwrap_err();
-    assert!(matches!(err, ArmBuildError::ExpectedJoint));
-}
-
-#[test]
-fn builder_rejects_incomplete_chain_at_build() {
-    let err = ArmBuilder::new()
-        .base_xyz(table::WIDTH_X * 0.5, 0.0, table::SURFACE_Z)
-        .link(0.3)
-        .build()
-        .unwrap_err();
-    assert!(matches!(err, ArmBuildError::IncompleteChain));
-}
-
-#[test]
-fn builder_rejects_revolute_before_link() {
-    let err = ArmBuilder::new()
-        .base_xyz(table::WIDTH_X * 0.5, 0.0, table::SURFACE_Z)
-        .revolute(-1.0, 1.0)
-        .build()
-        .unwrap_err();
-    assert!(matches!(err, ArmBuildError::ExpectedLink));
-}
-
-#[test]
-fn builder_rejects_unsupported_dof() {
-    let err = ArmBuilder::new()
-        .base_xyz(table::WIDTH_X * 0.5, 0.0, table::SURFACE_Z)
-        .link(0.3)
-        .revolute(-1.0, 1.0)
-        .link(0.3)
-        .revolute(-1.0, 1.0)
-        .link(0.1)
-        .revolute(-1.0, 1.0)
-        .build()
-        .unwrap_err();
-    assert!(matches!(err, ArmBuildError::UnsupportedKinematics { .. }));
+    assert!(matches!(err, ArmBuildError::MissingSerialChain));
 }
 
 #[test]
 fn default_arm_produces_racket_pose() {
-    let arm = sample_three_dof_arm();
+    let arm = sample_competition_arm();
     let state = arm.initial_state();
     let pose = state.racket_pose(&arm).expect("FK");
     assert!(pose.position.v.y > arm.base.v.y);
@@ -110,7 +73,7 @@ fn default_arm_produces_racket_pose() {
 
 #[test]
 fn step_moves_angles_toward_targets() {
-    let arm = sample_three_dof_arm();
+    let arm = sample_competition_arm();
     let mut state = arm.initial_state();
     state.set_targets(Joints::from_slice(&[0.5, 0.8, -0.2, 0.45]));
     state.step_toward_targets(&arm, 0.1);
@@ -119,7 +82,7 @@ fn step_moves_angles_toward_targets() {
 
 #[test]
 fn rejects_wrong_joint_count_in_fk() {
-    let arm = sample_three_dof_arm();
+    let arm = sample_competition_arm();
     assert!(
         arm.forward_kinematics(&Joints::from_slice(&[0.0]))
             .is_none()
@@ -128,7 +91,7 @@ fn rejects_wrong_joint_count_in_fk() {
 
 #[test]
 fn inverse_kinematics_round_trips_forward_kinematics() {
-    let arm = sample_three_dof_arm();
+    let arm = sample_competition_arm();
     let joints = Joints::from_slice(&[0.2, 0.2, -0.3, -0.45]);
     let pose = arm.forward_kinematics(&joints).expect("FK");
     let solved = arm.inverse_kinematics(pose.position).expect("IK");
@@ -204,7 +167,7 @@ fn generalized_velocity_ik_can_move_inward_from_rail_max() {
 
 #[test]
 fn inverse_kinematics_rejects_unreachable_target() {
-    let arm = sample_three_dof_arm();
+    let arm = sample_competition_arm();
     let err = arm
         .inverse_kinematics(Point3::new(10.0, 10.0, 10.0))
         .unwrap_err();
@@ -216,7 +179,7 @@ fn inverse_kinematics_rejects_unreachable_target() {
 
 #[test]
 fn clamp_impact_preserves_hit_plane_y_when_possible() {
-    let arm = sample_three_dof_arm();
+    let arm = sample_competition_arm();
     let rail = arm.rail.as_ref().expect("competition rail");
     let far = Point3::new(0.76, 0.30, table::SURFACE_Z + 0.25);
     let (rail_x, clamped) = arm.clamp_impact_for_rail(rail, far);

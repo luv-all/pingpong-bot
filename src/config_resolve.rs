@@ -18,8 +18,8 @@ struct CalibrationPathField {
 pub fn calibration_path_from_config(config_path: &Path) -> Result<Option<PathBuf>, String> {
     let text = fs::read_to_string(config_path)
         .map_err(|e| format!("config 읽기 {}: {e}", config_path.display()))?;
-    let partial: CalibrationPathField = toml::from_str(&text)
-        .map_err(|e| format!("config 파싱 {}: {e}", config_path.display()))?;
+    let partial: CalibrationPathField =
+        toml::from_str(&text).map_err(|e| format!("config 파싱 {}: {e}", config_path.display()))?;
     let Some(rel) = partial.calibration_path else {
         return Ok(None);
     };

@@ -23,19 +23,6 @@ pub fn chain_joint_indices(robot: &Robot, ee_link: &str) -> Option<Vec<usize>> {
     return Some(chain);
 }
 
-/// actuated 관절각으로 모든 link 월드 pose.
-pub fn link_world_poses(
-    robot: &Robot,
-    joint_values: &[f64],
-    actuated_chain: &[usize],
-) -> Vec<(String, [f64; 3], [f64; 4])> {
-    let transforms = link_transforms(robot, joint_values, actuated_chain);
-    return transforms
-        .into_iter()
-        .map(|(name, iso)| iso_to_pose_tuple(&name, iso))
-        .collect();
-}
-
 /// URDF FK + sim 마운트 변환.
 pub fn link_world_poses_in_sim(
     robot: &Robot,

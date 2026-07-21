@@ -683,14 +683,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "opencv",
-]
-
-[[package]]
-name = "capture-flying-ball"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
+ "pingpong-bot",
 ]
 
 [[package]]
@@ -994,7 +987,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "detect-bgsub"
+name = "detect-appearance"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1004,37 +997,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "detect-colormask"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "opencv",
- "pingpong-bot",
-]
-
-[[package]]
-name = "detect-compare"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "opencv",
- "pingpong-bot",
-]
-
-[[package]]
-name = "detect-contour"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "opencv",
- "pingpong-bot",
-]
-
-[[package]]
-name = "detect-roi"
+name = "detect-full"
 version = "0.1.0"
 dependencies = [
  "anyhow",

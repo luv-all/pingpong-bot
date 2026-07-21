@@ -20,7 +20,7 @@ pub struct SimRobot {
 /// sim 배치 프리셋.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MountPreset {
-    /// 내장 competition_arm / mesh 없는 URDF
+    /// 내장 competition primitive / mesh 없는 URDF
     Competition,
     /// REP-103 Z-up URDF — 탁구대 y≈0 끝
     Rep103AtTableEnd,
@@ -34,13 +34,12 @@ pub struct RobotBuilder {
     mount: Option<SimRobotMount>,
     mount_preset: Option<MountPreset>,
     max_joint_speed: f64,
-    use_competition_primitive: bool,
 }
 
 /// [`RobotBuilder::build`] 실패.
 #[derive(Debug, Error)]
 pub enum RobotBuildError {
-    #[error("URDF 경로가 지정되지 않았습니다 (primitive 모드는 `competition()` 사용)")]
+    #[error("URDF 경로가 지정되지 않았습니다")]
     MissingUrdfPath,
     #[error(transparent)]
     Urdf(#[from] UrdfLoadError),
@@ -56,24 +55,12 @@ impl RobotBuilder {
             mount: None,
             mount_preset: None,
             max_joint_speed: 2.5,
-            use_competition_primitive: false,
         };
-    }
-
-    /// 내장 primitive 4DOF 팔 (URDF 없음).
-    pub fn competition() -> Self {
-        return Self::new().use_competition_primitive(true);
-    }
-
-    fn use_competition_primitive(mut self, value: bool) -> Self {
-        self.use_competition_primitive = value;
-        return self;
     }
 
     /// URDF 파일 경로.
     pub fn urdf(mut self, path: impl AsRef<Path>) -> Self {
         self.urdf_path = Some(path.as_ref().to_path_buf());
-        self.use_competition_primitive = false;
         return self;
     }
 
@@ -114,11 +101,10 @@ impl RobotBuilder {
         return self;
     }
 
-    fn resolve_mount(&self, robot_name: &str) -> SimRobotMount {
+    fn resolve_mount(&self) -> SimRobotMount {
         if let Some(mount) = self.mount {
             return mount;
         }
-        let _ = robot_name;
         let preset = self.mount_preset.unwrap_or(MountPreset::Competition);
         return match preset {
             MountPreset::Competition => SimRobotMount::competition_placed(),
@@ -126,7 +112,7 @@ impl RobotBuilder {
         };
     }
 
-    /// primitive 전용 — app `shared_competition_arm()` 등 fallback `Arm`으로 조립.
+    /// primitive 전용 — `shared_competition_arm()` 등 fallback `Arm`으로 조립.
     pub fn build_primitive(fallback: Arc<Arm>) -> SimRobot {
         return SimRobot {
             arm: fallback,
@@ -136,10 +122,6 @@ impl RobotBuilder {
 
     /// `SimRobot`을 조립한다 (URDF 필수).
     pub fn build(self) -> Result<SimRobot, RobotBuildError> {
-        if self.use_competition_primitive {
-            return Err(RobotBuildError::MissingUrdfPath);
-        }
-
         let path = self
             .urdf_path
             .as_ref()
@@ -147,13 +129,13 @@ impl RobotBuilder {
 
         let ee = self.ee_link.as_deref();
         let mut urdf = UrdfRobot::from_file(path, ee)?;
-        urdf.mount = self.resolve_mount(&urdf.name);
+        urdf.mount = self.resolve_mount();
 
-        let arm = urdf.try_into_arm(self.max_joint_speed).map_err(|e| {
-            RobotBuildError::ArmConversion {
-                reason: e.to_string(),
-            }
-        })?;
+        let arm =
+            urdf.to_arm(self.max_joint_speed)
+                .map_err(|e| RobotBuildError::ArmConversion {
+                    reason: e.to_string(),
+                })?;
 
         return Ok(SimRobot {
             arm: Arc::new(arm),

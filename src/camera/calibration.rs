@@ -42,7 +42,7 @@ impl CameraParams {
     /// sim 기본 배치: 테이블 주위 원호, 테이블 중앙을 바라봄.
     pub fn sim_layout(camera_id: CameraId, camera_count: u8) -> Self {
         let count = camera_count.max(1);
-        let index = camera_id.index();
+        let index = camera_id.0;
         let t = if count <= 1 {
             0.5
         } else {

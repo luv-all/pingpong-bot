@@ -7,9 +7,9 @@ use anyhow::{Context, Result, bail};
 use opencv::core::Scalar;
 use opencv::prelude::*;
 use pingpong_bot::{
-    BallDetector, BounceEvent, Calibration, CameraId, ColormaskConfig, DetectorKind, FrameSource,
-    OpenCvCapture, PixelPoint, Point3, PreviewAction, TrajPoint, build_detector, destroy_window,
-    detect_bounces, draw_cam_label, draw_circle_px, draw_debug_lines, draw_world_velocity,
+    BallDetector, BounceEvent, Calibration, CameraId, FrameSource, OpenCvCapture, PixelPoint,
+    Point3, PreviewAction, TrajPoint, VisionConfig, destroy_window, detect_bounces, draw_cam_label,
+    draw_circle_px, draw_debug_lines, draw_help_lines, draw_world_velocity, fuse_from_vision,
     hstack_bgr, mean_bounce_e, show_bgr, triangulate_views,
 };
 
@@ -60,7 +60,14 @@ fn open_sources(
         }
         return Ok(sources);
     }
-    bail!("--video PATH (반복) 또는 --device N (반복) 필요 — 카메라 ≥2");
+    // 미지정 → 웹캠 0, 1
+    for (i, &dev) in [0, 1].iter().enumerate() {
+        let cap = OpenCvCapture::from_device(CameraId(i as u8), dev)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("device {dev}"))?;
+        sources.push(Box::new(cap) as Box<dyn FrameSource>);
+    }
+    return Ok(sources);
 }
 
 fn triangulate_pixels(
@@ -83,7 +90,7 @@ pub fn run_capture(
     calibration: &Path,
     videos: &[PathBuf],
     devices: &[i32],
-    detector: DetectorKind,
+    vision: &VisionConfig,
     preview: bool,
     wait_ms: i32,
     max_frames: usize,
@@ -103,8 +110,8 @@ pub fn run_capture(
     }
 
     let mut detectors: Vec<Box<dyn BallDetector>> = (0..sources.len())
-        .map(|_| build_detector(detector, ColormaskConfig::default()))
-        .collect();
+        .map(|_| fuse_from_vision(vision).map(|d| Box::new(d) as Box<dyn BallDetector>))
+        .collect::<Result<Vec<_>>>()?;
 
     let window = "measure:restitution";
     let mut traj = Vec::new();
@@ -231,10 +238,14 @@ pub fn run_capture(
         if let Some(e) = e_mean {
             lines.push(format!("mean e={e:.4}  (n={})", bounces.len()));
         }
-        lines.push("q/ESC quit".into());
 
         let mut mosaic = hstack_bgr(&panels)?;
         draw_debug_lines(&mut mosaic, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        draw_help_lines(
+            &mut mosaic,
+            &["q/ESC quit"],
+            Scalar::new(0.0, 255.0, 80.0, 0.0),
+        )?;
 
         if preview {
             match show_bgr(window, &mosaic, wait_ms)? {

@@ -81,7 +81,7 @@ pub fn predict_hit_plane_with(
             }
             return Some(Prediction {
                 time_to_impact_secs: t_cross,
-                impact_position: Point3::from_vector(impact),
+                impact_position: Point3::from(impact),
                 incoming_velocity: vel,
             });
         }

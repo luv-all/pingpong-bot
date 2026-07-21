@@ -218,12 +218,6 @@ fn read_dist_coeffs(d: &opencv::core::Mat) -> Result<Vec<f64>, String> {
     return Ok(out);
 }
 
-/// 하위 호환 이름 — [`calibrate_charuco`]와 동일.
-pub fn calibrate_charuco_draft(dir: &Path) -> Result<Calibration, String> {
-    let (calib, _) = calibrate_charuco(dir, CharucoBoardSpec::default(), CameraId(0))?;
-    return Ok(calib);
-}
-
 /// 한 프레임 ChArUco 검출 + 오버레이 (인터랙티브 calib용).
 #[derive(Debug, Clone)]
 pub struct CharucoFrameDetect {

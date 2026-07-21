@@ -5,7 +5,9 @@
 ## 영상 (권장)
 
 ```bash
-# TOML calibration_path 사용
+# 인자 없음 → device 0,1 + TOML calibration_path
+cargo run -p measure-friction
+
 cargo run -p measure-friction -- --device 0 --device 1
 
 cargo run -p measure-friction -- --config config/experiment.toml --video a.mp4 --video b.mp4

@@ -10,21 +10,21 @@ mod opencv_tri;
 pub mod preview;
 mod projection;
 mod sim;
-mod synthetic;
 mod triangulate;
 
 pub use calibration::{Calibration, CameraParams};
-pub use capture::{Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture};
+pub use capture::{
+    ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture,
+};
 pub use charuco::{
     CharucoBoardSpec, CharucoCalibReport, CharucoFrameDetect, MIN_CHARUCO_CORNERS,
-    calibrate_charuco, calibrate_charuco_draft, detect_and_draw_charuco,
+    calibrate_charuco, detect_and_draw_charuco,
 };
 pub use preview::{
     PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
-    draw_world_velocity, hstack_bgr, show_bgr,
+    draw_help_lines, draw_world_velocity, hstack_bgr, show_bgr,
 };
 pub use sim::SimCamera;
-pub use synthetic::SyntheticCamera;
 pub use triangulate::{
     dlt_triangulate, sample_at, triangulate_projections, triangulate_synced, triangulate_views,
 };
@@ -58,10 +58,6 @@ pub struct CameraId(pub u8);
 impl CameraId {
     pub const fn new(index: u8) -> Self {
         return Self(index);
-    }
-
-    pub fn index(self) -> u8 {
-        return self.0;
     }
 }
 

@@ -13,9 +13,9 @@ use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::constants::{TABLE_BOUNCE_RESTITUTION, ball, table};
 use pingpong_bot::{
-    Arm, DEFAULT_CONFIG_PATH, DetectorKind, PhysicsConfig, drag_from_trajectory,
-    merge_physics_into_config, physics_coeffs_toml, resolve_calibration_path,
-    restitution_from_bounce_heights, restitution_from_normal_speeds,
+    Arm, DEFAULT_CONFIG_PATH, PhysicsConfig, drag_from_trajectory, merge_physics_into_config,
+    physics_coeffs_toml, resolve_calibration_path, restitution_from_bounce_heights,
+    restitution_from_normal_speeds,
 };
 use pingpong_bot::{BallVec3, SimWorld};
 
@@ -30,10 +30,9 @@ struct Args {
     calibration: Option<PathBuf>,
     #[arg(long = "video", value_name = "PATH")]
     videos: Vec<PathBuf>,
+    /// 웹캠 인덱스 (반복). 영상/device 미지정이면 0,1
     #[arg(long = "device", value_name = "N")]
     devices: Vec<i32>,
-    #[arg(long, default_value = "colormask")]
-    detector: String,
     #[arg(long)]
     no_preview: bool,
     #[arg(long, default_value_t = 33)]
@@ -73,16 +72,25 @@ fn main() -> Result<()> {
         patch.drag = Some(k);
     }
 
-    if args.calibration.is_some() || !args.videos.is_empty() || !args.devices.is_empty() {
+    let has_other = args.heights.is_some()
+        || args.vz_pairs.is_some()
+        || args.sim
+        || args.sim_ballistics
+        || args.drag_csv.is_some();
+    let run_capture = args.calibration.is_some()
+        || !args.videos.is_empty()
+        || !args.devices.is_empty()
+        || !has_other;
+
+    if run_capture {
         let cal = resolve_calibration_path(&args.config, args.calibration.clone())
             .map_err(anyhow::Error::msg)?;
-        let kind = DetectorKind::parse(&args.detector)
-            .with_context(|| format!("unknown detector: {}", args.detector))?;
+        let vision = pingpong_bot::load_vision_from_config(&args.config)?;
         let result = capture_loop::run_capture(
             &cal,
             &args.videos,
             &args.devices,
-            kind,
+            &vision,
             !args.no_preview,
             args.wait_ms,
             args.max_frames,
@@ -135,7 +143,8 @@ fn main() -> Result<()> {
     if patch.is_empty() {
         bail!(
             "입력이 없습니다. 예:\n  \
-             --device 0 --device 1   # calibration_path 는 --config TOML\n  \
+             cargo run -p measure-restitution   # 기본 device 0,1 + --config calibration_path\n  \
+             --device 0 --device 1\n  \
              --calibration calib.json --video cam0.mp4 --video cam1.mp4\n  \
              --heights 0.40,0.29,0.21\n  \
              --sim"
@@ -163,7 +172,7 @@ fn main() -> Result<()> {
 }
 
 fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
-    use pingpong_bot::ballistics::semi_implicit_euler;
+    use pingpong_bot::estimator::ballistics::semi_implicit_euler;
 
     let floor = table::SURFACE_Z + ball::RADIUS;
     let mut pos = Vector3::new(

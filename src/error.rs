@@ -1,11 +1,10 @@
 //! 도메인 전용 에러 타입.
 //!
 //! variant마다 왜 실패했는지 필드로 담아 로그/디버깅에 바로 쓸 수 있게 한다.
-//! infra/bin의 `thiserror`와 분리해, domain은 std만 의존한다.
 
 use std::fmt;
 
-use crate::{CameraId, PixelPoint};
+use crate::CameraId;
 
 /// 도메인 계층 공통 에러.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,13 +24,6 @@ pub enum SwingPlanError {
         target_y: f64,
         target_z: f64,
     },
-    /// 관절 각/속도가 하드웨어 한계를 벗어남
-    JointLimit {
-        joint_index: usize,
-        value: f64,
-        min: f64,
-        max: f64,
-    },
     /// 임팩트 시각까지 남은 시간이 최소 스윙 소요 시간보다 짧음
     InsufficientTime {
         time_to_impact_secs: f64,
@@ -47,11 +39,6 @@ pub enum SwingPlanError {
 /// 관측/삼각측량 관련 오류.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ObservationError {
-    /// 픽셀 좌표가 이미지/관심영역 범위 밖
-    OutOfBounds {
-        camera_id: CameraId,
-        pixel: PixelPoint,
-    },
     /// 삼각측량에 필요한 카메라 수 부족
     TriangulationInsufficient {
         cameras_with_observation: usize,
@@ -74,24 +61,11 @@ pub enum HwError {
         duration_secs: f64,
         /// 관절 축 수
         joint_count: usize,
-        /// 실패 상세
-        detail: HwFailDetail,
     },
     /// 관절 읽기 실패
-    ReadFailed { detail: HwFailDetail },
-}
-
-/// 하드웨어 실패 원인.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HwFailDetail {
-    /// 아직 구현되지 않음
-    NotImplemented,
-    /// 통신/전송 오류
-    Transport,
-    /// 특정 액추에이터 고장
-    ActuatorFault { actuator_id: u8 },
-    /// 기타 (고정 메시지)
-    Other(&'static str),
+    ReadFailed,
+    /// 하드웨어 설정 검증 실패
+    InvalidConfig { reason: String },
 }
 
 impl fmt::Display for DomainError {
@@ -113,15 +87,6 @@ impl fmt::Display for SwingPlanError {
             } => write!(
                 f,
                 "역기구학 해 없음 - 목표 위치 ({target_x:.3}, {target_y:.3}, {target_z:.3}) m 가 도달 범위 밖"
-            ),
-            Self::JointLimit {
-                joint_index,
-                value,
-                min,
-                max,
-            } => write!(
-                f,
-                "관절 {joint_index} 값 {value:.3} rad 가 허용 범위 [{min:.3}, {max:.3}] 밖"
             ),
             Self::InsufficientTime {
                 time_to_impact_secs,
@@ -150,11 +115,6 @@ impl fmt::Display for SwingPlanError {
 impl fmt::Display for ObservationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         return match self {
-            Self::OutOfBounds { camera_id, pixel } => write!(
-                f,
-                "{camera_id} 픽셀 ({:.1}, {:.1}) 범위 밖",
-                pixel.x, pixel.y
-            ),
             Self::TriangulationInsufficient {
                 cameras_with_observation,
                 required,
@@ -179,23 +139,12 @@ impl fmt::Display for HwError {
             Self::CommandFailed {
                 duration_secs,
                 joint_count,
-                detail,
             } => write!(
                 f,
-                "하드웨어 명령 실패 ({duration_secs:.3}s, {joint_count}축): {detail}"
+                "하드웨어 명령 실패 ({duration_secs:.3}s, {joint_count}축): 통신/전송 오류"
             ),
-            Self::ReadFailed { detail } => write!(f, "하드웨어 상태 읽기 실패: {detail}"),
-        };
-    }
-}
-
-impl fmt::Display for HwFailDetail {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        return match self {
-            Self::NotImplemented => write!(f, "미구현"),
-            Self::Transport => write!(f, "통신/전송 오류"),
-            Self::ActuatorFault { actuator_id } => write!(f, "액추에이터 {actuator_id} 고장"),
-            Self::Other(message) => write!(f, "{message}"),
+            Self::ReadFailed => write!(f, "하드웨어 상태 읽기 실패: 통신/전송 오류"),
+            Self::InvalidConfig { reason } => write!(f, "하드웨어 설정 오류: {reason}"),
         };
     }
 }

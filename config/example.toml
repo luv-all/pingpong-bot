@@ -46,12 +46,24 @@ use_ground_truth = true
 # joint_offsets_rad = [0.0, 0.0, 0.0, 0.0]
 # motor_angle_limits_deg = [[90, 220], [135, 225], [92, 230], [120, 220]]
 
-# real + calibration_path 일 때 실캠 (device = 웹캠 번호).
+# ─── 검출 ([vision]) ───────────────────────────────────────────────
+# 런타임·detect-* 툴 공용 SSOT. 이 블록을 빼면 `config/default.toml` 임베드값.
+#
+# 파이프라인 (항상 fuse, peer detector 없음):
+#   1. appearance  generators — 후보 생성 (colormask | contour, 앞부터 FirstSurviving)
+#   2. scorer                 — area·원형도 hard cut + (있으면) motion soft
+#   3. motion                 — 프레임 차분 마스크; soft boost만 (독립 검출기 아님)
+#   ROI                       — track() 반변; detect-full 에서 `r` 로 on/off
+#
+# 실험:
+#   cargo run -p detect-appearance   # colormask | contour 좌우
+#   cargo run -p detect-full         # fuse 본선 + ROI 토글
 #
 # [vision]
-# detector = "colormask"   # bgsub | colormask | contour | roi
+# generators = ["colormask"]   # 또는 ["colormask","contour"] / ["contour"]
+# roi_half_px = 80             # 직전 hit 기준 정사각 ROI 반변 [px]
 #
-# [[vision.cameras]]
+# [[vision.cameras]]           # real 전용. 비어 있으면 모터 스모크만
 # id = 0
 # device = 0
 #
@@ -59,7 +71,8 @@ use_ground_truth = true
 # id = 1
 # device = 1
 #
-# [vision.colormask]
+# # ── appearance: 색 마스크 (space=ycrcb | hsv; 미사용 채널 범위는 무시)
+# [vision.appearance.colormask]
 # space = "ycrcb"
 # y_min = 0
 # y_max = 255
@@ -67,8 +80,28 @@ use_ground_truth = true
 # cr_max = 173
 # cb_min = 77
 # cb_max = 127
-# min_area_px = 20
-# max_area_px = 20000
+# h_min = 5
+# h_max = 25
+# s_min = 80
+# s_max = 255
+# v_min = 80
+# v_max = 255
+# min_area_px = 20.0           # generator 쪽 거친 면적 필터 (scorer와 교집합)
+# max_area_px = 20000.0
+#
+# # contour appearance 는 Canny 고정 — TOML 튜닝 키 없음 (필터는 scorer 공유)
+#
+# # ── scorer: hard cut (통과 못하면 탈락)
+# [vision.scorer]
+# min_area_px = 20.0
+# max_area_px = 20000.0
+# min_circularity = 0.55       # 0..=1, 원에 가까울수록 1
+#
+# # ── motion: soft boost only
+# # 점수 *= (1 + weight * overlap). overlap = 후보 bbox 안 움직임 픽셀 비율 [0,1]
+# # weight = 0 → MotionPrior 끔. 키울수록 “움직이는 blob” 선호.
+# [vision.motion]
+# weight = 0.5
 
 [physics]
 restitution = 0.85

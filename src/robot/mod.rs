@@ -2,7 +2,6 @@
 //!
 //! `Arm`은 sim/real이 같이 쓰는 불변 기하 모델이다. 부팅 때 한 번 만들고
 //! `Arc<Arm>`으로 넘긴다. FK/IK랑 스윙 계획은 이 타입만 본다.
-//! Rapier/Dynamixel 쪽 변환은 infra 어댑터가 `RacketPose`로 한다.
 //!
 //! 조립은 `ArmBuilder`, 런타임 추종은 `RobotState`.
 
@@ -19,10 +18,9 @@ mod tests;
 
 use nalgebra::{DMatrix, DVector, Isometry3, Matrix3, UnitQuaternion, Vector3};
 
-pub use builder::{ArmBuildError, ArmBuilder, SUPPORTED_FK_JOINTS};
+pub use builder::{ArmBuildError, ArmBuilder};
 pub use catalog::{
-    DEFAULT_ROBOT_ID, ROBOTS, RobotEntry, competition_arm, find_robot, robot_ids_csv,
-    shared_competition_arm,
+    DEFAULT_ROBOT_ID, ROBOTS, RobotEntry, find_robot, robot_ids_csv, shared_competition_arm,
 };
 pub use loader::{MountPreset, RobotBuildError, RobotBuilder, SimRobot};
 pub use serial::{SerialChain, SerialChainError, SerialJoint};
@@ -30,7 +28,6 @@ pub use state::RobotState;
 pub use urdf::{UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfRobot};
 
 use self::rail::LinearRail;
-use crate::constants::ARM_POSITION_LINKS;
 use crate::error::SwingPlanError;
 use crate::geometry::Point3;
 
@@ -59,12 +56,6 @@ impl RobotPose {
     pub fn new(rail_x: f64, joints: Joints) -> Self {
         return Self { rail_x, joints };
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum ArmKinematics {
-    Canonical4Dof,
-    Serial(SerialChain),
 }
 
 /// revolute 관절 1축 허용 범위 [rad].
@@ -104,7 +95,7 @@ pub struct Arm {
     /// 관절 추종 최대 각속도 [rad/s]
     pub max_joint_speed: f64,
     /// FK/IK 구현. URDF 로봇은 원본 고정 변환과 축을 보존한 직렬 체인을 쓴다.
-    pub(crate) kinematics: ArmKinematics,
+    pub(crate) chain: SerialChain,
 }
 
 /// 월드 좌표계 라켓 자세 - sim/real 동일 표현.
@@ -116,25 +107,6 @@ pub struct RacketPose {
     pub normal: Vector3<f64>,
     /// Hamilton 단위 쿼터니언 (w, x, y, z) - 어댑터가 SDK 회전으로 변환
     pub orientation: [f64; 4],
-}
-
-/// 2R planar 체인: 어깨/팔꿈치 각 -> (reach, height) 및 중간 점.
-#[derive(Debug, Clone, Copy)]
-struct PlanarPose {
-    reach: f64,
-    height: f64,
-    elbow_reach: f64,
-    elbow_height: f64,
-}
-
-fn planar_2r(l1: f64, l2: f64, a1: f64, a2: f64) -> PlanarPose {
-    let elbow = a1 + a2;
-    return PlanarPose {
-        reach: l1 * a1.cos() + l2 * elbow.cos(),
-        height: l1 * a1.sin() + l2 * elbow.sin(),
-        elbow_reach: l1 * a1.cos(),
-        elbow_height: l1 * a1.sin(),
-    };
 }
 
 impl Arm {
@@ -198,7 +170,7 @@ impl Arm {
             limits,
             default_joints,
             max_joint_speed,
-            kinematics: ArmKinematics::Serial(chain),
+            chain,
         });
     }
 
@@ -263,16 +235,8 @@ impl Arm {
             .build();
     }
 
-    fn planar_link_lengths(&self) -> (f64, f64) {
-        return (self.link_lengths[0], self.link_lengths[1]);
-    }
-
     fn arm_length(&self) -> f64 {
-        if let ArmKinematics::Serial(chain) = &self.kinematics {
-            return chain.approximate_reach();
-        }
-        let (l1, l2) = self.planar_link_lengths();
-        return l1 + l2;
+        return self.chain.approximate_reach();
     }
 
     /// revolute 축(관절) 개수.
@@ -286,11 +250,10 @@ impl Arm {
 
     /// 라켓 open을 담당하는 관절. 3축 위치 체인은 별도 손목이 없다.
     pub fn wrist_joint_index(&self) -> Option<usize> {
-        return match &self.kinematics {
-            ArmKinematics::Canonical4Dof => Some(3),
-            ArmKinematics::Serial(chain) if chain.joints.len() >= 4 => Some(chain.joints.len() - 1),
-            ArmKinematics::Serial(_) => None,
-        };
+        if self.chain.joints.len() >= 4 {
+            return Some(self.chain.joints.len() - 1);
+        }
+        return None;
     }
 
     /// `default_joints`로 초기화된 런타임 상태.
@@ -330,75 +293,26 @@ impl Arm {
 
     /// 주어진 마운트 원점에서 FK.
     pub fn forward_kinematics_at(&self, mount: Point3, joints: &Joints) -> Option<RacketPose> {
-        if let ArmKinematics::Serial(chain) = &self.kinematics {
-            let (ee, _) = chain.forward_with_joint_frames(mount.v, &joints.values)?;
-            return Some(racket_pose_from_isometry(ee));
-        }
-        if joints.values.len() != SUPPORTED_FK_JOINTS
-            || self.link_lengths.len() < ARM_POSITION_LINKS
-        {
-            return None;
-        }
-        let yaw = joints.values[0];
-        let a1 = joints.values[1];
-        let a2 = joints.values[2];
-        let wrist_open = joints.values[3];
-        let (l1, l2) = self.planar_link_lengths();
-        let planar = planar_2r(l1, l2, a1, a2);
-
-        let offset = Vector3::new(
-            planar.reach * yaw.sin(),
-            planar.reach * yaw.cos(),
-            planar.height,
-        );
-        let position = Point3::from_vector(mount.v + offset);
-        let (normal, orientation) = racket_face_toward_opponent(yaw, wrist_open);
-
-        return Some(RacketPose {
-            position,
-            normal,
-            orientation,
-        });
+        let (ee, _) = self.chain.forward_with_joint_frames(mount.v, &joints.values)?;
+        return Some(racket_pose_from_isometry(ee));
     }
 
     /// 마운트부터 EE까지의 체인 점 - OBB/뷰어 공용.
     pub fn chain_points(&self, rail_x: f64, joints: &Joints) -> Option<Vec<Vector3<f64>>> {
-        if let ArmKinematics::Serial(chain) = &self.kinematics {
-            let mount = self.mount_at_rail(rail_x).v;
-            let (ee, frames) = chain.forward_with_joint_frames(mount, &joints.values)?;
-            let mut points = Vec::with_capacity(frames.len() + 2);
-            points.push(mount);
-            for (position, _) in frames {
-                if (position - *points.last().expect("mount")).norm_squared() > 1e-16 {
-                    points.push(position);
-                }
-            }
-            let ee_position = ee.translation.vector;
-            if (ee_position - *points.last().expect("mount")).norm_squared() > 1e-16 {
-                points.push(ee_position);
-            }
-            return Some(points);
-        }
-        if joints.values.len() != SUPPORTED_FK_JOINTS
-            || self.link_lengths.len() < ARM_POSITION_LINKS
-        {
-            return None;
-        }
-        let yaw = joints.values[0];
-        let a1 = joints.values[1];
-        let a2 = joints.values[2];
-        let (l1, l2) = self.planar_link_lengths();
-        let planar = planar_2r(l1, l2, a1, a2);
         let mount = self.mount_at_rail(rail_x).v;
-
-        let to_world = |reach: f64, height: f64| -> Vector3<f64> {
-            return mount + Vector3::new(reach * yaw.sin(), reach * yaw.cos(), height);
-        };
-
-        let base = mount;
-        let elbow = to_world(planar.elbow_reach, planar.elbow_height);
-        let wrist = to_world(planar.reach, planar.height);
-        return Some(vec![base, elbow, wrist]);
+        let (ee, frames) = self.chain.forward_with_joint_frames(mount, &joints.values)?;
+        let mut points = Vec::with_capacity(frames.len() + 2);
+        points.push(mount);
+        for (position, _) in frames {
+            if (position - *points.last().expect("mount")).norm_squared() > 1e-16 {
+                points.push(position);
+            }
+        }
+        let ee_position = ee.translation.vector;
+        if (ee_position - *points.last().expect("mount")).norm_squared() > 1e-16 {
+            points.push(ee_position);
+        }
+        return Some(points);
     }
 
     /// 손목 open [rad]을 한계 안으로 넣어 새 `Joints`를 만든다.
@@ -413,11 +327,7 @@ impl Arm {
         let Some(wrist_index) = self.wrist_joint_index() else {
             return Ok(joints.clone());
         };
-        let requested = if matches!(&self.kinematics, ArmKinematics::Serial(_)) {
-            -open
-        } else {
-            open
-        };
+        let requested = -open;
         let clamped = self
             .joint_limit(wrist_index)
             .map_or(requested, |limit| requested.clamp(limit.min, limit.max));
@@ -623,96 +533,6 @@ impl Arm {
         target: Point3,
         hint: Option<&Joints>,
     ) -> Result<Joints, SwingPlanError> {
-        if matches!(&self.kinematics, ArmKinematics::Serial(_)) {
-            return self.inverse_kinematics_serial(mount, target, hint);
-        }
-        if self.joint_count() != SUPPORTED_FK_JOINTS {
-            return Err(SwingPlanError::InverseKinematicsNoSolution {
-                target_x: target.v.x,
-                target_y: target.v.y,
-                target_z: target.v.z,
-            });
-        }
-
-        let rel = target.v - mount.v;
-        let planar_reach = (rel.x * rel.x + rel.y * rel.y).sqrt();
-        let planar_height = rel.z;
-        let yaw = rel.x.atan2(rel.y);
-
-        let (l1, l2) = self.planar_link_lengths();
-        let d_sq = planar_reach * planar_reach + planar_height * planar_height;
-        let reach = d_sq.sqrt();
-
-        const EPS: f64 = 1e-6;
-        let reach_max = l1 + l2;
-        let reach_min = (l1 - l2).abs();
-        if reach > reach_max + EPS || reach < reach_min - EPS {
-            return Err(SwingPlanError::InverseKinematicsNoSolution {
-                target_x: target.v.x,
-                target_y: target.v.y,
-                target_z: target.v.z,
-            });
-        }
-
-        let wrist = hint
-            .and_then(|h| h.values.get(3).copied())
-            .unwrap_or(self.default_joints.values[3]);
-        let wrist = self
-            .joint_limit(3)
-            .map_or(wrist, |limit| wrist.clamp(limit.min, limit.max));
-
-        let cos_a2 = ((d_sq - l1 * l1 - l2 * l2) / (2.0 * l1 * l2)).clamp(-1.0, 1.0);
-        let a2_mag = cos_a2.acos();
-        let alpha = planar_height.atan2(planar_reach);
-
-        let mut candidates: Vec<Joints> = Vec::with_capacity(2);
-        for &a2 in &[a2_mag, -a2_mag] {
-            let a1 = alpha - (l2 * a2.sin()).atan2(l1 + l2 * a2.cos());
-            candidates.push(Joints::from_slice(&[yaw, a1, a2, wrist]));
-        }
-
-        candidates.sort_by(|a, b| {
-            let score_a = ik_hint_distance(a, hint);
-            let score_b = ik_hint_distance(b, hint);
-            score_a
-                .partial_cmp(&score_b)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        for joints in &candidates {
-            if self.joints_in_limits(joints) {
-                return Ok(joints.clone());
-            }
-        }
-
-        if let Some(joints) = candidates.first() {
-            for (joint_index, (&angle, limit)) in
-                joints.values.iter().zip(self.limits.iter()).enumerate()
-            {
-                if let Some(limit) = limit.filter(|limit| !limit.contains(angle)) {
-                    return Err(SwingPlanError::JointLimit {
-                        joint_index,
-                        value: angle,
-                        min: limit.min,
-                        max: limit.max,
-                    });
-                }
-            }
-        }
-
-        return Err(SwingPlanError::InverseKinematicsNoSolution {
-            target_x: target.v.x,
-            target_y: target.v.y,
-            target_z: target.v.z,
-        });
-    }
-
-    fn inverse_kinematics_serial(
-        &self,
-        mount: Point3,
-        target: Point3,
-        hint: Option<&Joints>,
-    ) -> Result<Joints, SwingPlanError> {
         const MAX_ITERS: usize = 300;
         const TOLERANCE: f64 = 1e-5;
         const DAMPING: f64 = 1e-3;
@@ -823,11 +643,6 @@ impl Arm {
         );
     }
 
-    /// 월드 목표를 팔 도달 반경 안으로 당긴다 (고정 베이스/레일 없을 때).
-    pub fn clamp_to_reach(&self, target: Point3) -> Point3 {
-        return Self::clamp_preserving_y(self.base, target, self.arm_length());
-    }
-
     /// `y`(접수 깊이)를 우선 보존하며 도달 구 안으로 투영한다.
     fn clamp_preserving_y(mount: Point3, target: Point3, arm_length: f64) -> Point3 {
         let max_reach = (arm_length - 1e-3).max(0.0);
@@ -845,84 +660,29 @@ impl Arm {
             let lat_norm = lateral.norm();
             if lat_norm > 1e-9 {
                 let scale = (max_lat / lat_norm).min(1.0);
-                return Point3::from_vector(
+                return Point3::from(
                     mount.v + Vector3::new(lateral.x * scale, y_comp, lateral.z * scale),
                 );
             }
-            return Point3::from_vector(mount.v + Vector3::new(0.0, y_comp, 0.0));
+            return Point3::from(mount.v + Vector3::new(0.0, y_comp, 0.0));
         }
 
         // y 자체만으로도 도달 불능 - 구면 투영 폴백
-        return Point3::from_vector(mount.v + rel * (max_reach / distance));
+        return Point3::from(mount.v + rel * (max_reach / distance));
     }
 
-    /// 라켓 위치에 대한 3xN 자코비안 `dp/dq`.
-    pub fn position_jacobian(&self, joints: &Joints) -> Option<DMatrix<f64>> {
-        return self.position_jacobian_at(self.base, joints);
-    }
-
+    /// 라켓 위치에 대한 3xN 자코비안 `dp/dq` (마운트 기준).
     fn position_jacobian_at(&self, mount: Point3, joints: &Joints) -> Option<DMatrix<f64>> {
-        if let ArmKinematics::Serial(chain) = &self.kinematics {
-            let (ee, frames) = chain.forward_with_joint_frames(mount.v, &joints.values)?;
-            let ee_position = ee.translation.vector;
-            let mut jacobian = DMatrix::zeros(3, frames.len());
-            for (index, (joint_position, joint_axis)) in frames.iter().enumerate() {
-                let column = joint_axis.cross(&(ee_position - joint_position));
-                jacobian[(0, index)] = column.x;
-                jacobian[(1, index)] = column.y;
-                jacobian[(2, index)] = column.z;
-            }
-            return Some(jacobian);
+        let (ee, frames) = self.chain.forward_with_joint_frames(mount.v, &joints.values)?;
+        let ee_position = ee.translation.vector;
+        let mut jacobian = DMatrix::zeros(3, frames.len());
+        for (index, (joint_position, joint_axis)) in frames.iter().enumerate() {
+            let column = joint_axis.cross(&(ee_position - joint_position));
+            jacobian[(0, index)] = column.x;
+            jacobian[(1, index)] = column.y;
+            jacobian[(2, index)] = column.z;
         }
-        if joints.values.len() != SUPPORTED_FK_JOINTS {
-            return None;
-        }
-        let yaw = joints.values[0];
-        let a1 = joints.values[1];
-        let a2 = joints.values[2];
-        let elbow = a1 + a2;
-        let (l1, l2) = self.planar_link_lengths();
-
-        let dreach_da1 = -l1 * a1.sin() - l2 * elbow.sin();
-        let dreach_da2 = -l2 * elbow.sin();
-        let dheight_da1 = l1 * a1.cos() + l2 * elbow.cos();
-        let dheight_da2 = l2 * elbow.cos();
-
-        let planar = planar_2r(l1, l2, a1, a2);
-
-        let dyaw = Vector3::new(planar.reach * yaw.cos(), -planar.reach * yaw.sin(), 0.0);
-        let da1 = Vector3::new(yaw.sin() * dreach_da1, yaw.cos() * dreach_da1, dheight_da1);
-        let da2 = Vector3::new(yaw.sin() * dreach_da2, yaw.cos() * dreach_da2, dheight_da2);
-
-        let position = Matrix3::from_columns(&[dyaw, da1, da2]);
-        let mut jacobian = DMatrix::zeros(3, SUPPORTED_FK_JOINTS);
-        jacobian.view_mut((0, 0), (3, 3)).copy_from(&position);
         return Some(jacobian);
-    }
-
-    /// 엔드이펙터 선속도에서 감쇠 최소제곱 관절 각속도를 구한다.
-    pub fn joint_velocities_for_ee_velocity(
-        &self,
-        joints: &Joints,
-        ee_velocity: Vector3<f64>,
-    ) -> Result<Vec<f64>, SwingPlanError> {
-        let j =
-            self.position_jacobian(joints)
-                .ok_or(SwingPlanError::InverseKinematicsNoSolution {
-                    target_x: 0.0,
-                    target_y: 0.0,
-                    target_z: 0.0,
-                })?;
-        let regularized = &j * j.transpose() + Matrix3::identity() * 1e-6;
-        let Some(inverse) = regularized.try_inverse() else {
-            return Err(SwingPlanError::InverseKinematicsNoSolution {
-                target_x: ee_velocity.x,
-                target_y: ee_velocity.y,
-                target_z: ee_velocity.z,
-            });
-        };
-        let q_dot = j.transpose() * (inverse * ee_velocity);
-        return Ok(q_dot.iter().copied().collect());
     }
 
     /// 라켓 면 법선을 유지하는 레일·관절 속도 역산.
@@ -1039,40 +799,6 @@ impl Arm {
     }
 }
 
-fn ik_hint_distance(joints: &Joints, hint: Option<&Joints>) -> f64 {
-    let Some(hint) = hint else {
-        return 0.0;
-    };
-    return joints
-        .values
-        .iter()
-        .zip(hint.values.iter())
-        .map(|(a, b)| (a - b).abs())
-        .sum();
-}
-
-/// 라켓 면 법선/자세 - 상대(yaw 방향)를 보고 `open`만큼 연다.
-///
-/// sim 콜라이더/뷰어 큐브는 local +Z가 얇은 축(면 법선)이다.
-fn racket_face_toward_opponent(yaw: f64, open: f64) -> (Vector3<f64>, [f64; 4]) {
-    let cy = yaw.cos();
-    let sy = yaw.sin();
-    let cp = open.cos();
-    let sp = open.sin();
-    // yaw=0 -> +Y(슈터/상대), open -> +Z 성분
-    let normal = Vector3::new(sy * cp, cy * cp, sp).normalize();
-    // 면 위쪽(local +Y): 월드 대략 +Z에 가깝게
-    let mut face_up = Vector3::new(-sy * sp, -cy * sp, cp);
-    if face_up.norm() < 1e-9 {
-        face_up = Vector3::new(0.0, 0.0, 1.0);
-    } else {
-        face_up = face_up.normalize();
-    }
-    let face_right = face_up.cross(&normal).normalize();
-    let face_up = normal.cross(&face_right).normalize();
-    return (normal, rotation_matrix_to_quat(face_right, face_up, normal));
-}
-
 fn racket_pose_from_isometry(iso: Isometry3<f64>) -> RacketPose {
     // 4-dof CAD 라켓 링크 계약: local +Y=면 법선(얇은 mesh 축), +Z=위.
     // 기구학/Rapier 라켓 계약: local +Z=면 법선, +Y=위.
@@ -1084,16 +810,8 @@ fn racket_pose_from_isometry(iso: Isometry3<f64>) -> RacketPose {
     let orientation = iso.rotation * link_from_racket;
     let q = orientation.quaternion();
     return RacketPose {
-        position: Point3::from_vector(iso.translation.vector),
+        position: Point3::from(iso.translation.vector),
         normal,
         orientation: [q.w, q.i, q.j, q.k],
     };
-}
-
-/// 열 (local X,Y,Z) -> 월드 기저로 가는 회전의 Hamilton 쿼터니언 (w,x,y,z).
-fn rotation_matrix_to_quat(x: Vector3<f64>, y: Vector3<f64>, z: Vector3<f64>) -> [f64; 4] {
-    let matrix = Matrix3::from_columns(&[x, y, z]);
-    let q = UnitQuaternion::from_matrix(&matrix);
-    let p = q.into_inner();
-    return [p.w, p.i, p.j, p.k];
 }

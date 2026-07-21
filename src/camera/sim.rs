@@ -46,7 +46,7 @@ impl SimCamera {
         let remaining = if frames == 0 { None } else { Some(frames) };
         return Self {
             camera_id,
-            view: CameraView::for_camera_index(camera_id.index(), camera_count),
+            view: CameraView::for_camera_index(camera_id.0, camera_count),
             world,
             clock,
             remaining,

@@ -1,8 +1,5 @@
 //! 로봇 카탈로그 — **여기만** 만진다 (id·URDF·EE·제어 속도).
 //!
-//! `base_xyz`는 Arm 빌더에, URDF mesh 월드 배치는 bin이 탁구대 끝에 고정한다
-//! (infra `SimRobotMount` — “마운트” = 시뮬 월드에 로봇 루트를 올리는 위치·자세).
-//!
 //! URDF가 있는 항목은 URDF 자체가 제어·FK·IK·뷰어의 단일 모델이다.
 
 use std::path::{Path, PathBuf};
@@ -56,13 +53,6 @@ pub static ROBOTS: LazyLock<Vec<RobotEntry>> = LazyLock::new(|| {
             primitive: None,
         },
         RobotEntry {
-            id: "competition-urdf",
-            urdf_rel: Some("assets/robots/competition_arm.urdf"),
-            ee_link: Some("racket_link"),
-            max_joint_speed: 2.5,
-            primitive: None,
-        },
-        RobotEntry {
             id: "4-dof",
             urdf_rel: Some("assets/robots/4-dof/urdf/all-4-export.urdf"),
             ee_link: Some("pingpong_paddle_v5_1"),
@@ -85,11 +75,6 @@ pub fn shared_competition_arm() -> Arc<Arm> {
         .expect("DEFAULT_ROBOT_ID")
         .primitive_arm()
         .expect("기본 로봇은 primitive");
-}
-
-pub fn competition_arm() -> Result<Arm, ArmBuildError> {
-    let entry = find_robot(DEFAULT_ROBOT_ID).expect("DEFAULT_ROBOT_ID");
-    return entry.primitive.expect("기본 로봇은 primitive")();
 }
 
 #[cfg(test)]

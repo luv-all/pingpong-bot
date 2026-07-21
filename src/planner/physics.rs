@@ -59,7 +59,7 @@ pub fn plan_swing(
     let ik_hint = arm
         .with_wrist_open(&start.joints, Arm::wrist_open_for_return(v_out - v_in))
         .map_err(DomainError::InfeasibleSwing)?;
-    let racket_center = crate::Point3::from_vector(
+    let racket_center = crate::Point3::from(
         impact_position.v
             - desired_normal
                 * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z),

@@ -100,6 +100,165 @@ impl OpenCvCapture {
     pub fn timeline_fps(&self) -> Option<f64> {
         return self.timeline.map(|(_, f)| f);
     }
+
+    /// 드라이버가 보고하는 프레임 크기. 미지원이면 `None`.
+    pub fn reported_size(&self) -> Option<(i32, i32)> {
+        let w = self.cap.get(videoio::CAP_PROP_FRAME_WIDTH).ok()?;
+        let h = self.cap.get(videoio::CAP_PROP_FRAME_HEIGHT).ok()?;
+        if w > 0.0 && h > 0.0 {
+            return Some((w.round() as i32, h.round() as i32));
+        }
+        return None;
+    }
+
+    /// 드라이버 `CAP_PROP_FPS`. 라이브 웹캠은 0/엉터리인 경우가 많다.
+    pub fn reported_fps(&self) -> Option<f64> {
+        let fps = self.cap.get(videoio::CAP_PROP_FPS).ok()?;
+        if fps.is_finite() && fps > 1.0 {
+            return Some(fps);
+        }
+        return None;
+    }
+
+    /// 현재 FOURCC 네 글자 (`MJPG`, `YUY2` 등). 미지원이면 `None`.
+    pub fn reported_fourcc(&self) -> Option<String> {
+        let code = self.cap.get(videoio::CAP_PROP_FOURCC).ok()? as i32;
+        if code == 0 {
+            return None;
+        }
+        let bytes = [
+            (code & 0xff) as u8,
+            ((code >> 8) & 0xff) as u8,
+            ((code >> 16) & 0xff) as u8,
+            ((code >> 24) & 0xff) as u8,
+        ];
+        let s: String = bytes
+            .iter()
+            .map(|&b| if b.is_ascii_graphic() { b as char } else { '?' })
+            .collect();
+        return Some(s);
+    }
+
+    /// UVC 스트림 모드 요청 (Arducam B0332 등은 **MJPG**여야 고FPS).
+    ///
+    /// 예: `1280×800` + `120` + `MJPG`. 드라이버가 무시할 수 있으니
+    /// [`reported_fourcc`] / [`reported_fps`]로 확인한다.
+    pub fn request_stream(
+        &mut self,
+        width: i32,
+        height: i32,
+        fps: f64,
+        fourcc: &[u8; 4],
+    ) -> Result<(), String> {
+        let code = videoio::VideoWriter::fourcc(
+            fourcc[0] as char,
+            fourcc[1] as char,
+            fourcc[2] as char,
+            fourcc[3] as char,
+        )
+        .map_err(|e| format!("FOURCC: {e}"))?;
+        let _ = self.cap.set(videoio::CAP_PROP_FOURCC, f64::from(code));
+        let _ = self
+            .cap
+            .set(videoio::CAP_PROP_FRAME_WIDTH, f64::from(width));
+        let _ = self
+            .cap
+            .set(videoio::CAP_PROP_FRAME_HEIGHT, f64::from(height));
+        let _ = self.cap.set(videoio::CAP_PROP_FPS, fps);
+        return Ok(());
+    }
+
+    /// 노출 관련 드라이버 값 스냅샷 (macOS AVFoundation이면 대개 0 / 무시).
+    pub fn exposure_readout(&self) -> ExposureReadout {
+        return ExposureReadout {
+            auto: self.cap.get(videoio::CAP_PROP_AUTO_EXPOSURE).ok(),
+            exposure: self.cap.get(videoio::CAP_PROP_EXPOSURE).ok(),
+            gain: self.cap.get(videoio::CAP_PROP_GAIN).ok(),
+            backend: self
+                .cap
+                .get_backend_name()
+                .ok()
+                .unwrap_or_else(|| "?".into()),
+        };
+    }
+
+    /// 자동노출 off + 짧은 노출 시도. `set`이 하나라도 true면 `Ok(true)`.
+    /// macOS AVFoundation은 보통 전부 실패한다.
+    pub fn request_short_exposure(&mut self) -> bool {
+        // V4L2: 0.25=manual, 1=manual(일부). DirectShow도 유사.
+        let mut any = false;
+        for auto in [0.25, 1.0, 0.75] {
+            if self
+                .cap
+                .set(videoio::CAP_PROP_AUTO_EXPOSURE, auto)
+                .unwrap_or(false)
+            {
+                any = true;
+                break;
+            }
+        }
+        // 드라이버마다 스케일이 다름 — 짧은 쪽 후보를 여러 개 시도.
+        for exp in [-13.0, -11.0, -8.0, -6.0, 1.0, 5.0, 10.0] {
+            if self
+                .cap
+                .set(videoio::CAP_PROP_EXPOSURE, exp)
+                .unwrap_or(false)
+            {
+                any = true;
+                break;
+            }
+        }
+        return any;
+    }
+
+    /// 자동노출 복구 시도.
+    pub fn request_auto_exposure(&mut self) -> bool {
+        let mut any = false;
+        for auto in [3.0, 0.75, 1.0] {
+            if self
+                .cap
+                .set(videoio::CAP_PROP_AUTO_EXPOSURE, auto)
+                .unwrap_or(false)
+            {
+                any = true;
+                break;
+            }
+        }
+        return any;
+    }
+}
+
+/// [`OpenCvCapture::exposure_readout`] 결과.
+#[derive(Debug, Clone)]
+pub struct ExposureReadout {
+    pub auto: Option<f64>,
+    pub exposure: Option<f64>,
+    pub gain: Option<f64>,
+    pub backend: String,
+}
+
+impl ExposureReadout {
+    pub fn summary_line(&self) -> String {
+        let ae = self
+            .auto
+            .map(|v| format!("{v:.2}"))
+            .unwrap_or_else(|| "-".into());
+        let exp = self
+            .exposure
+            .map(|v| format!("{v:.2}"))
+            .unwrap_or_else(|| "-".into());
+        let gain = self
+            .gain
+            .map(|v| format!("{v:.1}"))
+            .unwrap_or_else(|| "-".into());
+        return format!("ae {ae} exp {exp} gain {gain}");
+    }
+
+    /// OpenCV macOS 백엔드는 width/height/fps 외 UVC 컨트롤을 거의 무시한다.
+    pub fn likely_unsupported(&self) -> bool {
+        let b = self.backend.to_ascii_lowercase();
+        return b.contains("avfoundation") || b.contains("avf");
+    }
 }
 
 impl FrameSource for OpenCvCapture {

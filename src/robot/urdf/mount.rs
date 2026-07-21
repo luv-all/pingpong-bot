@@ -31,7 +31,7 @@ pub struct SimRobotMount {
 }
 
 impl SimRobotMount {
-    /// 이미 sim Z-up으로 작성된 URDF (내장 `competition_arm` 등).
+    /// 이미 sim Z-up으로 작성된 URDF.
     pub fn competition_placed() -> Self {
         return Self {
             position: [0.0, 0.02, table::SURFACE_Z],

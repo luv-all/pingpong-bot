@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::ballistics::predict_hit_plane;
+use crate::estimator::ballistics::predict_hit_plane;
 use crate::{BallEkf, Estimator, HitPlane, Point3, Prediction};
 use nalgebra::Vector3;
 

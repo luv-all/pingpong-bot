@@ -182,11 +182,7 @@ pub fn draw(
             ui.separator();
             ui.heading("Status");
             if let Some(status) = status {
-                let ball_state = match status.ball_state {
-                    BallState::Parked => "parked",
-                    BallState::InFlight => "in flight",
-                };
-                ui.label(format!("ball: {ball_state}"));
+                ui.label(format!("ball: {}", status.ball_state));
                 ui.label(format!("sim time: {:.2} s", status.sim_time));
                 ui.label(format!(
                     "pos: ({:.2}, {:.2}, {:.2}) m",

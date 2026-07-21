@@ -20,8 +20,7 @@ use crossbeam_queue::ArrayQueue;
 use tracing::{info, info_span, warn};
 
 pub use crate::robot::catalog::{
-    DEFAULT_ROBOT_ID, ROBOTS, RobotEntry, competition_arm, find_robot, robot_ids_csv,
-    shared_competition_arm,
+    DEFAULT_ROBOT_ID, ROBOTS, RobotEntry, find_robot, robot_ids_csv, shared_competition_arm,
 };
 
 const OBSERVATION_CHANNEL_CAPACITY: usize = 64;
@@ -84,7 +83,7 @@ pub fn run(
         handles.push((
             PipelineThread::Camera,
             thread::spawn(move || {
-                pin_to_performance_core();
+
                 match feed {
                     CameraFeed::Hint(mut camera) => {
                         while let Some((camera_id, hint, timestamp)) = camera.next_hint() {
@@ -146,7 +145,6 @@ pub fn run(
     handles.push((
         PipelineThread::Estimation,
         thread::spawn(move || {
-            pin_to_performance_core();
             let mut series: Vec<(CameraId, Vec<BallObservation>)> = calibration
                 .cameras
                 .iter()
@@ -215,7 +213,6 @@ pub fn run(
     handles.push((
         PipelineThread::Control,
         thread::spawn(move || {
-            pin_to_performance_core();
             let mut last_plan_warn = Instant::now() - Duration::from_secs(10);
             loop {
                 if let Some(candidates) = slot.pop() {
@@ -275,10 +272,6 @@ pub fn run(
 
     info!("파이프라인 종료");
     return Ok(());
-}
-
-fn pin_to_performance_core() {
-    // 나중에 core_affinity 로 P-core 고정
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

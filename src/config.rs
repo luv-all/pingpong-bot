@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use pingpong_bot::Calibration;
+use pingpong_bot::VisionConfig;
 use pingpong_bot::hardware::dynamixel::DynamixelConfig;
 use pingpong_bot::{InterceptWindow, PhysicsParams};
 use serde::Deserialize;
@@ -39,12 +40,12 @@ pub struct InterceptConfig {
     pub sample_step: f64,
 }
 
-impl InterceptConfig {
-    pub fn window(self) -> InterceptWindow {
+impl From<InterceptConfig> for InterceptWindow {
+    fn from(c: InterceptConfig) -> Self {
         return InterceptWindow {
-            y_min: self.y_min,
-            y_max: self.y_max,
-            sample_step: self.sample_step,
+            y_min: c.y_min,
+            y_max: c.y_max,
+            sample_step: c.sample_step,
         };
     }
 }
@@ -54,97 +55,6 @@ impl InterceptConfig {
 #[serde(default)]
 pub struct HardwareConfig {
     pub dynamixel: Option<DynamixelConfig>,
-}
-
-/// 실물 비전 설정 (`[vision]`).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct VisionConfig {
-    /// `colormask` | `bgsub` | `contour` | `roi`
-    pub detector: String,
-    pub cameras: Vec<VisionCameraConfig>,
-    #[serde(default)]
-    pub colormask: ColormaskToml,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct VisionCameraConfig {
-    pub id: u8,
-    pub device: Option<i32>,
-    pub path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(default)]
-pub struct ColormaskToml {
-    pub space: String,
-    pub y_min: u8,
-    pub y_max: u8,
-    pub cr_min: u8,
-    pub cr_max: u8,
-    pub cb_min: u8,
-    pub cb_max: u8,
-    pub h_min: u8,
-    pub h_max: u8,
-    pub s_min: u8,
-    pub s_max: u8,
-    pub v_min: u8,
-    pub v_max: u8,
-    pub min_area_px: f64,
-    pub max_area_px: f64,
-}
-
-impl Default for ColormaskToml {
-    fn default() -> Self {
-        return Self {
-            space: "ycrcb".into(),
-            y_min: 0,
-            y_max: 255,
-            cr_min: 133,
-            cr_max: 173,
-            cb_min: 77,
-            cb_max: 127,
-            h_min: 5,
-            h_max: 25,
-            s_min: 80,
-            s_max: 255,
-            v_min: 80,
-            v_max: 255,
-            min_area_px: 20.0,
-            max_area_px: 20_000.0,
-        };
-    }
-}
-
-impl ColormaskToml {
-    pub fn to_config(&self) -> Result<pingpong_bot::ColormaskConfig> {
-        use pingpong_bot::{ColorSpace, ColormaskConfig};
-        let space = ColorSpace::parse(&self.space)
-            .with_context(|| format!("unknown vision.colormask.space `{}`", self.space))?;
-        let (c0_min, c0_max, c1_min, c1_max, c2_min, c2_max) = match space {
-            ColorSpace::Ycrcb => (
-                self.y_min,
-                self.y_max,
-                self.cr_min,
-                self.cr_max,
-                self.cb_min,
-                self.cb_max,
-            ),
-            ColorSpace::Hsv => (
-                self.h_min, self.h_max, self.s_min, self.s_max, self.v_min, self.v_max,
-            ),
-        };
-        return Ok(ColormaskConfig {
-            space,
-            c0_min,
-            c0_max,
-            c1_min,
-            c1_max,
-            c2_min,
-            c2_max,
-            min_area_px: self.min_area_px,
-            max_area_px: self.max_area_px,
-        });
-    }
 }
 
 /// TOML 하나로 로드하는 전체 런타임 설정.
@@ -165,9 +75,9 @@ pub struct RuntimeConfig {
     pub sim: SimConfig,
     #[serde(default)]
     pub hardware: HardwareConfig,
-    /// 실물 OpenCV 캡처·검출. 없으면 real은 모터 스모크만.
+    /// 검출 튜닝(+ optional cameras). 없으면 임베드 `config/default.toml` `[vision]`.
     #[serde(default)]
-    pub vision: Option<VisionConfig>,
+    pub vision: VisionConfig,
     /// 물리 계수 — `tools/measure_*`가 `[physics]`에 merge
     pub physics: PhysicsParams,
     /// 상대 asset 경로의 기준 디렉터리.
@@ -213,7 +123,9 @@ impl RuntimeConfig {
             "intercept.sample_step은 0보다 커야 합니다"
         );
         ensure!(
-            !self.intercept.window().hit_planes().is_empty(),
+            !InterceptWindow::from(self.intercept)
+                .hit_planes()
+                .is_empty(),
             "intercept 후보 수가 너무 많습니다"
         );
         ensure!(
@@ -240,28 +152,20 @@ impl RuntimeConfig {
             self.physics.drag.is_finite() && self.physics.drag >= 0.0,
             "physics.drag는 0 이상이어야 합니다"
         );
+        self.vision.validate_params().context("vision")?;
         if self.mode == RuntimeMode::Real {
             let dynamixel = self
                 .hardware
                 .dynamixel
                 .as_ref()
                 .context("mode=real에는 [hardware.dynamixel] 설정이 필요합니다")?;
-            dynamixel
-                .validate()
-                .map_err(anyhow::Error::msg)
-                .context("hardware.dynamixel")?;
-            if let Some(vision) = &self.vision {
+            dynamixel.validate().context("hardware.dynamixel")?;
+            if !self.vision.cameras.is_empty() {
                 ensure!(
                     self.calibration_path.is_some(),
-                    "mode=real + [vision]에는 calibration_path가 필요합니다"
+                    "mode=real + vision.cameras에는 calibration_path가 필요합니다"
                 );
-                ensure!(!vision.cameras.is_empty(), "vision.cameras가 비어 있습니다");
-                ensure!(
-                    pingpong_bot::DetectorKind::parse(&vision.detector).is_some(),
-                    "vision.detector는 colormask|bgsub|contour|roi 중 하나여야 합니다"
-                );
-                vision.colormask.to_config().context("vision.colormask")?;
-                for cam in &vision.cameras {
+                for cam in &self.vision.cameras {
                     ensure!(
                         cam.device.is_some() ^ cam.path.is_some(),
                         "vision.cameras id={} 는 device 또는 path 중 하나만 필요합니다",
@@ -271,11 +175,6 @@ impl RuntimeConfig {
             }
         }
         return Ok(());
-    }
-
-    /// `[physics]` → concrete [`PhysicsParams`].
-    pub fn physics_params(&self) -> PhysicsParams {
-        return self.physics;
     }
 
     /// 설정 파일 위치를 기준으로 Calibration 경로를 해석한다.
@@ -306,16 +205,11 @@ impl RuntimeConfig {
         return Ok(Calibration::sim(self.camera_count));
     }
 
-    fn resolve_path(&self, path: &Path) -> PathBuf {
+    pub(crate) fn resolve_path(&self, path: &Path) -> PathBuf {
         if path.is_absolute() {
             return path.to_path_buf();
         }
         return self.source_dir.join(path);
-    }
-
-    /// TOML 기준 상대 경로 해석 (비전 path 등).
-    pub fn resolve_asset(&self, path: &Path) -> PathBuf {
-        return self.resolve_path(path);
     }
 }
 

@@ -33,8 +33,8 @@ impl RealHardware {
     /// 포트를 열지 않지만 실제 좌표 변환·리밋·executor 경로를 그대로 사용한다.
     pub fn dry_run(config: DynamixelConfig) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
-        let mut bus = DynamixelBus::dry_run(config).map_err(|_| HwError::ReadFailed {
-            detail: crate::HwFailDetail::Transport,
+        let mut bus = DynamixelBus::dry_run(config).map_err(|e| HwError::InvalidConfig {
+            reason: e.to_string(),
         })?;
         bus.enable_torque(true)?;
         return Ok(Self::from_bus(bus, stream_hz));
@@ -115,9 +115,7 @@ impl Hardware for RealHardware {
         let joints = self
             .bus
             .lock()
-            .map_err(|_| HwError::ReadFailed {
-                detail: crate::HwFailDetail::Transport,
-            })?
+            .map_err(|_| HwError::ReadFailed)?
             .read_joints()?;
         return Ok(RobotPose::new(self.rail.read_x(), joints));
     }

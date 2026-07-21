@@ -6,7 +6,7 @@ use urdf_rs::JointType;
 
 use super::{UrdfLoadError, UrdfRobot, fk};
 
-pub fn try_into_arm(urdf: &UrdfRobot, max_joint_speed: f64) -> Result<Arm, UrdfLoadError> {
+pub fn to_arm(urdf: &UrdfRobot, max_joint_speed: f64) -> Result<Arm, UrdfLoadError> {
     let defaults = urdf.default_joints();
     let limits = urdf.joint_limits();
     let template = Arm::competition().map_err(|e| UrdfLoadError::ArmConversion {
@@ -53,7 +53,7 @@ pub fn try_into_arm(urdf: &UrdfRobot, max_joint_speed: f64) -> Result<Arm, UrdfL
         }
     })?;
     return Arm::from_serial_chain(
-        crate::Point3::from_vector(mount.translation.vector),
+        crate::Point3::from(mount.translation.vector),
         Some(rail),
         chain,
         limits,

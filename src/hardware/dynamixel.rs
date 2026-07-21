@@ -9,15 +9,18 @@ use std::f64::consts::TAU;
 use std::path::Path;
 
 use serde::Deserialize;
+use thiserror::Error;
 
-use crate::{HwError, HwFailDetail, Joints};
+use crate::{HwError, Joints};
 
 /// Python `_pack_u32` — Goal Position / Profile 값 패킹.
+#[cfg(feature = "real")]
 fn pack_u32(value: u32) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
 
 /// Python `_pack_u8` — Torque Enable 패킹.
+#[cfg(feature = "real")]
 fn pack_u8(value: u8) -> Vec<u8> {
     vec![value]
 }
@@ -78,13 +81,38 @@ impl Default for DynamixelConfig {
     }
 }
 
+/// Dynamixel TOML/설정 검증·로드 실패.
+#[derive(Debug, Error)]
+pub enum DynamixelConfigError {
+    #[error("4-DOF RealHardware에는 motor_ids가 4개여야 합니다 (현재 {joint_count})")]
+    MotorCount { joint_count: usize },
+    #[error("{name} 길이 {len} != motor_ids 길이 {joint_count}")]
+    VectorLength {
+        name: &'static str,
+        len: usize,
+        joint_count: usize,
+    },
+    #[error("joint_signs는 -1 또는 1이어야 합니다")]
+    JointSigns,
+    #[error("ticks_per_revolution은 0보다 커야 합니다")]
+    TicksPerRevolution,
+    #[error("현재 RealHardware는 Dynamixel Protocol 2.0만 지원합니다")]
+    ProtocolVersion,
+    #[error("stream_hz는 0보다 커야 합니다")]
+    StreamHz,
+    #[error("motor_angle_limits_deg 범위가 잘못됐습니다")]
+    AngleLimits,
+    #[error("TOML 파싱 실패: {0}")]
+    Toml(#[from] toml::de::Error),
+    #[error("설정 파일 읽기 실패: {0}")]
+    Io(#[from] std::io::Error),
+}
+
 impl DynamixelConfig {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), DynamixelConfigError> {
         let joint_count = self.motor_ids.len();
         if joint_count != 4 {
-            return Err(format!(
-                "4-DOF RealHardware에는 motor_ids가 4개여야 합니다 (현재 {joint_count})"
-            ));
+            return Err(DynamixelConfigError::MotorCount { joint_count });
         }
         for (name, len) in [
             ("joint_signs", self.joint_signs.len()),
@@ -92,27 +120,31 @@ impl DynamixelConfig {
             ("motor_angle_limits_deg", self.motor_angle_limits_deg.len()),
         ] {
             if len != joint_count {
-                return Err(format!("{name} 길이 {len} != motor_ids 길이 {joint_count}"));
+                return Err(DynamixelConfigError::VectorLength {
+                    name,
+                    len,
+                    joint_count,
+                });
             }
         }
         if self.joint_signs.iter().any(|sign| !matches!(sign, -1 | 1)) {
-            return Err("joint_signs는 -1 또는 1이어야 합니다".to_owned());
+            return Err(DynamixelConfigError::JointSigns);
         }
         if self.ticks_per_revolution <= 0 {
-            return Err("ticks_per_revolution은 0보다 커야 합니다".to_owned());
+            return Err(DynamixelConfigError::TicksPerRevolution);
         }
         if self.protocol_version != 2.0 {
-            return Err("현재 RealHardware는 Dynamixel Protocol 2.0만 지원합니다".to_owned());
+            return Err(DynamixelConfigError::ProtocolVersion);
         }
         if !self.stream_hz.is_finite() || self.stream_hz <= 0.0 {
-            return Err("stream_hz는 0보다 커야 합니다".to_owned());
+            return Err(DynamixelConfigError::StreamHz);
         }
         if self
             .motor_angle_limits_deg
             .iter()
             .any(|[lo, hi]| !lo.is_finite() || !hi.is_finite() || lo > hi)
         {
-            return Err("motor_angle_limits_deg 범위가 잘못됐습니다".to_owned());
+            return Err(DynamixelConfigError::AngleLimits);
         }
         return Ok(());
     }
@@ -129,15 +161,14 @@ struct RuntimeHardwareSection {
 }
 
 /// 전체 런타임 TOML에서 `[hardware.dynamixel]`만 읽는다.
-pub fn config_from_toml(text: &str) -> Result<DynamixelConfig, String> {
-    let document: RuntimeHardwareDocument =
-        toml::from_str(text).map_err(|error| error.to_string())?;
+pub fn config_from_toml(text: &str) -> Result<DynamixelConfig, DynamixelConfigError> {
+    let document: RuntimeHardwareDocument = toml::from_str(text)?;
     document.hardware.dynamixel.validate()?;
     return Ok(document.hardware.dynamixel);
 }
 
-pub fn load_config(path: &Path) -> Result<DynamixelConfig, String> {
-    let text = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+pub fn load_config(path: &Path) -> Result<DynamixelConfig, DynamixelConfigError> {
+    let text = std::fs::read_to_string(path)?;
     return config_from_toml(&text);
 }
 
@@ -149,7 +180,7 @@ pub struct MotorMapping {
 }
 
 impl MotorMapping {
-    pub fn new(config: DynamixelConfig) -> Result<Self, String> {
+    pub fn new(config: DynamixelConfig) -> Result<Self, DynamixelConfigError> {
         config.validate()?;
         let tick_limits = config
             .motor_angle_limits_deg
@@ -205,7 +236,7 @@ pub struct DynamixelBus {
 }
 
 impl DynamixelBus {
-    pub fn dry_run(config: DynamixelConfig) -> Result<Self, String> {
+    pub fn dry_run(config: DynamixelConfig) -> Result<Self, DynamixelConfigError> {
         let mapping = MotorMapping::new(config)?;
         let ticks = (0..mapping.config.motor_ids.len())
             .map(|index| mapping.radians_to_ticks(index, 0.0))
@@ -219,7 +250,9 @@ impl DynamixelBus {
 
     #[cfg(feature = "real")]
     pub fn open(config: DynamixelConfig) -> Result<Self, HwError> {
-        let mapping = MotorMapping::new(config).map_err(|_| read_transport_error())?;
+        let mapping = MotorMapping::new(config).map_err(|e| HwError::InvalidConfig {
+            reason: e.to_string(),
+        })?;
         let timeout = std::time::Duration::from_millis(100);
         let port = serialport::new(&mapping.config.port, mapping.config.baudrate)
             .timeout(timeout)
@@ -246,17 +279,18 @@ impl DynamixelBus {
             let present = self.read_raw_ticks()?;
             self.write_raw_goal_ticks(&present, 0.0)?;
         }
-        let ids = self.mapping.config.motor_ids.clone();
-        let data = vec![pack_u8(u8::from(enabled)); ids.len()];
-        let address = self.mapping.config.addr_torque_enable;
-        let retries = self.mapping.config.comm_retries;
-        let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
         match &mut self.backend {
             BusBackend::DryRun { .. } => {}
             #[cfg(feature = "real")]
-            BusBackend::Real(real) => real
-                .sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
-                .map_err(|_| read_transport_error())?,
+            BusBackend::Real(real) => {
+                let ids = self.mapping.config.motor_ids.clone();
+                let data = vec![pack_u8(u8::from(enabled)); ids.len()];
+                let address = self.mapping.config.addr_torque_enable;
+                let retries = self.mapping.config.comm_retries;
+                let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
+                real.sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
+                    .map_err(|_| read_transport_error())?;
+            }
         }
         self.torque_enabled = enabled;
         Ok(())
@@ -283,17 +317,18 @@ impl DynamixelBus {
             return Err(command_transport_error(duration_secs, ticks.len()));
         }
         // Python `_pack_u32` — Goal Position은 unsigned LE 4바이트.
-        let data: Vec<Vec<u8>> = ticks.iter().map(|tick| pack_u32(*tick as u32)).collect();
-        let ids = self.mapping.config.motor_ids.clone();
-        let address = self.mapping.config.addr_goal_position;
-        let retries = self.mapping.config.comm_retries;
-        let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
         match &mut self.backend {
             BusBackend::DryRun { ticks: stored } => stored.clone_from_slice(ticks),
             #[cfg(feature = "real")]
-            BusBackend::Real(real) => real
-                .sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
-                .map_err(|_| command_transport_error(duration_secs, joint_count))?,
+            BusBackend::Real(real) => {
+                let data: Vec<Vec<u8>> = ticks.iter().map(|tick| pack_u32(*tick as u32)).collect();
+                let ids = self.mapping.config.motor_ids.clone();
+                let address = self.mapping.config.addr_goal_position;
+                let retries = self.mapping.config.comm_retries;
+                let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
+                real.sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
+                    .map_err(|_| command_transport_error(duration_secs, joint_count))?;
+            }
         }
         Ok(())
     }
@@ -345,23 +380,23 @@ impl DynamixelBus {
 
     /// Python `apply_motion_profile` — Protocol 2.0 Profile Acc/Vel SyncWrite.
     fn apply_motion_profile(&mut self) -> Result<(), HwError> {
-        let ids = self.mapping.config.motor_ids.clone();
-        let retries = self.mapping.config.comm_retries;
-        let delay = self.mapping.config.comm_retry_delay_ms;
-        let values = [
-            (
-                self.mapping.config.addr_profile_acceleration,
-                self.mapping.config.profile_acceleration,
-            ),
-            (
-                self.mapping.config.addr_profile_velocity,
-                self.mapping.config.profile_velocity,
-            ),
-        ];
         match &mut self.backend {
             BusBackend::DryRun { .. } => {}
             #[cfg(feature = "real")]
             BusBackend::Real(real) => {
+                let ids = self.mapping.config.motor_ids.clone();
+                let retries = self.mapping.config.comm_retries;
+                let delay = self.mapping.config.comm_retry_delay_ms;
+                let values = [
+                    (
+                        self.mapping.config.addr_profile_acceleration,
+                        self.mapping.config.profile_acceleration,
+                    ),
+                    (
+                        self.mapping.config.addr_profile_velocity,
+                        self.mapping.config.profile_velocity,
+                    ),
+                ];
                 for (address, value) in values {
                     let data = vec![pack_u32(value); ids.len()];
                     real.sync_write_with_retry(&ids, address, &data, retries, delay)
@@ -444,21 +479,20 @@ fn command_transport_error(duration_secs: f64, joint_count: usize) -> HwError {
     return HwError::CommandFailed {
         duration_secs,
         joint_count,
-        detail: HwFailDetail::Transport,
     };
 }
 
 fn read_transport_error() -> HwError {
-    return HwError::ReadFailed {
-        detail: HwFailDetail::Transport,
-    };
+    return HwError::ReadFailed;
 }
 
 #[cfg(test)]
 mod tests {
     use crate::Joints;
 
-    use super::{DynamixelBus, DynamixelConfig, MotorMapping, config_from_toml};
+    use super::{
+        DynamixelBus, DynamixelConfig, DynamixelConfigError, MotorMapping, config_from_toml,
+    };
 
     #[test]
     fn motor_mapping_matches_python_reference() {
@@ -493,7 +527,13 @@ mod tests {
         config.joint_signs.pop();
 
         let error = MotorMapping::new(config).unwrap_err();
-        assert!(error.contains("joint_signs"));
+        assert!(matches!(
+            error,
+            DynamixelConfigError::VectorLength {
+                name: "joint_signs",
+                ..
+            }
+        ));
     }
 
     #[test]

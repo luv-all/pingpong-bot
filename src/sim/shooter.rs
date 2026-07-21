@@ -137,6 +137,15 @@ pub enum BallState {
     InFlight,
 }
 
+impl std::fmt::Display for BallState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return f.write_str(match self {
+            Self::Parked => "parked",
+            Self::InFlight => "in flight",
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -134,19 +134,9 @@ impl UrdfRobot {
             .collect();
     }
 
-    /// root link 이름.
-    pub fn root_link_name(&self) -> String {
-        return fk::find_root_link(&self.robot);
-    }
-
     /// kiss3d용 link visual 목록.
     pub fn link_visuals(&self) -> Vec<UrdfLinkVisual> {
         return visual::collect_link_visuals(&self.robot, |uri| self.resolve_path(uri));
-    }
-
-    /// 관절각으로 각 link의 월드 pose (이름 → (pos, quat wxyz)).
-    pub fn link_poses(&self, joints: &[f64]) -> Vec<(String, [f64; 3], [f64; 4])> {
-        return fk::link_world_poses(&self.robot, joints, &self.actuated_chain);
     }
 
     /// URDF FK + [`Self::mount`] (뷰어·물리 배치).
@@ -175,21 +165,6 @@ impl UrdfRobot {
         );
     }
 
-    /// 엔드이펙터 `RacketPose` + 임의 마운트 (테스트·튜닝용).
-    pub fn end_effector_pose_with_mount(
-        &self,
-        joints: &[f64],
-        mount: SimRobotMount,
-    ) -> Option<RacketPose> {
-        return fk::end_effector_pose_in_sim(
-            &self.robot,
-            &self.ee_link,
-            joints,
-            &self.actuated_chain,
-            mount.isometry(),
-        );
-    }
-
     /// link pose + 임의 마운트 (테스트·튜닝용).
     pub fn link_poses_with_mount(
         &self,
@@ -204,9 +179,9 @@ impl UrdfRobot {
         );
     }
 
-    /// 3 revolute 체인이면 domain `Arm`으로 변환 (plan_swing·기존 FK 호환).
-    pub fn try_into_arm(&self, max_joint_speed: f64) -> Result<Arm, UrdfLoadError> {
-        return arm_from_urdf::try_into_arm(self, max_joint_speed);
+    /// URDF actuated 체인을 제어 `Arm`으로 변환.
+    pub fn to_arm(&self, max_joint_speed: f64) -> Result<Arm, UrdfLoadError> {
+        return arm_from_urdf::to_arm(self, max_joint_speed);
     }
 
     /// mesh·텍스처 상대 경로를 URDF 기준 디렉터리로 해석한다.
@@ -344,7 +319,7 @@ mod tests {
             mesh.display()
         );
 
-        let arm = urdf.try_into_arm(2.5).expect("3축 URDF Arm 변환");
+        let arm = urdf.to_arm(2.5).expect("3축 URDF Arm 변환");
         assert_eq!(arm.joint_count(), urdf.joint_count());
         let joints = urdf.default_joints();
         let expected = urdf
@@ -389,7 +364,7 @@ mod tests {
         }
 
         // URDF에서 만든 domain Arm은 원본 URDF의 FK와 정확히 같아야 한다.
-        let arm = urdf.try_into_arm(2.5).expect("4축 Arm 변환");
+        let arm = urdf.to_arm(2.5).expect("4축 Arm 변환");
         assert_eq!(arm.joint_count(), 4);
         assert_eq!(
             arm.joint_limit(0),

@@ -3,9 +3,6 @@
 /// 스윙을 시작하기 위해 필요한 최소 리드 타임 [s].
 pub const MIN_SWING_SECS: f64 = 0.08;
 
-/// 권장 스윙 궤적 길이 [s]. commit 창 중앙 근처.
-pub const SWING_DURATION_SECS: f64 = 0.15;
-
 /// 스윙 commit 상한 [s].
 ///
 /// lead 가 이보다 길면 기다린다. 발사 직후 전 비행을 quintic 으로 잡으면

@@ -73,7 +73,7 @@ impl BallEkf {
         if !self.initialized {
             return None;
         }
-        return Some(Point3::from_vector(self.position));
+        return Some(Point3::from(self.position));
     }
 
     /// 현재 속도 추정.
@@ -294,7 +294,7 @@ mod tests {
 
         for i in 0..200 {
             let time = t0 + dt * i;
-            ekf.update_position(Point3::from_vector(pos), time);
+            ekf.update_position(Point3::from(pos), time);
             if let Some(pred) = ekf.predict_to(plane) {
                 if in_swing_commit_window(pred.time_to_impact_secs)
                     && pos.y <= table::LENGTH_Y * control::SWING_COMMIT_MAX_BALL_Y_FRAC

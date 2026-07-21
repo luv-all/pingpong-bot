@@ -1,45 +1,22 @@
-//! [`Arm`] 조립용 빌더 - base 이후 link -> revolute 순서 선언.
+//! [`Arm`] 조립용 빌더 - base + serial chain으로 조립한다.
 
 use std::fmt;
 
-use super::{Arm, ArmKinematics, JointLimit, SerialChain};
+use super::{Arm, JointLimit, SerialChain};
 use crate::robot::rail::LinearRail;
 use crate::{Joints, Point3};
 
-pub use crate::constants::SUPPORTED_FK_JOINTS;
-
-/// [`Arm`] 조립용 빌더 - base 이후 link -> revolute 를 키네마틱 체인 순서로 선언한다.
-#[derive(Debug, Clone)]
+/// [`Arm`] 조립용 빌더 - base 설정 후 `.serial_chain`으로 기구학을 채운다.
+#[derive(Debug, Clone, Default)]
 pub struct ArmBuilder {
     /// 베이스 위치 (미설정 시 build 실패)
     base: Option<Point3>,
     /// X축 리니어 레일
     rail: Option<LinearRail>,
-    /// revolute 축 순서대로 수집된 링크 길이 [m]
-    link_lengths: Vec<f64>,
-    /// revolute 축 순서대로 수집된 관절 한계
-    limits: Vec<JointLimit>,
-    /// 각 revolute의 초기 관절각 [rad]
-    default_joint_values: Vec<f64>,
     /// 최대 관절 속도 (미설정 시 2.5 rad/s)
     max_joint_speed: Option<f64>,
-    /// 체인 선언 순서 (build 시 검증)
-    phase: ChainPhase,
-    /// link/revolute 순서 위반 등 조립 중 첫 오류
-    chain_error: Option<ArmBuildError>,
-    /// arbitrary-axis 직렬 체인. 설정하면 legacy planar DSL 대신 사용한다.
+    /// arbitrary-axis 직렬 체인 (미설정 시 build 실패)
     serial_model: Option<(SerialChain, Vec<Option<JointLimit>>, Joints)>,
-}
-
-/// 빌더가 기대하는 다음 체인 요소.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ChainPhase {
-    /// `.base` / `.base_xyz` 필요
-    NeedBase,
-    /// `.link` 필요
-    NeedLink,
-    /// `.revolute` 필요 (직전 link에 대한 joint)
-    NeedJoint,
 }
 
 /// `ArmBuilder::build` 실패 이유.
@@ -47,16 +24,8 @@ enum ChainPhase {
 pub enum ArmBuildError {
     /// base 미설정
     MissingBase,
-    /// link->revolute 쌍이 하나도 없음
-    EmptyChain,
-    /// 마지막 link 뒤에 revolute 없음
-    IncompleteChain,
-    /// `.link` 와야 하는데 다른 호출
-    ExpectedLink,
-    /// `.revolute` 와야 하는데 `.link` 호출
-    ExpectedJoint,
-    /// 링크 길이 <= 0
-    InvalidLinkLength { link_index: usize, value: f64 },
+    /// `.serial_chain` 미설정
+    MissingSerialChain,
     /// min > max
     InvalidJointLimit {
         joint_index: usize,
@@ -69,11 +38,6 @@ pub enum ArmBuildError {
         value: f64,
         min: f64,
         max: f64,
-    },
-    /// FK 미지원 DOF
-    UnsupportedKinematics {
-        joint_count: usize,
-        supported: usize,
     },
     /// 체인·한계·기본 관절각 개수가 서로 다름
     KinematicsJointCountMismatch {
@@ -89,14 +53,8 @@ impl fmt::Display for ArmBuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingBase => return write!(f, "베이스 위치(base)가 설정되지 않았습니다"),
-            Self::EmptyChain => return write!(f, "link->revolute 체인이 비어 있습니다"),
-            Self::IncompleteChain => {
-                return write!(f, "마지막 link 뒤에 revolute 관절이 없습니다");
-            }
-            Self::ExpectedLink => return write!(f, "이 시점에는 .link()가 와야 합니다"),
-            Self::ExpectedJoint => return write!(f, "이 시점에는 .revolute()가 와야 합니다"),
-            Self::InvalidLinkLength { link_index, value } => {
-                return write!(f, "링크 {link_index} 길이가 양수가 아닙니다: {value}");
+            Self::MissingSerialChain => {
+                return write!(f, "직렬 체인(.serial_chain)이 설정되지 않았습니다");
             }
             Self::InvalidJointLimit {
                 joint_index,
@@ -117,15 +75,6 @@ impl fmt::Display for ArmBuildError {
                 return write!(
                     f,
                     "관절 {joint_index} 기본값 {value:.3} rad 가 허용 범위 [{min:.3}, {max:.3}] 밖"
-                );
-            }
-            Self::UnsupportedKinematics {
-                joint_count,
-                supported,
-            } => {
-                return write!(
-                    f,
-                    "현재 FK는 {supported}축만 지원합니다 (요청: {joint_count}축)"
                 );
             }
             Self::KinematicsJointCountMismatch {
@@ -150,29 +99,12 @@ impl std::error::Error for ArmBuildError {}
 impl ArmBuilder {
     /// 빈 빌더를 만든다.
     pub fn new() -> Self {
-        return Self {
-            base: None,
-            rail: None,
-            link_lengths: Vec::new(),
-            limits: Vec::new(),
-            default_joint_values: Vec::new(),
-            max_joint_speed: None,
-            phase: ChainPhase::NeedBase,
-            chain_error: None,
-            serial_model: None,
-        };
+        return Self::default();
     }
 
-    fn record_chain_error(&mut self, err: ArmBuildError) {
-        if self.chain_error.is_none() {
-            self.chain_error = Some(err);
-        }
-    }
-
-    /// 베이스 위치를 설정한다. 이후 `.link` -> `.revolute` 순으로 체인을 선언한다.
+    /// 베이스 위치를 설정한다.
     pub fn base(mut self, base: Point3) -> Self {
         self.base = Some(base);
-        self.phase = ChainPhase::NeedLink;
         return self;
     }
 
@@ -205,52 +137,6 @@ impl ArmBuilder {
         });
     }
 
-    /// revolute 축 앞의 rigid link [m]. 직후 `.revolute`가 와야 한다.
-    pub fn link(mut self, length_m: f64) -> Self {
-        if self.phase == ChainPhase::NeedBase {
-            self.record_chain_error(ArmBuildError::MissingBase);
-            return self;
-        }
-        if self.phase != ChainPhase::NeedLink {
-            self.record_chain_error(ArmBuildError::ExpectedJoint);
-            return self;
-        }
-        self.link_lengths.push(length_m);
-        self.phase = ChainPhase::NeedJoint;
-        return self;
-    }
-
-    /// 직전 link에 revolute 관절을 붙인다 (초기각 0 rad).
-    pub fn revolute(self, min: f64, max: f64) -> Self {
-        return self.revolute_at(min, max, 0.0);
-    }
-
-    /// 직전 link에 revolute 관절과 초기각을 붙인다.
-    pub fn revolute_at(self, min: f64, max: f64, default: f64) -> Self {
-        return self.revolute_limit_at(JointLimit::new(min, max), default);
-    }
-
-    /// `JointLimit`으로 revolute 관절을 붙인다 (초기각 0 rad).
-    pub fn revolute_limit(self, limit: JointLimit) -> Self {
-        return self.revolute_limit_at(limit, 0.0);
-    }
-
-    /// `JointLimit`과 초기각으로 revolute 관절을 붙인다.
-    pub fn revolute_limit_at(mut self, limit: JointLimit, default: f64) -> Self {
-        if self.phase == ChainPhase::NeedBase {
-            self.record_chain_error(ArmBuildError::MissingBase);
-            return self;
-        }
-        if self.phase != ChainPhase::NeedJoint {
-            self.record_chain_error(ArmBuildError::ExpectedLink);
-            return self;
-        }
-        self.limits.push(limit);
-        self.default_joint_values.push(default);
-        self.phase = ChainPhase::NeedLink;
-        return self;
-    }
-
     /// 최대 관절 각속도를 설정한다.
     pub fn max_joint_speed(mut self, rad_per_sec: f64) -> Self {
         self.max_joint_speed = Some(rad_per_sec);
@@ -270,10 +156,6 @@ impl ArmBuilder {
 
     /// 검증 후 `Arm`을 만든다.
     pub fn build(self) -> Result<Arm, ArmBuildError> {
-        if let Some(err) = self.chain_error {
-            return Err(err);
-        }
-
         let base = self.base.ok_or(ArmBuildError::MissingBase)?;
         let max_joint_speed = self.max_joint_speed.unwrap_or(2.5);
         if max_joint_speed <= 0.0 {
@@ -281,74 +163,9 @@ impl ArmBuilder {
                 value: max_joint_speed,
             });
         }
-
-        if let Some((chain, limits, default_joints)) = self.serial_model {
-            return Arm::from_serial_chain(
-                base,
-                self.rail,
-                chain,
-                limits,
-                default_joints,
-                max_joint_speed,
-            );
-        }
-
-        if self.link_lengths.is_empty() {
-            return Err(ArmBuildError::EmptyChain);
-        }
-        if self.phase == ChainPhase::NeedJoint {
-            return Err(ArmBuildError::IncompleteChain);
-        }
-
-        let default_joints = Joints {
-            values: self.default_joint_values,
-        };
-
-        if self.limits.len() != SUPPORTED_FK_JOINTS {
-            return Err(ArmBuildError::UnsupportedKinematics {
-                joint_count: self.limits.len(),
-                supported: SUPPORTED_FK_JOINTS,
-            });
-        }
-
-        for (link_index, &value) in self.link_lengths.iter().enumerate() {
-            if value <= 0.0 {
-                return Err(ArmBuildError::InvalidLinkLength { link_index, value });
-            }
-        }
-
-        for (joint_index, limit) in self.limits.iter().enumerate() {
-            if limit.min > limit.max {
-                return Err(ArmBuildError::InvalidJointLimit {
-                    joint_index,
-                    min: limit.min,
-                    max: limit.max,
-                });
-            }
-            if !limit.contains(default_joints.values[joint_index]) {
-                return Err(ArmBuildError::DefaultJointOutOfRange {
-                    joint_index,
-                    value: default_joints.values[joint_index],
-                    min: limit.min,
-                    max: limit.max,
-                });
-            }
-        }
-
-        return Ok(Arm {
-            base,
-            rail: self.rail,
-            link_lengths: self.link_lengths,
-            limits: self.limits.into_iter().map(Some).collect(),
-            default_joints,
-            max_joint_speed,
-            kinematics: ArmKinematics::Canonical4Dof,
-        });
-    }
-}
-
-impl Default for ArmBuilder {
-    fn default() -> Self {
-        return Self::new();
+        let (chain, limits, default_joints) = self
+            .serial_model
+            .ok_or(ArmBuildError::MissingSerialChain)?;
+        return Arm::from_serial_chain(base, self.rail, chain, limits, default_joints, max_joint_speed);
     }
 }

@@ -7,6 +7,9 @@
 멀티캠 + **TOML `calibration_path`** → 검출 → 삼각측량 → 바운스에서 $e = |v_z'|/|v_z|$.
 
 ```bash
+# 인자 없음 → device 0,1 + TOML calibration_path
+cargo run -p measure-restitution
+
 # config/default.toml 에 calibration_path = "calibration.json" 있으면
 cargo run -p measure-restitution -- --device 0 --device 1
 

@@ -20,9 +20,8 @@ path = "src/main.rs"
 required-features = ["gui"]
 
 [features]
-default = ["sim", "gui"]
-sim = []
-gui = ["sim", "dep:kiss3d", "dep:pollster", "dep:stl_io"]
+default = ["gui"]
+gui = ["dep:kiss3d", "dep:pollster", "dep:stl_io"]
 real = ["dep:rustypot", "dep:serialport"]
 
 [dependencies]

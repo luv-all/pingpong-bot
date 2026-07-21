@@ -7,9 +7,9 @@ use anyhow::{Context, Result, bail};
 use opencv::core::Scalar;
 use opencv::prelude::*;
 use pingpong_bot::{
-    BallDetector, Calibration, CameraId, ColormaskConfig, DetectorKind, FrameSource, OpenCvCapture,
-    PixelPoint, Point3, PreviewAction, RollEvent, TrajPoint, build_detector, destroy_window,
-    detect_rolls, draw_cam_label, draw_circle_px, draw_debug_lines, hstack_bgr, mean_roll_mu,
+    BallDetector, Calibration, CameraId, FrameSource, OpenCvCapture, PixelPoint, Point3,
+    PreviewAction, RollEvent, TrajPoint, VisionConfig, destroy_window, detect_rolls, draw_cam_label,
+    draw_circle_px, draw_debug_lines, draw_help_lines, fuse_from_vision, hstack_bgr, mean_roll_mu,
     show_bgr, triangulate_views,
 };
 
@@ -60,7 +60,14 @@ fn open_sources(
         }
         return Ok(sources);
     }
-    bail!("--video PATH (반복) 또는 --device N (반복) 필요 — 카메라 ≥2");
+    // 미지정 → 웹캠 0, 1
+    for (i, &dev) in [0, 1].iter().enumerate() {
+        let cap = OpenCvCapture::from_device(CameraId(i as u8), dev)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("device {dev}"))?;
+        sources.push(Box::new(cap) as Box<dyn FrameSource>);
+    }
+    return Ok(sources);
 }
 
 fn triangulate_pixels(
@@ -83,7 +90,7 @@ pub fn run_capture(
     calibration: &Path,
     videos: &[PathBuf],
     devices: &[i32],
-    detector: DetectorKind,
+    vision: &VisionConfig,
     preview: bool,
     wait_ms: i32,
     max_frames: usize,
@@ -103,8 +110,8 @@ pub fn run_capture(
     }
 
     let mut detectors: Vec<Box<dyn BallDetector>> = (0..sources.len())
-        .map(|_| build_detector(detector, ColormaskConfig::default()))
-        .collect();
+        .map(|_| fuse_from_vision(vision).map(|d| Box::new(d) as Box<dyn BallDetector>))
+        .collect::<Result<Vec<_>>>()?;
 
     let window = "measure:friction";
     let mut traj = Vec::new();
@@ -193,18 +200,22 @@ pub fn run_capture(
             traj.len()
         )];
         if let Some(ev) = rolls.last() {
-            lines.push(format!("roll#{}  μ={:.4}", rolls.len(), ev.mu));
+            lines.push(format!("roll#{}  mu={:.4}", rolls.len(), ev.mu));
             lines.push(format!("vt_in={:.3}  vt_out={:.3}", ev.vt_in, ev.vt_out));
         } else {
             lines.push("roll: waiting (on-table)".into());
         }
         if let Some(mu) = mu_mean {
-            lines.push(format!("mean μ={mu:.4}  (n={})", rolls.len()));
+            lines.push(format!("mean mu={mu:.4}  (n={})", rolls.len()));
         }
-        lines.push("q/ESC quit".into());
 
         let mut mosaic = hstack_bgr(&panels)?;
         draw_debug_lines(&mut mosaic, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        draw_help_lines(
+            &mut mosaic,
+            &["q/ESC quit"],
+            Scalar::new(0.0, 255.0, 80.0, 0.0),
+        )?;
 
         if preview {
             match show_bgr(window, &mosaic, wait_ms)? {

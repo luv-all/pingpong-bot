@@ -14,8 +14,10 @@ impl Point3 {
             v: Vector3::new(x, y, z),
         };
     }
+}
 
-    pub fn from_vector(v: Vector3<f64>) -> Self {
+impl From<Vector3<f64>> for Point3 {
+    fn from(v: Vector3<f64>) -> Self {
         return Self { v };
     }
 }

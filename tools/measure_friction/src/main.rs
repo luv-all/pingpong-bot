@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use pingpong_bot::constants::{TABLE_BOUNCE_FRICTION, ball, table};
 use pingpong_bot::{
-    Arm, DEFAULT_CONFIG_PATH, DetectorKind, PhysicsConfig, friction_from_tangential_speeds,
+    Arm, DEFAULT_CONFIG_PATH, PhysicsConfig, friction_from_tangential_speeds,
     merge_physics_into_config, physics_coeffs_toml, resolve_calibration_path,
 };
 use pingpong_bot::{BallVec3, SimWorld};
@@ -27,10 +27,9 @@ struct Args {
     calibration: Option<PathBuf>,
     #[arg(long = "video", value_name = "PATH")]
     videos: Vec<PathBuf>,
+    /// 웹캠 인덱스 (반복). 영상/device 미지정이면 0,1
     #[arg(long = "device", value_name = "N")]
     devices: Vec<i32>,
-    #[arg(long, default_value = "colormask")]
-    detector: String,
     #[arg(long)]
     no_preview: bool,
     #[arg(long, default_value_t = 33)]
@@ -58,16 +57,21 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let mut patch = PhysicsConfig::default();
 
-    if args.calibration.is_some() || !args.videos.is_empty() || !args.devices.is_empty() {
+    let has_other = args.vt_pairs.is_some() || args.sim;
+    let run_capture = args.calibration.is_some()
+        || !args.videos.is_empty()
+        || !args.devices.is_empty()
+        || !has_other;
+
+    if run_capture {
         let cal = resolve_calibration_path(&args.config, args.calibration.clone())
             .map_err(anyhow::Error::msg)?;
-        let kind = DetectorKind::parse(&args.detector)
-            .with_context(|| format!("unknown detector: {}", args.detector))?;
+        let vision = pingpong_bot::load_vision_from_config(&args.config)?;
         let result = capture_loop::run_capture(
             &cal,
             &args.videos,
             &args.devices,
-            kind,
+            &vision,
             !args.no_preview,
             args.wait_ms,
             args.max_frames,
@@ -106,7 +110,8 @@ fn main() -> Result<()> {
     if patch.is_empty() {
         bail!(
             "입력이 없습니다. 예:\n  \
-             --device 0 --device 1   # calibration_path 는 --config TOML\n  \
+             cargo run -p measure-friction   # 기본 device 0,1 + --config calibration_path\n  \
+             --device 0 --device 1\n  \
              --calibration calib.json --video cam0.mp4 --video cam1.mp4\n  \
              --vt-pairs 2.0:1.4\n  \
              --sim"
