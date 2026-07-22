@@ -84,6 +84,19 @@ pub struct SimWorld {
     use_ground_truth: bool,
     /// 이번 비행에서 스윙을 이미 commit했는지 (재계획·팔 떨림 방지)
     swing_committed: bool,
+    /// 마지막으로 `plan_best_swing`을 실제로 시도한 `sim_time`.
+    ///
+    /// 실패해도 `swing_committed`는 세팅되지 않으므로, 시도 자체를 스로틀링
+    /// 하지 않으면 공이 커밋 창 안에 있는 한 매 물리 스텝(1kHz)마다 IK·충돌
+    /// 샘플링 전체를 다시 도는 성능 버그가 된다(`try_auto_swing` 참고). 반대로
+    /// 한 번 실패했다고 완전히 포기해버리면(과거 구현) 첫 시도의 예측이
+    /// 일시적으로 부정확했을 뿐인 경우(공이 아직 접근 중이라 목표가 곧
+    /// 도달권 안으로 들어옴)를 놓친다 — 그래서 완전 포기가 아니라 재시도
+    /// 빈도만 `SWING_RETRY_THROTTLE_SECS`로 제한한다.
+    last_swing_attempt_at: f64,
+    /// 이번 비행이 발사된 `sim_time` — `park_if_out_of_play`의 최대 비행
+    /// 시간 안전장치(`MAX_BALL_FLIGHT_SECS`)가 기준으로 삼는다.
+    flight_started_at: f64,
 }
 
 impl SimWorld {
@@ -219,6 +232,8 @@ impl SimWorld {
             },
             use_ground_truth: true,
             swing_committed: false,
+            last_swing_attempt_at: f64::NEG_INFINITY,
+            flight_started_at: 0.0,
         };
         world.sync_shooter_pose(&default_shooter);
         return world;
@@ -361,15 +376,26 @@ impl SimWorld {
         if !ball_past_midcourt_for_commit(ball_y) {
             return;
         }
+        // 여기부터는 실제 `plan_best_swing`(IK·충돌 샘플링)을 도는 비싼
+        // 구간이라 재시도 빈도를 제한한다. 완전히 포기하지는 않는다 — 첫
+        // 시도의 예측이 일시적으로 부정확했을 뿐(공이 아직 접근 중이라
+        // 목표가 곧 도달권 안으로 들어오는 경우)일 수 있어서, 한 번
+        // 실패했다고 이번 비행 내내 포기하면 실제로 접수 가능한 공을
+        // 놓친다(4-dof 카탈로그 로봇으로 실측 확인됨).
+        const SWING_RETRY_THROTTLE_SECS: f64 = 0.02;
+        if self.sim_time - self.last_swing_attempt_at < SWING_RETRY_THROTTLE_SECS {
+            return;
+        }
+        self.last_swing_attempt_at = self.sim_time;
         let start = RobotPose::new(self.robot.rail_x(), self.robot.joints().clone());
         let planned = match plan_best_swing(&self.arm, &predictions, &start) {
             Ok(planned) => planned,
             Err(DomainError::InfeasibleSwing(ref err)) => {
-                debug!(%err, "plan_swing 불가 — 이번 공 스킵");
+                debug!(%err, "plan_swing 불가 — 이번 시도 스킵, 다음 재시도 대기");
                 return;
             }
             Err(other) => {
-                warn!(%other, "sim 자동 스윙 계획 실패");
+                warn!(%other, "sim 자동 스윙 계획 실패 — 다음 재시도 대기");
                 return;
             }
         };
@@ -426,6 +452,8 @@ impl SimWorld {
         self.ball_state = BallState::InFlight;
         self.robot.cancel_swing();
         self.swing_committed = false;
+        self.last_swing_attempt_at = f64::NEG_INFINITY;
+        self.flight_started_at = self.sim_time;
         self.try_auto_swing();
     }
 
@@ -521,16 +549,28 @@ impl SimWorld {
         self.ball_state = BallState::Parked;
     }
 
-    /// 테이블 밖·바닥으로 떨어진 공을 슈터로 회수한다.
+    /// 테이블 밖·바닥으로 떨어졌거나, 테이블 위에서 멈춰버린 공을 슈터로 회수한다.
     fn park_if_out_of_play(&mut self) {
-        let pos = self.rigid_body_set[self.ball_handle].translation();
+        let body = &self.rigid_body_set[self.ball_handle];
+        let pos = body.translation();
         let out = pos.x < -0.15
             || pos.x > (table::WIDTH_X + 0.15) as f32
             || pos.y < -0.15
             || pos.y > (table::LENGTH_Y + 0.15) as f32
             || pos.z < 0.35;
+        // 라켓에 맞고 되돌아온 공이 테이블 위에 그대로 안착하는 경우 위 `out`
+        // 조건에 걸리지 않아 `ball_state`가 영원히 InFlight로 남는다 — 그러면
+        // `try_auto_swing`이 (실패한 뒤에도) 매 물리 스텝 재시도하는 성능
+        // 문제로 이어진다(Random Shoot를 반복하면 멈추는 현상의 원인).
+        let resting = body.linvel().length_squared() < (0.01 * 0.01)
+            && pos.z < (table::SURFACE_Z + 0.05) as f32;
+        // 위 두 조건이 못 잡는 경우(예: 반발이 커서 오래 통통 튀며 안 멈추는
+        // 경우)에 대비한 최종 안전장치 — 비행이 이만큼 길어지면 속도·위치와
+        // 무관하게 무조건 회수한다.
+        const MAX_BALL_FLIGHT_SECS: f64 = 4.0;
+        let timed_out = self.sim_time - self.flight_started_at > MAX_BALL_FLIGHT_SECS;
 
-        if out {
+        if out || resting || timed_out {
             let settings = self.last_shooter_settings.clone();
             self.park_ball(&settings);
         }
@@ -1178,6 +1218,418 @@ mod tests {
                 "lateral={lateral:+.2} — 첫 바운스 x={bounce_x:.3}가 테이블 폭 여유 범위 밖 \
                  (x∈[{EDGE_MARGIN_M:.2},{:.2}] 기대)",
                 table::WIDTH_X - EDGE_MARGIN_M
+            );
+        }
+    }
+
+    /// `BallShooterSettings::randomized`가 뽑을 수 있는 (lateral, yaw, speed) 공간의
+    /// 코너(각 lateral의 yaw_min/yaw_max × speed_min/speed_max)를 모두 스윕해서,
+    /// 어떤 랜덤 샷도 네트를 맞지 않고 라켓 접수·리턴까지 이어짐을 검증한다.
+    ///
+    /// `randomized`는 발사 위치(`lateral_offset_m`)에 따라 기하학적으로 유효한
+    /// yaw 범위를 계산해 그 안에서 뽑는다(`yaw_range_for_lateral_deg`) — 이 범위의
+    /// 양 끝이 이 테스트가 실제로 검증하는 "가장 비스듬한" 샷이다.
+    #[test]
+    fn repeated_random_shoot_never_stalls_and_always_reparks() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        let arm = test_arm();
+        let mut world = SimWorld::new(arm, None);
+        world.set_use_ground_truth(true);
+
+        // 재시도 폭주 버그(수정 전)는 실패한 스윙 계획을 매 틱마다 다시 돌려서
+        // "느린 스텝"이 한 비행 내내 수백~수천 번 반복됐다. 수정 후에는 스윙이
+        // 끝나는 순간 `plan_return_to_center`가 딱 한 번(그 자체는 몇 ms 걸릴
+        // 수 있음) 도는 것만 허용한다 — 라운드당 느린 스텝 "개수"가 적어야
+        // 폭주가 아니라 한 번짜리 계획 비용임을 보증한다.
+        const SLOW_STEP_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(2);
+        const MAX_SLOW_STEPS_PER_ROUND: usize = 3;
+
+        let mut worst_step = std::time::Duration::ZERO;
+        for round in 0..30 {
+            let settings = BallShooterSettings::default().randomized(&mut rng);
+            world.shoot_ball(&settings);
+
+            let mut reparked = false;
+            let mut slow_steps = 0;
+            for _ in 0..6_000 {
+                let t0 = std::time::Instant::now();
+                world.step(1.0 / 1000.0, None);
+                let dt = t0.elapsed();
+                if dt > worst_step {
+                    worst_step = dt;
+                }
+                if dt > SLOW_STEP_THRESHOLD {
+                    slow_steps += 1;
+                }
+                if world.ball_state == BallState::Parked {
+                    reparked = true;
+                    break;
+                }
+            }
+            assert!(
+                reparked,
+                "round {round} — 6000 스텝 안에 공이 다시 Parked로 안 돌아옴 (settings={settings:?})"
+            );
+            assert!(
+                slow_steps <= MAX_SLOW_STEPS_PER_ROUND,
+                "round {round} — {SLOW_STEP_THRESHOLD:?} 넘는 스텝이 {slow_steps}개 — 재시도 폭주 의심"
+            );
+        }
+
+        assert!(
+            worst_step < std::time::Duration::from_millis(15),
+            "반복 Random Shoot 중 스텝 하나가 너무 오래 걸림: {worst_step:?}"
+        );
+    }
+
+    #[test]
+    fn random_shot_grid_still_swings_when_robot_starts_from_center() {
+        // 실제 GUI 재현: 첫 샷이 끝나면 로봇이 (레일 0이 아니라) 테이블
+        // 중앙(`default_x()`)으로 복귀해 있다. 이후 Random Shoot이 쏘는
+        // 격자 코너들이, 로봇이 그 중앙 위치에서 시작해도 여전히 스윙·
+        // 접수되는지 확인한다 (사용자 재현: 첫 샷 이후 Random Shoot을
+        // 누르면 공만 날아가고 로봇팔이 안 움직이는 문제).
+        for lateral in [-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
+            let (yaw_min, yaw_max) = BallShooterSettings::yaw_range_for_lateral_deg(lateral);
+            for yaw in [yaw_min, yaw_max] {
+                for speed in [
+                    crate::sim::shooter::RANDOM_SHOT_SPEED_MIN_MPS,
+                    crate::sim::shooter::RANDOM_SHOT_SPEED_MAX_MPS,
+                ] {
+                    let settings = BallShooterSettings {
+                        lateral_offset_m: lateral,
+                        yaw_deg: yaw,
+                        speed_mps: speed,
+                        ..BallShooterSettings::default()
+                    };
+
+                    let arm = test_arm();
+                    let center_rail_x = arm.rail.as_ref().expect("리니어").default_x();
+                    let center_joints = arm.default_joints.clone();
+                    let mut world = SimWorld::new(arm.clone(), None);
+                    world.set_use_ground_truth(true);
+                    *world.robot_mut() = RobotState::new(center_joints, center_rail_x);
+
+                    let collider_for_body = |world: &SimWorld, body_handle| {
+                        world
+                            .collider_set
+                            .iter()
+                            .find_map(|(handle, collider)| {
+                                (collider.parent() == Some(body_handle)).then_some(handle)
+                            })
+                            .expect("body collider")
+                    };
+                    let ball_collider = collider_for_body(&world, world.ball_handle);
+                    let racket_collider = collider_for_body(&world, world.racket_handle);
+
+                    world.shoot_ball(&settings);
+
+                    let mut racket_contact = false;
+                    let mut returned = false;
+                    for _ in 0..5_000 {
+                        world.step(1.0 / 1000.0, None);
+                        if world
+                            .narrow_phase
+                            .contact_pair(ball_collider, racket_collider)
+                            .is_some_and(ContactPair::has_any_active_contact)
+                        {
+                            racket_contact = true;
+                        }
+                        if racket_contact && world.ball_velocity().y > 0.0 {
+                            returned = true;
+                            break;
+                        }
+                    }
+
+                    assert!(
+                        racket_contact,
+                        "lateral={lateral:+.2} yaw={yaw:+.2} speed={speed:.2} — \
+                         로봇이 중앙에서 시작할 때 라켓 접수 없음"
+                    );
+                    assert!(
+                        returned,
+                        "lateral={lateral:+.2} yaw={yaw:+.2} speed={speed:.2} — \
+                         로봇이 중앙에서 시작할 때 라켓 접수 뒤 리턴 안 됨"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_full_random_shots_each_get_racket_contact() {
+        // 이전 스트레스 테스트(`repeated_random_shoot_never_stalls_and_always_reparks`)는
+        // 공이 결국 회수(re-park)되는지만 확인해서, "로봇이 아예 안 치고
+        // 공만 지나가도" 통과해버린다 — 정확히 사용자가 재현한 증상(공은
+        // 날아가는데 로봇팔이 안 움직임)을 못 잡는다. 매 라운드 실제로
+        // 라켓 접수가 일어나는지까지 확인한다. 같은 `SimWorld` 인스턴스를
+        // 계속 재사용해서(GUI에서 Shoot을 반복 누르는 것과 동일), 각 샷이
+        // "이전 샷이 완전히 끝난(로봇이 중앙 복귀 완료) 뒤" 시작되게 한다.
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+
+        let arm = test_arm();
+        let mut world = SimWorld::new(arm, None);
+        world.set_use_ground_truth(true);
+
+        for round in 0..15 {
+            let settings = BallShooterSettings::default().randomized(&mut rng);
+            world.shoot_ball(&settings);
+
+            let ball_collider = world
+                .collider_set
+                .iter()
+                .find_map(|(handle, collider)| {
+                    (collider.parent() == Some(world.ball_handle)).then_some(handle)
+                })
+                .expect("ball collider");
+            let racket_collider = world
+                .collider_set
+                .iter()
+                .find_map(|(handle, collider)| {
+                    (collider.parent() == Some(world.racket_handle)).then_some(handle)
+                })
+                .expect("racket collider");
+
+            let mut racket_contact = false;
+            let mut fully_settled = false;
+            for _ in 0..8_000 {
+                world.step(1.0 / 1000.0, None);
+                if world
+                    .narrow_phase
+                    .contact_pair(ball_collider, racket_collider)
+                    .is_some_and(ContactPair::has_any_active_contact)
+                {
+                    racket_contact = true;
+                }
+                // "이전 샷이 완전히 끝난 뒤"까지 기다린다 — 공이 회수되고
+                // 로봇도 스윙 중이 아님(중앙 복귀까지 끝).
+                if world.ball_state == BallState::Parked && !world.robot().is_swinging() {
+                    fully_settled = true;
+                    break;
+                }
+            }
+            assert!(
+                fully_settled,
+                "round {round} — 다음 라운드 전에 공 회수·로봇 복귀가 끝나지 않음                  (settings={settings:?})"
+            );
+            assert!(
+                racket_contact,
+                "round {round} — 공은 날아갔는데 라켓 접수가 없었음 (로봇팔이 안 움직임)                  (settings={settings:?})"
+            );
+        }
+    }
+
+
+    /// `random_shot_grid_clears_net_and_returns`는 `Arm::competition()`(손으로
+    /// 만든 테스트용 팔)만 검증한다 — 실제 GUI가 쓰는 카탈로그 "4-dof" 로봇
+    /// (`fourdof_robot`, URDF + `Rep103AtTableEnd`)은 리치가 달라 같은 범위가
+    /// 안전하지 않을 수 있다(실측으로 확인됨 — 아래 좌우 위치·yaw 촘촘한
+    /// 격자에서 5.6 m/s부터 임팩트 지점이 도달 범위 밖으로 나가는 조합이
+    /// 나왔고, 그래서 `RANDOM_SHOT_SPEED_MAX_MPS`를 5.5로 낮췄다). 코너만이
+    /// 아니라 각 좌우 위치에서 유효한 yaw 범위를 0/25/50/75/100%로 나눠
+    /// 스윕해야 한다 — 코너만 봐서는 못 잡는 실패(중간값에서만 실패)가
+    /// 실제로 있었다.
+    #[test]
+    fn random_shot_fine_grid_clears_net_and_returns_for_fourdof_robot() {
+        for lateral in [-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
+            let (yaw_min, yaw_max) = BallShooterSettings::yaw_range_for_lateral_deg(lateral);
+            for frac in [0.0_f64, 0.25, 0.5, 0.75, 1.0] {
+                let yaw = yaw_min + (yaw_max - yaw_min) * frac;
+                for speed in [
+                    crate::sim::shooter::RANDOM_SHOT_SPEED_MIN_MPS,
+                    crate::sim::shooter::RANDOM_SHOT_SPEED_MAX_MPS,
+                ] {
+                    let settings = BallShooterSettings {
+                        lateral_offset_m: lateral,
+                        yaw_deg: yaw,
+                        speed_mps: speed,
+                        ..BallShooterSettings::default()
+                    };
+                    let (arm, urdf) = fourdof_robot();
+                    let mut world = SimWorld::new(arm, urdf);
+                    world.set_use_ground_truth(true);
+
+                    let ball_collider = world
+                        .collider_set
+                        .iter()
+                        .find_map(|(handle, collider)| {
+                            (collider.parent() == Some(world.ball_handle)).then_some(handle)
+                        })
+                        .expect("ball collider");
+                    let racket_collider = world
+                        .collider_set
+                        .iter()
+                        .find_map(|(handle, collider)| {
+                            (collider.parent() == Some(world.racket_handle)).then_some(handle)
+                        })
+                        .expect("racket collider");
+
+                    world.shoot_ball(&settings);
+
+                    let mut racket_contact = false;
+                    let mut returned = false;
+                    for _ in 0..5_000 {
+                        world.step(1.0 / 1000.0, None);
+                        if world
+                            .narrow_phase
+                            .contact_pair(ball_collider, racket_collider)
+                            .is_some_and(ContactPair::has_any_active_contact)
+                        {
+                            racket_contact = true;
+                        }
+                        if racket_contact && world.ball_velocity().y > 0.0 {
+                            returned = true;
+                            break;
+                        }
+                    }
+
+                    assert!(
+                        racket_contact,
+                        "lateral={lateral:+.2} yaw={yaw:+.2} speed={speed:.2} — \
+                         4-dof 로봇이 라켓 접수 못 함"
+                    );
+                    assert!(
+                        returned,
+                        "lateral={lateral:+.2} yaw={yaw:+.2} speed={speed:.2} — \
+                         4-dof 로봇이 접수 뒤 리턴 못 함"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn plain_shoot_then_random_shoot_gets_racket_contact_broad_sweep() {
+        // 사용자가 정확히 재현한 순서: 평범한 Shoot(중앙→중앙, 기본 조준)을
+        // 먼저 완전히 끝낸 뒤, Random Shoot을 누른다. 여러 랜덤 시드로
+        // 넓게 스윕해서 실패하는 조합이 있는지 찾는다. 사용자가 실제로
+        // 돌리는 건 `Arm::competition()`이 아니라 카탈로그 "4-dof" 로봇
+        // (`main.rs::load_robot`과 동일 경로)이므로 그걸로 재현한다.
+        use rand::SeedableRng;
+
+        for seed in 0..200_u64 {
+            let (arm, urdf) = fourdof_robot();
+            let mut world = SimWorld::new(arm, urdf);
+            world.set_use_ground_truth(true);
+
+            // 1구: 평범한 Shoot.
+            world.shoot_ball(&BallShooterSettings::default());
+            let mut settled = false;
+            for _ in 0..8_000 {
+                world.step(1.0 / 1000.0, None);
+                if world.ball_state == BallState::Parked && !world.robot().is_swinging() {
+                    settled = true;
+                    break;
+                }
+            }
+            assert!(settled, "seed={seed} — 1구(평범한 Shoot) 후 정착 안 됨");
+
+            // 2구: Random Shoot.
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let settings = BallShooterSettings::default().randomized(&mut rng);
+            world.shoot_ball(&settings);
+
+            let ball_collider = world
+                .collider_set
+                .iter()
+                .find_map(|(handle, collider)| {
+                    (collider.parent() == Some(world.ball_handle)).then_some(handle)
+                })
+                .expect("ball collider");
+            let racket_collider = world
+                .collider_set
+                .iter()
+                .find_map(|(handle, collider)| {
+                    (collider.parent() == Some(world.racket_handle)).then_some(handle)
+                })
+                .expect("racket collider");
+
+            let mut racket_contact = false;
+            for _ in 0..8_000 {
+                world.step(1.0 / 1000.0, None);
+                if world
+                    .narrow_phase
+                    .contact_pair(ball_collider, racket_collider)
+                    .is_some_and(ContactPair::has_any_active_contact)
+                {
+                    racket_contact = true;
+                    break;
+                }
+                if world.ball_state == BallState::Parked {
+                    break;
+                }
+            }
+            assert!(
+                racket_contact,
+                "seed={seed} — 평범한 Shoot 뒤 Random Shoot(settings={settings:?})에서 \
+                 라켓 접수 없음 (로봇팔이 안 움직인 것으로 보임)"
+            );
+        }
+    }
+
+    #[test]
+    fn interrupting_swing_with_new_shot_does_not_permanently_break_robot() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+
+        // 스윙 도중(타격이든, 그 뒤 자동 복귀든) Shoot/Random Shoot으로 새
+        // 공을 쏘는 상황(Shoot 하다 Random Shoot 하면 로봇이 멈춘다는 사용자
+        // 재현)을 다양한 끼어들기 시점으로 재현한다. 매 라운드 끝에 방해
+        // 없는 평범한 샷을 하나 더 쏴서, 그게 정상적으로 접수되는지로
+        // 로봇이 영구적으로 고착됐는지 확인한다.
+        for interrupt_after_commit_ms in [10_u64, 50, 120, 250, 400, 600] {
+            let arm = test_arm();
+            let mut world = SimWorld::new(arm, None);
+            world.set_use_ground_truth(true);
+
+            world.shoot_ball(&BallShooterSettings::default().randomized(&mut rng));
+            let mut committed = false;
+            for _ in 0..800 {
+                world.step(1.0 / 1000.0, None);
+                if world.swing_committed() {
+                    committed = true;
+                    break;
+                }
+            }
+            assert!(
+                committed,
+                "interrupt_after_commit_ms={interrupt_after_commit_ms} — 1구 스윙이 commit 안 됨"
+            );
+            for _ in 0..interrupt_after_commit_ms {
+                world.step(1.0 / 1000.0, None);
+            }
+
+            // 2구: 1구의 타격·팔로스루·자동 복귀 중 어느 시점이든 끊고 새로
+            // (역시 랜덤) 쏜다.
+            world.shoot_ball(&BallShooterSettings::default().randomized(&mut rng));
+            for _ in 0..6_000 {
+                world.step(1.0 / 1000.0, None);
+                if world.ball_state == BallState::Parked {
+                    break;
+                }
+            }
+
+            // 3구: 방해 없이 평범하게 쏜다 — 앞선 끼어들기로 로봇이
+            // 영구적으로 망가지지 않았다면 이번엔 정상적으로 접수해야 한다.
+            world.shoot_ball(&BallShooterSettings::default());
+            let mut racket_contact = false;
+            for _ in 0..5_000 {
+                world.step(1.0 / 1000.0, None);
+                if world.robot().is_swinging() {
+                    racket_contact = true;
+                    break;
+                }
+            }
+            assert!(
+                racket_contact,
+                "interrupt_after_commit_ms={interrupt_after_commit_ms} — 끼어들기 이후 \
+                 3구(방해 없음)는 스윙이 시작돼야 하는데 안 됨 — 로봇이 고착된 것으로 \
+                 보임 (rail={}, joints={:?})",
+                world.robot().rail_x(),
+                world.robot().joints().values,
             );
         }
     }
