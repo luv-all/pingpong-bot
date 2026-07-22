@@ -12,8 +12,6 @@ pub mod rail;
 mod sim;
 
 #[cfg(feature = "real")]
-mod rail_stub;
-#[cfg(feature = "real")]
 mod real;
 
 pub use axl_rail::AxlRail;

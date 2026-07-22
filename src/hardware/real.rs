@@ -10,27 +10,13 @@ use tracing::{debug, error, warn};
 use super::axl_rail::AxlRail;
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::RailConfig;
-use super::rail_stub::RailStub;
 use crate::{Hardware, HwError, RobotPose, SwingTrajectory};
-
-enum PoseRail {
-    Stub(RailStub),
-    Active(AxlRail),
-}
-
-impl PoseRail {
-    fn read_x_m(&mut self) -> Result<f64, HwError> {
-        return match self {
-            Self::Stub(stub) => Ok(stub.read_x()),
-            Self::Active(rail) => rail.read_x_m(),
-        };
-    }
-}
 
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
     bus: Arc<Mutex<DynamixelBus>>,
-    rail: PoseRail,
+    /// `None`이면 `rail_x = 0` (레일 비활성).
+    rail: Option<AxlRail>,
     busy: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     executor: Option<JoinHandle<()>>,
@@ -63,9 +49,9 @@ impl RealHardware {
         is_dry_run: bool,
     ) -> Result<Self, HwError> {
         let rail = match rail.filter(|config| config.enabled) {
-            None => PoseRail::Stub(RailStub),
-            Some(config) if is_dry_run => PoseRail::Active(AxlRail::dry_run(config)?),
-            Some(config) => PoseRail::Active(AxlRail::open(config)?),
+            None => None,
+            Some(config) if is_dry_run => Some(AxlRail::dry_run(config)?),
+            Some(config) => Some(AxlRail::open(config)?),
         };
         return Ok(Self {
             bus: Arc::new(Mutex::new(bus)),
@@ -75,6 +61,13 @@ impl RealHardware {
             executor: None,
             stream_hz,
         });
+    }
+
+    fn read_rail_x_m(&mut self) -> Result<f64, HwError> {
+        return match &mut self.rail {
+            None => Ok(0.0),
+            Some(rail) => rail.read_x_m(),
+        };
     }
 
     fn reap_executor(&mut self) {
@@ -143,7 +136,7 @@ impl Hardware for RealHardware {
             .lock()
             .map_err(|_| HwError::ReadFailed)?
             .read_joints()?;
-        return Ok(RobotPose::new(self.rail.read_x_m()?, joints));
+        return Ok(RobotPose::new(self.read_rail_x_m()?, joints));
     }
 
     fn is_busy(&mut self) -> bool {
