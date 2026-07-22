@@ -88,6 +88,14 @@ impl AxlRail {
         let current_m = self.read_x_m()?;
         return self.move_abs_m(current_m + dx);
     }
+
+    /// 종료 직전 서보 OFF. Windows CLI는 이어서 프로세스를 강제 종료할 수 있다.
+    pub fn disable_servo_best_effort(&mut self) {
+        #[cfg(all(windows, feature = "real"))]
+        if let RailKind::Live(live) = &self.kind {
+            let _ = unsafe { (live.ffi.axm_signal_servo_on)(live.axis, 0) };
+        }
+    }
 }
 
 fn normalize_m(x: f64) -> f64 {

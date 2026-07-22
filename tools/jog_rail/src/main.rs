@@ -1,5 +1,6 @@
 //! AXL 리니어 레일 수동 조그 — 절대/상대 이동으로 배선·한계·클램프 검증.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -42,6 +43,22 @@ fn resolve_rail_config(path: &Path) -> Result<pingpong_bot::hardware::rail::Rail
         cfg.dll_path = parent.join(&cfg.dll_path);
     }
     return Ok(cfg);
+}
+
+/// AXL/OpenCV 등 대형 DLL의 process-exit detach가 수 초 블로킹되므로,
+/// 서보 OFF·출력 flush 후 Windows에서는 `TerminateProcess`로 바로 끝낸다.
+fn exit_cli_immediately(code: u32) -> ! {
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    #[cfg(windows)]
+    unsafe {
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> *mut core::ffi::c_void;
+            fn TerminateProcess(handle: *mut core::ffi::c_void, exit_code: u32) -> i32;
+        }
+        TerminateProcess(GetCurrentProcess(), code);
+    }
+    std::process::exit(code as i32);
 }
 
 fn run(args: Args) -> Result<()> {
@@ -93,7 +110,11 @@ fn run(args: Args) -> Result<()> {
         "이동 후"
     );
     println!("rail_x_m={commanded_m}");
-    return Ok(());
+
+    rail.disable_servo_best_effort();
+    // Drop/DLL detach 경로를 타지 않도록 핸들을 누수한 뒤 프로세스를 즉시 종료한다.
+    std::mem::forget(rail);
+    exit_cli_immediately(0);
 }
 
 fn main() -> Result<()> {

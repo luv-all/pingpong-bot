@@ -9,3 +9,5 @@ cargo run -p jog-rail -- --config config/real-hardware.toml --position-m 0.05
 ```
 
 설정: [`config/real-hardware.toml`](../../config/real-hardware.toml) — live 모드는 `[hardware.rail] enabled = true` 필요.
+
+성공 종료 시 Windows에서는 AXL/OpenCV DLL detach 지연을 피하려고 서보 OFF 후 `TerminateProcess`로 바로 끝낸다.
