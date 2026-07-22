@@ -79,6 +79,7 @@ pub fn draw(
     status: Option<&StatusSnapshot>,
 ) {
     let mut shoot = false;
+    let mut random_shoot = false;
     let mut park = false;
     let mut schedule_launch = false;
     let mut schedule_impulse = false;
@@ -174,6 +175,9 @@ pub fn draw(
                 if ui.button("Shoot").clicked() {
                     shoot = true;
                 }
+                if ui.button("Random Shoot").clicked() {
+                    random_shoot = true;
+                }
                 if ui.button("Park ball").clicked() {
                     park = true;
                 }
@@ -220,9 +224,17 @@ pub fn draw(
         });
 
     if let Ok(mut ctrl) = controls.try_lock() {
+        // 슬라이더 값은 매 프레임 그대로 반영 — Random Shoot는 이 한 발에만
+        // 랜덤 설정을 얹어 보내고, `ui_state.shooter`(슬라이더)는 건드리지
+        // 않는다. 안 그러면 이후 일반 Shoot가 마지막 Random Shoot 조준을
+        // 그대로 재현해버린다.
         ctrl.shooter = ui_state.shooter.clone();
         ctrl.time_scale = ui_state.time_scale;
         if shoot {
+            ctrl.request_shoot();
+        }
+        if random_shoot {
+            ctrl.shooter = ui_state.shooter.randomized(&mut rand::thread_rng());
             ctrl.request_shoot();
         }
         if park {

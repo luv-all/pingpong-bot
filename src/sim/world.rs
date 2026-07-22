@@ -1119,4 +1119,89 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn random_shot_grid_clears_net_and_returns() {
+        for lateral in [-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
+            let (yaw_min, yaw_max) = BallShooterSettings::yaw_range_for_lateral_deg(lateral);
+            for yaw in [yaw_min, yaw_max] {
+                for speed in [
+                    crate::sim::shooter::RANDOM_SHOT_SPEED_MIN_MPS,
+                    crate::sim::shooter::RANDOM_SHOT_SPEED_MAX_MPS,
+                ] {
+                    let settings = BallShooterSettings {
+                        lateral_offset_m: lateral,
+                        yaw_deg: yaw,
+                        speed_mps: speed,
+                        ..BallShooterSettings::default()
+                    };
+
+                    let arm = test_arm();
+                    let mut world = SimWorld::new(arm.clone(), None);
+                    world.set_use_ground_truth(true);
+
+                    let collider_for_body = |world: &SimWorld, body_handle| {
+                        world
+                            .collider_set
+                            .iter()
+                            .find_map(|(handle, collider)| {
+                                (collider.parent() == Some(body_handle)).then_some(handle)
+                            })
+                            .expect("body collider")
+                    };
+                    let ball_collider = collider_for_body(&world, world.ball_handle);
+                    let racket_collider = collider_for_body(&world, world.racket_handle);
+                    let net_collider = world
+                        .collider_set
+                        .iter()
+                        .find_map(|(handle, collider)| {
+                            let cuboid = collider.shape().as_cuboid()?;
+                            ((f64::from(cuboid.half_extents.y) - 0.005).abs() < 1e-6)
+                                .then_some(handle)
+                        })
+                        .expect("net collider");
+
+                    world.shoot_ball(&settings);
+
+                    let mut racket_contact = false;
+                    let mut returned = false;
+                    for _ in 0..5_000 {
+                        world.step(1.0 / 1000.0, None);
+
+                        assert!(
+                            !world
+                                .narrow_phase
+                                .contact_pair(ball_collider, net_collider)
+                                .is_some_and(ContactPair::has_any_active_contact),
+                            "lateral={lateral:+.2} yaw={yaw:+.2} speed={speed:.2} — \
+                             네트에 맞음"
+                        );
+
+                        if world
+                            .narrow_phase
+                            .contact_pair(ball_collider, racket_collider)
+                            .is_some_and(ContactPair::has_any_active_contact)
+                        {
+                            racket_contact = true;
+                        }
+                        if racket_contact && world.ball_velocity().y > 0.0 {
+                            returned = true;
+                            break;
+                        }
+                    }
+
+                    assert!(
+                        racket_contact,
+                        "lateral={lateral:+.2} yaw={yaw:+.2} speed={speed:.2} — \
+                         라켓 접수 없음"
+                    );
+                    assert!(
+                        returned,
+                        "lateral={lateral:+.2} yaw={yaw:+.2} speed={speed:.2} — \
+                         라켓 접수 뒤 리턴 안 됨"
+                    );
+                }
+            }
+        }
+    }
 }
