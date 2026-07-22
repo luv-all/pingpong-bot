@@ -226,8 +226,10 @@ impl AxlLive {
 #[cfg(all(windows, feature = "real"))]
 impl Drop for AxlLive {
     fn drop(&mut self) {
+        // 서보만 끈다. `AxlClose`와 `FreeLibrary(AXL.dll)`은 벤더 쪽에서
+        // 수 초 블로킹되는 경우가 많아 호출하지 않는다. DLL 핸들은
+        // `AxlFfi`의 `ManuallyDrop<Library>`로 프로세스 종료까지 유지한다.
         let _ = unsafe { (self.ffi.axm_signal_servo_on)(self.axis, 0) };
-        let _ = unsafe { (self.ffi.axl_close)() };
     }
 }
 

@@ -1,4 +1,9 @@
 //! Windows AXL 동적 라이브러리 바인딩.
+//!
+//! `AXL.dll`은 `FreeLibrary` detach에서 수 초 동안 블로킹될 수 있어,
+//! 로드한 `Library`는 프로세스 종료까지 의도적으로 unload하지 않는다.
+
+use std::mem::ManuallyDrop;
 
 use libloading::Library;
 
@@ -29,10 +34,14 @@ type AxmStatusGetCmdPos = unsafe extern "system" fn(i32, *mut f64) -> u32;
 type AxmStatusReadInMotion = unsafe extern "system" fn(i32, *mut u32) -> u32;
 type AxmMovePos = unsafe extern "system" fn(i32, f64, f64, f64, f64) -> u32;
 
-/// AXL 헤더와 동일한 stdcall 심볼 테이블. `library`는 함수 포인터 수명 동안 유지된다.
+/// AXL 헤더와 동일한 stdcall 심볼 테이블.
+///
+/// `_library`는 `ManuallyDrop`으로 감싸 unload를 막는다(프로세스 종료 시 OS가 회수).
 pub struct AxlFfi {
-    _library: Library,
+    _library: ManuallyDrop<Library>,
     pub axl_open_no_reset: AxlOpenNoReset,
+    /// 명시적 종료용. `Drop`에서는 호출하지 않는다(`AxlClose`가 블로킹될 수 있음).
+    #[allow(dead_code)]
     pub axl_close: AxlClose,
     pub axm_info_is_motion_module: AxmInfoIsMotionModule,
     pub axm_mot_set_pulse_out_method: AxmMotSetPulseOutMethod,
@@ -108,7 +117,7 @@ impl AxlFfi {
                     .get(b"AxmStatusReadInMotion\0")
                     .map_err(symbol_error)?,
                 axm_move_pos: *library.get(b"AxmMovePos\0").map_err(symbol_error)?,
-                _library: library,
+                _library: ManuallyDrop::new(library),
             });
         }
     }
