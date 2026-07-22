@@ -45,10 +45,7 @@ impl AxlRail {
         check_axl("AxlOpenNoReset", unsafe {
             (ffi.axl_open_no_reset)(config.irq_no)
         })?;
-        let mut live = AxlLive {
-            ffi,
-            axis: config.axis,
-        };
+        let mut live = AxlLive { ffi };
         live.configure(&config)?;
 
         return Ok(Self {
@@ -103,7 +100,6 @@ fn validate_config(config: &RailConfig) -> Result<(), HwError> {
 #[cfg(all(windows, feature = "real"))]
 struct AxlLive {
     ffi: super::axl_ffi::AxlFfi,
-    axis: i32,
 }
 
 #[cfg(all(windows, feature = "real"))]
@@ -217,7 +213,6 @@ impl AxlLive {
                 (self.ffi.axm_status_read_in_motion)(config.axis, &mut in_motion)
             })?;
             if in_motion == 0 {
-                std::thread::sleep(std::time::Duration::from_millis(1000));
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {
