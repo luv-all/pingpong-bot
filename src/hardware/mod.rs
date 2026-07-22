@@ -4,14 +4,18 @@ use crate::error::HwError;
 use crate::planner::SwingTrajectory;
 use crate::robot::RobotPose;
 
+#[cfg(all(windows, feature = "real"))]
+mod axl_ffi;
+mod axl_rail;
 pub mod dynamixel;
+pub mod rail;
 mod sim;
 
 #[cfg(feature = "real")]
-mod rail_stub;
-#[cfg(feature = "real")]
 mod real;
 
+pub use axl_rail::AxlRail;
+pub use rail::load_rail_config;
 pub use sim::SimHardware;
 
 #[cfg(feature = "real")]

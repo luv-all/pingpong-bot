@@ -85,9 +85,9 @@ fn run(args: Args) -> Result<()> {
         .map_err(anyhow::Error::msg)
         .with_context(|| format!("Dynamixel 설정 읽기 실패: {}", args.config.display()))?;
     let mut hardware = if args.dry_run {
-        RealHardware::dry_run(config)
+        RealHardware::dry_run(config, None)
     } else {
-        RealHardware::new(config)
+        RealHardware::new(config, None)
     }
     .context("Dynamixel 초기화 실패")?;
 

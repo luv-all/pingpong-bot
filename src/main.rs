@@ -182,13 +182,14 @@ fn run_real(runtime: RuntimeConfig) -> Result<()> {
         .dynamixel
         .clone()
         .context("mode=real에는 [hardware.dynamixel] 설정이 필요합니다")?;
+    let rail = runtime.hardware.rail.clone();
 
     if !runtime.vision.cameras.is_empty() {
         let vision = runtime.vision.clone();
-        return run_real_with_vision(runtime, dynamixel, vision);
+        return run_real_with_vision(runtime, dynamixel, rail, vision);
     }
 
-    let mut hardware = RealHardware::new(dynamixel).context("Dynamixel 초기화 실패")?;
+    let mut hardware = RealHardware::new(dynamixel, rail).context("RealHardware 초기화 실패")?;
     let pose = hardware
         .read_pose()
         .context("Dynamixel 현재 관절 읽기 실패")?;
@@ -204,6 +205,7 @@ fn run_real(runtime: RuntimeConfig) -> Result<()> {
 fn run_real_with_vision(
     runtime: RuntimeConfig,
     dynamixel: pingpong_bot::hardware::dynamixel::DynamixelConfig,
+    rail: Option<pingpong_bot::hardware::rail::RailConfig>,
     vision: VisionConfig,
 ) -> Result<()> {
     use pingpong_bot::{CameraFeed, OpenCvCapture, TracingTelemetry, fuse_vision};
@@ -244,7 +246,7 @@ fn run_real_with_vision(
         runtime.urdf_path().as_deref(),
         runtime.ee_link.as_deref(),
     )?;
-    let hardware = RealHardware::new(dynamixel).context("Dynamixel 초기화")?;
+    let hardware = RealHardware::new(dynamixel, rail).context("RealHardware 초기화 실패")?;
     let estimator = Box::new(BallEkf::with_physics(runtime.physics));
     let telemetry = Arc::new(TracingTelemetry);
     let config = PipelineConfig {

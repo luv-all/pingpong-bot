@@ -52,3 +52,32 @@ motor_angle_limits_deg = [
 restitution = 0.85
 friction = 0.15
 drag = 0.0
+
+[hardware.rail]
+enabled = true
+dll_path = "C:/Users/user/Downloads/Interfacing File/Interfacing File/Linear/LM_interface/src/lib/AXL.dll"
+axis = 0
+irq_no = 7
+# 벤치에서 1 m당 펄스 실측 후 기입. 아래는 자리값.
+pulses_per_meter = 250000
+# 앱 도메인과 보드 cmd/act가 좌우 반대면 true (절대: min↔max, 상대: 부호 반전)
+reverse = true
+x_min_m = 0
+x_max_m = 1.43
+vel = 5
+accel = 12.0
+decel = 12.0
+min_vel = 0.001
+max_vel = 5.0
+pulse_out_method = 4
+enc_input_method = 3
+abs_rel_mode = 0
+profile_mode = 3
+accel_unit = 0
+soft_limit_stop_mode = 0
+soft_limit_selection = 0
+inposition_use = 1
+alarm_use = 0
+limit_stop_mode = 0
+pos_end_limit_level = 2
+neg_end_limit_level = 2

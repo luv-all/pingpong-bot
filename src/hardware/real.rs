@@ -1,4 +1,4 @@
-//! Dynamixel 4축 실물 하드웨어 어댑터. AXL 레일은 x=0 스텁이다.
+//! Dynamixel 4축 실물 하드웨어 어댑터와 선택적 AXL 레일 pose reader.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -7,14 +7,16 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, error, warn};
 
+use super::axl_rail::AxlRail;
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
-use super::rail_stub::RailStub;
+use super::rail::RailConfig;
 use crate::{Hardware, HwError, RobotPose, SwingTrajectory};
 
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
     bus: Arc<Mutex<DynamixelBus>>,
-    rail: RailStub,
+    /// `None`이면 `rail_x = 0` (레일 비활성).
+    rail: Option<AxlRail>,
     busy: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     executor: Option<JoinHandle<()>>,
@@ -23,31 +25,48 @@ pub struct RealHardware {
 
 impl RealHardware {
     /// 실제 시리얼 포트를 열고 motion profile과 torque를 설정한다.
-    pub fn new(config: DynamixelConfig) -> Result<Self, HwError> {
+    pub fn new(config: DynamixelConfig, rail: Option<RailConfig>) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::open(config)?;
         bus.enable_torque(true)?;
-        return Ok(Self::from_bus(bus, stream_hz));
+        return Self::from_bus(bus, stream_hz, rail, false);
     }
 
     /// 포트를 열지 않지만 실제 좌표 변환·리밋·executor 경로를 그대로 사용한다.
-    pub fn dry_run(config: DynamixelConfig) -> Result<Self, HwError> {
+    pub fn dry_run(config: DynamixelConfig, rail: Option<RailConfig>) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::dry_run(config).map_err(|e| HwError::InvalidConfig {
             reason: e.to_string(),
         })?;
         bus.enable_torque(true)?;
-        return Ok(Self::from_bus(bus, stream_hz));
+        return Self::from_bus(bus, stream_hz, rail, true);
     }
 
-    fn from_bus(bus: DynamixelBus, stream_hz: f64) -> Self {
-        return Self {
+    fn from_bus(
+        bus: DynamixelBus,
+        stream_hz: f64,
+        rail: Option<RailConfig>,
+        is_dry_run: bool,
+    ) -> Result<Self, HwError> {
+        let rail = match rail.filter(|config| config.enabled) {
+            None => None,
+            Some(config) if is_dry_run => Some(AxlRail::dry_run(config)?),
+            Some(config) => Some(AxlRail::open(config)?),
+        };
+        return Ok(Self {
             bus: Arc::new(Mutex::new(bus)),
-            rail: RailStub,
+            rail,
             busy: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
             executor: None,
             stream_hz,
+        });
+    }
+
+    fn read_rail_x_m(&mut self) -> Result<f64, HwError> {
+        return match &mut self.rail {
+            None => Ok(0.0),
+            Some(rail) => rail.read_x_m(),
         };
     }
 
@@ -74,7 +93,7 @@ impl Hardware for RealHardware {
             || trajectory.rail.end_velocity.abs() > 1e-4
             || (trajectory.follow_through_rail_x - trajectory.rail.end).abs() > 1e-4
         {
-            warn!("AXL 레일 미구현 — rail_x=0으로 Dynamixel 관절 궤적만 실행");
+            warn!("AXL 레일 스윙 동기 미구현 — 관절 궤적만 실행");
         }
 
         let trajectory = trajectory.clone();
@@ -117,7 +136,7 @@ impl Hardware for RealHardware {
             .lock()
             .map_err(|_| HwError::ReadFailed)?
             .read_joints()?;
-        return Ok(RobotPose::new(self.rail.read_x(), joints));
+        return Ok(RobotPose::new(self.read_rail_x_m()?, joints));
     }
 
     fn is_busy(&mut self) -> bool {
@@ -137,6 +156,7 @@ impl Drop for RealHardware {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::thread;
     use std::time::Duration;
 
@@ -144,6 +164,32 @@ mod tests {
 
     use super::RealHardware;
     use crate::hardware::dynamixel::DynamixelConfig;
+    use crate::hardware::rail::RailConfig;
+
+    #[test]
+    fn dry_run_read_pose_uses_rail_position() {
+        let dynamixel = DynamixelConfig {
+            stream_hz: 500.0,
+            ..DynamixelConfig::default()
+        };
+        let rail = RailConfig {
+            enabled: true,
+            dll_path: PathBuf::from("unused.dll"),
+            pulses_per_meter: 1000,
+            x_min_m: -1.0,
+            x_max_m: 1.0,
+            vel: 0.2,
+            accel: 1.0,
+            decel: 1.0,
+            min_vel: 0.001,
+            max_vel: 1.0,
+            ..RailConfig::default()
+        };
+
+        let mut hardware = RealHardware::dry_run(dynamixel, Some(rail)).expect("dry-run hardware");
+
+        assert_eq!(hardware.read_pose().expect("pose").rail_x, 0.0);
+    }
 
     #[test]
     fn dry_run_executes_trajectory_and_reports_busy_state() {
@@ -151,7 +197,7 @@ mod tests {
             stream_hz: 500.0,
             ..DynamixelConfig::default()
         };
-        let mut hardware = RealHardware::dry_run(config).expect("dry-run hardware");
+        let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
         let trajectory = SwingTrajectory::new(
             Joints::from_slice(&[0.0; 4]),
             Joints::from_slice(&[0.1; 4]),
@@ -179,7 +225,7 @@ mod tests {
             stream_hz: 500.0,
             ..DynamixelConfig::default()
         };
-        let mut hardware = RealHardware::dry_run(config).expect("dry-run hardware");
+        let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
         let trajectory = SwingTrajectory::new(
             Joints::from_slice(&[0.0; 4]),
             Joints::from_slice(&[0.1; 4]),

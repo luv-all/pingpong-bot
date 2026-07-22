@@ -22,7 +22,7 @@ required-features = ["gui"]
 [features]
 default = ["gui"]
 gui = ["dep:kiss3d", "dep:pollster", "dep:stl_io"]
-real = ["dep:rustypot", "dep:serialport"]
+real = ["dep:rustypot", "dep:serialport", "dep:libloading"]
 
 [dependencies]
 anyhow = "1.0.103"
@@ -53,3 +53,6 @@ toml_edit = "0.22.27"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 urdf-rs = "0.9.0"
+
+[target.'cfg(windows)'.dependencies]
+libloading = { version = "0.8", optional = true }

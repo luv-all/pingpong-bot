@@ -7,6 +7,7 @@ use anyhow::{Context, Result, ensure};
 use pingpong_bot::Calibration;
 use pingpong_bot::VisionConfig;
 use pingpong_bot::hardware::dynamixel::DynamixelConfig;
+use pingpong_bot::hardware::rail::RailConfig;
 use pingpong_bot::{InterceptWindow, PhysicsParams};
 use serde::Deserialize;
 
@@ -55,6 +56,7 @@ impl From<InterceptConfig> for InterceptWindow {
 #[serde(default)]
 pub struct HardwareConfig {
     pub dynamixel: Option<DynamixelConfig>,
+    pub rail: Option<RailConfig>,
 }
 
 /// TOML 하나로 로드하는 전체 런타임 설정.
@@ -100,6 +102,12 @@ impl RuntimeConfig {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
+        if let Some(rail) = &mut config.hardware.rail
+            && rail.enabled
+            && rail.dll_path.is_relative()
+        {
+            rail.dll_path = config.source_dir.join(&rail.dll_path);
+        }
         config
             .validate()
             .with_context(|| format!("TOML 값 검증 실패: {}", path.display()))?;
@@ -160,6 +168,9 @@ impl RuntimeConfig {
                 .as_ref()
                 .context("mode=real에는 [hardware.dynamixel] 설정이 필요합니다")?;
             dynamixel.validate().context("hardware.dynamixel")?;
+            if let Some(rail) = &self.hardware.rail {
+                rail.validate().context("hardware.rail")?;
+            }
             if !self.vision.cameras.is_empty() {
                 ensure!(
                     self.calibration_path.is_some(),
@@ -283,6 +294,28 @@ drag = 0.01
     }
 
     #[test]
+    fn resolves_relative_rail_dll_path_from_toml_directory() {
+        let real = CONFIG.replace("mode = \"sim\"", "mode = \"real\"")
+            + r#"
+
+[hardware.dynamixel]
+port = "COM9"
+motor_ids = [1, 3, 4, 5]
+
+[hardware.rail]
+enabled = true
+dll_path = "drivers/AXL.dll"
+"#;
+        let config =
+            RuntimeConfig::from_toml(&real, Path::new("config/real.toml")).expect("real 설정");
+
+        assert_eq!(
+            config.hardware.rail.expect("rail 설정").dll_path,
+            Path::new("config/drivers/AXL.dll")
+        );
+    }
+
+    #[test]
     fn rejects_missing_runtime_fields() {
         let error = RuntimeConfig::from_toml(
             "mode = \"sim\"\n[physics]\nrestitution = 0.85\n",
@@ -310,6 +343,26 @@ drag = 0.01
         assert!(
             RuntimeConfig::from_toml(&too_many_samples, Path::new("config/test.toml")).is_err()
         );
+    }
+
+    #[test]
+    fn rejects_invalid_rail_range_when_enabled() {
+        let real = CONFIG.replace("mode = \"sim\"", "mode = \"real\"")
+            + r#"
+
+[hardware.dynamixel]
+port = "COM9"
+motor_ids = [1, 3, 4, 5]
+
+[hardware.rail]
+enabled = true
+dll_path = "drivers/AXL.dll"
+x_min_m = 0.50
+x_max_m = 0.20
+"#;
+        let error =
+            RuntimeConfig::from_toml(&real, Path::new("config/real.toml")).unwrap_err();
+        assert!(format!("{error:#}").contains("hardware.rail"));
     }
 
     #[test]

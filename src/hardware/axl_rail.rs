@@ -1,0 +1,358 @@
+//! AXL 리니어 레일 dry-run 및 Windows 실물 어댑터.
+
+use crate::HwError;
+
+use super::rail::RailConfig;
+
+pub struct AxlRail {
+    config: RailConfig,
+    kind: RailKind,
+}
+
+#[cfg(all(windows, feature = "real"))]
+const MOVE_POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+enum RailKind {
+    DryRun {
+        position_m: f64,
+    },
+    #[cfg(all(windows, feature = "real"))]
+    Live(AxlLive),
+}
+
+impl AxlRail {
+    /// DLL 없이 레일 좌표·클램프 경로를 검증한다.
+    pub fn dry_run(config: RailConfig) -> Result<Self, HwError> {
+        validate_config(&config)?;
+        return Ok(Self {
+            config,
+            kind: RailKind::DryRun { position_m: 0.0 },
+        });
+    }
+
+    /// Windows AXL DLL을 열고 단일 축을 초기화한다.
+    #[cfg(all(windows, feature = "real"))]
+    pub fn open(config: RailConfig) -> Result<Self, HwError> {
+        validate_config(&config)?;
+        if !config.enabled {
+            return Err(HwError::InvalidConfig {
+                reason: "enabled=true인 rail 설정이 필요합니다".into(),
+            });
+        }
+
+        let ffi = super::axl_ffi::AxlFfi::load(&config.dll_path)?;
+        // 칩 리셋 없이 열어 보드에 기록된 엔코더/명령 위치를 유지한다.
+        check_axl("AxlOpenNoReset", unsafe {
+            (ffi.axl_open_no_reset)(config.irq_no)
+        })?;
+        let mut live = AxlLive { ffi };
+        live.configure(&config)?;
+
+        return Ok(Self {
+            config,
+            kind: RailKind::Live(live),
+        });
+    }
+
+    /// Windows+real이 아닌 빌드에서는 실물 AXL 장치를 열 수 없다.
+    #[cfg(not(all(windows, feature = "real")))]
+    pub fn open(_config: RailConfig) -> Result<Self, HwError> {
+        return Err(HwError::InvalidConfig {
+            reason: "AxlRail::open은 Windows + feature=real 에서만 지원됩니다".into(),
+        });
+    }
+
+    /// 보드 cmd/act 원시 위치 [m]. `reverse` 해석 전 값.
+    pub fn read_board_x_m(&mut self) -> Result<f64, HwError> {
+        match &mut self.kind {
+            RailKind::DryRun { position_m } => {
+                Ok(normalize_m(self.config.domain_to_board_abs(*position_m)))
+            }
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => live.read_x_m(self.config.axis),
+        }
+    }
+
+    /// 앱이 해석하는 도메인 위치 [m] (`reverse` 반영).
+    pub fn read_x_m(&mut self) -> Result<f64, HwError> {
+        let board_m = self.read_board_x_m()?;
+        return Ok(normalize_m(self.config.board_to_domain_abs(board_m)));
+    }
+
+    /// 도메인 절대 위치를 클램프한 뒤 보드 좌표로 변환해 이동한다. 반환값은 도메인 명령.
+    pub fn move_abs_m(&mut self, x: f64) -> Result<f64, HwError> {
+        let domain_m = normalize_m(self.config.clamp_m(x));
+        let board_m = normalize_m(self.config.domain_to_board_abs(domain_m));
+        match &mut self.kind {
+            RailKind::DryRun { position_m } => *position_m = domain_m,
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => live.move_abs_m(&self.config, board_m)?,
+        }
+        return Ok(domain_m);
+    }
+
+    /// 도메인 상대 이동. `reverse`면 보드 Δ에 -1을 곱한 것과 같다.
+    pub fn move_rel_m(&mut self, dx: f64) -> Result<f64, HwError> {
+        let current_domain = self.read_x_m()?;
+        return self.move_abs_m(current_domain + dx);
+    }
+
+}
+
+fn normalize_m(x: f64) -> f64 {
+    return (x * 1_000_000_000_000.0).round() / 1_000_000_000_000.0;
+}
+
+fn validate_config(config: &RailConfig) -> Result<(), HwError> {
+    return config.validate().map_err(|error| HwError::InvalidConfig {
+        reason: error.to_string(),
+    });
+}
+
+#[cfg(all(windows, feature = "real"))]
+struct AxlLive {
+    ffi: super::axl_ffi::AxlFfi,
+}
+
+#[cfg(all(windows, feature = "real"))]
+impl AxlLive {
+    fn configure(&mut self, config: &RailConfig) -> Result<(), HwError> {
+        let axis = config.axis;
+        let mut status = 0;
+        check_axl("AxmInfoIsMotionModule", unsafe {
+            (self.ffi.axm_info_is_motion_module)(&mut status)
+        })?;
+        if status != super::axl_ffi::STATUS_EXIST {
+            return Err(HwError::InvalidConfig {
+                reason: format!("AXL motion module axis={axis} status={status}"),
+            });
+        }
+
+        check_axl("AxmMotSetPulseOutMethod", unsafe {
+            (self.ffi.axm_mot_set_pulse_out_method)(axis, config.pulse_out_method)
+        })?;
+        check_axl("AxmMotSetEncInputMethod", unsafe {
+            (self.ffi.axm_mot_set_enc_input_method)(axis, config.enc_input_method)
+        })?;
+        let pulses =
+            i32::try_from(config.pulses_per_meter).map_err(|_| HwError::InvalidConfig {
+                reason: format!(
+                    "pulses_per_meter={}가 i32 범위를 초과합니다",
+                    config.pulses_per_meter
+                ),
+            })?;
+        // 1 board unit = 1 meter = pulses_per_meter pulses (vendor-style Unit=1, Pulse=N).
+        check_axl("AxmMotSetMoveUnitPerPulse", unsafe {
+            (self.ffi.axm_mot_set_move_unit_per_pulse)(axis, 1.0, pulses)
+        })?;
+        check_axl("AxmMotSetMinVel", unsafe {
+            (self.ffi.axm_mot_set_min_vel)(axis, config.min_vel)
+        })?;
+        check_axl("AxmMotSetMaxVel", unsafe {
+            (self.ffi.axm_mot_set_max_vel)(axis, config.max_vel)
+        })?;
+        check_axl("AxmMotSetAccelUnit", unsafe {
+            (self.ffi.axm_mot_set_accel_unit)(axis, config.accel_unit)
+        })?;
+        check_axl("AxmMotSetAbsRelMode", unsafe {
+            (self.ffi.axm_mot_set_abs_rel_mode)(axis, config.abs_rel_mode)
+        })?;
+        check_axl("AxmMotSetProfileMode", unsafe {
+            (self.ffi.axm_mot_set_profile_mode)(axis, config.profile_mode)
+        })?;
+        check_axl("AxmSignalSetInpos", unsafe {
+            (self.ffi.axm_signal_set_inpos)(axis, config.inposition_use)
+        })?;
+        check_axl("AxmSignalSetServoAlarm", unsafe {
+            (self.ffi.axm_signal_set_servo_alarm)(axis, config.alarm_use)
+        })?;
+        check_axl("AxmSignalSetLimit", unsafe {
+            (self.ffi.axm_signal_set_limit)(
+                axis,
+                config.limit_stop_mode,
+                config.pos_end_limit_level,
+                config.neg_end_limit_level,
+            )
+        })?;
+        let soft_limit = config.soft_limit_args();
+        check_axl("AxmSignalSetSoftLimit", unsafe {
+            (self.ffi.axm_signal_set_soft_limit)(
+                axis,
+                soft_limit.use_,
+                soft_limit.stop_mode,
+                soft_limit.selection,
+                soft_limit.positive_m,
+                soft_limit.negative_m,
+            )
+        })?;
+        return check_axl("AxmSignalServoOn", unsafe {
+            (self.ffi.axm_signal_servo_on)(axis, super::axl_ffi::ENABLE)
+        });
+    }
+
+    fn read_x_m(&mut self, axis: i32) -> Result<f64, HwError> {
+        let mut position_m = 0.0;
+        let actual_status = unsafe { (self.ffi.axm_status_get_act_pos)(axis, &mut position_m) };
+        if actual_status == super::axl_ffi::AXT_RT_SUCCESS {
+            return Ok(position_m);
+        }
+
+        let command_status = unsafe { (self.ffi.axm_status_get_cmd_pos)(axis, &mut position_m) };
+        if command_status == super::axl_ffi::AXT_RT_SUCCESS {
+            return Ok(position_m);
+        }
+        return Err(read_position_error(actual_status, command_status));
+    }
+
+    fn move_abs_m(&mut self, config: &RailConfig, commanded_m: f64) -> Result<(), HwError> {
+        check_axl("AxmMotSetAbsRelMode", unsafe {
+            (self.ffi.axm_mot_set_abs_rel_mode)(config.axis, 0)
+        })?;
+        check_axl("AxmMovePos", unsafe {
+            (self.ffi.axm_move_pos)(
+                config.axis,
+                commanded_m,
+                config.vel,
+                config.accel,
+                config.decel,
+            )
+        })?;
+
+        let deadline = std::time::Instant::now() + MOVE_POLL_TIMEOUT;
+        loop {
+            let mut in_motion = 0;
+            check_axl("AxmStatusReadInMotion", unsafe {
+                (self.ffi.axm_status_read_in_motion)(config.axis, &mut in_motion)
+            })?;
+            if in_motion == 0 {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(move_poll_timeout_error());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+}
+
+#[cfg(all(windows, feature = "real"))]
+impl Drop for AxlLive {
+    fn drop(&mut self) {
+        // 서보는 켠 채로 둔다 — 반복 실행·벤치 세션에서 엔코더/홀딩을 유지한다.
+        let _ = unsafe { (self.ffi.axl_close)() };
+    }
+}
+
+#[cfg(all(windows, feature = "real"))]
+fn check_axl(name: &str, code: u32) -> Result<(), HwError> {
+    if code == super::axl_ffi::AXT_RT_SUCCESS {
+        return Ok(());
+    }
+    return Err(HwError::InvalidConfig {
+        reason: format!("AXL {name} code={code}"),
+    });
+}
+
+#[cfg(all(windows, feature = "real"))]
+fn read_position_error(actual_status: u32, command_status: u32) -> HwError {
+    return HwError::InvalidConfig {
+        reason: format!(
+            "AXL AxmStatusGetActPos code={actual_status}; AxmStatusGetCmdPos code={command_status}"
+        ),
+    };
+}
+
+#[cfg(all(windows, feature = "real"))]
+fn move_poll_timeout_error() -> HwError {
+    return HwError::InvalidConfig {
+        reason: format!(
+            "AXL AxmStatusReadInMotion timeout after {}s",
+            MOVE_POLL_TIMEOUT.as_secs()
+        ),
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::AxlRail;
+    use crate::hardware::rail::RailConfig;
+
+    #[test]
+    fn dry_run_move_abs_clamps_and_updates_position() {
+        let cfg = RailConfig {
+            enabled: true,
+            dll_path: PathBuf::from("unused.dll"),
+            pulses_per_meter: 1000,
+            x_min_m: 0.0,
+            x_max_m: 0.4,
+            vel: 0.2,
+            accel: 1.0,
+            decel: 1.0,
+            min_vel: 0.001,
+            max_vel: 1.0,
+            ..RailConfig::default()
+        };
+        let mut rail = AxlRail::dry_run(cfg).unwrap();
+        assert_eq!(rail.read_x_m().unwrap(), 0.0);
+        let commanded = rail.move_abs_m(1.0).unwrap();
+        assert_eq!(commanded, 0.4);
+        assert_eq!(rail.read_x_m().unwrap(), 0.4);
+        let commanded = rail.move_rel_m(-0.1).unwrap();
+        assert_eq!(commanded, 0.3);
+    }
+
+    #[test]
+    fn dry_run_reverse_maps_abs_min_max_and_keeps_domain_api() {
+        let cfg = RailConfig {
+            enabled: true,
+            dll_path: PathBuf::from("unused.dll"),
+            pulses_per_meter: 1000,
+            reverse: true,
+            x_min_m: 0.0,
+            x_max_m: 0.4,
+            vel: 0.2,
+            accel: 1.0,
+            decel: 1.0,
+            min_vel: 0.001,
+            max_vel: 1.0,
+            ..RailConfig::default()
+        };
+        let mut rail = AxlRail::dry_run(cfg).unwrap();
+        let commanded = rail.move_abs_m(0.25).unwrap();
+        assert_eq!(commanded, 0.25);
+        assert_eq!(rail.read_x_m().unwrap(), 0.25);
+        // board abs = xmin + xmax - domain
+        assert_eq!(rail.read_board_x_m().unwrap(), 0.15);
+        let commanded = rail.move_rel_m(0.05).unwrap();
+        assert_eq!(commanded, 0.3);
+        assert_eq!(rail.read_board_x_m().unwrap(), 0.1);
+    }
+
+    #[cfg(all(windows, feature = "real"))]
+    #[test]
+    fn read_error_includes_both_axl_status_codes() {
+        let error = super::read_position_error(7, 9);
+
+        assert_eq!(
+            error,
+            crate::HwError::InvalidConfig {
+                reason: "AXL AxmStatusGetActPos code=7; AxmStatusGetCmdPos code=9".into(),
+            }
+        );
+    }
+
+    #[cfg(all(windows, feature = "real"))]
+    #[test]
+    fn move_poll_timeout_error_identifies_axl_operation() {
+        let error = super::move_poll_timeout_error();
+
+        assert_eq!(
+            error,
+            crate::HwError::InvalidConfig {
+                reason: "AXL AxmStatusReadInMotion timeout after 30s".into(),
+            }
+        );
+    }
+}

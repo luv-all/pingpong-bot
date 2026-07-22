@@ -104,7 +104,7 @@ RUST_LOG=debug cargo run -p pingpong-bot
 RUST_LOG=pingpong_bot=debug,info cargo run -p pingpong-bot -- config/experiment.toml
 ```
 
-### Dynamixel 4축 (Windows)
+### Dynamixel 4축 · AXL 레일 (Windows)
 
 `config/real-hardware.toml`은 Python `test-manipulator`에서 확인한 COM8·ID
 1/3/4/5·방향·tick 리밋을 그대로 쓴다. 각도는 모터 절대각이 아니라 **URDF 관절각**이다.
@@ -116,11 +116,31 @@ cargo run -p jog-axis -- --config config/real-hardware.toml --angles-deg 0,0,0,0
 # 실기는 작은 단축 이동부터 (예: URDF joint 0 → 5°)
 cargo run -p jog-axis -- --config config/real-hardware.toml --joint 0 --angle-deg 5
 
-# 포트 연결 + 현재 4축 읽기 스모크
+# 포트 연결 + 현재 4축·레일 pose 읽기 스모크
 cargo run -p pingpong-bot --features real -- config/real-hardware.toml
 ```
 
-AXL 레일은 아직 `rail_x=0` 스텁이며, 비영 레일 궤적은 경고 후 팔 4축만 실행한다.
+**AXL 리니어 레일** (`[hardware.rail]`, 단위 m):
+
+- `enabled = true`일 때만 `AxlRail`이 열리며, `read_pose().rail_x`는 실측(또는 dry-run 메모리) 값을 반환한다.
+- 오픈은 `AxlOpenNoReset` — 칩 리셋 없이 보드에 기록된 엔코더/명령 위치를 유지한다.
+- `dll_path`는 `AXL.dll` 절대 경로. PATH에 DLL 디렉터리를 넣거나 TOML에 직접 지정한다.
+- `pulses_per_meter`, `reverse`, `x_min_m`/`x_max_m`, `vel`/`accel`/`decel` 등은 TOML SSOT — **`AxmMotLoadParaAll` / `.mot` 파일은 사용하지 않는다.**
+- `reverse = true`: 앱 도메인 절대좌표는 `board = x_min + x_max - domain` (min↔max). 상대 Δ만 `-1`. cmd/act는 보드 값, `read_x_m`은 도메인 해석값.
+- 소프트 리밋: 앱 클램프 + `AxmSignalSetSoftLimit`(보드 물리 `x_min`/`x_max`).
+- 스윙 `command`의 비영 `RailMotion`은 아직 **경고만** — 관절 궤적만 실행(레일 스윙 동기는 후속).
+
+```powershell
+# 레일 조그 — dry-run(매핑·클램프만)
+cargo run -p jog-rail -- --config config/real-hardware.toml --position-m 0.05 --dry-run
+cargo run -p jog-rail -- --config config/real-hardware.toml --delta-m=-0.01 --dry-run
+
+# live: [hardware.rail] enabled = true + dll_path·pulses_per_meter·travel 실측 후
+cargo run -p jog-rail -- --config config/real-hardware.toml --position-m 0.05
+```
+
+상세: [`tools/jog_rail/README.md`](tools/jog_rail/README.md) · [`config/real-hardware.toml`](config/real-hardware.toml) `[hardware.rail]`.
+
 실카메라 pipeline은 다음 단계다.
 
 ---
@@ -214,7 +234,7 @@ flowchart LR
   subgraph realSide ["real 모드 · 예정"]
     direction LR
     realCamera["<b>실 카메라</b><br/>UVC · 멀티캠"]
-    realHardware["<b>RealHardware</b><br/>Dynamixel · AXL 스텁"]
+    realHardware["<b>RealHardware</b><br/>Dynamixel · AXL pose"]
   end
 
   realCamera -.-> common -.-> realHardware
@@ -309,6 +329,7 @@ cargo run -p pingpong-bot -- config/experiment.toml
 | `measure-restitution` | ✅ | [measure_restitution](tools/measure_restitution/README.md) |
 | `measure-friction` | ✅ | [measure_friction](tools/measure_friction/README.md) |
 | `jog-axis` | ✅ | [jog_axis](tools/jog_axis/README.md) |
+| `jog-rail` | ✅ | [jog_rail](tools/jog_rail/README.md) — AXL 레일 조그 (m) |
 
 ### 실물 관측
 
@@ -380,7 +401,7 @@ cargo build -p pingpong-bot --release
 | TOML 단일 설정 (`config/default.toml`) | ✅ |
 | OpenCV fuse(appearance→Scorer→motion) · `VideoCapture` · `[vision]` | ✅ |
 | Dynamixel 4축 `RealHardware` · `jog-axis` | ✅ (Windows 실기 재검증 필요) |
-| AXL 레일, Rerun 시각화 | ⏳ (AXL은 x=0 스텁) |
+| AXL 레일 `jog-rail` · `read_pose` | ✅ (스윙 레일 동기·Rerun은 후속) |
 | TOML `mode = "real"` | ✅ 모터 스모크 / `[vision]` 있으면 실캠 pipeline |
 
 sim에서는 **실제 3D 물리**로 공이 날고, ground truth 또는 EKF control로 라켓이 움직인다.
