@@ -45,7 +45,7 @@ impl Default for BallShooterSettings {
         return Self {
             speed_mps: 5.0,
             yaw_deg: 0.0,
-            pitch_deg: -4.0,
+            pitch_deg: -2.0,
             roll_deg: 0.0,
             lateral_offset_m: 0.0,
             height_offset_m: 0.19,
