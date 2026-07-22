@@ -767,6 +767,141 @@ mod tests {
         );
     }
 
+    /// 진단용 — `catalog::find_robot("4-dof")`가 실제 카탈로그 경로(URDF +
+    /// `RobotBuilder`)로 만드는 팔·마운트 그대로 로드한다. `competition()`
+    /// 처럼 손으로 만든 것이 아니라 `main.rs::load_robot`과 동일 경로.
+    fn fourdof_robot() -> (Arc<Arm>, Option<Arc<crate::robot::urdf::UrdfRobot>>) {
+        let entry = crate::robot::catalog::find_robot("4-dof").expect("4-dof 카탈로그 항목");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(entry.urdf_rel.expect("4-dof는 URDF 필수"));
+        let built = crate::robot::RobotBuilder::new()
+            .urdf(&path)
+            .ee_link_opt(entry.ee_link)
+            .mount_preset(crate::robot::MountPreset::Rep103AtTableEnd)
+            .max_joint_speed(entry.max_joint_speed)
+            .build()
+            .expect("4-dof RobotBuilder 빌드");
+        return (built.arm, built.urdf);
+    }
+
+    /// 기본 슈터 샷이 네트 위를 여유 있게 지나가는지 회귀 검증한다.
+    ///
+    /// `pitch_deg=-4.0`이던 예전 기본값은 첫 바운스 뒤 네트를 -0.7cm 차로
+    /// 스쳤다(`predict_hit_plane`은 네트를 모델링하지 않아 이 경계 샷에서
+    /// 예측이 커밋 직후 곧바로 틀어짐 — 팔 기하학과 무관하게 발생하는 결함).
+    /// `pitch_deg=-2.0`으로 옮긴 지금은 여유 있게 넘어간다.
+    #[test]
+    fn default_shot_clears_net_with_margin() {
+        let arm = test_arm();
+        let mut world = SimWorld::new(arm, None);
+        world.set_use_ground_truth(false); // 스윙 없이 순수 탄도만 본다
+
+        let net_collider = world
+            .collider_set
+            .iter()
+            .find_map(|(handle, collider)| {
+                let cuboid = collider.shape().as_cuboid()?;
+                ((f64::from(cuboid.half_extents.y) - 0.005).abs() < 1e-6).then_some(handle)
+            })
+            .expect("net collider");
+        let ball_collider = world
+            .collider_set
+            .iter()
+            .find_map(|(handle, collider)| {
+                (collider.parent() == Some(world.ball_handle)).then_some(handle)
+            })
+            .expect("ball collider");
+
+        let net_top_z = table::SURFACE_Z + crate::constants::table::NET_HEIGHT;
+        world.shoot_ball(&BallShooterSettings::default());
+
+        let net_y = (table::LENGTH_Y * 0.5) as f32;
+        let mut previous_y = world.ball_position().y;
+        for _ in 0..3_000 {
+            world.step(1.0 / 1000.0, None);
+            let pos = world.ball_position();
+            assert!(
+                !world
+                    .narrow_phase
+                    .contact_pair(ball_collider, net_collider)
+                    .is_some_and(ContactPair::has_any_active_contact),
+                "기본 샷이 네트에 맞음: y={:.4} z={:.4} (net_top={:.4})",
+                pos.y,
+                pos.z,
+                net_top_z
+            );
+            if previous_y > net_y && pos.y <= net_y {
+                assert!(
+                    f64::from(pos.z) > net_top_z,
+                    "네트 통과 높이 여유 없음: z={:.4} net_top={:.4}",
+                    pos.z,
+                    net_top_z
+                );
+                return;
+            }
+            previous_y = pos.y;
+        }
+        panic!("공이 네트 y를 지나가지 않음 — 샷이 테이블 위에서 멈췄거나 이탈함");
+    }
+
+    /// `competition()` primitive는 이미 랠리 통합 테스트가 있지만
+    /// (`ground_truth_rally_contacts_racket_clears_net_and_bounces_near_center`),
+    /// 카탈로그 `"4-dof"` URDF 로봇(`main.rs::load_robot`과 동일 경로로 조립)은
+    /// 한 번도 같은 방식으로 검증된 적이 없었다.
+    #[test]
+    fn fourdof_ground_truth_rally_contacts_racket_and_returns() {
+        let (arm, urdf) = fourdof_robot();
+        let mut world = SimWorld::new(arm.clone(), urdf);
+        world.set_use_ground_truth(true);
+
+        let collider_for_body = |body_handle| {
+            world
+                .collider_set
+                .iter()
+                .find_map(|(handle, collider)| {
+                    (collider.parent() == Some(body_handle)).then_some(handle)
+                })
+                .expect("body collider")
+        };
+        let ball_collider = collider_for_body(world.ball_handle);
+        let racket_collider = collider_for_body(world.racket_handle);
+
+        world.shoot_ball(&BallShooterSettings::default());
+
+        let mut racket_contact = false;
+        let mut returned = false;
+        let mut min_dist = f64::MAX;
+
+        for _ in 0..4_000 {
+            world.step(1.0 / 1000.0, None);
+
+            let ee = world.robot().racket_pose(&arm).expect("FK").position.v;
+            let ball = world.ball_position();
+            let dx = f64::from(ball.x) - ee.x;
+            let dy = f64::from(ball.y) - ee.y;
+            let dz = f64::from(ball.z) - ee.z;
+            min_dist = min_dist.min((dx * dx + dy * dy + dz * dz).sqrt());
+
+            if world
+                .narrow_phase
+                .contact_pair(ball_collider, racket_collider)
+                .is_some_and(ContactPair::has_any_active_contact)
+            {
+                racket_contact = true;
+            }
+            if racket_contact && world.ball_velocity().y > 0.0 {
+                returned = true;
+                break;
+            }
+        }
+
+        assert!(
+            racket_contact,
+            "4-dof 라켓·공 접촉 없음 — min_dist={min_dist:.4}"
+        );
+        assert!(returned, "라켓 접촉 뒤 공의 vy가 +여야 함");
+    }
+
     #[test]
     fn auto_swing_on_shoot_moves_rail() {
         let arm = test_arm();
@@ -919,5 +1054,69 @@ mod tests {
         let q = world.urdf_joint_values().expect("same joints");
         assert_eq!(q, vec![0.11, 0.22, 0.33]);
         assert_eq!(world.effective_sim_mount().rpy, [0.1, -0.2, 0.3]);
+    }
+
+    /// GUI "Random Shoot"가 쓰는 `lateral_offset_m ∈ [-0.5, 0.5]` 전체 범위에서
+    /// 첫 바운스가 항상 테이블 폭 안(여유 있게)에 떨어지는지 검증한다.
+    ///
+    /// `yaw_deg`로 좌우를 바꾸는 방법도 시도했지만, 경험적 스윕에서 일부 각도
+    /// (±10~15°)가 네트를 비스듬히 맞고 튕겨 테이블 밖으로 나가는 걸 확인했다
+    /// (공 자유비행 자체가 각도에 비선형적으로 반응). `lateral_offset_m`은
+    /// 궤적 모양은 그대로 두고 시작 x만 평행이동하므로 이 문제가 없다.
+    #[test]
+    fn random_shot_lateral_range_stays_within_table() {
+        const LATERAL_RANGE_M: f64 = 0.5;
+        const EDGE_MARGIN_M: f64 = 0.1;
+
+        for lateral in [-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
+            assert!(lateral.abs() <= LATERAL_RANGE_M);
+            let arm = test_arm();
+            let mut world = SimWorld::new(arm, None);
+            world.set_use_ground_truth(false);
+            let table_collider = world
+                .collider_set
+                .iter()
+                .find_map(|(handle, collider)| {
+                    let cuboid = collider.shape().as_cuboid()?;
+                    ((f64::from(cuboid.half_extents.x) - table::WIDTH_X * 0.5).abs() < 1e-5
+                        && (f64::from(cuboid.half_extents.y) - table::LENGTH_Y * 0.5).abs()
+                            < 1e-5)
+                        .then_some(handle)
+                })
+                .expect("table collider");
+            let ball_collider = world
+                .collider_set
+                .iter()
+                .find_map(|(handle, collider)| {
+                    (collider.parent() == Some(world.ball_handle)).then_some(handle)
+                })
+                .expect("ball collider");
+
+            let settings = BallShooterSettings {
+                lateral_offset_m: lateral,
+                ..BallShooterSettings::default()
+            };
+            world.shoot_ball(&settings);
+            let mut bounce_x = None;
+            for _ in 0..5_000 {
+                world.step(1.0 / 1000.0, None);
+                if world
+                    .narrow_phase
+                    .contact_pair(ball_collider, table_collider)
+                    .is_some_and(ContactPair::has_any_active_contact)
+                {
+                    bounce_x = Some(f64::from(world.ball_position().x));
+                    break;
+                }
+            }
+            let bounce_x = bounce_x
+                .unwrap_or_else(|| panic!("lateral={lateral:+.2} — 공이 테이블에 안 떨어짐"));
+            assert!(
+                bounce_x > EDGE_MARGIN_M && bounce_x < table::WIDTH_X - EDGE_MARGIN_M,
+                "lateral={lateral:+.2} — 첫 바운스 x={bounce_x:.3}가 테이블 폭 여유 범위 밖 \
+                 (x∈[{EDGE_MARGIN_M:.2},{:.2}] 기대)",
+                table::WIDTH_X - EDGE_MARGIN_M
+            );
+        }
     }
 }
