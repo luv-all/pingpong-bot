@@ -2085,6 +2085,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jog-rail"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "pingpong-bot",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"

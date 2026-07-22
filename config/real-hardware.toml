@@ -54,15 +54,15 @@ friction = 0.15
 drag = 0.0
 
 [hardware.rail]
-enabled = false
+enabled = true
 dll_path = "C:/Users/user/Downloads/Interfacing File/Interfacing File/Linear/LM_interface/src/lib/AXL.dll"
 axis = 0
 irq_no = 7
 # 벤치에서 1 m당 펄스 실측 후 기입. 아래는 자리값.
-pulses_per_meter = 2500000
-x_min_m = -0.20
-x_max_m = 0.50
-vel = 0.3
+pulses_per_meter = 250000
+x_min_m = 0
+x_max_m = 1.43
+vel = 0.8
 accel = 1.0
 decel = 1.0
 min_vel = 0.001
