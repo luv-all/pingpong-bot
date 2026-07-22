@@ -41,7 +41,10 @@ impl AxlRail {
         }
 
         let ffi = super::axl_ffi::AxlFfi::load(&config.dll_path)?;
-        check_axl("AxlOpen", unsafe { (ffi.axl_open)(config.irq_no) })?;
+        // 칩 리셋 없이 열어 보드에 기록된 엔코더/명령 위치를 유지한다.
+        check_axl("AxlOpenNoReset", unsafe {
+            (ffi.axl_open_no_reset)(config.irq_no)
+        })?;
         let mut live = AxlLive {
             ffi,
             axis: config.axis,

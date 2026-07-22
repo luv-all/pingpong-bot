@@ -123,6 +123,7 @@ cargo run -p pingpong-bot --features real -- config/real-hardware.toml
 **AXL 리니어 레일** (`[hardware.rail]`, 단위 m):
 
 - `enabled = true`일 때만 `AxlRail`이 열리며, `read_pose().rail_x`는 실측(또는 dry-run 메모리) 값을 반환한다.
+- 오픈은 `AxlOpenNoReset` — 칩 리셋 없이 보드에 기록된 엔코더/명령 위치를 유지한다.
 - `dll_path`는 `AXL.dll` 절대 경로. PATH에 DLL 디렉터리를 넣거나 TOML에 직접 지정한다.
 - `pulses_per_meter`, `x_min_m`/`x_max_m`, `vel`/`accel`/`decel` 등은 TOML SSOT — **`AxmMotLoadParaAll` / `.mot` 파일은 사용하지 않는다.**
 - 소프트 리밋: 앱 클램프 + `AxmSignalSetSoftLimit(use=1, stop_mode=0, selection=0, +x_max_m, -x_min_m)`.

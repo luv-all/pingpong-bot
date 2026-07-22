@@ -75,7 +75,7 @@ Added to `config/real-hardware.toml` (and documented in `config/example.toml` / 
 | `enabled` | When true, open DLL/board |
 | `dll_path` | Path to `AXL.dll` |
 | `axis` | Axis index (bench: `0`) |
-| `irq_no` | `AxlOpen` argument (sample used `7`) |
+| `irq_no` | `AxlOpenNoReset` argument (sample used `7`) |
 | `pulses_per_meter` | Positive integer (or finite value stored as `u32` after validate); board unit via `AxmMotSetMoveUnitPerPulse(1.0, pulses)` so **1 board unit = 1 meter** |
 | `x_min_m` / `x_max_m` | Required; `x_min_m < x_max_m`; app clamp + board soft limit |
 | `vel` / `accel` / `decel` | `AxmMovePos` profile (and init profile setters as needed) |
@@ -111,7 +111,7 @@ Drop: servo off + AxlClose (best-effort)
 **Open sequence:**
 
 1. `libloading` load `dll_path`
-2. `AxlOpen(irq_no)` (or no-op if already open — prefer fail if unexpected)
+2. `AxlOpenNoReset(irq_no)` — chip reset 없이 열어 기록된 엔코더/명령 위치를 유지 (or no-op if already open — prefer fail if unexpected)
 3. Motion module present check (`AxmInfoIsMotionModule`)
 4. Apply TOML via `AxmMotSet*` / signal setters (no `.mot`)
 5. `AxmSignalSetSoftLimit(..., x_max_m, x_min_m)` in **meters** (board unit = m)
@@ -151,7 +151,7 @@ Log `read_x_m` before and after live moves. Enforce max step optionally later; f
 | Failure | Behavior |
 |---------|----------|
 | Missing DLL / load error | `HwError` / `anyhow` bail |
-| `AxlOpen` / Set / Move non-success | bail with return code (and `AxlGetReturnCodeInfo` if cheap) |
+| `AxlOpenNoReset` / Set / Move non-success | bail with return code (and `AxlGetReturnCodeInfo` if cheap) |
 | Target outside limits | clamp (jog may warn); never silently skip enable when user asked for live rail |
 | `enabled=false` | stub; no DLL |
 

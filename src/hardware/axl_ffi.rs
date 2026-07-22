@@ -8,7 +8,7 @@ pub const AXT_RT_SUCCESS: u32 = 0;
 pub const STATUS_EXIST: u32 = 1;
 pub const ENABLE: u32 = 1;
 
-type AxlOpen = unsafe extern "system" fn(i32) -> u32;
+type AxlOpenNoReset = unsafe extern "system" fn(i32) -> u32;
 type AxlClose = unsafe extern "system" fn() -> i32;
 type AxmInfoIsMotionModule = unsafe extern "system" fn(*mut u32) -> u32;
 type AxmMotSetPulseOutMethod = unsafe extern "system" fn(i32, u32) -> u32;
@@ -32,7 +32,7 @@ type AxmMovePos = unsafe extern "system" fn(i32, f64, f64, f64, f64) -> u32;
 /// AXL 헤더와 동일한 stdcall 심볼 테이블. `library`는 함수 포인터 수명 동안 유지된다.
 pub struct AxlFfi {
     _library: Library,
-    pub axl_open: AxlOpen,
+    pub axl_open_no_reset: AxlOpenNoReset,
     pub axl_close: AxlClose,
     pub axm_info_is_motion_module: AxmInfoIsMotionModule,
     pub axm_mot_set_pulse_out_method: AxmMotSetPulseOutMethod,
@@ -62,7 +62,9 @@ impl AxlFfi {
 
         unsafe {
             return Ok(Self {
-                axl_open: *library.get(b"AxlOpen\0").map_err(symbol_error)?,
+                axl_open_no_reset: *library
+                    .get(b"AxlOpenNoReset\0")
+                    .map_err(symbol_error)?,
                 axl_close: *library.get(b"AxlClose\0").map_err(symbol_error)?,
                 axm_info_is_motion_module: *library
                     .get(b"AxmInfoIsMotionModule\0")
