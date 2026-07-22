@@ -134,12 +134,17 @@ impl AxlLive {
         check_axl("AxmMotSetEncInputMethod", unsafe {
             (self.ffi.axm_mot_set_enc_input_method)(axis, config.enc_input_method)
         })?;
+        let pulses = i32::try_from(config.pulses_per_meter).map_err(|_| {
+            HwError::InvalidConfig {
+                reason: format!(
+                    "pulses_per_meter={}가 i32 범위를 초과합니다",
+                    config.pulses_per_meter
+                ),
+            }
+        })?;
+        // 1 board unit = 1 meter = pulses_per_meter pulses (vendor-style Unit=1, Pulse=N).
         check_axl("AxmMotSetMoveUnitPerPulse", unsafe {
-            (self.ffi.axm_mot_set_move_unit_per_pulse)(
-                axis,
-                1.0 / f64::from(config.pulses_per_meter),
-                1,
-            )
+            (self.ffi.axm_mot_set_move_unit_per_pulse)(axis, 1.0, pulses)
         })?;
         check_axl("AxmMotSetMinVel", unsafe {
             (self.ffi.axm_mot_set_min_vel)(axis, config.min_vel)
