@@ -24,6 +24,9 @@ pub struct RailConfig {
     pub axis: i32,
     pub irq_no: i32,
     pub pulses_per_meter: u32,
+    /// `true`이면 앱 도메인과 보드 cmd/act 절대 좌표를 min↔max로 대응시킨다.
+    /// 상대 이동량만 부호 반전한다.
+    pub reverse: bool,
     pub x_min_m: f64,
     pub x_max_m: f64,
     pub vel: f64,
@@ -53,6 +56,7 @@ impl Default for RailConfig {
             axis: 0,
             irq_no: 7,
             pulses_per_meter: 2_500_000,
+            reverse: false,
             x_min_m: -0.20,
             x_max_m: 0.50,
             vel: 0.3,
@@ -125,6 +129,32 @@ impl RailConfig {
         return x.clamp(self.x_min_m, self.x_max_m);
     }
 
+    /// 절대 위치: 도메인 → 보드.
+    /// `reverse`면 구간 끝점을 서로 대응시킨다 (`domain_min ↔ board_max`).
+    pub fn domain_to_board_abs(&self, domain_m: f64) -> f64 {
+        if self.reverse {
+            return self.x_min_m + self.x_max_m - domain_m;
+        }
+        return domain_m;
+    }
+
+    /// 절대 위치: 보드(cmd/act) → 앱이 해석하는 도메인 좌표.
+    pub fn board_to_domain_abs(&self, board_m: f64) -> f64 {
+        if self.reverse {
+            return self.x_min_m + self.x_max_m - board_m;
+        }
+        return board_m;
+    }
+
+    /// 상대 이동량: 도메인 Δ → 보드 Δ. `reverse`면 부호만 반전.
+    pub fn domain_to_board_rel(&self, domain_dx: f64) -> f64 {
+        if self.reverse {
+            return -domain_dx;
+        }
+        return domain_dx;
+    }
+
+    /// Soft limit는 보드 물리 좌표의 이동 한도(도메인 해석과 무관).
     pub fn soft_limit_args(&self) -> SoftLimitArgs {
         return SoftLimitArgs {
             use_: 1,
@@ -202,6 +232,26 @@ mod tests {
         assert_eq!(args.use_, 1);
         assert_eq!(args.positive_m, 0.40);
         assert_eq!(args.negative_m, -0.15);
+    }
+
+    #[test]
+    fn reverse_abs_reflects_min_max_rel_negates() {
+        let cfg = RailConfig {
+            reverse: true,
+            x_min_m: 0.0,
+            x_max_m: 1.43,
+            ..RailConfig::default()
+        };
+        assert_eq!(cfg.domain_to_board_abs(0.0), 1.43);
+        assert_eq!(cfg.domain_to_board_abs(1.43), 0.0);
+        assert!((cfg.domain_to_board_abs(0.2) - 1.23).abs() < 1e-12);
+        assert!((cfg.board_to_domain_abs(1.23) - 0.2).abs() < 1e-12);
+        assert_eq!(cfg.domain_to_board_rel(0.1), -0.1);
+        assert_eq!(cfg.domain_to_board_rel(-0.05), 0.05);
+        // soft limit는 보드 물리 한도 그대로
+        let args = cfg.soft_limit_args();
+        assert_eq!(args.positive_m, 1.43);
+        assert_eq!(args.negative_m, 0.0);
     }
 
     #[test]

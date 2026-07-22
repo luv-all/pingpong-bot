@@ -62,29 +62,41 @@ impl AxlRail {
         });
     }
 
-    pub fn read_x_m(&mut self) -> Result<f64, HwError> {
+    /// 보드 cmd/act 원시 위치 [m]. `reverse` 해석 전 값.
+    pub fn read_board_x_m(&mut self) -> Result<f64, HwError> {
         match &mut self.kind {
-            RailKind::DryRun { position_m } => Ok(*position_m),
+            RailKind::DryRun { position_m } => {
+                Ok(normalize_m(self.config.domain_to_board_abs(*position_m)))
+            }
             #[cfg(all(windows, feature = "real"))]
             RailKind::Live(live) => live.read_x_m(self.config.axis),
         }
     }
 
-    /// 절대 위치 명령을 레일 소프트 리밋으로 클램프하고, 실제 명령값을 반환한다.
-    pub fn move_abs_m(&mut self, x: f64) -> Result<f64, HwError> {
-        let commanded_m = normalize_m(self.config.clamp_m(x));
-        match &mut self.kind {
-            RailKind::DryRun { position_m } => *position_m = commanded_m,
-            #[cfg(all(windows, feature = "real"))]
-            RailKind::Live(live) => live.move_abs_m(&self.config, commanded_m)?,
-        }
-        return Ok(commanded_m);
+    /// 앱이 해석하는 도메인 위치 [m] (`reverse` 반영).
+    pub fn read_x_m(&mut self) -> Result<f64, HwError> {
+        let board_m = self.read_board_x_m()?;
+        return Ok(normalize_m(self.config.board_to_domain_abs(board_m)));
     }
 
-    pub fn move_rel_m(&mut self, dx: f64) -> Result<f64, HwError> {
-        let current_m = self.read_x_m()?;
-        return self.move_abs_m(current_m + dx);
+    /// 도메인 절대 위치를 클램프한 뒤 보드 좌표로 변환해 이동한다. 반환값은 도메인 명령.
+    pub fn move_abs_m(&mut self, x: f64) -> Result<f64, HwError> {
+        let domain_m = normalize_m(self.config.clamp_m(x));
+        let board_m = normalize_m(self.config.domain_to_board_abs(domain_m));
+        match &mut self.kind {
+            RailKind::DryRun { position_m } => *position_m = domain_m,
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => live.move_abs_m(&self.config, board_m)?,
+        }
+        return Ok(domain_m);
     }
+
+    /// 도메인 상대 이동. `reverse`면 보드 Δ에 -1을 곱한 것과 같다.
+    pub fn move_rel_m(&mut self, dx: f64) -> Result<f64, HwError> {
+        let current_domain = self.read_x_m()?;
+        return self.move_abs_m(current_domain + dx);
+    }
+
 }
 
 fn normalize_m(x: f64) -> f64 {
@@ -289,6 +301,33 @@ mod tests {
         assert_eq!(rail.read_x_m().unwrap(), 0.4);
         let commanded = rail.move_rel_m(-0.1).unwrap();
         assert_eq!(commanded, 0.3);
+    }
+
+    #[test]
+    fn dry_run_reverse_maps_abs_min_max_and_keeps_domain_api() {
+        let cfg = RailConfig {
+            enabled: true,
+            dll_path: PathBuf::from("unused.dll"),
+            pulses_per_meter: 1000,
+            reverse: true,
+            x_min_m: 0.0,
+            x_max_m: 0.4,
+            vel: 0.2,
+            accel: 1.0,
+            decel: 1.0,
+            min_vel: 0.001,
+            max_vel: 1.0,
+            ..RailConfig::default()
+        };
+        let mut rail = AxlRail::dry_run(cfg).unwrap();
+        let commanded = rail.move_abs_m(0.25).unwrap();
+        assert_eq!(commanded, 0.25);
+        assert_eq!(rail.read_x_m().unwrap(), 0.25);
+        // board abs = xmin + xmax - domain
+        assert_eq!(rail.read_board_x_m().unwrap(), 0.15);
+        let commanded = rail.move_rel_m(0.05).unwrap();
+        assert_eq!(commanded, 0.3);
+        assert_eq!(rail.read_board_x_m().unwrap(), 0.1);
     }
 
     #[cfg(all(windows, feature = "real"))]

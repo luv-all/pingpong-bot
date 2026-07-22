@@ -53,6 +53,7 @@ use_ground_truth = true
 # axis = 0
 # irq_no = 7
 # pulses_per_meter = 2500000
+# reverse = false  # true면 절대 좌표 min↔max 매핑, 상대만 부호 반전
 # x_min_m = -0.20
 # x_max_m = 0.50
 # vel = 0.3
