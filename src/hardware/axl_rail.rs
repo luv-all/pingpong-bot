@@ -88,14 +88,6 @@ impl AxlRail {
         let current_m = self.read_x_m()?;
         return self.move_abs_m(current_m + dx);
     }
-
-    /// 종료 직전 서보 OFF. Windows CLI는 이어서 프로세스를 강제 종료할 수 있다.
-    pub fn disable_servo_best_effort(&mut self) {
-        #[cfg(all(windows, feature = "real"))]
-        if let RailKind::Live(live) = &self.kind {
-            let _ = unsafe { (live.ffi.axm_signal_servo_on)(live.axis, 0) };
-        }
-    }
 }
 
 fn normalize_m(x: f64) -> f64 {
@@ -134,14 +126,13 @@ impl AxlLive {
         check_axl("AxmMotSetEncInputMethod", unsafe {
             (self.ffi.axm_mot_set_enc_input_method)(axis, config.enc_input_method)
         })?;
-        let pulses = i32::try_from(config.pulses_per_meter).map_err(|_| {
-            HwError::InvalidConfig {
+        let pulses =
+            i32::try_from(config.pulses_per_meter).map_err(|_| HwError::InvalidConfig {
                 reason: format!(
                     "pulses_per_meter={}가 i32 범위를 초과합니다",
                     config.pulses_per_meter
                 ),
-            }
-        })?;
+            })?;
         // 1 board unit = 1 meter = pulses_per_meter pulses (vendor-style Unit=1, Pulse=N).
         check_axl("AxmMotSetMoveUnitPerPulse", unsafe {
             (self.ffi.axm_mot_set_move_unit_per_pulse)(axis, 1.0, pulses)
@@ -226,6 +217,7 @@ impl AxlLive {
                 (self.ffi.axm_status_read_in_motion)(config.axis, &mut in_motion)
             })?;
             if in_motion == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(1000));
                 return Ok(());
             }
             if std::time::Instant::now() >= deadline {
@@ -239,7 +231,7 @@ impl AxlLive {
 #[cfg(all(windows, feature = "real"))]
 impl Drop for AxlLive {
     fn drop(&mut self) {
-        let _ = unsafe { (self.ffi.axm_signal_servo_on)(self.axis, 0) };
+        // 서보는 켠 채로 둔다 — 반복 실행·벤치 세션에서 엔코더/홀딩을 유지한다.
         let _ = unsafe { (self.ffi.axl_close)() };
     }
 }

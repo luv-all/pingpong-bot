@@ -111,7 +111,6 @@ fn run(args: Args) -> Result<()> {
     );
     println!("rail_x_m={commanded_m}");
 
-    rail.disable_servo_best_effort();
     // Drop/DLL detach 경로를 타지 않도록 핸들을 누수한 뒤 프로세스를 즉시 종료한다.
     std::mem::forget(rail);
     exit_cli_immediately(0);
