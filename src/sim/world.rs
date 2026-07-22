@@ -934,6 +934,64 @@ mod tests {
         );
     }
 
+    /// 실물 로봇은 모터 토크 한계 때문에 레일 한쪽 끝→반대쪽 끝처럼 급한
+    /// 이동을 못 만든다 — 매 스윙 뒤 항상 테이블 폭 중앙(레일 `default_x`,
+    /// 관절 `default_joints`)으로 복귀시켜 다음 스윙의 시작 조건을 일정하게
+    /// 유지해야 한다. `home_x`(레일 원점, x=0)는 부팅 시 대기 위치일 뿐 여기서
+    /// 말하는 중앙이 아니다. 스윙이 끝난 뒤 다음 공을 쏘지 않아도 로봇이
+    /// 저절로 복귀하는지 검증한다.
+    #[test]
+    fn robot_returns_to_center_after_swing_without_next_shot() {
+        let arm = test_arm();
+        let center_rail_x = arm.rail.as_ref().expect("테스트 arm은 리니어 포함").default_x();
+        let center_joints = arm.default_joints.clone();
+
+        let mut world = SimWorld::new(arm, None);
+        world.set_use_ground_truth(true);
+        world.shoot_ball(&BallShooterSettings::default());
+
+        let mut swing_started = false;
+        for _ in 0..800 {
+            world.step(1.0 / 1000.0, None);
+            if world.robot().is_swinging() {
+                swing_started = true;
+                break;
+            }
+        }
+        assert!(swing_started, "스윙이 시작되어야 함");
+
+        // 타격 스윙이 끝나면 로봇이 곧바로 복귀 궤적을 이어서 시작하므로
+        // (`RobotState::step_toward_targets`), `is_swinging()`은 타격+팔로스루
+        // +복귀 전체를 하나의 연속 동작으로 본다 — "다 끝났다"는 신호는
+        // `is_swinging()`이 다시 false가 되는 순간 하나뿐이고, 그 시점에는
+        // 이미 중앙 복귀까지 끝나 있어야 한다.
+        let mut swing_ended = false;
+        for _ in 0..6_000 {
+            world.step(1.0 / 1000.0, None);
+            if !world.robot().is_swinging() {
+                swing_ended = true;
+                break;
+            }
+        }
+        assert!(swing_ended, "타격+복귀가 끝나야 함");
+
+        let rail_x = world.robot().rail_x();
+        let joints_close = world
+            .robot()
+            .joints()
+            .values
+            .iter()
+            .zip(center_joints.values.iter())
+            .all(|(actual, center)| (actual - center).abs() < 1e-2);
+        assert!(
+            (rail_x - center_rail_x).abs() < 1e-2 && joints_close,
+            "스윙 뒤 다음 발사 없이도 로봇이 저절로 중앙(rail={center_rail_x})으로 복귀해야 함 \
+             (실제 rail={rail_x}, joints={:?}, center={:?})",
+            world.robot().joints().values,
+            center_joints.values,
+        );
+    }
+
     #[test]
     fn auto_swing_plans_with_strike_velocity() {
         use crate::plan_swing;
@@ -1003,7 +1061,11 @@ mod tests {
 
         let j0: Vec<f64> = world.robot().joints().values.clone();
         let dt = 1.0 / 1000.0;
-        let steps = ((duration / dt).ceil() as usize).saturating_add(100);
+        // 스윙이 끝나자마자 로봇이 자동으로 홈 복귀 궤적을 이어서 시작하므로
+        // (실물 로봇처럼 항상 중앙 정렬), 여유 버퍼를 크게 두면 레일이 이미
+        // 복귀 방향으로 움직이기 시작한 뒤 값을 재게 된다 — 스윙 완료 직후만
+        // 확인하도록 버퍼를 작게 둔다.
+        let steps = ((duration / dt).ceil() as usize).saturating_add(5);
         for _ in 0..steps {
             world.step(dt, None);
         }

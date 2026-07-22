@@ -178,6 +178,96 @@ pub fn plan_best_swing(
     )));
 }
 
+/// 스윙 뒤 항상 시도할 최소 복귀 시간 [s].
+const RETURN_TO_CENTER_MIN_SECS: f64 = 0.3;
+/// 이 시간까지 늘려도 실현 가능한 궤적이 없으면 포기한다.
+const RETURN_TO_CENTER_MAX_SECS: f64 = 3.0;
+/// 실패할 때마다 소요 시간을 이 배수로 늘린다.
+const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
+
+/// 스윙(혹은 랠리) 뒤 로봇을 중앙 포즈(관절 `default_joints`, 레일 `default_x`
+/// = 테이블 폭 중앙)로 되돌리는 궤적을 계획한다.
+///
+/// 레일의 `home_x`(원점, x=0)는 "대기 위치"일 뿐 테이블 중앙이 아니다 —
+/// 여기서 되돌아갈 곳은 `LinearRail::default_x()`(`(x_min+x_max)*0.5`), 즉
+/// 테이블 폭 한가운데다. 실제 로봇은 모터 토크 한계 때문에 레일 한쪽
+/// 끝에서 반대쪽 끝으로 급하게 움직이는 궤적을 못 만든다 — 매 스윙 뒤 항상
+/// 중앙으로 복귀시켜 다음 스윙의 시작 조건을 일정하게 유지한다. 볼 예측이
+/// 없으므로 `plan_swing`과 달리 목표 소요 시간이 정해져 있지 않다 — 관절·
+/// 레일 속도/가속/토크 한계(`trajectory_within_limits`)를 만족할 때까지
+/// 소요 시간을 점진적으로 늘려가며 찾는다.
+pub fn plan_return_to_center(arm: &Arm, start: &RobotPose) -> Result<SwingTrajectory, DomainError> {
+    let center_joints = arm.default_joints.clone();
+    let center_rail_x = arm
+        .rail
+        .as_ref()
+        .map(|rail| rail.default_x())
+        .unwrap_or(start.rail_x);
+
+    let start_velocity = vec![0.0; start.joints.values.len()];
+    let end_velocity = vec![0.0; center_joints.values.len()];
+
+    // 끝속도가 항상 0이라 `fit_end_velocity`의 스케일링은 아무 것도 못 바꾼다
+    // (0에 뭘 곱해도 0) — 첫 시도부터 웬만하면 통과하도록, 실제 이동 거리
+    // 기준 등속 근사(0.5배 여유, quintic 첨두 속도가 평균보다 크므로)로 시작
+    // 시간을 추정해 무의미한 재시도(각 32회 반복)를 줄인다.
+    let joint_distance = start
+        .joints
+        .values
+        .iter()
+        .zip(center_joints.values.iter())
+        .map(|(actual, home)| (actual - home).abs())
+        .fold(0.0_f64, f64::max);
+    let rail_distance = (start.rail_x - center_rail_x).abs();
+    let joint_time_estimate = if arm.max_joint_speed > 0.0 {
+        joint_distance / (arm.max_joint_speed * 0.5)
+    } else {
+        0.0
+    };
+    let rail_time_estimate = arm.rail.as_ref().map_or(0.0, |rail| {
+        if rail.max_speed > 0.0 {
+            rail_distance / (rail.max_speed * 0.5)
+        } else {
+            0.0
+        }
+    });
+
+    let mut duration = joint_time_estimate
+        .max(rail_time_estimate)
+        .max(RETURN_TO_CENTER_MIN_SECS);
+    let mut last_error = None;
+    while duration <= RETURN_TO_CENTER_MAX_SECS {
+        let rail = RailMotion {
+            start: start.rail_x,
+            end: center_rail_x,
+            start_velocity: 0.0,
+            end_velocity: 0.0,
+        };
+        match build_feasible_trajectory(
+            arm,
+            &start.joints,
+            center_joints.clone(),
+            start_velocity.clone(),
+            end_velocity.clone(),
+            duration,
+            rail,
+        ) {
+            Ok(trajectory) => return Ok(trajectory),
+            Err(error) => {
+                last_error = Some(error);
+                duration *= RETURN_TO_CENTER_GROWTH;
+            }
+        }
+    }
+    return Err(DomainError::InfeasibleSwing(last_error.unwrap_or(
+        SwingPlanError::InverseKinematicsNoSolution {
+            target_x: center_rail_x,
+            target_y: 0.0,
+            target_z: table::SURFACE_Z,
+        },
+    )));
+}
+
 /// 속도/가속 한계 안에 들어오는 quintic을 만든다.
 ///
 /// 종료 위치는 항상 임팩트 IK 해. 끝속도는 한계 안으로 스케일하되
