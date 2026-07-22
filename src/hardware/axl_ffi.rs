@@ -40,8 +40,6 @@ type AxmMovePos = unsafe extern "system" fn(i32, f64, f64, f64, f64) -> u32;
 pub struct AxlFfi {
     _library: ManuallyDrop<Library>,
     pub axl_open_no_reset: AxlOpenNoReset,
-    /// 명시적 종료용. `Drop`에서는 호출하지 않는다(`AxlClose`가 블로킹될 수 있음).
-    #[allow(dead_code)]
     pub axl_close: AxlClose,
     pub axm_info_is_motion_module: AxmInfoIsMotionModule,
     pub axm_mot_set_pulse_out_method: AxmMotSetPulseOutMethod,
