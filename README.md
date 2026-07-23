@@ -63,7 +63,7 @@ _.path = [
 cargo check --workspace
 cargo test --workspace
 
-# sim 파이프라인 실행 (`src/entry` SSOT)
+# sim 파이프라인 실행 (`src/defaults` SSOT)
 cargo run -p pingpong-bot
 
 # 다른 실험 설정
@@ -77,17 +77,16 @@ cargo run -p pingpong-bot -- config/experiment.toml
 
 ## 런타임 설정 (`pingpong-bot`)
 
-배선·숫자·검출·미러·토크는 [`src/entry/competition.rs`](src/entry/competition.rs)가 SSOT다.
-머신만 `config/local.toml` 또는 CLI:
+배선·숫자·검출·미러·토크·포트는 [`src/defaults.rs`](src/defaults.rs)가 SSOT다.
+덮어쓰기는 CLI만:
 
 ```bash
 cargo run -p pingpong-bot
 cargo run -p pingpong-bot -- --mode sim
 cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
-cp config/local.example.toml config/local.toml
 ```
 
-`InterceptWindow`는 entry에서 y 구간을 샘플해 타격점을 고른다.
+`InterceptWindow`는 defaults에서 y 구간을 샘플해 타격점을 고른다.
 
 ### 예시
 
@@ -97,45 +96,38 @@ cargo run -p pingpong-bot
 
 # 로그 레벨 조정
 RUST_LOG=debug cargo run -p pingpong-bot
-RUST_LOG=pingpong_bot=debug,info cargo run -p pingpong-bot -- config/experiment.toml
+RUST_LOG=pingpong_bot=debug,info cargo run -p pingpong-bot
 ```
 
 ### Dynamixel 4축 · AXL 레일 (Windows)
 
-`config/real-hardware.toml`은 Python `test-manipulator`에서 확인한 COM8·ID
-1/3/4/5·방향·tick 리밋을 그대로 쓴다. 각도는 모터 절대각이 아니라 **URDF 관절각**이다.
+배선 숫자는 [`src/defaults.rs`](src/defaults.rs) `dynamixel()` / `rail()` (예전
+`real-hardware.toml` 값). 포트 기본은 `dynamixel().port`(`COM8`), 덮어쓰기는
+`--dxl-port` / `--port`. 각도는 모터 절대각이 아니라 **URDF 관절각**이다.
 
 ```powershell
-# 통신 없이 전체 경로 확인
-cargo run -p jog-axis -- --config config/real-hardware.toml --angles-deg 0,0,0,0 --dry-run
+# 관절·레일 인터랙티브 REPL (dry-run)
+cargo run -p jog -- --dry-run
 
-# 실기는 작은 단축 이동부터 (예: URDF joint 0 → 5°)
-cargo run -p jog-axis -- --config config/real-hardware.toml --joint 0 --angle-deg 5
+# 실기
+cargo run -p jog -- --port COM8
+cargo run -p jog -- --port COM8 --dll-path "C:/path/to/AXL.dll"
 
 # 포트 연결 + 현재 4축·레일 pose 읽기 스모크
-cargo run -p pingpong-bot --features real -- config/real-hardware.toml
+cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
 ```
 
-**AXL 리니어 레일** (`[hardware.rail]`, 단위 m):
+**AXL 리니어 레일** (`defaults::rail()`, 단위 m):
 
 - `enabled = true`일 때만 `AxlRail`이 열리며, `read_pose().rail_x`는 실측(또는 dry-run 메모리) 값을 반환한다.
 - 오픈은 `AxlOpenNoReset` — 칩 리셋 없이 보드에 기록된 엔코더/명령 위치를 유지한다.
-- `dll_path`는 `AXL.dll` 절대 경로. PATH에 DLL 디렉터리를 넣거나 TOML에 직접 지정한다.
-- `pulses_per_meter`, `reverse`, `x_min_m`/`x_max_m`, `vel`/`accel`/`decel` 등은 TOML SSOT — **`AxmMotLoadParaAll` / `.mot` 파일은 사용하지 않는다.**
+- `dll_path`는 `AXL.dll` 절대 경로. PATH에 DLL 디렉터리를 넣거나 `--dll-path`로 덮어쓴다.
+- `pulses_per_meter`, `reverse`, `x_min_m`/`x_max_m`, `vel`/`accel`/`decel` 등은 defaults SSOT — **`AxmMotLoadParaAll` / `.mot` 파일은 사용하지 않는다.**
 - `reverse = true`: 앱 도메인 절대좌표는 `board = x_min + x_max - domain` (min↔max). 상대 Δ만 `-1`. cmd/act는 보드 값, `read_x_m`은 도메인 해석값.
 - 소프트 리밋: 앱 클램프 + `AxmSignalSetSoftLimit`(보드 물리 `x_min`/`x_max`).
-- 스윙 `command`의 비영 `RailMotion`은 아직 **경고만** — 관절 궤적만 실행(레일 스윙 동기는 후속).
+- `RealHardware::command`는 관절과 레일을 같은 `stream_hz`로 샘플링한다 (논블로킹 `command_abs_m`).
 
-```powershell
-# 레일 조그 — dry-run(매핑·클램프만)
-cargo run -p jog-rail -- --config config/real-hardware.toml --position-m 0.05 --dry-run
-cargo run -p jog-rail -- --config config/real-hardware.toml --delta-m=-0.01 --dry-run
-
-# live: [hardware.rail] enabled = true + dll_path·pulses_per_meter·travel 실측 후
-cargo run -p jog-rail -- --config config/real-hardware.toml --position-m 0.05
-```
-
-상세: [`tools/jog_rail/README.md`](tools/jog_rail/README.md) · [`config/real-hardware.toml`](config/real-hardware.toml) `[hardware.rail]`.
+상세: [`tools/jog/README.md`](tools/jog/README.md) · `defaults::rail()` / `dynamixel()` / `robot()`.
 
 실카메라 pipeline은 다음 단계다.
 
@@ -277,7 +269,7 @@ TODO.md     실행 체크리스트
 | `4-dof` | `assets/robots/4-dof/urdf/all-4-export.urdf` | 해당 URDF |
 
 ```toml
-# src/entry (SSOT)
+# src/defaults (SSOT)
 robot = "competition"
 ```
 
@@ -321,11 +313,11 @@ cargo run -p pingpong-bot -- config/experiment.toml
 | `cam-preview` | ✅ | [cam_preview](tools/cam_preview/README.md) |
 | `calib-charuco` | ✅ | [calib_charuco](tools/calib_charuco/README.md) |
 | `detect-appearance` | ✅ | [detect_appearance](tools/detect_appearance/README.md) — colormask\|contour 좌우 |
+| `tune-colormask` | ✅ | [tune_colormask](tools/tune_colormask/README.md) — 픽커로 YCrCb/HSV 범위 |
 | `detect-full` | ✅ | [detect_full](tools/detect_full/README.md) — fuse + ROI `r` 토글 |
 | `measure-restitution` | ✅ | [measure_restitution](tools/measure_restitution/README.md) |
 | `measure-friction` | ✅ | [measure_friction](tools/measure_friction/README.md) |
-| `jog-axis` | ✅ | [jog_axis](tools/jog_axis/README.md) |
-| `jog-rail` | ✅ | [jog_rail](tools/jog_rail/README.md) — AXL 레일 조그 (m) |
+| `jog` | ✅ | [jog](tools/jog/README.md) — 관절·레일 REPL (IK/스윙) |
 
 ### 실물 관측
 
@@ -342,8 +334,9 @@ flowchart LR
 
 - 보정: [calib_charuco](tools/calib_charuco/README.md)
 - appearance 비교: [detect-appearance](tools/detect_appearance/README.md)
+- 색 범위 픽커: [tune-colormask](tools/tune_colormask/README.md)
 - fuse 본선 (+ROI): [detect-full](tools/detect_full/README.md) · [decisions J](docs/decisions.md)
-- 실전 TOML: [config/local.example.toml](config/local.example.toml) `[vision]` · `calibration_path`
+- 배선 SSOT: [`src/defaults.rs`](src/defaults.rs)
 - 설계: [비전 스펙](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md)
 
 ### 물리 계수 측정 (`measure_*`)
@@ -394,10 +387,10 @@ cargo build -p pingpong-bot --release
 | ChArUco (`calib_charuco` — 인터랙티브 선별 + 인트린식/dist) | ✅ |
 | EKF / 궤적 추정 | ✅ (sim; 기본은 `sim.use_ground_truth=true`) |
 | `measure_restitution` / `measure_friction` (e·μ·k) | ✅ |
-| entry 배선 SSOT (`src/entry`) | ✅ |
+| entry 배선 SSOT (`src/defaults`) | ✅ |
 | OpenCV fuse(appearance→Scorer→motion) · `VideoCapture` · `[vision]` | ✅ |
-| Dynamixel 4축 `RealHardware` · `jog-axis` | ✅ (Windows 실기 재검증 필요) |
-| AXL 레일 `jog-rail` · `read_pose` | ✅ (스윙 레일 동기·Rerun은 후속) |
+| Dynamixel 4축 `RealHardware` · `jog` REPL | ✅ (Windows 실기 재검증 필요) |
+| AXL 레일 동기 `command` · `read_pose` | ✅ |
 | TOML `mode = "real"` | ✅ 모터 스모크 / `[vision]` 있으면 실캠 pipeline |
 
 sim에서는 **실제 3D 물리**로 공이 날고, ground truth 또는 EKF control로 라켓이 움직인다.
