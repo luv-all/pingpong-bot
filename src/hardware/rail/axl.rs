@@ -2,7 +2,7 @@
 
 use crate::HwError;
 
-use super::rail::RailConfig;
+use super::config::RailConfig;
 
 pub struct AxlRail {
     config: RailConfig,

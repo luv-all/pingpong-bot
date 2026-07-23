@@ -7,14 +7,14 @@ use std::sync::{Arc, Mutex};
 
 use kiss3d::egui;
 
-use super::controls::SimRuntimeControls;
 use super::debug_overlays::DebugOverlays;
 use super::debug_snap::CommitPhase;
-use super::shooter::{BallShooterSettings, BallState};
-use super::world::SimWorld;
 use crate::Prediction;
 use crate::constants::viewer::{CAMERA_DIST_DEFAULT, CAMERA_DIST_MAX, CAMERA_DIST_MIN};
 use crate::defaults;
+use crate::sim::physics::shooter::{BallShooterSettings, BallState};
+use crate::sim::physics::world::SimWorld;
+use crate::sim::session::controls::SimRuntimeControls;
 
 /// 한글 글리프용 폰트 (NanumGothic, OFL). 한 번만 설치.
 static KOREAN_FONTS_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -27,7 +27,7 @@ pub fn ensure_korean_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "NanumGothic".to_owned(),
-        egui::FontData::from_static(include_bytes!("../../assets/fonts/NanumGothic-Regular.ttf"))
+        egui::FontData::from_static(include_bytes!("../../../assets/fonts/NanumGothic-Regular.ttf"))
             .into(),
     );
     // Latin은 기본 폰트, 한글 글리프만 NanumGothic으로 폴백.

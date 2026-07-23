@@ -8,7 +8,7 @@ use pingpong_bot::MAX_REPROJ_RMSE_PX;
 #[derive(Parser, Debug)]
 #[command(
     name = "calib_table_pnp",
-    about = "탁구대 랜드마크 6점 클릭 → solvePnP(IPPE) → Calibration JSON"
+    about = "탁구대 랜드마크 8점 클릭 → solvePnP(IPPE) → Calibration JSON"
 )]
 pub struct Args {
     /// 웹캠 인덱스 (기본 인터랙티브)

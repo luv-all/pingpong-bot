@@ -14,9 +14,9 @@ use rapier3d::prelude::*;
 use tracing::{debug, warn};
 
 use super::arm_bodies::ArmMultibody;
-use super::debug_snap::{CommitPhase, SimDebugSnapshot};
 use super::shooter::{BallShooterSettings, BallState};
 use crate::sim::estimator::predict_impact;
+use crate::sim::gui::debug_snap::{CommitPhase, SimDebugSnapshot};
 
 /// 한 물리 스텝 입력 — `controls` 뮤텍스를 물리 연산 동안 잡지 않기 위함.
 pub struct SimStepInput<'a> {

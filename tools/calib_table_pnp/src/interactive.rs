@@ -114,13 +114,13 @@ pub fn run(args: &Args) -> Result<()> {
         if frozen {
             draw_clicks(&mut panel, &clicks, &marks)?;
             let next = if clicks.len() < TABLE_LANDMARK_COUNT {
-                marks[clicks.len()].prompt
+                marks[clicks.len()].prompt.to_string()
             } else {
-                "all 6 clicked - press s"
+                format!("all {TABLE_LANDMARK_COUNT} clicked - press s")
             };
             let lines = [
                 format!("REVIEW clicks={}/{}", clicks.len(), TABLE_LANDMARK_COUNT),
-                next.to_string(),
+                next,
             ];
             draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
             draw_help_lines(
@@ -164,7 +164,7 @@ pub fn run(args: &Args) -> Result<()> {
                 } else if (key == i32::from(b's') || key == i32::from(b'S')) && frozen {
                     if clicks.len() != TABLE_LANDMARK_COUNT {
                         println!(
-                            "클릭 {}/{} — 6개 모두 찍으세요",
+                            "클릭 {}/{} - 모두 찍으세요",
                             clicks.len(),
                             TABLE_LANDMARK_COUNT
                         );

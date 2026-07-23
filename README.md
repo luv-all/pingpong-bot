@@ -312,7 +312,7 @@ cargo run -p pingpong-bot -- config/experiment.toml
 |-------|------|--------|
 | `cam-preview` | ✅ | [cam_preview](tools/cam_preview/README.md) |
 | `calib-charuco` | ✅ | [calib_charuco](tools/calib_charuco/README.md) |
-| `calib-table-pnp` | ✅ | [calib_table_pnp](tools/calib_table_pnp/README.md) — 탁구대 6점 → solvePnP |
+| `calib-table-pnp` | ✅ | [calib_table_pnp](tools/calib_table_pnp/README.md) — 탁구대 8점 → solvePnP |
 | `detect-appearance` | ✅ | [detect_appearance](tools/detect_appearance/README.md) — colormask\|contour 좌우 |
 | `tune-colormask` | ✅ | [tune_colormask](tools/tune_colormask/README.md) — 픽커로 YCrCb/HSV 범위 |
 | `detect-full` | ✅ | [detect_full](tools/detect_full/README.md) — fuse + ROI `r` 토글 |
@@ -326,7 +326,7 @@ cargo run -p pingpong-bot -- config/experiment.toml
 
 ```mermaid
 flowchart LR
-  table["탁구대 6점 클릭"] --> pnp["calib-table-pnp IPPE"] --> json["Calibration JSON"]
+  table["탁구대 8점 클릭"] --> pnp["calib-table-pnp IPPE"] --> json["Calibration JSON"]
   boards["ChArUco Space 스냅"] --> calib["calib-charuco"] --> json
   frames["폴더/영상"] --> appearance["detect-appearance"] --> full["detect-full / fuse_from_vision"]
   json --> runtime["runtime calibration_path"]
@@ -388,7 +388,7 @@ cargo build -p pingpong-bot --release
 | `sample_at` 타임스탬프 보간 | ✅ |
 | DLT/OpenCV 삼각측량 (`camera`, 2뷰는 `triangulatePoints`) | ✅ |
 | ChArUco (`calib_charuco` — 인터랙티브 선별 + 인트린식/dist) | ✅ |
-| 탁구대 PnP (`calib_table_pnp` — 6점 클릭 + IPPE 외참) | ✅ |
+| 탁구대 PnP (`calib_table_pnp` — 8점 클릭 + IPPE 외참) | ✅ |
 | EKF / 궤적 추정 | ✅ (sim; 기본은 `sim.use_ground_truth=true`) |
 | `measure_restitution` / `measure_friction` (e·μ·k) | ✅ |
 | entry 배선 SSOT (`src/defaults`) | ✅ |

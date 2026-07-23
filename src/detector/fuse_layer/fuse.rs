@@ -20,11 +20,11 @@
 //! ```
 
 use super::candidate::Candidate;
-use super::motion::{MotionPrior, draw_candidate_contour, mask_to_bgr};
 use super::scorer::Scorer;
-use super::BallDetector;
 use crate::PixelPoint;
 use crate::camera::Frame;
+use crate::detector::BallDetector;
+use crate::detector::motion::{MotionPrior, draw_candidate_contour, mask_to_bgr};
 use opencv::prelude::*;
 
 /// 프레임 → 공 후보 목록. (색·엣지 등 appearance)

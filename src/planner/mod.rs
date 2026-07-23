@@ -2,16 +2,19 @@
 
 pub mod collision;
 pub mod impact;
-pub mod physics;
-pub mod trajectory;
+pub mod swing;
 
 pub use collision::{OrientedBox, clamp_above_table, robot_obbs, table_penetration};
 pub use impact::{rally_return_velocity, required_racket_velocity, verify_impact_model};
-pub use physics::{
-    PlannedIntercept, accel, aero_accel, ball_past_midcourt_for_commit, in_swing_commit_window,
-    plan_best_swing, plan_return_to_center, plan_swing,
+pub use swing::{
+    PlannedIntercept, RailMotion, SwingTrajectory, accel, aero_accel,
+    ball_past_midcourt_for_commit, in_swing_commit_window, plan_best_swing, plan_return_to_center,
+    plan_swing,
 };
-pub use trajectory::{RailMotion, SwingTrajectory};
+/// 하위 호환: `planner::physics::…`
+pub use swing::physics;
+/// 하위 호환: `planner::trajectory::…`
+pub use swing::trajectory;
 
 use anyhow::{Result, ensure};
 

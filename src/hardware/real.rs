@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, error};
 
-use super::axl_rail::AxlRail;
+use super::rail::AxlRail;
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::RailConfig;
 use crate::{Hardware, HwError, RobotPose, SwingTrajectory};

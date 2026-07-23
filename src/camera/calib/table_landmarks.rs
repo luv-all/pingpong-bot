@@ -6,8 +6,8 @@
 use crate::Point3;
 use crate::constants::table;
 
-/// 권장 랜드마크 개수 (4 corners + center + robot-side mid).
-pub const TABLE_LANDMARK_COUNT: usize = 6;
+/// 권장 랜드마크 개수 (4 corners + 3 interior on centerline + robot-side mid).
+pub const TABLE_LANDMARK_COUNT: usize = 8;
 
 /// 재투영 RMSE 합격 상한 [px]. 플랜: ≤ 2~3.
 pub const MAX_REPROJ_RMSE_PX: f64 = 3.0;
@@ -23,9 +23,9 @@ pub struct TableLandmark {
     pub world: Point3,
 }
 
-/// 팀 규약 6점 (순서 고정 — 클릭도 이 순서).
+/// 팀 규약 8점 (순서 고정 — 클릭도 이 순서).
 ///
-/// 1–4 꼭짓점, 5 중앙, 6 로봇쪽 변 중점.
+/// 1–4 꼭짓점, 5–7 내부(중앙선 Y=L/4, L/2, 3L/4), 8 로봇쪽 변 중점.
 pub fn table_landmarks() -> [TableLandmark; TABLE_LANDMARK_COUNT] {
     let z = table::SURFACE_Z;
     let w = table::WIDTH_X;
@@ -33,32 +33,42 @@ pub fn table_landmarks() -> [TableLandmark; TABLE_LANDMARK_COUNT] {
     return [
         TableLandmark {
             id: "c00",
-            prompt: "1/6 robot-left corner (0,0)",
+            prompt: "1/8 robot-left corner (0,0)",
             world: Point3::new(0.0, 0.0, z),
         },
         TableLandmark {
             id: "c10",
-            prompt: "2/6 robot-right corner (W,0)",
+            prompt: "2/8 robot-right corner (W,0)",
             world: Point3::new(w, 0.0, z),
         },
         TableLandmark {
             id: "c11",
-            prompt: "3/6 far-right corner (W,L)",
+            prompt: "3/8 far-right corner (W,L)",
             world: Point3::new(w, l, z),
         },
         TableLandmark {
             id: "c01",
-            prompt: "4/6 far-left corner (0,L)",
+            prompt: "4/8 far-left corner (0,L)",
             world: Point3::new(0.0, l, z),
         },
         TableLandmark {
             id: "center",
-            prompt: "5/6 table center (W/2,L/2)",
+            prompt: "5/8 table center (W/2,L/2)",
             world: Point3::new(w * 0.5, l * 0.5, z),
         },
         TableLandmark {
+            id: "inner_robot",
+            prompt: "6/8 inner robot-half (W/2,L/4)",
+            world: Point3::new(w * 0.5, l * 0.25, z),
+        },
+        TableLandmark {
+            id: "inner_far",
+            prompt: "7/8 inner far-half (W/2,3L/4)",
+            world: Point3::new(w * 0.5, l * 0.75, z),
+        },
+        TableLandmark {
             id: "mid_robot",
-            prompt: "6/6 robot-side mid-edge (W/2,0)",
+            prompt: "8/8 robot-side mid-edge (W/2,0)",
             world: Point3::new(w * 0.5, 0.0, z),
         },
     ];
@@ -67,9 +77,10 @@ pub fn table_landmarks() -> [TableLandmark; TABLE_LANDMARK_COUNT] {
 /// 화면에 그릴 메시 선분 (랜드마크 인덱스 쌍).
 /// 양 끝점이 모두 클릭됐을 때만 그린다.
 ///
-/// - 0..=3: 탁구대 둘레 사각형
-/// - 4(center)↔꼭짓점: 대각 메시
-/// - 5(mid_robot)↔로봇쪽 두 꼭짓점·중앙
+/// - 0..=3: 탁구대 둘레
+/// - 4(center)↔꼭짓점: 스포크
+/// - 5–6: 중앙선 내부 (robot-half · far-half)
+/// - 7(mid_robot)↔로봇쪽 변 · inner_robot
 pub fn table_landmark_mesh_edges() -> &'static [(usize, usize)] {
     return &[
         // perimeter
@@ -77,15 +88,18 @@ pub fn table_landmark_mesh_edges() -> &'static [(usize, usize)] {
         (1, 2),
         (2, 3),
         (3, 0),
-        // center spokes
+        // center spokes to corners
         (4, 0),
         (4, 1),
         (4, 2),
         (4, 3),
-        // robot mid-edge
-        (5, 0),
-        (5, 1),
+        // centerline interior chain: mid_robot - inner_robot - center - inner_far
+        (7, 5),
         (5, 4),
+        (4, 6),
+        // robot mid-edge to corners
+        (7, 0),
+        (7, 1),
     ];
 }
 
@@ -94,7 +108,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn six_landmarks_on_table_surface() {
+    fn eight_landmarks_on_table_surface() {
         let marks = table_landmarks();
         assert_eq!(marks.len(), TABLE_LANDMARK_COUNT);
         for m in &marks {
@@ -111,6 +125,22 @@ mod tests {
         );
         assert_eq!(
             marks[5].world,
+            Point3::new(
+                table::WIDTH_X * 0.5,
+                table::LENGTH_Y * 0.25,
+                table::SURFACE_Z
+            )
+        );
+        assert_eq!(
+            marks[6].world,
+            Point3::new(
+                table::WIDTH_X * 0.5,
+                table::LENGTH_Y * 0.75,
+                table::SURFACE_Z
+            )
+        );
+        assert_eq!(
+            marks[7].world,
             Point3::new(table::WIDTH_X * 0.5, 0.0, table::SURFACE_Z)
         );
     }

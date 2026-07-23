@@ -10,14 +10,14 @@ use kiss3d::prelude::*;
 use rapier3d::prelude::{Rotation, Vector};
 use tracing::info;
 
-use super::controls::SimRuntimeControls;
 use super::debug_overlays::{DebugOverlays, colors};
 use super::debug_snap::CommitPhase;
 use super::mesh_loader;
 use super::panel;
-use super::shooter::{RANDOM_SHOT_TARGET_PADDING_M, ShooterLayout};
-use super::world::SimWorld;
 use crate::robot::urdf::{UrdfLinkVisual, UrdfModel};
+use crate::sim::session::controls::SimRuntimeControls;
+use crate::sim::physics::shooter::{RANDOM_SHOT_TARGET_PADDING_M, ShooterLayout};
+use crate::sim::physics::world::SimWorld;
 
 const HIDDEN: Vec3 = Vec3::new(0.0, 0.0, -10.0);
 const ARC_NODE_COUNT: usize = 48;

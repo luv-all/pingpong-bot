@@ -8,17 +8,14 @@ use crate::Point3;
 
 pub mod ballistics;
 pub mod ekf;
-pub mod identify;
-pub mod traj_measure;
+pub mod measure;
 
 pub use ballistics::{clears_net_gate, predict_hit_plane, semi_implicit_euler};
 pub use ekf::BallEkf;
-pub use identify::{
-    drag_from_trajectory, format_physics_for_defaults, friction_from_tangential_speeds,
+pub use measure::{
+    BounceEvent, RollEvent, TrajPoint, detect_bounces, detect_rolls, drag_from_trajectory,
+    format_physics_for_defaults, friction_from_tangential_speeds, mean_bounce_e, mean_roll_mu,
     restitution_from_bounce_heights, restitution_from_normal_speeds,
-};
-pub use traj_measure::{
-    BounceEvent, RollEvent, TrajPoint, detect_bounces, detect_rolls, mean_bounce_e, mean_roll_mu,
 };
 
 /// 접수 평면. 월드 y [m] 하나.

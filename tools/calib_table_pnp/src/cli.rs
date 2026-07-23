@@ -15,7 +15,7 @@ use crate::args::{Args, resolve_output};
 struct PixelsFile {
     width: u32,
     height: u32,
-    /// `[[u,v], ...]` 길이 6, `table_landmarks()` 순서
+    /// `[[u,v], ...]` 길이 8, `table_landmarks()` 순서
     pixels: Vec<[f64; 2]>,
     #[serde(default)]
     label: Option<String>,

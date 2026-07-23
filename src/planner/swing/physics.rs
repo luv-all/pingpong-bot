@@ -2,7 +2,7 @@
 
 use nalgebra::Vector3;
 
-use super::impact::{rally_return_velocity, required_racket_velocity};
+use crate::planner::impact::{rally_return_velocity, required_racket_velocity};
 use crate::constants::{G, table};
 use crate::defaults;
 use crate::error::{DomainError, SwingPlanError};

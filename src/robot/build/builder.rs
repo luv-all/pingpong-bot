@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::{Arm, JointLimit, SerialChain};
+use crate::robot::{Arm, JointLimit, SerialChain};
 use crate::robot::rail::LinearRail;
 use crate::{Joints, Point3};
 

@@ -1,4 +1,4 @@
-//! 탁구대 6점 랜드마크 → solvePnP(IPPE) → Calibration JSON.
+//! 탁구대 8점 랜드마크 → solvePnP(IPPE) → Calibration JSON.
 //!
 //! - 기본: [`interactive`] — Space 스냅 · 클릭 · s 저장
 //! - 보조: [`cli`] — `--from-pixels` / `--validate`

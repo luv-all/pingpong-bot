@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use super::shooter::BallShooterSettings;
+use crate::sim::physics::shooter::BallShooterSettings;
 
 /// GUI에서 바꾸고 물리 스레드가 읽는 sim 런타임 상태.
 #[derive(Debug)]

@@ -8,10 +8,10 @@ use std::time::{Duration, Instant};
 use tracing::info;
 
 use super::controls::SimRuntimeControls;
-use super::world::{SimStepInput, SimWorld};
 use crate::camera::SimCamera;
 use crate::hardware::SimHardware;
 use crate::robot::Robot;
+use crate::sim::physics::world::{SimStepInput, SimWorld};
 
 /// sim 실행 설정.
 #[derive(Debug, Clone, Copy)]

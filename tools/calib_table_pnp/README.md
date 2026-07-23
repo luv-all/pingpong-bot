@@ -1,6 +1,6 @@
 # calib-table-pnp
 
-탁구대 **규격 랜드마크 6점**을 클릭해 OpenCV `solvePnP`(IPPE)로 카메라 외참 `R|t`를 잡고, 기존과 같은 `Calibration` JSON을 쓴다. Charuco 없이 FOV로 `K`만 근사 (`dist=[]`).
+탁구대 **규격 랜드마크 8점**을 클릭해 OpenCV `solvePnP`(IPPE)로 카메라 외참 `R|t`를 잡고, 기존과 같은 `Calibration` JSON을 쓴다. Charuco 없이 FOV로 `K`만 근사 (`dist=[]`).
 
 | 파일 | 역할 |
 |------|------|
@@ -17,7 +17,9 @@
 3. 상대쪽 오른쪽 `(W, L, SURFACE_Z)`
 4. 상대쪽 왼쪽 `(0, L, SURFACE_Z)`
 5. 테이블 중앙 `(W/2, L/2, SURFACE_Z)`
-6. 로봇쪽 변 중점 `(W/2, 0, SURFACE_Z)`
+6. 로봇 반쪽 내부 `(W/2, L/4, SURFACE_Z)`
+7. 상대 반쪽 내부 `(W/2, 3L/4, SURFACE_Z)`
+8. 로봇쪽 변 중점 `(W/2, 0, SURFACE_Z)`
 
 재투영 RMSE **≤ 3 px**(기본 `--max-rmse`)일 때만 저장.
 
@@ -58,7 +60,7 @@ cargo run -p calib-table-pnp -- --validate calibration.json
 {
   "width": 640,
   "height": 480,
-  "pixels": [[100,200],[500,200],[520,400],[80,400],[300,300],[300,200]]
+  "pixels": [[100,200],[500,200],[520,400],[80,400],[300,300],[300,250],[300,350],[300,200]]
 }
 ```
 

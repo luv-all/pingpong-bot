@@ -1,19 +1,14 @@
 //! 카메라 입력·캘리브레이션·삼각측량.
 //!
-//! 세부 토픽:
 //! - [`calib`] — `Calibration` / ChArUco / 탁구대 PnP
 //! - [`tri`] — DLT · OpenCV `triangulatePoints`
-//! - [`preview`] — highgui 오버레이
-//! - capture / projection / sim — 입력·투영·시뮬 카메라
+//! - [`io`] — 캡처 · 프리뷰 · 투영 · 시뮬 카메라
 
 use std::fmt;
 use std::time::Instant;
 
 pub mod calib;
-mod capture;
-pub mod preview;
-mod projection;
-mod sim;
+pub mod io;
 pub mod tri;
 
 pub use calib::{
@@ -22,17 +17,17 @@ pub use calib::{
     calibrate_charuco, calibrate_table_pnp, detect_and_draw_charuco, ensure_reproj_below,
     ensure_reproj_ok, table_landmark_mesh_edges, table_landmarks, upsert_camera,
 };
-pub use capture::{
-    ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture,
+pub use io::{
+    ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture, PreviewAction,
+    SimCamera, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines,
+    draw_world_velocity, hstack_bgr, show_bgr,
 };
-pub use preview::{
-    PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
-    draw_help_lines, draw_world_velocity, hstack_bgr, show_bgr,
-};
-pub use sim::SimCamera;
 pub use tri::{
     dlt_triangulate, sample_at, triangulate_projections, triangulate_synced, triangulate_views,
 };
+
+/// 하위 호환: `camera::preview`
+pub use io::preview;
 
 /// 이미지 픽셀 좌표.
 #[derive(Debug, Clone, Copy, PartialEq)]
