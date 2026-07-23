@@ -34,6 +34,51 @@ pub enum SwingPlanError {
         incoming_velocity: [f64; 3],
         outgoing_velocity: [f64; 3],
     },
+    /// 임팩트/궤적 자세가 테이블을 관통
+    TablePenetration {
+        target_x: f64,
+        target_y: f64,
+        target_z: f64,
+        depth: f64,
+    },
+    /// 관절 속도·가속·토크 또는 레일 한계를 만족하는 궤적 없음
+    JointOrTorqueLimit {
+        target_x: f64,
+        target_y: f64,
+        target_z: f64,
+    },
+}
+
+impl SwingPlanError {
+    /// 재시도해도 안전 스윙이 안 나오는 하드 실패 (도달·리턴 불가).
+    ///
+    /// `InsufficientTime`만 false — 공이 더 가까워질 때까지 기다릴 수 있다.
+    pub fn is_hard_unreachable(&self) -> bool {
+        return !matches!(self, Self::InsufficientTime { .. });
+    }
+
+    /// 디버그 마커용 목표 좌표 (있으면).
+    pub fn target_xyz(&self) -> Option<[f64; 3]> {
+        return match self {
+            Self::InverseKinematicsNoSolution {
+                target_x,
+                target_y,
+                target_z,
+            }
+            | Self::TablePenetration {
+                target_x,
+                target_y,
+                target_z,
+                ..
+            }
+            | Self::JointOrTorqueLimit {
+                target_x,
+                target_y,
+                target_z,
+            } => Some([*target_x, *target_y, *target_z]),
+            Self::InsufficientTime { .. } | Self::ReturnVelocityUnreachable { .. } => None,
+        };
+    }
 }
 
 /// 관측/삼각측량 관련 오류.
@@ -108,6 +153,23 @@ impl fmt::Display for SwingPlanError {
                 outgoing_velocity[1],
                 outgoing_velocity[2]
             ),
+            Self::TablePenetration {
+                target_x,
+                target_y,
+                target_z,
+                depth,
+            } => write!(
+                f,
+                "테이블 관통 {depth:.3}m - 목표 ({target_x:.3}, {target_y:.3}, {target_z:.3}) m"
+            ),
+            Self::JointOrTorqueLimit {
+                target_x,
+                target_y,
+                target_z,
+            } => write!(
+                f,
+                "관절/토크/레일 한계 - 목표 ({target_x:.3}, {target_y:.3}, {target_z:.3}) m"
+            ),
         };
     }
 }
@@ -153,3 +215,41 @@ impl std::error::Error for DomainError {}
 impl std::error::Error for SwingPlanError {}
 impl std::error::Error for ObservationError {}
 impl std::error::Error for HwError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hard_unreachable_skips_only_insufficient_time() {
+        assert!(SwingPlanError::InverseKinematicsNoSolution {
+            target_x: 0.0,
+            target_y: 0.0,
+            target_z: 0.0,
+        }
+        .is_hard_unreachable());
+        assert!(SwingPlanError::ReturnVelocityUnreachable {
+            incoming_velocity: [0.0; 3],
+            outgoing_velocity: [0.0; 3],
+        }
+        .is_hard_unreachable());
+        assert!(!SwingPlanError::InsufficientTime {
+            time_to_impact_secs: 0.05,
+            min_swing_secs: 0.1,
+        }
+        .is_hard_unreachable());
+        assert!(SwingPlanError::TablePenetration {
+            target_x: 0.0,
+            target_y: 0.0,
+            target_z: 0.0,
+            depth: 0.01,
+        }
+        .is_hard_unreachable());
+        assert!(SwingPlanError::JointOrTorqueLimit {
+            target_x: 0.0,
+            target_y: 0.0,
+            target_z: 0.0,
+        }
+        .is_hard_unreachable());
+    }
+}

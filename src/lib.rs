@@ -50,9 +50,9 @@ pub use hardware::{Hardware, SimHardware};
 pub use pipeline::{CameraFeed, PipelineConfig, PipelineError, PipelineThread, run};
 pub use planner::{
     InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox, RailMotion, SwingTrajectory, accel,
-    ball_past_midcourt_for_commit, clamp_above_table, in_swing_commit_window, plan_best_swing,
-    plan_return_to_center, plan_swing, rally_return_velocity, required_racket_velocity,
-    robot_obbs, table_penetration, verify_impact_model,
+    aero_accel, ball_past_midcourt_for_commit, clamp_above_table, in_swing_commit_window,
+    plan_best_swing, plan_return_to_center, plan_swing, rally_return_velocity,
+    required_racket_velocity, robot_obbs, table_penetration, verify_impact_model,
 };
 pub use robot::{
     Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, MountPreset, RacketPose,

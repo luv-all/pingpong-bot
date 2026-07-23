@@ -6,6 +6,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::defaults;
 use crate::estimator::ballistics::predict_hit_plane;
 use crate::{BallEkf, Estimator, HitPlane, Point3, Prediction};
 use nalgebra::Vector3;
@@ -16,7 +17,13 @@ use crate::sim::world::SimWorld;
 /// Rapier 월드 스냅샷으로 접수 평면 교차를 예측한다 (물리 스텝·자동 스윙 공용).
 pub fn predict_impact(world: &SimWorld, plane: HitPlane) -> Option<Prediction> {
     let snap = snapshot_from_world(world)?;
-    return predict_hit_plane(snap.position, snap.velocity, plane, 0.0);
+    return predict_hit_plane(
+        snap.position,
+        snap.velocity,
+        Vector3::zeros(),
+        plane,
+        &defaults::physics(),
+    );
 }
 
 /// Rapier 월드에서 공 상태를 읽어 EKF에 주입한 뒤 `predict_to`한다.

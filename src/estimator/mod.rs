@@ -11,7 +11,7 @@ pub mod ekf;
 pub mod identify;
 pub mod traj_measure;
 
-pub use ballistics::{predict_hit_plane, predict_hit_plane_with, semi_implicit_euler};
+pub use ballistics::{clears_net_gate, predict_hit_plane, semi_implicit_euler};
 pub use ekf::BallEkf;
 pub use identify::{
     drag_from_trajectory, format_physics_for_defaults, friction_from_tangential_speeds,

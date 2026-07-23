@@ -3,17 +3,18 @@
 //! 상태 x = [p, v], 측정은 삼각측량 3D 위치.
 //! 짧은 전파와 hit-plane 예측은 반암시적 오일러 (`ballistics`).
 //!
-//! sim Rapier에는 이차 항력이 없어서 파이프라인은 BallEkf::new(0.0) 을 쓴다.
-//! with_defaults() 는 임베드 `[physics].drag` 기본값.
+//! sim Rapier에는 이차 항력이 없어서(기본 drag=0) 파이프라인은
+//! `BallEkf::new(0.0)` 을 쓴다. Magnus는 ω 상태 확장 전까지 예측에서 0.
+//! with_defaults() 는 임베드 `[physics]` 기본값.
 
 use std::time::Instant;
 
 use nalgebra::{Matrix3, Matrix6, Vector3, Vector6};
 
-use super::ballistics::{predict_hit_plane_with, semi_implicit_euler};
-use crate::estimator::Estimator;
-use crate::defaults::PhysicsParams;
+use super::ballistics::{predict_hit_plane, semi_implicit_euler};
 use crate::defaults;
+use crate::defaults::PhysicsParams;
+use crate::estimator::Estimator;
 use crate::{HitPlane, Point3, Prediction};
 
 /// EKF 상태: 위치/속도 + 공분산.
@@ -167,7 +168,14 @@ impl BallEkf {
     }
 
     fn predict_step(&mut self, dt: f64) {
-        let (pos, vel) = semi_implicit_euler(self.position, self.velocity, dt, self.physics.drag);
+        // ω 추정 전 — 각속도 0으로 전파.
+        let (pos, vel) = semi_implicit_euler(
+            self.position,
+            self.velocity,
+            Vector3::zeros(),
+            dt,
+            &self.physics,
+        );
         self.position = pos;
         self.velocity = vel;
 
@@ -199,7 +207,13 @@ impl Estimator for BallEkf {
         if !self.initialized || !self.velocity_seeded {
             return None;
         }
-        return predict_hit_plane_with(self.position, self.velocity, plane, &self.physics);
+        return predict_hit_plane(
+            self.position,
+            self.velocity,
+            Vector3::zeros(),
+            plane,
+            &self.physics,
+        );
     }
 }
 
@@ -280,7 +294,8 @@ mod tests {
         };
         let p0 = Vector3::new(table::WIDTH_X * 0.5, 2.4, table::SURFACE_Z + 0.25);
         let v0 = Vector3::new(0.0, -5.5, 0.8);
-        let truth0 = predict_hit_plane(p0, v0, plane, 0.0).expect("truth");
+        let physics = crate::defaults::physics();
+        let truth0 = predict_hit_plane(p0, v0, Vector3::zeros(), plane, &physics).expect("truth");
 
         let mut ekf = BallEkf::new(0.0);
         let t0 = Instant::now();
@@ -301,7 +316,7 @@ mod tests {
                     best_err = best_err.min(err);
                 }
             }
-            let (np, nv) = semi_implicit_euler(pos, vel, 0.008, 0.0);
+            let (np, nv) = semi_implicit_euler(pos, vel, Vector3::zeros(), 0.008, &physics);
             pos = np;
             vel = nv;
             t += 0.008;
