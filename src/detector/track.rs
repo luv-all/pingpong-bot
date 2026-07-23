@@ -169,8 +169,6 @@ mod tests {
             c1_max: 255,
             c2_min: 0,
             c2_max: 255,
-            min_area_px: 20.0,
-            max_area_px: 20_000.0,
         };
         let frame = blob_frame();
         let mut d = track(ColormaskDetector::new(cfg), 40);

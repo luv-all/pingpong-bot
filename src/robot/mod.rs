@@ -174,67 +174,6 @@ impl Arm {
         });
     }
 
-    /// 경진용 4DOF URDF 체인을 fixed-link 단위로 합성한 primitive 모델.
-    ///
-    /// 축·관절 순서·한계·EE offset은 `all-4-export.urdf`와 같고 mesh만 생략한다.
-    ///
-    /// 앱에서 쓰는 프리셋은 `crate::pipeline::ROBOTS`.
-    /// primitive 모델도 URDF 모델과 같은 직렬 체인을 쓴다.
-    pub fn competition() -> Result<Self, ArmBuildError> {
-        use crate::constants::arm::{BASE_Y, MAX_JOINT_SPEED, RAIL_MAX_SPEED};
-        use crate::constants::table;
-
-        let joints = vec![
-            SerialJoint::new(
-                Isometry3::translation(-0.02575, 0.028, 0.0601),
-                Vector3::new(-1.0, 0.0, 0.0),
-            )
-            .expect("4-dof q0 axis"),
-            SerialJoint::new(
-                Isometry3::translation(0.0255, 0.0, 0.0825),
-                Vector3::new(0.0, 0.0, -1.0),
-            )
-            .expect("4-dof q1 axis"),
-            SerialJoint::new(
-                Isometry3::translation(0.0, 0.025, 0.1398),
-                Vector3::new(-1.0, 0.0, 0.0),
-            )
-            .expect("4-dof q2 axis"),
-            SerialJoint::new(
-                Isometry3::translation(0.0, 0.1518, 0.0),
-                Vector3::new(-1.0, 0.0, 0.0),
-            )
-            .expect("4-dof q3 axis"),
-        ];
-        let chain = SerialChain::new(
-            UnitQuaternion::identity(),
-            joints,
-            Isometry3::translation(0.0, 0.0513, -0.034),
-        )
-        .expect("4-dof serial chain");
-        return Self::builder()
-            .base_xyz(0.0, BASE_Y, table::SURFACE_Z)
-            .linear_rail(
-                BASE_Y,
-                table::SURFACE_Z,
-                0.0,
-                table::WIDTH_X,
-                RAIL_MAX_SPEED,
-            )
-            .serial_chain(
-                chain,
-                vec![
-                    None,
-                    Some(JointLimit::new(-0.523599, 0.523599)),
-                    Some(JointLimit::new(-2.007129, 1.48353)),
-                    Some(JointLimit::new(-2.094395, 2.094395)),
-                ],
-                Joints::from_slice(&[0.0, 0.0, -0.2617995, 0.0]),
-            )
-            .max_joint_speed(MAX_JOINT_SPEED)
-            .build();
-    }
-
     fn arm_length(&self) -> f64 {
         return self.chain.approximate_reach();
     }

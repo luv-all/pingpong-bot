@@ -66,8 +66,6 @@ pub struct ColormaskConfig {
     pub c1_max: u8,
     pub c2_min: u8,
     pub c2_max: u8,
-    pub min_area_px: f64,
-    pub max_area_px: f64,
 }
 
 pub struct ColormaskDetector {
@@ -121,7 +119,8 @@ impl ColormaskDetector {
     }
 
     /// 검출 + 색 마스크(BGR). 선택 컨투어는 초록.
-    pub fn detect_debug(&mut self, frame: &Frame) -> (Option<PixelPoint>, Mat) {
+    /// hard cut은 호출측 `[vision.scorer]` (`Scorer`)를 쓴다.
+    pub fn detect_debug(&mut self, frame: &Frame, scorer: &Scorer) -> (Option<PixelPoint>, Mat) {
         let empty = || empty_bgr(frame);
         let Some(mask) = self.color_mask(frame) else {
             return (None, empty());
@@ -141,13 +140,6 @@ impl ColormaskDetector {
         }
 
         let cands = self.candidates_from_mask(&mask);
-        // 단독 사용: area만 hard cut, circularity 미적용 (기존 동작).
-        let scorer = Scorer::new(
-            self.config.min_area_px,
-            self.config.max_area_px,
-            0.0,
-            0.0,
-        );
         let best = scorer.pick_best(&cands, |_| 0.0);
         if let Some(c) = best {
             draw_candidate_contour(&mut mask_bgr, &c.contour);
@@ -184,7 +176,12 @@ impl CandidateGenerator for ColormaskDetector {
 
 impl BallDetector for ColormaskDetector {
     fn detect(&mut self, frame: &Frame) -> Option<PixelPoint> {
-        return self.detect_debug(frame).0;
+        let scorer = Scorer::from(&crate::detector::ScorerParams {
+            min_area_px: 20.0,
+            max_area_px: 20_000.0,
+            min_circularity: 0.55,
+        });
+        return self.detect_debug(frame, &scorer).0;
     }
 }
 
@@ -225,8 +222,6 @@ mod tests {
             c1_max: 255,
             c2_min: 0,
             c2_max: 255,
-            min_area_px: 20.0,
-            max_area_px: 20_000.0,
         };
         let mut det = ColormaskDetector::new(config);
         let pixel = det.detect(&frame).expect("should find blob");

@@ -11,11 +11,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use nalgebra::Vector3;
-use pingpong_bot::constants::{TABLE_BOUNCE_RESTITUTION, ball, table};
+use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{
-    Arm, DEFAULT_CONFIG_PATH, PhysicsConfig, drag_from_trajectory, merge_physics_into_config,
-    physics_coeffs_toml, resolve_calibration_path, restitution_from_bounce_heights,
-    restitution_from_normal_speeds,
+    Arm, DEFAULT_CONFIG_PATH, PhysicsConfig, PhysicsParams, drag_from_trajectory,
+    merge_physics_into_config, physics_coeffs_toml, resolve_calibration_path,
+    restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
 use pingpong_bot::{BallVec3, SimWorld};
 
@@ -128,14 +128,18 @@ fn main() -> Result<()> {
 
     if args.sim_ballistics {
         let e = measure_e_ballistics(args.drop_height)?;
-        println!("restitution e = {e:.6}  (ballistics; configured={TABLE_BOUNCE_RESTITUTION})");
+        println!(
+            "restitution e = {e:.6}  (ballistics; configured={})",
+            pingpong_bot::competition_physics().restitution
+        );
         patch.restitution = Some(e);
     }
 
     if args.sim {
         let e = measure_e_in_sim(args.drop_height)?;
         println!(
-            "restitution e = {e:.6}  (sim drop; configured TABLE_BOUNCE_RESTITUTION={TABLE_BOUNCE_RESTITUTION})"
+            "restitution e = {e:.6}  (sim drop; configured physics.restitution={})",
+            pingpong_bot::competition_physics().restitution
         );
         patch.restitution = Some(e);
     }
@@ -205,7 +209,7 @@ fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
 }
 
 fn measure_e_in_sim(drop_height: f64) -> Result<f64> {
-    let arm = Arc::new(Arm::competition().context("competition arm")?);
+    let arm = Arc::new(pingpong_bot::competition_arm().context("competition arm")?);
     let mut world = SimWorld::new(arm, None);
     world.set_use_ground_truth(false);
 

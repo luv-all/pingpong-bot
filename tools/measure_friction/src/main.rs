@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use pingpong_bot::constants::{TABLE_BOUNCE_FRICTION, ball, table};
+use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{
-    Arm, DEFAULT_CONFIG_PATH, PhysicsConfig, friction_from_tangential_speeds,
+    Arm, DEFAULT_CONFIG_PATH, PhysicsConfig, PhysicsParams, friction_from_tangential_speeds,
     merge_physics_into_config, physics_coeffs_toml, resolve_calibration_path,
 };
 use pingpong_bot::{BallVec3, SimWorld};
@@ -102,7 +102,8 @@ fn main() -> Result<()> {
     if args.sim {
         let mu = measure_mu_in_sim(args.drop_height, args.horiz_speed)?;
         println!(
-            "friction μ = {mu:.6}  (sim; configured TABLE_BOUNCE_FRICTION={TABLE_BOUNCE_FRICTION})"
+            "friction μ = {mu:.6}  (sim; configured physics.friction={})",
+            pingpong_bot::competition_physics().friction
         );
         patch.friction = Some(mu);
     }
@@ -139,7 +140,7 @@ fn main() -> Result<()> {
 }
 
 fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
-    let arm = Arc::new(Arm::competition().context("competition arm")?);
+    let arm = Arc::new(pingpong_bot::competition_arm().context("competition arm")?);
     let mut world = SimWorld::new(arm, None);
     world.set_use_ground_truth(false);
 

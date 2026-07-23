@@ -8,16 +8,19 @@ pub mod clock;
 pub mod config_resolve;
 pub mod constants;
 pub mod detector;
+pub mod entry;
 pub mod error;
 pub mod estimator;
 pub mod geometry;
 pub mod hardware;
+pub mod local;
 pub mod physics_config;
 pub mod pipeline;
 pub mod planner;
 pub mod robot;
 pub mod sim;
 pub mod telemetry;
+pub mod tunables;
 
 pub use camera::{
     BallObservation, Calibration, CameraId, CameraParams, CharucoBoardSpec, CharucoCalibReport,
@@ -27,6 +30,11 @@ pub use camera::{
     draw_debug_lines, draw_help_lines, draw_world_velocity, hstack_bgr, sample_at, show_bgr,
     triangulate_projections, triangulate_synced, triangulate_views,
 };
+pub use entry::{
+    competition_arm, competition_detector, competition_dynamixel, competition_intercept,
+    competition_physics, competition_tunables, install_competition_tunables,
+};
+pub use local::{DEFAULT_LOCAL_PATH, LocalMachine};
 pub use clock::Clock;
 pub use config_resolve::{
     DEFAULT_CONFIG_PATH, calibration_path_from_config, resolve_calibration_path,
@@ -52,6 +60,10 @@ pub use hardware::RealHardware;
 pub use hardware::{Hardware, SimHardware};
 pub use physics_config::{
     PhysicsConfig, PhysicsParams, load_physics_from_config, merge_physics_into_config,
+};
+pub use tunables::{
+    ControlParams, EstimatorParams, ImpactParams, Tunables, current as current_tunables,
+    install as install_tunables,
 };
 pub use pipeline::{
     CameraFeed, DEFAULT_ROBOT_ID, PipelineConfig, PipelineError, PipelineThread, ROBOTS,

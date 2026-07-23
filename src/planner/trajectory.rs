@@ -287,6 +287,22 @@ impl SwingTrajectory {
         return Joints { values };
     }
 
+    /// `t` [s]에서 관절 각속도 [rad/s]를 샘플한다.
+    pub fn sample_velocity_at(&self, t: f64) -> Vec<f64> {
+        if t <= self.impact_time_secs || self.duration_secs <= self.impact_time_secs {
+            return self
+                .pre_impact_segments()
+                .into_iter()
+                .map(|segment| segment.sample(t).1)
+                .collect();
+        }
+        return self
+            .follow_through_segments()
+            .into_iter()
+            .map(|segment| segment.sample(t - self.impact_time_secs).1)
+            .collect();
+    }
+
     /// 궤적 전 구간 최대 관절 각속도 [rad/s].
     pub fn peak_joint_speed(&self) -> f64 {
         let pre = self
@@ -304,17 +320,25 @@ impl SwingTrajectory {
 
     /// 궤적 전 구간 최대 관절 각가속도 [rad/s^2].
     pub fn peak_joint_acceleration(&self) -> f64 {
-        let pre = self
-            .pre_impact_segments()
-            .iter()
-            .map(|segment| segment.max_acceleration(24))
+        return self
+            .peak_joint_accelerations()
+            .into_iter()
             .fold(0.0_f64, f64::max);
-        let post = self
-            .follow_through_segments()
-            .iter()
-            .map(|segment| segment.max_acceleration(24))
-            .fold(0.0_f64, f64::max);
-        return pre.max(post);
+    }
+
+    /// 관절별 전 구간 peak |α| [rad/s^2].
+    pub fn peak_joint_accelerations(&self) -> Vec<f64> {
+        let pre = self.pre_impact_segments();
+        let post = self.follow_through_segments();
+        let n = pre.len().max(post.len());
+        let mut out = vec![0.0_f64; n];
+        for (index, segment) in pre.iter().enumerate() {
+            out[index] = out[index].max(segment.max_acceleration(24));
+        }
+        for (index, segment) in post.iter().enumerate() {
+            out[index] = out[index].max(segment.max_acceleration(24));
+        }
+        return out;
     }
 }
 

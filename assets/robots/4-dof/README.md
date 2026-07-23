@@ -37,12 +37,12 @@ cargo run -p pingpong-bot -- config/4-dof.toml
 
 URDF movable joint 순서와 모터 ID 순서는 고정이다.
 
-| URDF joint | Dynamixel ID | sign |
-|------------|--------------|------|
-| Revolute 6 | 1 | -1 |
-| Revolute 9 | 3 | +1 |
-| Revolute 13 | 4 | +1 |
-| Revolute 18 | 5 | +1 |
+| URDF joint | Dynamixel ID | sign | notes |
+|------------|--------------|------|-------|
+| Revolute 6 | 1 (+ slave **2** mirrored) | -1 | yaw 듀얼: `slave_ticks = 2·zero − master` |
+| Revolute 9 | 3 | +1 | |
+| Revolute 13 | 4 | +1 | |
+| Revolute 18 | 5 | +1 | |
 
-통신·절대각 리밋의 SSOT는 `config/real-hardware.toml`의
-`[hardware.dynamixel]`이다. AXL 레일은 현재 `rail_x=0` 스텁이다.
+미러·포트·리밋 SSOT는 [`src/entry/competition.rs`](../../../src/entry/competition.rs)의
+`competition_dynamixel()`이다.

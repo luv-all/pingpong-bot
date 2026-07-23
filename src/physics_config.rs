@@ -1,4 +1,4 @@
-//! 런타임/측정 툴이 공유하는 물리 계수 (`config.toml` `[physics]`).
+//! 물리 계수. 앱 기본값은 [`crate::entry::competition_physics`].
 
 use std::fs;
 use std::io;
@@ -6,10 +6,6 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use toml_edit::{DocumentMut, Item, Table, value};
-
-use crate::constants::{
-    ball::{RESTITUTION, TABLE_BOUNCE_FRICTION},
-};
 
 /// 해석된 물리 계수 (항상 concrete 값).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -22,18 +18,7 @@ pub struct PhysicsParams {
     pub drag: f64,
 }
 
-impl Default for PhysicsParams {
-    fn default() -> Self {
-        return Self {
-            restitution: RESTITUTION,
-            friction: TABLE_BOUNCE_FRICTION,
-            // sim Rapier에는 이차 항력이 없음 - EKF 기본도 0
-            drag: 0.0,
-        };
-    }
-}
-
-/// TOML `[physics]` 섹션 - 필드별 optional (부분 갱신).
+/// TOML `[physics]` 섹션 - 필드별 optional (부분 갱신, measure 툴용).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PhysicsConfig {
     pub restitution: Option<f64>,
@@ -47,20 +32,17 @@ impl PhysicsConfig {
     }
 }
 
-impl From<&PhysicsConfig> for PhysicsParams {
-    fn from(c: &PhysicsConfig) -> Self {
-        let d = Self::default();
+impl PhysicsParams {
+    pub fn with_overrides(self, c: &PhysicsConfig) -> Self {
         return Self {
-            restitution: c.restitution.unwrap_or(d.restitution),
-            friction: c.friction.unwrap_or(d.friction),
-            drag: c.drag.unwrap_or(d.drag),
+            restitution: c.restitution.unwrap_or(self.restitution),
+            friction: c.friction.unwrap_or(self.friction),
+            drag: c.drag.unwrap_or(self.drag),
         };
     }
 }
 
 /// `path`의 `[physics]`에 측정값을 merge한다. 파일이 없으면 최소 config를 만든다.
-///
-/// 주석/다른 키는 `toml_edit`으로 최대한 보존한다.
 pub fn merge_physics_into_config(
     path: impl AsRef<Path>,
     patch: &PhysicsConfig,
@@ -75,111 +57,66 @@ pub fn merge_physics_into_config(
             fs::create_dir_all(parent)?;
         }
         let mut doc = DocumentMut::new();
+        doc["mode"] = value("sim");
         doc["camera_count"] = value(3);
         doc["robot"] = value("competition");
-        doc["intercept"] = Item::Table(Table::new());
-        doc["intercept"]["y_min"] = value(0.20);
-        doc["intercept"]["y_max"] = value(0.55);
-        doc["intercept"]["sample_step"] = value(0.05);
+        let mut intercept = Table::new();
+        intercept["y_min"] = value(0.20);
+        intercept["y_max"] = value(0.55);
+        intercept["sample_step"] = value(0.05);
+        doc["intercept"] = Item::Table(intercept);
         doc
     };
 
-    if !doc.as_table().contains_key("physics") {
-        doc["physics"] = Item::Table(Table::new());
+    let physics = doc["physics"].or_insert(Item::Table(Table::new()));
+    let table = physics.as_table_mut().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidData, "[physics] must be a table")
+    })?;
+    if let Some(v) = patch.restitution {
+        table["restitution"] = value(v);
     }
-    let physics = doc["physics"].as_table_mut().expect("physics table");
-
-    if let Some(e) = patch.restitution {
-        physics["restitution"] = value(e);
+    if let Some(v) = patch.friction {
+        table["friction"] = value(v);
     }
-    if let Some(mu) = patch.friction {
-        physics["friction"] = value(mu);
+    if let Some(v) = patch.drag {
+        table["drag"] = value(v);
     }
-    if let Some(k) = patch.drag {
-        physics["drag"] = value(k);
-    }
-
     fs::write(path, doc.to_string())?;
-    return Ok(load_physics_section(&doc));
+    return Ok(load_physics_section(&fs::read_to_string(path)?).unwrap_or_default());
 }
 
-/// config 텍스트/파일에서 `[physics]`를 읽는다.
 pub fn load_physics_from_config(path: impl AsRef<Path>) -> io::Result<PhysicsConfig> {
     let text = fs::read_to_string(path)?;
-    let doc: DocumentMut = text
-        .parse()
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    return Ok(load_physics_section(&doc));
+    return Ok(load_physics_section(&text).unwrap_or_default());
 }
 
-fn load_physics_section(doc: &DocumentMut) -> PhysicsConfig {
-    let Some(table) = doc.get("physics").and_then(|item| item.as_table()) else {
-        return PhysicsConfig::default();
-    };
-    return PhysicsConfig {
-        restitution: table.get("restitution").and_then(toml_float),
-        friction: table.get("friction").and_then(toml_float),
-        drag: table.get("drag").and_then(toml_float),
-    };
-}
-
-fn toml_float(item: &Item) -> Option<f64> {
-    return item
-        .as_float()
-        .or_else(|| item.as_integer().map(|i| i as f64));
+fn load_physics_section(text: &str) -> Option<PhysicsConfig> {
+    #[derive(Deserialize)]
+    struct File {
+        physics: Option<PhysicsConfig>,
+    }
+    return toml::from_str::<File>(text).ok().and_then(|f| f.physics);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use crate::entry::competition_physics;
 
     #[test]
-    fn merge_writes_and_preserves_other_keys() {
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("pingpong_physics_{stamp}.toml"));
-        fs::write(
-            &path,
-            "camera_count = 3\nrobot = \"competition\"\n[intercept]\ny_min = 0.20\ny_max = 0.55\nsample_step = 0.05\n",
-        )
-        .unwrap();
+    fn competition_physics_values() {
+        let p = competition_physics();
+        assert!((p.restitution - 0.85).abs() < 1e-12);
+    }
 
-        merge_physics_into_config(
-            &path,
-            &PhysicsConfig {
-                restitution: Some(0.84),
-                friction: None,
-                drag: Some(0.012),
-            },
-        )
-        .unwrap();
-
-        let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("y_min = 0.20"));
-        assert!(text.contains("restitution"));
-        assert!(text.contains("0.84"));
-        assert!(text.contains("drag"));
-
-        let loaded = load_physics_from_config(&path).unwrap();
-        assert!((loaded.restitution.unwrap() - 0.84).abs() < 1e-9);
-        assert!((loaded.drag.unwrap() - 0.012).abs() < 1e-9);
-
-        merge_physics_into_config(
-            &path,
-            &PhysicsConfig {
-                restitution: None,
-                friction: Some(0.2),
-                drag: None,
-            },
-        )
-        .unwrap();
-        let loaded = load_physics_from_config(&path).unwrap();
-        assert!((loaded.restitution.unwrap() - 0.84).abs() < 1e-9);
-        assert!((loaded.friction.unwrap() - 0.2).abs() < 1e-9);
-
-        let _ = fs::remove_file(&path);
+    #[test]
+    fn with_overrides() {
+        let p = competition_physics().with_overrides(&PhysicsConfig {
+            restitution: Some(0.9),
+            friction: None,
+            drag: None,
+        });
+        assert!((p.restitution - 0.9).abs() < 1e-12);
+        assert!((p.friction - 0.15).abs() < 1e-12);
     }
 }

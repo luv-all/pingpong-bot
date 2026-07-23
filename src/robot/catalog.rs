@@ -1,14 +1,18 @@
-//! 로봇 카탈로그 — **여기만** 만진다 (id·URDF·EE·제어 속도).
+//! 로봇 카탈로그 — id·URDF·EE·속도 이름표.
 //!
-//! URDF가 있는 항목은 URDF 자체가 제어·FK·IK·뷰어의 단일 모델이다.
+//! competition primitive 조립은 [`crate::entry::competition_arm`]이 SSOT.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use crate::{Arm, ArmBuildError, constants::arm::MAX_JOINT_SPEED};
+use crate::entry::competition_arm;
+use crate::{Arm, ArmBuildError};
 
 /// TOML / CLI 기본 id ([`ROBOTS`] 첫 항목과 맞출 것).
 pub const DEFAULT_ROBOT_ID: &str = "competition";
+
+/// competition primitive 기본 관절 속도 상한 [rad/s].
+const COMPETITION_MAX_JOINT_SPEED: f64 = 16.0;
 
 /// 카탈로그 한 줄.
 #[derive(Clone, Copy)]
@@ -33,17 +37,15 @@ impl RobotEntry {
     }
 }
 
-/// **로봇 SSOT**.
+/// **로봇 이름표 SSOT** (조립 숫자는 entry).
 pub static ROBOTS: LazyLock<Vec<RobotEntry>> = LazyLock::new(|| {
-    let build_competition = Arm::competition;
-
     return vec![
         RobotEntry {
             id: "competition",
             urdf_rel: None,
             ee_link: None,
-            max_joint_speed: MAX_JOINT_SPEED,
-            primitive: Some(build_competition),
+            max_joint_speed: COMPETITION_MAX_JOINT_SPEED,
+            primitive: Some(competition_arm),
         },
         RobotEntry {
             id: "urdf-test",

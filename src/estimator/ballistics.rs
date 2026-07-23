@@ -4,9 +4,10 @@
 
 use nalgebra::Vector3;
 
-use crate::constants::{ball, estimator as est, table};
+use crate::constants::{ball, table};
 use crate::physics_config::PhysicsParams;
 use crate::planner::physics::accel;
+use crate::tunables;
 use crate::{HitPlane, Point3, Prediction};
 
 /// 위치/속도에서 접수 평면 교차를 반암시적 오일러(+바운스)로 예측한다.
@@ -24,7 +25,7 @@ pub fn predict_hit_plane(
         plane,
         &PhysicsParams {
             drag: drag_coefficient,
-            ..PhysicsParams::default()
+            ..crate::entry::competition_physics()
         },
     );
 }
@@ -36,8 +37,9 @@ pub fn predict_hit_plane_with(
     plane: HitPlane,
     physics: &PhysicsParams,
 ) -> Option<Prediction> {
+    let est = tunables::current().estimator;
     let vy = velocity.y;
-    if vy > -est::MIN_APPROACH_SPEED_Y {
+    if vy > -est.min_approach_speed_y {
         return None;
     }
     if is_table_rolling(position, velocity) {
@@ -53,12 +55,12 @@ pub fn predict_hit_plane_with(
     let mut vel = velocity;
     let mut t = 0.0;
 
-    while t < est::MAX_LEAD {
+    while t < est.max_lead {
         let prev_y = pos.y;
-        let (next_pos, next_vel) = semi_implicit_euler_with(pos, vel, est::INTEGRATE_DT, physics);
+        let (next_pos, next_vel) = semi_implicit_euler_with(pos, vel, est.integrate_dt, physics);
         pos = next_pos;
         vel = next_vel;
-        t += est::INTEGRATE_DT;
+        t += est.integrate_dt;
 
         if prev_y > plane.y && pos.y <= plane.y {
             let denom = pos.y - prev_y;
@@ -67,8 +69,8 @@ pub fn predict_hit_plane_with(
             } else {
                 (plane.y - prev_y) / denom
             };
-            let t_cross = t - est::INTEGRATE_DT + est::INTEGRATE_DT * frac;
-            if t_cross <= est::MIN_LEAD || t_cross > est::MAX_LEAD {
+            let t_cross = t - est.integrate_dt + est.integrate_dt * frac;
+            if t_cross <= est.min_lead || t_cross > est.max_lead {
                 return None;
             }
             let mut impact = pos;
@@ -96,7 +98,8 @@ fn rest_height() -> f64 {
 
 /// 테이블에 붙어 느리게 구르는 상태 (비행/바운스 중이면 false).
 fn is_table_rolling(position: Vector3<f64>, velocity: Vector3<f64>) -> bool {
-    let on_table = position.z <= rest_height() + est::MIN_STRIKE_CLEARANCE;
+    let on_table =
+        position.z <= rest_height() + tunables::current().estimator.min_strike_clearance;
     let flat = velocity.z.abs() < 0.5;
     return on_table && flat;
 }
@@ -116,7 +119,7 @@ pub fn semi_implicit_euler(
         dt,
         &PhysicsParams {
             drag: drag_coefficient,
-            ..PhysicsParams::default()
+            ..crate::entry::competition_physics()
         },
     );
 }
@@ -150,7 +153,8 @@ pub fn semi_implicit_euler_with(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::{estimator::MIN_LEAD, table};
+    use crate::constants::table;
+    use crate::tunables;
 
     #[test]
     fn default_shot_like_impact_at_hit_plane() {
@@ -165,7 +169,7 @@ mod tests {
         };
         let pred = predict_hit_plane(position, velocity, plane, 0.0).expect("예측");
         assert!((pred.impact_position.v.y - plane.y).abs() < 1e-5);
-        assert!(pred.time_to_impact_secs > MIN_LEAD);
+        assert!(pred.time_to_impact_secs > tunables::current().estimator.min_lead);
         assert!(pred.incoming_velocity.y < 0.0);
     }
 

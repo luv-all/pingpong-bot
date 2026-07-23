@@ -126,7 +126,7 @@ pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
     let wrist = wrist_index
         .and_then(|index| joints.values.get(index))
         .copied()
-        .unwrap_or(crate::constants::RACKET_OPEN_PITCH);
+        .unwrap_or(crate::tunables::current().control.racket_open_pitch);
 
     for _ in 0..TABLE_CLAMP_ITERS {
         let depth = table_penetration(arm, rail_x, &current);
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn deep_racket_penetrates_table() {
-        let arm = Arm::competition().expect("arm");
+        let arm = crate::entry::competition_arm().expect("arm");
         let rail_x = arm.rail.as_ref().map(|r| r.home_x()).unwrap_or(0.0);
         let mut joints = arm.default_joints.clone();
         let mut deepest = 0.0;
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn default_pose_clears_table() {
-        let arm = Arm::competition().expect("arm");
+        let arm = crate::entry::competition_arm().expect("arm");
         let rail_x = arm.rail.as_ref().map(|r| r.home_x()).unwrap_or(0.0);
         let depth = table_penetration(&arm, rail_x, &arm.default_joints);
         assert!(depth <= 1e-4, "기본 자세는 테이블 위: {depth}");

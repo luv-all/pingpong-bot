@@ -63,7 +63,7 @@ _.path = [
 cargo check --workspace
 cargo test --workspace
 
-# sim 파이프라인 실행 (`config/default.toml`)
+# sim 파이프라인 실행 (`src/entry` SSOT)
 cargo run -p pingpong-bot
 
 # 다른 실험 설정
@@ -77,27 +77,23 @@ cargo run -p pingpong-bot -- config/experiment.toml
 
 ## 런타임 설정 (`pingpong-bot`)
 
+배선·숫자·검출·미러·토크는 [`src/entry/competition.rs`](src/entry/competition.rs)가 SSOT다.
+머신만 `config/local.toml` 또는 CLI:
+
 ```bash
-cargo run -p pingpong-bot                       # config/default.toml
-cargo run -p pingpong-bot -- config/example.toml  # 지정한 TOML
+cargo run -p pingpong-bot
+cargo run -p pingpong-bot -- --mode sim
+cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
+cp config/local.example.toml config/local.toml
 ```
 
-CLI는 선택적인 TOML 경로 하나만 받는다. 모드·로봇·카메라·sim·물리 값은
-모두 TOML이 SSOT이며 CLI override는 없다. `calibration_path`와 `urdf_path`의
-상대 경로는 해당 TOML 파일의 디렉터리를 기준으로 해석한다. 전체 필드 설명은
-[`config/example.toml`](config/example.toml)을 참고한다.
-`[intercept]`의 `y_min..=y_max`를 `sample_step` 간격으로 예측해, 현재 로봇
-포즈에서 접촉 오차·관절/레일 한계·테이블 충돌을 통과하는 타격점만 선택한다.
+`InterceptWindow`는 entry에서 y 구간을 샘플해 타격점을 고른다.
 
 ### 예시
 
 ```bash
-# GUI sim (기본) — 슈터에서 「발사」로 공 쏘기
+# GUI sim (기본)
 cargo run -p pingpong-bot
-
-# 설명이 포함된 예시를 복사해 robot, [sim], urdf_path 등을 수정
-cp config/example.toml config/experiment.toml
-cargo run -p pingpong-bot -- config/experiment.toml
 
 # 로그 레벨 조정
 RUST_LOG=debug cargo run -p pingpong-bot
@@ -281,7 +277,7 @@ TODO.md     실행 체크리스트
 | `4-dof` | `assets/robots/4-dof/urdf/all-4-export.urdf` | 해당 URDF |
 
 ```toml
-# config/default.toml
+# src/entry (SSOT)
 robot = "competition"
 ```
 
@@ -347,7 +343,7 @@ flowchart LR
 - 보정: [calib_charuco](tools/calib_charuco/README.md)
 - appearance 비교: [detect-appearance](tools/detect_appearance/README.md)
 - fuse 본선 (+ROI): [detect-full](tools/detect_full/README.md) · [decisions J](docs/decisions.md)
-- 실전 TOML: [config/example.toml](config/example.toml) `[vision]` · `calibration_path`
+- 실전 TOML: [config/local.example.toml](config/local.example.toml) `[vision]` · `calibration_path`
 - 설계: [비전 스펙](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md)
 
 ### 물리 계수 측정 (`measure_*`)
@@ -398,7 +394,7 @@ cargo build -p pingpong-bot --release
 | ChArUco (`calib_charuco` — 인터랙티브 선별 + 인트린식/dist) | ✅ |
 | EKF / 궤적 추정 | ✅ (sim; 기본은 `sim.use_ground_truth=true`) |
 | `measure_restitution` / `measure_friction` (e·μ·k) | ✅ |
-| TOML 단일 설정 (`config/default.toml`) | ✅ |
+| entry 배선 SSOT (`src/entry`) | ✅ |
 | OpenCV fuse(appearance→Scorer→motion) · `VideoCapture` · `[vision]` | ✅ |
 | Dynamixel 4축 `RealHardware` · `jog-axis` | ✅ (Windows 실기 재검증 필요) |
 | AXL 레일 `jog-rail` · `read_pose` | ✅ (스윙 레일 동기·Rerun은 후속) |

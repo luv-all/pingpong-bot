@@ -1,19 +1,12 @@
-//! 검출 튜닝 SSOT — `config/default.toml` `[vision]`.
-//!
-//! 레이어: `vision.appearance.*` generators · `vision.scorer`(hard cuts) ·
-//! `vision.motion.weight`(soft boost). Rust nesting == TOML nesting.
+//! 검출 파라미터 타입. 앱 조립 SSOT는 [`crate::entry`].
 
 use std::fs;
 use std::path::Path;
-use std::sync::OnceLock;
 
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 
 use super::{ColorSpace, ColormaskConfig, ColormaskDetector, FuseDetector};
-
-/// 컴파일 시점에 박아 둔 기본 TOML (워크스페이스 `config/default.toml`).
-const EMBEDDED_DEFAULT_TOML: &str = include_str!("../../config/default.toml");
 
 /// Appearance generator 종류 (fuse 1층). scorer/motion이 아님.
 #[derive(
@@ -94,7 +87,7 @@ fn default_generators() -> Vec<Appearance> {
 }
 
 fn default_roi_half_px() -> i32 {
-    return VisionConfig::from_embedded().roi_half_px;
+    return 80;
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -126,8 +119,6 @@ pub struct ColormaskParams {
     pub s_max: u8,
     pub v_min: u8,
     pub v_max: u8,
-    pub min_area_px: f64,
-    pub max_area_px: f64,
 }
 
 /// `[vision.scorer]` — hard cuts. `ContourDetector::from(&scorer)`로도 쓴다.
@@ -151,46 +142,62 @@ fn default_motion_weight() -> f64 {
 
 impl Default for VisionConfig {
     fn default() -> Self {
-        return Self::from_embedded();
+        return Self {
+            generators: default_generators(),
+            roi_half_px: default_roi_half_px(),
+            cameras: Vec::new(),
+            appearance: AppearanceParams::default(),
+            scorer: ScorerParams::default(),
+            motion: MotionParams::default(),
+        };
     }
 }
 
 impl Default for AppearanceParams {
     fn default() -> Self {
-        return VisionConfig::from_embedded().appearance;
+        return Self {
+            colormask: ColormaskParams::default(),
+        };
     }
 }
 
 impl Default for ColormaskParams {
     fn default() -> Self {
-        return VisionConfig::from_embedded().appearance.colormask;
+        return Self {
+            space: ColorSpace::Ycrcb,
+            y_min: 0,
+            y_max: 255,
+            cr_min: 133,
+            cr_max: 173,
+            cb_min: 77,
+            cb_max: 127,
+            h_min: 5,
+            h_max: 25,
+            s_min: 80,
+            s_max: 255,
+            v_min: 80,
+            v_max: 255,
+        };
     }
 }
 
 impl Default for ScorerParams {
     fn default() -> Self {
-        return VisionConfig::from_embedded().scorer;
+        return Self {
+            min_area_px: 20.0,
+            max_area_px: 20_000.0,
+            min_circularity: 0.55,
+        };
     }
 }
 
 impl Default for MotionParams {
     fn default() -> Self {
-        return VisionConfig::from_embedded().motion;
+        return Self { weight: 0.5 };
     }
 }
 
 impl VisionConfig {
-    /// `config/default.toml` 임베드본. 테스트·편의 factory용.
-    pub fn from_embedded() -> Self {
-        static ONCE: OnceLock<VisionConfig> = OnceLock::new();
-        return ONCE
-            .get_or_init(|| {
-                parse_vision_required(EMBEDDED_DEFAULT_TOML)
-                    .expect("embedded config/default.toml [vision] must be complete")
-            })
-            .clone();
-    }
-
     pub fn validate_params(&self) -> Result<()> {
         ensure!(
             !self.generators.is_empty(),
@@ -233,8 +240,6 @@ impl TryFrom<&ColormaskParams> for ColormaskConfig {
             c1_max,
             c2_min,
             c2_max,
-            min_area_px: p.min_area_px,
-            max_area_px: p.max_area_px,
         });
     }
 }
@@ -263,46 +268,12 @@ pub fn vision_from_toml(text: &str) -> Result<VisionConfig> {
         vision: Option<VisionConfig>,
     }
     let file: File = toml::from_str(text).context("TOML 파싱")?;
-    let vision = file.vision.unwrap_or_else(VisionConfig::from_embedded);
+    let vision = file.vision.unwrap_or_default();
     vision.validate_params()?;
     return Ok(vision);
 }
 
-/// 임베드 파싱 — 필드 누락 시 즉시 실패 (Default 재귀 방지).
-fn parse_vision_required(text: &str) -> Result<VisionConfig> {
-    #[derive(Deserialize)]
-    struct File {
-        vision: VisionRequired,
-    }
-    #[derive(Deserialize)]
-    struct VisionRequired {
-        generators: Vec<Appearance>,
-        roi_half_px: i32,
-        #[serde(default)]
-        cameras: Vec<VisionCameraConfig>,
-        appearance: AppearanceParamsRequired,
-        scorer: ScorerParams,
-        motion: MotionParams,
-    }
-    #[derive(Deserialize)]
-    struct AppearanceParamsRequired {
-        colormask: ColormaskParams,
-    }
-    let file: File = toml::from_str(text).context("embedded TOML")?;
-    let v = file.vision;
-    return Ok(VisionConfig {
-        generators: v.generators,
-        roi_half_px: v.roi_half_px,
-        cameras: v.cameras,
-        appearance: AppearanceParams {
-            colormask: v.appearance.colormask,
-        },
-        scorer: v.scorer,
-        motion: v.motion,
-    });
-}
-
-/// TOML `[vision]` → 3레이어 fuse. 구현은 [`super::dsl::fuse_vision`] (DSL SSOT).
+/// TOML `[vision]` → 3레이어 fuse.
 pub fn fuse_from_vision(vision: &VisionConfig) -> Result<FuseDetector> {
     return super::dsl::fuse_vision(vision);
 }
@@ -310,13 +281,10 @@ pub fn fuse_from_vision(vision: &VisionConfig) -> Result<FuseDetector> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_resolve::DEFAULT_CONFIG_PATH;
 
     #[test]
-    fn embedded_matches_workspace_default_toml() {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let loaded = load_vision_from_config(workspace.join(DEFAULT_CONFIG_PATH)).unwrap();
-        assert_eq!(loaded, VisionConfig::from_embedded());
+    fn default_vision_params() {
+        let loaded = VisionConfig::default();
         assert_eq!(loaded.generators, vec![Appearance::Colormask]);
         assert_eq!(loaded.roi_half_px, 80);
         assert_eq!(loaded.appearance.colormask.space, ColorSpace::Ycrcb);

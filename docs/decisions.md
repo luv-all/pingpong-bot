@@ -1,7 +1,8 @@
 # 결정 사항 (decisions)
 
 코드에 “왜 이렇게 했지?”가 남을 만한 값·경로·폴백을 모아 둔다.  
-숫자는 가능하면 `src/constants/` 또는 TOML이 SSOT이고, 여기는 **의도**를 적는다.
+숫자는 가능하면 `src/constants/`(물리 상수) 또는 **`src/entry/`(앱 배선)** 이 SSOT이고, 여기는 **의도**를 적는다.
+TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 
 관련 공식(유지): `required_racket_velocity` — \(v_{out}, n, e \rightarrow v_r\) (`planner/impact.rs`).
 
@@ -16,12 +17,12 @@
 | **A** | 어디로 공을 보낼지 — 상대 코트 중앙 바운드 |
 | **B** | 스윙 속도 0으로 포기하지 않음 · commit 창 |
 | **C** | 한 공당 스윙 한 번 · sim 기본은 ground truth |
-| **D** | 팔 모델 — competition은 4-dof 체인(메시 없음) |
-| **E** | 어디서 칠지 — `[intercept]` y 구간을 여러 장 샘플 |
+| **D** | 팔 모델 — competition은 entry 빌더 4-dof 체인(메시 없음) |
+| **E** | 어디서 칠지 — entry InterceptWindow y 구간을 여러 장 샘플 |
 | **F** | 관측 — OpenCV 필수, 검출은 아직 패스스루 |
 | **G** | 테이블 뚫지 않기 — OBB |
-| **H** | 구조 — `domain/infra/...` 없음, `src/` 모듈 |
-| **J** | 검출 = fuse(appearance·Scorer·motion) · ROI는 최적화 |
+| **H** | 구조 — entry SSOT · 도메인은 메커니즘만 · local/CLI 오버레이 |
+| **J** | 검출 = fuse · 조립은 entry · fuse_vision은 툴 어댑터 |
 
 ---
 
@@ -66,14 +67,14 @@
 
 1. **한 공에 스윙 한 번** (`swing_committed`). 스윙 중 재계획 없음.
 2. **sim 기본**은 Rapier 진실로 치는 ground truth.  
-   EKF로 치려면 TOML `sim.use_ground_truth = false`.
+   EKF로 치려면 entry/코드에서 `set_use_ground_truth(false)`.
 3. **미드코트 게이트:** `ball_y ≤ 0.55 · LENGTH_Y` 이후에만 commit  
    (상대 코트에서는 탄도가 아직 흔들림). ground truth·EKF control 공통.
 
 | ID | 내용 | 코드 | 상태 |
 |----|------|------|------|
 | C1 | commit-once + 창 대기 | `sim/world`, `hardware/sim` | ✅ |
-| C2 | 기본 ground truth / 실험은 EKF | TOML `[sim]` | ✅ (EKF 기본 승격은 아래) |
+| C2 | 기본 ground truth / 실험은 EKF | entry / `SimWorld` | ✅ (EKF 기본 승격은 아래) |
 | C3 | 바쁠 때 타겟 버림 | `pipeline` | 유지 |
 | C4 | 미드코트 게이트 `0.55·LENGTH` | `ball_past_midcourt_for_commit` | ✅ |
 
@@ -102,6 +103,10 @@
 - 면 법선: 손목 open (`q3`). 제어/Rapier 라켓은 **local +Z = 면 법선**.
 - **시각화:** primitive 라켓은 **원판**(지름 ~15 cm).  
   **충돌·Rapier**는 여전히 블레이드 OBB 박스 (`RACKET_HALF_*`).
+- **sim 암:** Rapier 다물체 + 관절 모터(`τ_max` = entry)는 기본 ON.  
+  **볼 충돌**은 `Arm` FK 키네마틱 라켓(`sync_racket_kinematic`) —  
+  다물체 링크 프레임이 `ee_transform`·면축 리맵과 아직 1:1이 아님.  
+  EE collider 전환은 기하 정합 후.
 
 | ID | 내용 | 상태 |
 |----|------|------|
@@ -111,6 +116,7 @@
 | D4 | URDF SSOT, 실패 시 에러 | ✅ |
 | D5 | pose IK + Jacobian 회귀 | ✅ |
 | D6 | 블레이드 치수 ~15×16×1 cm (손잡이 제외). 뷰어 원판 | ✅ |
+| D7 | sim: 다물체 τ 추종 + FK 키네마틱 라켓 충돌 | ✅ (2026-07-22) |
 
 카탈로그: `src/robot/catalog.rs` (`ROBOTS`).
 
@@ -122,7 +128,7 @@
 **지금:** TOML `[intercept]`의 `y_min..=y_max`를 `sample_step`마다 잘라  
 여러 평면에 대해 탄도 교차를 예측한 뒤, **하나**를 고른다.
 
-기본값 (`config/default.toml`): `y = 0.20..0.55`, `step = 0.05`.
+기본값 (entry `competition_intercept`): `y = 0.20..0.55`, `step = 0.05`.
 
 ### 고르는 순서 (`plan_best_swing`)
 
@@ -179,18 +185,23 @@
 단일 `pingpong-bot` + `src/` 기능 모듈.  
 트레잇·타입은 `ports.rs`/`types.rs` 대신 각 모듈에 둔다.
 
+**SSOT:** 앱 숫자·배선은 `src/entry/` (버전 파일). 도메인 타입에는
+`::competition` / competition `Default` / 임베디드 TOML 프리셋을 두지 않는다.
+머신만 `config/local.toml` 또는 CLI(`--dxl-port`).
+
 | 모듈 | 하는 일 |
 |------|---------|
+| `entry` | **배선 SSOT** — arm·tunables·detector·dynamixel(+mirror)·physics |
 | `camera` | 캡처·캘리브·삼각측량·sim 카메라 |
-| `detector` | 공 검출 |
+| `detector` | 공 검출 DSL (`fuse` / `track`); `fuse_vision`은 툴 TOML 어댑터 |
 | `estimator` | EKF·탄도 |
-| `planner` | 인터셉트·스윙·충돌·임팩트 |
-| `robot` | Arm·URDF·카탈로그 |
-| `sim` | Rapier·뷰어·슈터 |
+| `planner` | 인터셉트·스윙·충돌·임팩트 · 관절별 `τ_max` |
+| `robot` | Arm 빌더·URDF·카탈로그(이름표) |
+| `sim` | Rapier 다물체 암·뷰어·슈터 |
 | `hardware` / `telemetry` / `pipeline` | 실물·로그·루프 |
-| `config` (bin) | TOML만 SSOT — CLI는 경로 하나 |
+| `local` | 머신 포트·경로 오버레이만 |
 
-런타임 설정: `config/default.toml`. CLI 플래그로 robot/mode override 없음.
+런타임: `cargo run` = entry. CLI `--mode` / `--dxl-port` / `--local`.
 
 네트 높이: ITTF **0.1525 m** (`constants/table::NET_HEIGHT`).
 
@@ -249,18 +260,18 @@ track(fuse_from_vision(&vision)?, vision.roi_half_px);
 | ROI | 탐색 최적화 | `track(..., vision.roi_half_px)` · `r` 토글 in detect-full |
 
 ```rust
-let v = load_vision_from_config("config/default.toml")?;
-track(fuse_from_vision(&v)?, v.roi_half_px)
+// 앱 SSOT — entry
+let detect = competition_detector(); // fuse(generators![…], scorer) + track
 ```
 
-툴: `detect-appearance` (좌우) · `detect-full` (`build_detector`에 fuse DSL 인라인).  
-라이브러리 SSOT: `src/detector/dsl.rs` (`fuse_vision` / `track_vision`).
+툴: `detect-appearance` / `detect-full`은 선택적 `[vision]` TOML 어댑터(`fuse_vision`) 가능.  
+앱 조립 SSOT: `src/entry/competition.rs`. DSL 메커니즘: `fuse` / `track`.
 
 | ID | 내용 | 상태 |
 |----|------|------|
 | J1 | ROI=`track` (+ enable 토글) | ✅ |
 | J2 | fuse = generators + Scorer + motion soft | ✅ |
-| J3 | 검출 튜닝 TOML SSOT (`[vision]` nested) | ✅ |
+| J3 | 검출 조립은 entry SSOT (`fuse_vision`은 툴 전용) | ✅ |
 
 ---
 
@@ -278,6 +289,6 @@ track(fuse_from_vision(&v)?, v.roi_half_px)
 - [ ] C2 — EKF 기본 승격 (스모크)
 - [x] J1 — 검출 방법 / ROI=`track` 분리
 - [ ] J2 — 캐스케이드·`roi_half_px` 벤치
-- [x] J3 — `[vision]` TOML 튜닝 SSOT
+- [x] J3 — 검출 조립 entry SSOT
 
-작성: 2026-07-11. 갱신: 2026-07-15 (thin types) · **2026-07-17** (플랫 구조·인터셉트·geometry·포기 경로) · **2026-07-20** (검출 vs ROI · vision TOML SSOT).
+작성: 2026-07-11. 갱신: 2026-07-15 (thin types) · **2026-07-17** (플랫 구조·인터셉트·geometry·포기 경로) · **2026-07-20** (검출 vs ROI) · **2026-07-22** (entry SSOT · Dynamixel mirror · 다물체 τ).

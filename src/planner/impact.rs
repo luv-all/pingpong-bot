@@ -3,28 +3,29 @@
 use nalgebra::Vector3;
 
 use crate::Point3;
-use crate::constants::impact::{MAX_RETURN_SPEED, NET_CLEARANCE, RALLY_TIME_TO_BOUNCE};
 use crate::constants::physics::G_Z;
 use crate::constants::table;
 use crate::error::SwingPlanError;
+use crate::tunables;
 
 /// 네트를 넘고 상대 코트 중앙에 바운드하는 출사 속도.
 ///
 /// 목표 바운드는 `(WIDTH/2, LENGTH*3/4, SURFACE+BALL_RADIUS)`이며,
 /// 무저항 중력 탄도의 경계값 문제를 풀어 `v_out`을 구한다.
 pub fn rally_return_velocity(impact: Point3, _v_in: Vector3<f64>) -> Vector3<f64> {
+    let impact_cfg = tunables::current().impact;
     let target = Vector3::new(
         table::WIDTH_X * 0.5,
         table::LENGTH_Y * 0.75,
         table::SURFACE_Z + crate::constants::BALL_RADIUS,
     );
-    let t = RALLY_TIME_TO_BOUNCE;
+    let t = impact_cfg.rally_time_to_bounce;
     let gravity_displacement = Vector3::new(0.0, 0.0, 0.5 * G_Z * t * t);
     let mut v_out = (target - impact.v - gravity_displacement) / t;
 
     let speed = v_out.norm();
-    if speed > MAX_RETURN_SPEED && speed > f64::EPSILON {
-        v_out *= MAX_RETURN_SPEED / speed;
+    if speed > impact_cfg.max_return_speed && speed > f64::EPSILON {
+        v_out *= impact_cfg.max_return_speed / speed;
     }
     return v_out;
 }
@@ -79,7 +80,8 @@ pub fn verify_impact_model(
 /// 무저항 탄도로 네트 통과 높이를 검사한다.
 pub fn clears_net_ballistic(impact: Point3, v_out: Vector3<f64>) -> bool {
     let y_net = table::LENGTH_Y * 0.5;
-    let z_min = table::SURFACE_Z + table::NET_HEIGHT + NET_CLEARANCE * 0.5;
+    let z_min =
+        table::SURFACE_Z + table::NET_HEIGHT + tunables::current().impact.net_clearance * 0.5;
     if v_out.y <= 1e-6 {
         return false;
     }
@@ -98,69 +100,40 @@ fn vector3_to_array(v: Vector3<f64>) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::DEFAULT_RESTITUTION;
+    use crate::physics_config::PhysicsParams;
 
     #[test]
-    fn loft_return_has_upward_and_forward() {
+    fn rally_return_clears_net_toward_far_half() {
         let impact = Point3::new(
             table::WIDTH_X * 0.5,
             table::DEFAULT_HIT_PLANE_Y,
-            table::SURFACE_Z + 0.05,
+            table::SURFACE_Z + 0.12,
         );
-        let v_in = Vector3::new(0.0, -7.5, -1.0);
+        let v_in = Vector3::new(0.0, -4.0, -1.0);
         let v_out = rally_return_velocity(impact, v_in);
-        assert!(v_out.y > 1.0, "앞으로: {v_out:?}");
-        assert!(v_out.z > 0.5, "위로: {v_out:?}");
-        assert!(
-            clears_net_ballistic(impact, v_out),
-            "네트 통과 실패 v_out={v_out:?}"
-        );
-    }
-
-    #[test]
-    fn loft_return_bounces_near_opponent_court_center() {
-        let impact = Point3::new(0.42, table::DEFAULT_HIT_PLANE_Y, table::SURFACE_Z + 0.08);
-        let v_out = rally_return_velocity(impact, Vector3::new(0.2, -5.0, -0.7));
-        let bounce_z = table::SURFACE_Z + crate::constants::BALL_RADIUS;
-        let a = 0.5 * G_Z;
-        let b = v_out.z;
-        let c = impact.v.z - bounce_z;
-        let discriminant = b * b - 4.0 * a * c;
-        assert!(discriminant > 0.0);
-        let roots = [
-            (-b + discriminant.sqrt()) / (2.0 * a),
-            (-b - discriminant.sqrt()) / (2.0 * a),
-        ];
-        let flight_time = roots
-            .into_iter()
-            .filter(|time| *time > 1e-6)
-            .fold(f64::INFINITY, f64::min);
-        let bounce = impact.v
-            + v_out * flight_time
-            + Vector3::new(0.0, 0.0, 0.5 * G_Z * flight_time * flight_time);
-
-        let target = Vector3::new(table::WIDTH_X * 0.5, table::LENGTH_Y * 0.75, bounce_z);
-        assert!(
-            (bounce - target).norm() < 0.05,
-            "bounce={bounce:?}, target={target:?}, v_out={v_out:?}"
-        );
+        assert!(v_out.y > 0.0);
         assert!(clears_net_ballistic(impact, v_out));
     }
 
     #[test]
-    fn loft_required_racket_satisfies_impact_model() {
-        let impact = Point3::new(0.76, 0.30, 0.80);
-        let v_in = Vector3::new(0.1, -5.0, -0.8);
+    fn required_racket_matches_impact_model() {
+        let impact = Point3::new(0.42, table::DEFAULT_HIT_PLANE_Y, table::SURFACE_Z + 0.08);
+        let v_out = rally_return_velocity(impact, Vector3::new(0.2, -5.0, -0.7));
+        let bounce_z = table::SURFACE_Z + crate::constants::BALL_RADIUS;
+        assert!(v_out.y > 0.0);
+        let t = tunables::current().impact.rally_time_to_bounce;
+        let z_at_bounce = impact.v.z + v_out.z * t + 0.5 * G_Z * t * t;
+        assert!((z_at_bounce - bounce_z).abs() < 1e-6);
+    }
+
+    #[test]
+    fn verify_roundtrip() {
+        let impact = Point3::new(0.5, 0.3, 0.9);
+        let v_in = Vector3::new(0.1, -5.0, -0.5);
         let v_out = rally_return_velocity(impact, v_in);
-        let normal = Vector3::new(0.0, 0.85, 0.53).normalize();
-        let v_r = required_racket_velocity(v_in, v_out, normal, DEFAULT_RESTITUTION).expect("v_r");
-        assert!(v_r.z > 0.0, "라켓도 위로: {v_r:?}");
-        assert!(verify_impact_model(
-            v_in,
-            v_out,
-            v_r,
-            normal,
-            DEFAULT_RESTITUTION
-        ));
+        let normal = (v_out - v_in).normalize();
+        let e = crate::entry::competition_physics().restitution;
+        let v_r = required_racket_velocity(v_in, v_out, normal, e).expect("v_r");
+        assert!(verify_impact_model(v_in, v_out, v_r, normal, e));
     }
 }

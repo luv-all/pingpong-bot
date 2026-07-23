@@ -1,0 +1,6 @@
+# 머신 로컬 오버레이 (앱 SSOT 아님).
+# 복사: `cp config/local.example.toml config/local.toml`
+# 배선·토크·검출 숫자는 `src/entry/competition.rs`.
+
+dxl_port = "COM8"
+# calibration_path = "assets/calibration/cameras.json"

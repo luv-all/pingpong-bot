@@ -1,12 +1,12 @@
-//! 런타임 TOML에서 경로만 가볍게 읽는다 (도구 공용).
+//! 경로 해석 헬퍼 (도구 공용). 앱 배선 SSOT는 [`crate::entry`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-/// 런타임 기본 설정 (measure/calib 툴과 바이너리 공통).
-pub const DEFAULT_CONFIG_PATH: &str = "config/default.toml";
+/// 측정·검출 도구용 선택 오버레이. 앱은 `config/local.toml` / CLI만 쓴다.
+pub const DEFAULT_CONFIG_PATH: &str = "config/tools.toml";
 
 #[derive(Debug, Deserialize)]
 struct CalibrationPathField {

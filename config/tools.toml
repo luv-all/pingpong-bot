@@ -1,0 +1,30 @@
+# 측정·검출 도구용 선택 오버레이 (앱 SSOT 아님).
+# 앱 배선은 `src/entry/competition.rs`.
+
+# calibration_path = "assets/calibration/cameras.json"
+
+[vision]
+roi_half_px = 80
+generators = ["colormask", "contour"]
+
+[vision.appearance.colormask]
+space = "ycrcb"
+y_min = 0
+y_max = 255
+cr_min = 133
+cr_max = 173
+cb_min = 77
+cb_max = 127
+
+[vision.scorer]
+min_area_px = 20.0
+max_area_px = 20000.0
+min_circularity = 0.55
+
+[vision.motion]
+weight = 0.5
+
+[physics]
+restitution = 0.85
+friction = 0.15
+drag = 0.0

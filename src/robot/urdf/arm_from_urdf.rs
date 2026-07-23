@@ -9,7 +9,7 @@ use super::{UrdfLoadError, UrdfRobot, fk};
 pub fn to_arm(urdf: &UrdfRobot, max_joint_speed: f64) -> Result<Arm, UrdfLoadError> {
     let defaults = urdf.default_joints();
     let limits = urdf.joint_limits();
-    let template = Arm::competition().map_err(|e| UrdfLoadError::ArmConversion {
+    let template = crate::entry::competition_arm().map_err(|e| UrdfLoadError::ArmConversion {
         reason: format!("레일·베이스 템플릿: {e}"),
     })?;
     let rail = template.rail.expect("competition arm은 레일 포함");

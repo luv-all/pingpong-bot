@@ -104,7 +104,7 @@ mod tests {
     use crate::sim::SimSessionConfig;
 
     fn test_arm() -> Arc<Arm> {
-        return Arc::new(Arm::competition().expect("테스트용 4DOF arm"));
+        return Arc::new(crate::entry::competition_arm().expect("테스트용 4DOF arm"));
     }
 
     #[test]

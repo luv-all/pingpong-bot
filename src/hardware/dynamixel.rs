@@ -25,7 +25,14 @@ fn pack_u8(value: u8) -> Vec<u8> {
     vec![value]
 }
 
-/// Python `test-manipulator`에서 검증한 Dynamixel Protocol 2.0 설정.
+/// 마스터 goal tick을 `2 * zero_tick - master`로 미러하는 슬레이브.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct MirrorSlave {
+    pub master_id: u8,
+    pub slave_id: u8,
+}
+
+/// Dynamixel Protocol 2.0 버스 설정. 벤치 숫자는 `crate::entry`에서 조립한다.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct DynamixelConfig {
@@ -48,15 +55,18 @@ pub struct DynamixelConfig {
     pub joint_signs: Vec<i8>,
     pub joint_offsets_rad: Vec<f64>,
     pub motor_angle_limits_deg: Vec<[f64; 2]>,
+    #[serde(default)]
+    pub mirror_slaves: Vec<MirrorSlave>,
 }
 
 impl Default for DynamixelConfig {
+    /// 빈 골격 — 앱 프리셋이 아님. `validate()`는 motor_ids 길이로 실패한다.
     fn default() -> Self {
         return Self {
-            port: "COM8".to_owned(),
+            port: String::new(),
             baudrate: 57_600,
             protocol_version: 2.0,
-            motor_ids: vec![1, 3, 4, 5],
+            motor_ids: Vec::new(),
             ticks_per_revolution: 4096,
             zero_tick: 2048,
             addr_goal_position: 116,
@@ -69,14 +79,10 @@ impl Default for DynamixelConfig {
             comm_retries: 5,
             comm_retry_delay_ms: 20,
             stream_hz: 200.0,
-            joint_signs: vec![-1, 1, 1, 1],
-            joint_offsets_rad: vec![0.0; 4],
-            motor_angle_limits_deg: vec![
-                [90.0, 220.0],
-                [135.0, 225.0],
-                [92.0, 230.0],
-                [120.0, 220.0],
-            ],
+            joint_signs: Vec::new(),
+            joint_offsets_rad: Vec::new(),
+            motor_angle_limits_deg: Vec::new(),
+            mirror_slaves: Vec::new(),
         };
     }
 }
@@ -102,6 +108,12 @@ pub enum DynamixelConfigError {
     StreamHz,
     #[error("motor_angle_limits_deg 범위가 잘못됐습니다")]
     AngleLimits,
+    #[error("mirror_slaves: master_id {master_id}가 motor_ids에 없습니다")]
+    MirrorMasterMissing { master_id: u8 },
+    #[error("mirror_slaves: slave_id {slave_id}는 motor_ids와 겹치면 안 됩니다")]
+    MirrorSlaveInMotorIds { slave_id: u8 },
+    #[error("mirror_slaves: id {id}가 중복됩니다")]
+    MirrorDuplicateId { id: u8 },
     #[error("TOML 파싱 실패: {0}")]
     Toml(#[from] toml::de::Error),
     #[error("설정 파일 읽기 실패: {0}")]
@@ -146,7 +158,44 @@ impl DynamixelConfig {
         {
             return Err(DynamixelConfigError::AngleLimits);
         }
+        let mut seen_slaves = Vec::new();
+        for pair in &self.mirror_slaves {
+            if !self.motor_ids.contains(&pair.master_id) {
+                return Err(DynamixelConfigError::MirrorMasterMissing {
+                    master_id: pair.master_id,
+                });
+            }
+            if self.motor_ids.contains(&pair.slave_id) {
+                return Err(DynamixelConfigError::MirrorSlaveInMotorIds {
+                    slave_id: pair.slave_id,
+                });
+            }
+            if seen_slaves.contains(&pair.slave_id)
+                || seen_slaves.contains(&pair.master_id)
+                || pair.slave_id == pair.master_id
+            {
+                return Err(DynamixelConfigError::MirrorDuplicateId { id: pair.slave_id });
+            }
+            seen_slaves.push(pair.slave_id);
+        }
         return Ok(());
+    }
+
+    /// Torque / Profile SyncWrite 대상 = 논리 모터 ∪ 미러 슬레이브.
+    pub fn bus_ids(&self) -> Vec<u8> {
+        let mut ids = self.motor_ids.clone();
+        for pair in &self.mirror_slaves {
+            if !ids.contains(&pair.slave_id) {
+                ids.push(pair.slave_id);
+            }
+        }
+        return ids;
+    }
+
+    pub fn mirror_tick(&self, master_ticks: i32) -> i32 {
+        let mirrored = 2 * self.zero_tick - master_ticks;
+        let max_tick = self.ticks_per_revolution.saturating_sub(1).max(0);
+        return mirrored.clamp(0, max_tick);
     }
 }
 
@@ -222,7 +271,10 @@ impl MotorMapping {
 
 enum BusBackend {
     DryRun {
+        /// `motor_ids` 순서 Present/Goal (읽기·논리 관절).
         ticks: Vec<i32>,
+        /// 마지막 Goal SyncWrite 전체 (미러 슬레이브 포함).
+        last_bus_goals: Vec<(u8, i32)>,
     },
     #[cfg(feature = "real")]
     Real(RealBackend),
@@ -243,9 +295,39 @@ impl DynamixelBus {
             .collect();
         return Ok(Self {
             mapping,
-            backend: BusBackend::DryRun { ticks },
+            backend: BusBackend::DryRun {
+                ticks,
+                last_bus_goals: Vec::new(),
+            },
             torque_enabled: false,
         });
+    }
+
+    /// dry-run 전용: 마지막 Goal에 실린 (id, tick), 미러 포함.
+    pub fn last_bus_goals(&self) -> Option<&[(u8, i32)]> {
+        return match &self.backend {
+            BusBackend::DryRun { last_bus_goals, .. } => Some(last_bus_goals.as_slice()),
+            #[cfg(feature = "real")]
+            BusBackend::Real(_) => None,
+        };
+    }
+
+    fn expand_goal_ticks(&self, ticks: &[i32]) -> Vec<(u8, i32)> {
+        let cfg = &self.mapping.config;
+        let mut out: Vec<(u8, i32)> = cfg
+            .motor_ids
+            .iter()
+            .zip(ticks.iter())
+            .map(|(&id, &tick)| (id, tick))
+            .collect();
+        for pair in &cfg.mirror_slaves {
+            let Some(master_index) = cfg.motor_ids.iter().position(|&id| id == pair.master_id)
+            else {
+                continue;
+            };
+            out.push((pair.slave_id, cfg.mirror_tick(ticks[master_index])));
+        }
+        return out;
     }
 
     #[cfg(feature = "real")]
@@ -283,7 +365,7 @@ impl DynamixelBus {
             BusBackend::DryRun { .. } => {}
             #[cfg(feature = "real")]
             BusBackend::Real(real) => {
-                let ids = self.mapping.config.motor_ids.clone();
+                let ids = self.mapping.config.bus_ids();
                 let data = vec![pack_u8(u8::from(enabled)); ids.len()];
                 let address = self.mapping.config.addr_torque_enable;
                 let retries = self.mapping.config.comm_retries;
@@ -316,13 +398,22 @@ impl DynamixelBus {
         if ticks.len() != joint_count {
             return Err(command_transport_error(duration_secs, ticks.len()));
         }
-        // Python `_pack_u32` — Goal Position은 unsigned LE 4바이트.
+        let bus_goals = self.expand_goal_ticks(ticks);
         match &mut self.backend {
-            BusBackend::DryRun { ticks: stored } => stored.clone_from_slice(ticks),
+            BusBackend::DryRun {
+                ticks: stored,
+                last_bus_goals,
+            } => {
+                stored.clone_from_slice(ticks);
+                *last_bus_goals = bus_goals;
+            }
             #[cfg(feature = "real")]
             BusBackend::Real(real) => {
-                let data: Vec<Vec<u8>> = ticks.iter().map(|tick| pack_u32(*tick as u32)).collect();
-                let ids = self.mapping.config.motor_ids.clone();
+                let ids: Vec<u8> = bus_goals.iter().map(|(id, _)| *id).collect();
+                let data: Vec<Vec<u8>> = bus_goals
+                    .iter()
+                    .map(|(_, tick)| pack_u32(*tick as u32))
+                    .collect();
                 let address = self.mapping.config.addr_goal_position;
                 let retries = self.mapping.config.comm_retries;
                 let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
@@ -348,7 +439,7 @@ impl DynamixelBus {
     fn read_raw_ticks(&mut self) -> Result<Vec<i32>, HwError> {
         let joint_count = self.mapping.config.motor_ids.len();
         let ticks = match &mut self.backend {
-            BusBackend::DryRun { ticks } => ticks.clone(),
+            BusBackend::DryRun { ticks, .. } => ticks.clone(),
             #[cfg(feature = "real")]
             BusBackend::Real(real) => {
                 let ids = self.mapping.config.motor_ids.clone();
@@ -384,7 +475,7 @@ impl DynamixelBus {
             BusBackend::DryRun { .. } => {}
             #[cfg(feature = "real")]
             BusBackend::Real(real) => {
-                let ids = self.mapping.config.motor_ids.clone();
+                let ids = self.mapping.config.bus_ids();
                 let retries = self.mapping.config.comm_retries;
                 let delay = self.mapping.config.comm_retry_delay_ms;
                 let values = [
@@ -489,14 +580,19 @@ fn read_transport_error() -> HwError {
 #[cfg(test)]
 mod tests {
     use crate::Joints;
+    use crate::entry::competition_dynamixel;
 
     use super::{
         DynamixelBus, DynamixelConfig, DynamixelConfigError, MotorMapping, config_from_toml,
     };
 
+    fn bench_config() -> DynamixelConfig {
+        return competition_dynamixel();
+    }
+
     #[test]
     fn motor_mapping_matches_python_reference() {
-        let mapping = MotorMapping::new(DynamixelConfig::default()).expect("valid mapping");
+        let mapping = MotorMapping::new(bench_config()).expect("valid mapping");
 
         assert_eq!(mapping.radians_to_ticks(0, 0.0), 2048);
         assert_eq!(
@@ -511,7 +607,7 @@ mod tests {
 
     #[test]
     fn motor_mapping_round_trips_and_clamps_to_motor_limits() {
-        let mapping = MotorMapping::new(DynamixelConfig::default()).expect("valid mapping");
+        let mapping = MotorMapping::new(bench_config()).expect("valid mapping");
 
         let ticks = mapping.radians_to_ticks(2, -0.4);
         let restored = mapping.ticks_to_radians(2, ticks);
@@ -523,7 +619,7 @@ mod tests {
 
     #[test]
     fn motor_mapping_rejects_mismatched_vector_lengths() {
-        let mut config = DynamixelConfig::default();
+        let mut config = bench_config();
         config.joint_signs.pop();
 
         let error = MotorMapping::new(config).unwrap_err();
@@ -538,7 +634,7 @@ mod tests {
 
     #[test]
     fn dry_run_bus_round_trips_last_written_joints() {
-        let mut bus = DynamixelBus::dry_run(DynamixelConfig::default()).expect("dry-run bus");
+        let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
         let target = Joints::from_slice(&[-0.2, 0.1, -0.3, 0.2]);
 
         bus.enable_torque(true).expect("torque");
@@ -551,12 +647,48 @@ mod tests {
     }
 
     #[test]
+    fn dry_run_mirrors_slave_goal_around_zero_tick() {
+        let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
+        // joint0 sign=-1 → URDF +angle decreases ticks from 2048.
+        // Pick ticks via mapping: want master absolute ~2276 (200°) → slave 1820 (160°).
+        let zero = bus.mapping.config().zero_tick;
+        let ticks_per_rev = bus.mapping.config().ticks_per_revolution;
+        let master_200 = (200.0 * f64::from(ticks_per_rev) / 360.0).round() as i32;
+        let expected_slave = 2 * zero - master_200;
+
+        // Drive joint0 so radians_to_ticks yields master_200 (within clamp).
+        let angle = bus.mapping.ticks_to_radians(0, master_200);
+        bus.write_joints(&Joints::from_slice(&[angle, 0.0, -0.26, 0.0]))
+            .expect("write");
+        let goals = bus.last_bus_goals().expect("dry-run goals");
+        assert!(goals.iter().any(|(id, tick)| *id == 1 && *tick == master_200));
+        assert!(
+            goals
+                .iter()
+                .any(|(id, tick)| *id == 2 && *tick == expected_slave),
+            "goals={goals:?} expected slave {expected_slave}"
+        );
+    }
+
+    #[test]
+    fn mirror_tick_formula() {
+        let cfg = bench_config();
+        assert_eq!(cfg.mirror_tick(2048), 2048);
+        let t200 = (200.0_f64 * 4096.0 / 360.0).round() as i32;
+        let t160 = (160.0_f64 * 4096.0 / 360.0).round() as i32;
+        assert_eq!(cfg.mirror_tick(t200), t160);
+    }
+
+    #[test]
     fn reads_dynamixel_section_from_runtime_toml() {
         let config = config_from_toml(
             r#"
 [hardware.dynamixel]
 port = "COM9"
 motor_ids = [1, 3, 4, 5]
+joint_signs = [-1, 1, 1, 1]
+joint_offsets_rad = [0.0, 0.0, 0.0, 0.0]
+motor_angle_limits_deg = [[90.0, 220.0], [135.0, 225.0], [92.0, 230.0], [120.0, 220.0]]
 "#,
         )
         .expect("config");

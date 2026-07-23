@@ -163,6 +163,7 @@ mod tests {
     use crate::{Hardware, Joints, RailMotion, SwingTrajectory};
 
     use super::RealHardware;
+    use crate::entry::competition_dynamixel;
     use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
 
@@ -170,7 +171,7 @@ mod tests {
     fn dry_run_read_pose_uses_rail_position() {
         let dynamixel = DynamixelConfig {
             stream_hz: 500.0,
-            ..DynamixelConfig::default()
+            ..competition_dynamixel()
         };
         let rail = RailConfig {
             enabled: true,
@@ -195,7 +196,7 @@ mod tests {
     fn dry_run_executes_trajectory_and_reports_busy_state() {
         let config = DynamixelConfig {
             stream_hz: 500.0,
-            ..DynamixelConfig::default()
+            ..crate::entry::competition_dynamixel()
         };
         let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
         let trajectory = SwingTrajectory::new(
@@ -223,7 +224,7 @@ mod tests {
     fn drop_cancels_long_running_trajectory_promptly() {
         let config = DynamixelConfig {
             stream_hz: 500.0,
-            ..DynamixelConfig::default()
+            ..crate::entry::competition_dynamixel()
         };
         let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
         let trajectory = SwingTrajectory::new(

@@ -22,6 +22,8 @@ pub struct RobotState {
 struct SwingPlayback {
     trajectory: crate::SwingTrajectory,
     elapsed: f64,
+    /// `advance_swing_torque_limited`용 관절 각속도 [rad/s].
+    joint_vel: Vec<f64>,
 }
 
 impl RobotState {
@@ -76,6 +78,7 @@ impl RobotState {
         self.active_swing = Some(SwingPlayback {
             trajectory,
             elapsed: 0.0,
+            joint_vel: Vec::new(),
         });
     }
 
@@ -87,6 +90,7 @@ impl RobotState {
     /// quintic 궤적을 `dt`만큼 진행한다. 완료 시 `true`.
     ///
     /// 계획된 임팩트·팔로스루 knot를 사후 clamp 없이 그대로 재생한다.
+    /// 토크 포화 추종은 [`Self::advance_swing_torque_limited`] / Rapier [`crate::sim::ArmMultibody`].
     pub fn advance_swing(&mut self, _arm: &Arm, dt: f64) -> bool {
         let Some(playback) = &mut self.active_swing else {
             return false;
@@ -97,6 +101,47 @@ impl RobotState {
         self.rail_x = playback.trajectory.sample_rail_at(t);
         self.angles = sampled;
         if playback.elapsed >= playback.trajectory.duration_secs {
+            self.active_swing = None;
+            return true;
+        }
+        return false;
+    }
+
+    /// 토크 한도(`τ_max/I`)로 목표 샘플을 추종한다 — 듀얼 yaw vs 단일 비교용.
+    ///
+    /// 관절 속도 상태 `ω`를 두고 `|α| ≤ τ_max/I`로 적분한다. 위치만 클램프하면
+    /// 궤적 초반에 포화되지 않아 듀얼/단일이 같아 보인다.
+    pub fn advance_swing_torque_limited(&mut self, _arm: &Arm, dt: f64) -> bool {
+        let Some(playback) = &mut self.active_swing else {
+            return false;
+        };
+        if playback.joint_vel.is_empty() {
+            playback.joint_vel = vec![0.0; self.angles.values.len()];
+        }
+        playback.elapsed += dt;
+        let t = playback.elapsed.min(playback.trajectory.duration_secs);
+        let desired = playback.trajectory.sample_at(t);
+        let desired_vel = playback.trajectory.sample_velocity_at(t);
+        self.rail_x = playback.trajectory.sample_rail_at(t);
+
+        let control = crate::tunables::current().control;
+        let inertia = control.joint_inertia.max(1e-9);
+        let n = self.angles.values.len().min(desired.values.len());
+        for i in 0..n {
+            let a_max = control.max_joint_torques.get(i).copied().unwrap_or(6.0) / inertia;
+            let omega = playback.joint_vel[i];
+            let omega_des = desired_vel.get(i).copied().unwrap_or(0.0);
+            // PD-ish velocity chase, then saturate α by torque budget.
+            let alpha_cmd = ((omega_des - omega) / dt.max(1e-9)
+                + 40.0 * (desired.values[i] - self.angles.values[i]))
+                .clamp(-a_max, a_max);
+            let omega_next = omega + alpha_cmd * dt;
+            self.angles.values[i] += 0.5 * (omega + omega_next) * dt;
+            playback.joint_vel[i] = omega_next;
+        }
+
+        if playback.elapsed >= playback.trajectory.duration_secs {
+            self.angles = desired;
             self.active_swing = None;
             return true;
         }
@@ -171,11 +216,14 @@ impl RobotState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entry::{competition_tunables, install_competition_tunables};
+    use crate::tunables::{ControlParams, EstimatorParams, ImpactParams, Tunables, install};
     use crate::{RailMotion, SwingTrajectory};
 
     #[test]
     fn playback_targets_and_reaches_follow_through_end() {
-        let arm = Arm::competition().expect("arm");
+        install_competition_tunables();
+        let arm = crate::entry::competition_arm().expect("arm");
         let start = arm.initial_state();
         let mut impact = start.joints().clone();
         impact.values[0] += 0.01;
@@ -201,5 +249,59 @@ mod tests {
         for (actual, expected) in state.joints().values.iter().zip(end.values) {
             assert!((actual - expected).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn dual_yaw_torque_tracks_farther_than_single() {
+        install_competition_tunables();
+        let arm = crate::entry::competition_arm().expect("arm");
+        let start = arm.initial_state();
+        let mut impact = start.joints().clone();
+        impact.values[0] += 0.5;
+        let end = impact.clone();
+        let trajectory = SwingTrajectory::with_follow_through(
+            start.joints().clone(),
+            impact,
+            end,
+            vec![0.0; 4],
+            vec![3.0; 4],
+            vec![0.0; 4],
+            0.05,
+            0.08,
+            RailMotion::fixed(start.rail_x()),
+            start.rail_x(),
+            0.0,
+        );
+
+        let mut dual = start.clone();
+        dual.replace_swing(trajectory.clone());
+        for _ in 0..8 {
+            dual.advance_swing_torque_limited(&arm, 0.005);
+        }
+        let dual_q0 = dual.joints().values[0].abs();
+
+        install(Tunables {
+            control: ControlParams {
+                max_joint_torques: [6.0, 6.0, 6.0, 6.0],
+                ..competition_tunables().control
+            },
+            impact: ImpactParams {
+                ..competition_tunables().impact
+            },
+            estimator: EstimatorParams {
+                ..competition_tunables().estimator
+            },
+        });
+        let mut single = start;
+        single.replace_swing(trajectory);
+        for _ in 0..8 {
+            single.advance_swing_torque_limited(&arm, 0.005);
+        }
+        let single_q0 = single.joints().values[0].abs();
+        assert!(
+            dual_q0 > single_q0 + 1e-4,
+            "τ0=12 should outpace τ0=6: dual={dual_q0} single={single_q0}"
+        );
+        install_competition_tunables();
     }
 }

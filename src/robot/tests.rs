@@ -6,7 +6,7 @@ use crate::error::SwingPlanError;
 use crate::{Joints, Point3};
 
 fn sample_competition_arm() -> Arm {
-    return Arm::competition().expect("테스트용 4DOF arm");
+    return crate::entry::competition_arm().expect("테스트용 4DOF arm");
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn inverse_kinematics_round_trips_forward_kinematics() {
 
 #[test]
 fn pose_ik_round_trips_position_and_face_normal_with_rail() {
-    let arm = Arm::competition().expect("arm");
+    let arm = crate::entry::competition_arm().expect("arm");
     let expected = RobotPose::new(0.62, Joints::from_slice(&[0.08, 0.12, -0.55, -0.28]));
     let target = arm
         .forward_kinematics_with_rail(expected.rail_x, &expected.joints)
@@ -120,7 +120,7 @@ fn pose_ik_round_trips_position_and_face_normal_with_rail() {
 
 #[test]
 fn generalized_velocity_ik_moves_center_without_rotating_face() {
-    let arm = Arm::competition().expect("arm");
+    let arm = crate::entry::competition_arm().expect("arm");
     let pose = RobotPose::new(0.62, Joints::from_slice(&[0.08, 0.12, -0.55, -0.28]));
     let before = arm
         .forward_kinematics_with_rail(pose.rail_x, &pose.joints)
@@ -153,7 +153,7 @@ fn generalized_velocity_ik_moves_center_without_rotating_face() {
 
 #[test]
 fn generalized_velocity_ik_can_move_inward_from_rail_max() {
-    let arm = Arm::competition().expect("arm");
+    let arm = crate::entry::competition_arm().expect("arm");
     let rail = arm.rail.expect("rail");
     let pose = RobotPose::new(rail.x_max, arm.default_joints.clone());
     let (rail_velocity, _) = arm

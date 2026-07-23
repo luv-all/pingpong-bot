@@ -130,7 +130,11 @@ impl CandidateGenerator for ContourDetector {
 
 impl Default for ContourDetector {
     fn default() -> Self {
-        return Self::new(super::super::params::VisionConfig::from_embedded().scorer);
+        return Self::new(crate::detector::ScorerParams {
+            min_area_px: 20.0,
+            max_area_px: 20_000.0,
+            min_circularity: 0.55,
+        });
     }
 }
 

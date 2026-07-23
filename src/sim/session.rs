@@ -99,7 +99,7 @@ impl SimSession {
             urdf,
             controls,
             shutdown,
-            crate::PhysicsParams::default(),
+            crate::entry::competition_physics(),
         );
     }
 

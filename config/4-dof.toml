@@ -1,73 +1,8 @@
-# pingpong-bot 런타임 설정 — 4-dof (all-4-export) 로봇
+# 레거시: 예전에는 `cargo run -- config/4-dof.toml`로 카탈로그 4-dof를 켰다.
+# 앱 배선 SSOT는 `src/entry/`이며, 로봇 선택은 CLI로 한다:
 #
-#   cargo run -p pingpong-bot -- config/4-dof.toml
+#   cargo run -p pingpong-bot -- --robot 4-dof
 #
-# 상대 경로는 이 TOML 위치 기준. 자세한 로봇 설명은
-# assets/robots/4-dof/README.md 참고.
-
-# "sim" | "real"
-mode = "sim"
-
-# 삼각측량 최소 2대.
-camera_count = 3
-
-robot = "4-dof"
-
-# 보정 JSON 하나 = 안에 cameras[] (캠마다 K·dist). 없으면 sim 캘리브레이션 폴백.
-# measure_* / calib 는 이 경로를 기본으로 쓴다 (--calibration / -o 로 덮어쓰기).
-#   cargo run -p calib-charuco -- --device 0
-#   cargo run -p measure-restitution -- --device 0 --device 1
-# calibration_path = "calibration.json"
-
-[intercept]
-y_min = 0.20
-y_max = 0.55
-sample_step = 0.05
-
-[sim]
-gui = true
-frames = 300
-speed = 1.0
-physics_hz = 1000.0
-frame_hz = 120.0
-shoot_on_start = false
-# true=ground truth / false=EKF control
-use_ground_truth = true
-
-# real 모터 — config/real-hardware.toml 참고 (motor_ids/joint_signs는
-# assets/robots/4-dof/README.md의 URDF joint ↔ Dynamixel ID 매핑과 일치해야 함)
-# [hardware.dynamixel]
-# port = "COM8"
-# motor_ids = [1, 3, 4, 5]
-# joint_signs = [-1, 1, 1, 1]
-# joint_offsets_rad = [0.0, 0.0, 0.0, 0.0]
-# motor_angle_limits_deg = [[90, 220], [135, 225], [92, 230], [120, 220]]
-
-# real + calibration_path 일 때 실캠 (device = 웹캠 번호).
-#
-# [vision]
-# detector = "colormask"   # bgsub | colormask | contour | roi
-#
-# [[vision.cameras]]
-# id = 0
-# device = 0
-#
-# [[vision.cameras]]
-# id = 1
-# device = 1
-#
-# [vision.colormask]
-# space = "ycrcb"
-# y_min = 0
-# y_max = 255
-# cr_min = 133
-# cr_max = 173
-# cb_min = 77
-# cb_max = 127
-# min_area_px = 20
-# max_area_px = 20000
-
-[physics]
-restitution = 0.85
-friction = 0.15
-drag = 0.0
+# 이 파일은 참고용으로만 남긴다 (RuntimeConfig TOML SSOT 아님).
+# URDF·EE·마운트는 `src/robot/catalog.rs`의 "4-dof" 항목 +
+# `MountPreset::Rep103AtTableEnd`가 담당한다.

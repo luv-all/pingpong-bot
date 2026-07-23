@@ -30,7 +30,7 @@ pub const RANDOM_SHOT_TARGET_PADDING_M: f64 = 0.45;
 /// `RANDOM_SHOT_TARGET_PADDING_M`과 함께 촘촘한 격자 실측으로 찾은 범위:
 /// 하한은 네트 통과(기본 pitch=-2°, 순수 탄도라 로봇 모델과 무관 — 비스듬한
 /// 샷일수록 마진이 줄어든다), 상한은 GUI가 실제로 쓰는 카탈로그 "4-dof"
-/// 로봇(`fourdof_robot`, URDF + `Rep103AtTableEnd`)의 리치 — `Arm::competition()`
+/// 로봇(`fourdof_robot`, URDF + `Rep103AtTableEnd`)의 리치 — `competition_arm()`
 /// (손으로 만든 테스트용 팔)만으로는 상한 쪽 문제가 안 보였다(로봇마다 리치가
 /// 다름). [5.2, 5.5] 범위는 좌우 위치·yaw 전체 격자에서 두 조건 모두 실측
 /// 통과.

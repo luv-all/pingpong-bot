@@ -431,7 +431,7 @@ mod tests {
         );
 
         let urdf = UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
-        let primitive = Arm::competition().expect("competition primitive");
+        let primitive = crate::entry::competition_arm().expect("competition primitive");
         for values in [
             vec![0.0, 0.0, -0.25, 0.0],
             vec![0.15, 0.2, -0.4, 0.35],

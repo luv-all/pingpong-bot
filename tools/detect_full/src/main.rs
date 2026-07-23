@@ -60,15 +60,7 @@ fn build_detector(vision: &VisionConfig) -> Result<RoiTrack> {
     );
 
     let w = vision.motion.weight;
-    let mut scorer = Scorer::from(&vision.scorer).with_motion_weight(w);
-    if vision.generators.contains(&Appearance::Colormask) {
-        scorer.min_area_px = scorer
-            .min_area_px
-            .max(vision.appearance.colormask.min_area_px);
-        scorer.max_area_px = scorer
-            .max_area_px
-            .min(vision.appearance.colormask.max_area_px);
-    }
+    let scorer = Scorer::from(&vision.scorer).with_motion_weight(w);
 
     let det: FuseDetector = match vision.generators.as_slice() {
         [Appearance::Colormask] => fuse(

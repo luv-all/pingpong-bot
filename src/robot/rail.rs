@@ -5,7 +5,7 @@ use crate::Point3;
 /// 탁구대 한쪽 변에 설치된 X축 리니어 레일.
 ///
 /// 팔 베이스는 레일 위에서 좌우로 이동하고, 팔은 주로 Y/Z 평면에서 접수한다.
-/// 값은 `Arm::competition` 빌더 체인에서 명시한다.
+/// 값은 `crate::entry::competition_arm` 빌더 체인에서 명시한다.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinearRail {
     /// 레일 위 베이스 고정 y [m] (탁구대 로봇 쪽 끝 근처)

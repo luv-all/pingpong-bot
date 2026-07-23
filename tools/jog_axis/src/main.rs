@@ -2,21 +2,21 @@
 //!
 //! `Hardware` 포트를 런타임과 동일한 코드 경로로 사용한다.
 
-use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::Parser;
-use pingpong_bot::hardware::dynamixel::load_config;
-use pingpong_bot::{Hardware, Joints, RailMotion, RealHardware, SwingTrajectory};
+use pingpong_bot::{
+    Hardware, Joints, RailMotion, RealHardware, SwingTrajectory, competition_dynamixel,
+};
 
 #[derive(Parser)]
 #[command(name = "jog_axis", about = "축 수동 조그 (Hardware 포트)")]
 struct Args {
-    /// `[hardware.dynamixel]`이 있는 런타임 TOML.
-    #[arg(long, default_value = "config/real-hardware.toml")]
-    config: PathBuf,
+    /// Dynamixel 시리얼 포트 (entry 기본 COM8 덮어씀).
+    #[arg(long)]
+    port: Option<String>,
     /// 0부터 시작하는 단축 인덱스.
     #[arg(long, requires = "angle_deg", conflicts_with = "angles_deg")]
     joint: Option<usize>,
@@ -81,9 +81,10 @@ fn target_positions(args: &Args, present: &[f64]) -> Result<Vec<f64>> {
 }
 
 fn run(args: Args) -> Result<()> {
-    let config = load_config(&args.config)
-        .map_err(anyhow::Error::msg)
-        .with_context(|| format!("Dynamixel 설정 읽기 실패: {}", args.config.display()))?;
+    let mut config = competition_dynamixel();
+    if let Some(port) = &args.port {
+        config.port = port.clone();
+    }
     let mut hardware = if args.dry_run {
         RealHardware::dry_run(config, None)
     } else {

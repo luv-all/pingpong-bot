@@ -49,6 +49,7 @@ fn main() -> Result<()> {
     let vision = load_vision_from_config(&args.config)?;
     let mut colormask = ColormaskDetector::try_from(&vision.appearance.colormask)?;
     let mut contour = ContourDetector::from(&vision.scorer);
+    let scorer = pingpong_bot::Scorer::from(&vision.scorer);
     println!(
         "appearance colormask|contour (from {})",
         args.config.display()
@@ -68,7 +69,7 @@ fn main() -> Result<()> {
     let mut hits = [0usize; 2];
 
     while let Some(frame) = source.next_frame() {
-        let (cm_px, mut cm_mask) = colormask.detect_debug(&frame);
+        let (cm_px, mut cm_mask) = colormask.detect_debug(&frame, &scorer);
         let (ct_px, mut ct_mask) = contour.detect_debug(&frame);
 
         if let Some(p) = cm_px {

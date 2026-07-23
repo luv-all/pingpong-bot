@@ -155,7 +155,7 @@ mod tests {
     use super::*;
 
     fn test_fallback_arm() -> Arc<Arm> {
-        return Arc::new(Arm::competition().expect("test arm"));
+        return Arc::new(crate::entry::competition_arm().expect("test arm"));
     }
 
     #[test]

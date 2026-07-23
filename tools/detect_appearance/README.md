@@ -10,4 +10,4 @@ cargo run -p detect-appearance -- --config config/default.toml
 cargo run -p detect-appearance -- --path clip.mp4 -o out/
 ```
 
-파라미터: `[vision.appearance.colormask]` · `[vision.scorer]` (contour 단독 필터).
+파라미터: `[vision.appearance.colormask]`(색) · `[vision.scorer]`(면적·원형도 hard cut, 양쪽 공통).

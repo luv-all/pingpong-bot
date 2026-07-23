@@ -27,18 +27,9 @@ use super::scorer::Scorer;
 use super::track::{RoiTrack, track};
 use crate::generators;
 
-/// [`Scorer::from`] + colormask area 교집합 + motion weight.
+/// [`Scorer::from`] + motion weight. 면적·원형도 hard cut은 `[vision.scorer]`만 본다.
 pub fn scorer_from_vision(vision: &VisionConfig) -> Scorer {
-    let mut scorer = Scorer::from(&vision.scorer).with_motion_weight(vision.motion.weight);
-    if vision.generators.contains(&Appearance::Colormask) {
-        scorer.min_area_px = scorer
-            .min_area_px
-            .max(vision.appearance.colormask.min_area_px);
-        scorer.max_area_px = scorer
-            .max_area_px
-            .min(vision.appearance.colormask.max_area_px);
-    }
-    return scorer;
+    return Scorer::from(&vision.scorer).with_motion_weight(vision.motion.weight);
 }
 
 /// TOML `[vision]` → `fuse(…).with_motion_weight(w)`.

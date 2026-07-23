@@ -3,11 +3,8 @@
 use nalgebra::Vector3;
 
 use super::impact::{rally_return_velocity, required_racket_velocity};
-use crate::constants::{
-    G, JOINT_INERTIA, MAX_JOINT_ACCEL, MAX_JOINT_TORQUE, MIN_SWING_SECS,
-    RACKET_EFFECTIVE_RESTITUTION, SWING_COMMIT_MAX_BALL_Y_FRAC, SWING_COMMIT_MAX_SECS,
-    SWING_FOLLOW_THROUGH_SECS, table,
-};
+use crate::constants::{G, table};
+use crate::tunables;
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
 use crate::{Joints, Prediction, RailMotion, RobotPose, SwingTrajectory};
@@ -27,12 +24,12 @@ pub fn accel(velocity: Vector3<f64>, drag_coefficient: f64) -> Vector3<f64> {
 ///
 /// 창보다 이르면 대기(발사 직후 긴 궤적 금지), 짧으면 `InsufficientTime`.
 pub fn in_swing_commit_window(time_to_impact_secs: f64) -> bool {
-    return (MIN_SWING_SECS..=SWING_COMMIT_MAX_SECS).contains(&time_to_impact_secs);
+    return (tunables::current().control.min_swing_secs..=tunables::current().control.swing_commit_max_secs).contains(&time_to_impact_secs);
 }
 
 /// 네트 통과 후인지 - ground truth/EKF control 공통 commit 게이트.
 pub fn ball_past_midcourt_for_commit(ball_y: f64) -> bool {
-    return ball_y <= table::LENGTH_Y * SWING_COMMIT_MAX_BALL_Y_FRAC;
+    return ball_y <= table::LENGTH_Y * tunables::current().control.swing_commit_max_ball_y_frac;
 }
 
 /// 예측/현재 포즈로 quintic 스윙 궤적을 계획한다.
@@ -42,11 +39,11 @@ pub fn plan_swing(
     start: &RobotPose,
 ) -> Result<SwingTrajectory, DomainError> {
     let time_to_impact = prediction.time_to_impact_secs;
-    if time_to_impact < MIN_SWING_SECS {
+    if time_to_impact < tunables::current().control.min_swing_secs {
         return Err(DomainError::InfeasibleSwing(
             SwingPlanError::InsufficientTime {
                 time_to_impact_secs: time_to_impact,
-                min_swing_secs: MIN_SWING_SECS,
+                min_swing_secs: tunables::current().control.min_swing_secs,
             },
         ));
     }
@@ -90,7 +87,7 @@ pub fn plan_swing(
             },
         ))?;
 
-    let v_r = required_racket_velocity(v_in, v_out, pose.normal, RACKET_EFFECTIVE_RESTITUTION)
+    let v_r = required_racket_velocity(v_in, v_out, pose.normal, tunables::current().impact.racket_effective_restitution)
         .map_err(DomainError::InfeasibleSwing)?;
 
     let start_velocity = vec![0.0; start.joints.values.len()];
@@ -325,7 +322,7 @@ fn trajectory_with_follow_through(
     impact_time: f64,
     rail: RailMotion,
 ) -> SwingTrajectory {
-    let follow_time = SWING_FOLLOW_THROUGH_SECS;
+    let follow_time = tunables::current().control.swing_follow_through_secs;
     let mut end_values = impact.values.clone();
     for (index, (value, velocity)) in end_values
         .iter_mut()
@@ -368,14 +365,42 @@ fn trajectory_collision_free(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
     return true;
 }
 
-fn peak_required_torque(trajectory: &SwingTrajectory) -> f64 {
-    return JOINT_INERTIA * trajectory.peak_joint_acceleration();
+fn torques_within_limits(trajectory: &SwingTrajectory) -> bool {
+    let control = tunables::current().control;
+    let inertia = control.joint_inertia;
+    let peaks = trajectory.peak_joint_accelerations();
+    return peaks.iter().enumerate().all(|(index, &alpha)| {
+        let limit = control
+            .max_joint_torques
+            .get(index)
+            .copied()
+            .unwrap_or(0.0);
+        return inertia * alpha <= limit;
+    });
+}
+
+fn peak_torque_scale(trajectory: &SwingTrajectory) -> f64 {
+    let control = tunables::current().control;
+    let inertia = control.joint_inertia;
+    let mut scale = 1.0_f64;
+    for (index, &alpha) in trajectory.peak_joint_accelerations().iter().enumerate() {
+        let limit = control
+            .max_joint_torques
+            .get(index)
+            .copied()
+            .unwrap_or(0.0);
+        let required = inertia * alpha;
+        if required > limit && required > f64::EPSILON {
+            scale = scale.min(limit / required * 0.95);
+        }
+    }
+    return scale;
 }
 
 fn trajectory_within_limits(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
     let joints_ok = trajectory.peak_joint_speed() <= arm.max_joint_speed
-        && trajectory.peak_joint_acceleration() <= MAX_JOINT_ACCEL
-        && peak_required_torque(trajectory) <= MAX_JOINT_TORQUE;
+        && trajectory.peak_joint_acceleration() <= tunables::current().control.max_joint_accel
+        && torques_within_limits(trajectory);
     let rail_ok = arm
         .rail
         .as_ref()
@@ -425,22 +450,17 @@ fn fit_end_velocity(
 
         let peak_speed = trajectory.peak_joint_speed();
         let peak_accel = trajectory.peak_joint_acceleration();
-        let peak_torque = peak_required_torque(&trajectory);
         let speed_scale = if peak_speed > arm.max_joint_speed {
             arm.max_joint_speed / peak_speed * 0.95
         } else {
             1.0
         };
-        let accel_scale = if peak_accel > MAX_JOINT_ACCEL {
-            MAX_JOINT_ACCEL / peak_accel * 0.95
+        let accel_scale = if peak_accel > tunables::current().control.max_joint_accel {
+            tunables::current().control.max_joint_accel / peak_accel * 0.95
         } else {
             1.0
         };
-        let torque_scale = if peak_torque > MAX_JOINT_TORQUE {
-            MAX_JOINT_TORQUE / peak_torque * 0.95
-        } else {
-            1.0
-        };
+        let torque_scale = peak_torque_scale(&trajectory);
         let scale = speed_scale.min(accel_scale).min(torque_scale);
         if scale >= 0.99 {
             break;
@@ -465,7 +485,7 @@ mod tests {
     use crate::robot::Arm;
 
     fn sample_three_dof_arm() -> Arm {
-        return Arm::competition().expect("테스트용 4DOF arm");
+        return crate::entry::competition_arm().expect("테스트용 4DOF arm");
     }
 
     fn sample_start(arm: &Arm) -> RobotPose {
@@ -491,14 +511,13 @@ mod tests {
     fn in_swing_commit_window_bounds() {
         assert!(!in_swing_commit_window(0.05));
         assert!(in_swing_commit_window(0.12));
-        assert!(in_swing_commit_window(SWING_COMMIT_MAX_SECS));
-        assert!(!in_swing_commit_window(SWING_COMMIT_MAX_SECS + 0.01));
+        assert!(in_swing_commit_window(tunables::current().control.swing_commit_max_secs));
+        assert!(!in_swing_commit_window(tunables::current().control.swing_commit_max_secs + 0.01));
     }
 
     #[test]
     fn midcourt_gate_matches_fraction() {
-        use crate::constants::control::SWING_COMMIT_MAX_BALL_Y_FRAC;
-        let limit = table::LENGTH_Y * SWING_COMMIT_MAX_BALL_Y_FRAC;
+        let limit = table::LENGTH_Y * tunables::current().control.swing_commit_max_ball_y_frac;
         assert!(!ball_past_midcourt_for_commit(limit + 0.01));
         assert!(ball_past_midcourt_for_commit(limit));
         assert!(ball_past_midcourt_for_commit(0.3));
@@ -549,7 +568,7 @@ mod tests {
             prediction.incoming_velocity,
             rally_return_velocity(prediction.impact_position, prediction.incoming_velocity),
             pose.normal,
-            RACKET_EFFECTIVE_RESTITUTION,
+            tunables::current().impact.racket_effective_restitution,
         )
         .expect("required racket velocity");
         assert!(
@@ -625,12 +644,12 @@ mod tests {
             panic!("InsufficientTime 기대");
         };
         assert!((time_to_impact_secs - 0.05).abs() < f64::EPSILON);
-        assert!((min_swing_secs - MIN_SWING_SECS).abs() < f64::EPSILON);
+        assert!((min_swing_secs - tunables::current().control.min_swing_secs).abs() < f64::EPSILON);
     }
 
     #[test]
     fn competition_geometry_reachable_with_rail() {
-        let arm = Arm::competition().expect("competition arm");
+        let arm = crate::entry::competition_arm().expect("competition arm");
 
         let rail_x = arm.rail.as_ref().map(|r| r.default_x()).unwrap_or(0.0);
         let far_impact = arm
