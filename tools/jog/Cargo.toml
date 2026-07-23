@@ -1,13 +1,15 @@
 [package]
-name = "jog-axis"
+name = "jog"
 edition.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "jog_axis"
+name = "jog"
 path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.103"
 clap = { version = "4.6.1", features = ["derive"] }
+nalgebra = { version = "0.35.0", features = ["serde-serialize"] }
 pingpong-bot = { path = "../..", default-features = false, features = ["real"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
