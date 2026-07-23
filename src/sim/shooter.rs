@@ -25,17 +25,23 @@ pub const RANDOM_SHOT_LATERAL_MAX_M: f64 = 0.5;
 pub const RANDOM_SHOT_TARGET_PADDING_M: f64 = 0.45;
 
 /// `BallShooterSettings::randomized`가 뽑는 속도 범위 [m/s].
-/// (기본 슬라이더 범위 3.0..=15.0보다 훨씬 좁다.)
 ///
-/// `RANDOM_SHOT_TARGET_PADDING_M`과 함께 촘촘한 격자 실측으로 찾은 범위:
-/// 하한은 네트 통과(기본 pitch=-2°, 순수 탄도라 로봇 모델과 무관 — 비스듬한
-/// 샷일수록 마진이 줄어든다), 상한은 GUI가 실제로 쓰는 카탈로그 "4-dof"
-/// 로봇(`fourdof_robot`, URDF + `Rep103AtTableEnd`)의 리치 — `Arm::competition()`
-/// (손으로 만든 테스트용 팔)만으로는 상한 쪽 문제가 안 보였다(로봇마다 리치가
-/// 다름). [5.2, 5.5] 범위는 좌우 위치·yaw 전체 격자에서 두 조건 모두 실측
-/// 통과.
-pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 5.2;
-pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 5.5;
+/// 이전 `[5.2, 5.5]`는 재보정 전(과거 근거 없이 빠른) `max_joint_speed`
+/// 기준으로 "4-dof 로봇 리치 상한"에 맞춰 역산한 값이었다 — 그 상한 계산
+/// 자체가 이제 무효하다(관절속도가 그때보다 훨씬 느려짐, `.omc/research/
+/// dynamixel-specs.md`). 그리고 [5.2, 5.5] m/s는애초에 실제 사람 랠리
+/// 속도(레크리에이션 12-14 m/s, 엘리트 21-26 m/s — table tennis 킨매틱스
+/// 연구)보다 훨씬 느려 비현실적이었다.
+///
+/// 재보정된 관절속도 한계(~2.88 rad/s) 아래서 이 팔이 실제로 가장 편하게
+/// 받을 수 있는 입사속도를 실측한 결과(2026-07-23, `swing_feasibility`로
+/// 위치·높이·하강각 격자 스윕): 반발계수 물리상(`v_r = (v_out + e*v_in)/(1+e)`)
+/// 입사속도가 빠를수록 라켓이 스스로 내야 하는 속도는 오히려 줄어들고
+/// (블록 기술과 같은 원리), 임팩트 높이가 정상 범위(테이블 위 10~30cm)일
+/// 때 6~10 m/s 부근에서 최적이었다. 이 범위는 레크리에이션 랠리 속도의
+/// 하한(12-14 m/s)보다도 낮아 사람이 정상적으로만 쳐도 커버된다.
+pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 7.0;
+pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 10.0;
 
 /// 슈터 설치 위치 (월드 좌표, Z-up).
 pub struct ShooterLayout;

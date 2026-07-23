@@ -58,11 +58,11 @@ pub use pipeline::{
     RobotEntry, find_robot, robot_ids_csv, run, shared_competition_arm,
 };
 pub use planner::{
-    InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox, RailMotion, SwingTrajectory, accel,
-    ball_past_midcourt_for_commit, clamp_above_table, in_swing_commit_window, plan_best_swing,
-    plan_coarse_track, plan_return_to_center, plan_swing, rally_return_velocity,
-    required_racket_velocity,
-    robot_obbs, table_penetration, verify_impact_model,
+    BangBangTrajectory, InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox, RailMotion,
+    SwingFeasibility, SwingTrajectory, accel, ball_past_midcourt_for_commit, clamp_above_table,
+    in_swing_commit_window, plan_bang_bang_swing, plan_best_swing, plan_coarse_track,
+    plan_return_to_center, plan_swing, rally_return_velocity, required_racket_velocity,
+    robot_obbs, swing_feasibility, table_penetration, verify_impact_model,
 };
 pub use robot::rail::LinearRail;
 pub use robot::{

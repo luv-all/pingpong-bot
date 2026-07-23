@@ -262,7 +262,21 @@ impl Arm {
     /// 앱에서 쓰는 프리셋은 `crate::pipeline::ROBOTS`.
     /// primitive 모델도 URDF 모델과 같은 직렬 체인을 쓴다.
     pub fn competition() -> Result<Self, ArmBuildError> {
-        use crate::constants::arm::{BASE_Y, RAIL_MAX_SPEED};
+        use crate::constants::arm::BASE_Y;
+        return Self::competition_with_mount(BASE_Y, 0.0);
+    }
+
+    /// [`Arm::competition`]과 같지만 레일 마운트 위치(테이블과의 거리·높이)를
+    /// 직접 지정한다 - `tools/mount_search`(마운트 위치 최적화 스윕) 전용.
+    ///
+    /// `base_y`: 베이스 y [m] - 테이블 로봇쪽 끝 기준(`BASE_Y` 관례와 동일 좌표계).
+    /// `height_offset_m`: 테이블 면(`table::SURFACE_Z`) 대비 레일 마운트 높이
+    /// 오프셋 [m] - 실기 AXL 레일 브래킷은 테이블 면보다 약 3cm 위에
+    /// 설치돼 있다(2026-07-23, 실측 보고). 기본 [`Arm::competition`]은
+    /// `0.0`(테이블 면과 같은 높이)을 쓰는데, 이는 실기와 다른 단순화라
+    /// 마운트 스윕에서 실측치 중심으로 후보를 넓게 잡아야 한다.
+    pub fn competition_with_mount(base_y: f64, height_offset_m: f64) -> Result<Self, ArmBuildError> {
+        use crate::constants::arm::RAIL_MAX_SPEED;
         use crate::constants::control::{
             CONTINUOUS_TORQUE_DERATE, MX28_STALL_TORQUE_NM, MX64_STALL_TORQUE_NM,
         };
@@ -526,26 +540,31 @@ impl Arm {
         ];
 
         // per-joint 연속 토크 안전 한계 [N*m]. 모터 매핑(specs.md §3):
-        // joint0=yaw=MX-64R, joint1=shoulder=MX-64R, joint2=elbow=MX-28T,
+        // joint0=yaw=MX-64R x2(듀얼모터), joint1=shoulder=MX-64R, joint2=elbow=MX-28T,
         // joint3=wrist=MX-28T. stall(12.0V)을 CONTINUOUS_TORQUE_DERATE로 감쇠한
         // 값을 쓴다 — stall은 지속 불가능한 순간 동작점이라 정상 상태 실현
         // 가능성 판정에는 부적절하기 때문(자세한 근거/가정은 constants::control).
+        //
+        // joint0(yaw)만 모터 2배: URDF에서 `Rigid 4`/`Rigid 5`가 각각
+        // `MX-64R_v1__2__1`/`MX-64R_v1__1__1`을 `base_link`에 대칭(±6.625cm)
+        // 고정하고, `Revolute 6`(yaw)은 그중 하나(`MX-64R_v1__2__1`)를
+        // 부모로 삼는다 — 나머지 한 대(`MX-64R_v1__1__1`)는 어떤 관절도
+        // 구동하지 않는 것처럼 보이지만, 실기에서는 이 둘이 기계적으로
+        // 결합돼 같은 yaw 축에 토크를 함께 낸다(2026-07-23, 하드웨어 담당자
+        // 확인). 소프트웨어 IK/동역학 모델은 이 축을 여전히 관절 1개
+        // (`Revolute 6`)로만 다루지만(운동학적 자유도는 늘지 않음), 토크
+        // 예산은 모터 1대분이 아니라 2대분이어야 한다.
         let joint_torque_limits = vec![
-            MX64_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
+            2.0 * MX64_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
             MX64_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
             MX28_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
             MX28_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
         ];
 
+        let mount_z = table::SURFACE_Z + height_offset_m;
         return Self::builder()
-            .base_xyz(0.0, BASE_Y, table::SURFACE_Z)
-            .linear_rail(
-                BASE_Y,
-                table::SURFACE_Z,
-                0.0,
-                table::WIDTH_X,
-                RAIL_MAX_SPEED,
-            )
+            .base_xyz(0.0, base_y, mount_z)
+            .linear_rail(base_y, mount_z, 0.0, table::WIDTH_X, RAIL_MAX_SPEED)
             .serial_chain(
                 chain,
                 vec![
@@ -1120,6 +1139,96 @@ impl Arm {
         } else {
             (0.0, 0)
         };
+        return Ok((
+            rail_velocity,
+            velocities.iter().skip(offset).copied().collect(),
+        ));
+    }
+
+    /// 라켓 위치(x,y,z) 3제약만의 수치미분 자코비안 - `(레일 유무 포함) x 관절수`.
+    /// [`linear_velocities_for_racket_velocity`]와 그 조작성 평가(특이값 등)가
+    /// 공유하는 빌더.
+    fn position_jacobian_fd(&self, pose: &RobotPose) -> Option<DMatrix<f64>> {
+        const STEP: f64 = 1e-6;
+        if pose.joints.values.len() != self.joint_count() {
+            return None;
+        }
+        let has_rail = self.rail.is_some();
+        let mut values = Vec::with_capacity(self.joint_count() + usize::from(has_rail));
+        if has_rail {
+            values.push(pose.rail_x);
+        }
+        values.extend_from_slice(&pose.joints.values);
+        let base = self.forward_kinematics_with_rail(pose.rail_x, &pose.joints)?;
+        let base_pos = DVector::from_vec(vec![base.position.v.x, base.position.v.y, base.position.v.z]);
+        let mut jacobian = DMatrix::zeros(3, values.len());
+        for index in 0..values.len() {
+            let joint_offset = usize::from(has_rail);
+            let difference = if has_rail
+                && index == 0
+                && self.rail.is_some_and(|rail| values[0] + STEP > rail.x_max)
+            {
+                -STEP
+            } else if index >= joint_offset
+                && self
+                    .joint_limit(index - joint_offset)
+                    .is_some_and(|limit| values[index] + STEP > limit.max)
+            {
+                -STEP
+            } else {
+                STEP
+            };
+            let mut perturbed = values.clone();
+            perturbed[index] += difference;
+            let (rail_x, joint_values) = if has_rail {
+                (perturbed[0], perturbed[1..].to_vec())
+            } else {
+                (pose.rail_x, perturbed)
+            };
+            let perturbed_pose = self.forward_kinematics_with_rail(
+                rail_x,
+                &Joints {
+                    values: joint_values,
+                },
+            )?;
+            let perturbed_pos = DVector::from_vec(vec![
+                perturbed_pose.position.v.x,
+                perturbed_pose.position.v.y,
+                perturbed_pose.position.v.z,
+            ]);
+            jacobian.set_column(index, &((perturbed_pos - &base_pos) / difference));
+        }
+        return Some(jacobian);
+    }
+
+    /// 목표 라켓 "선속도"만 내는 관절/레일 속도의 최소노름 해 - 순간 방향
+    /// (라켓 법선 회전)은 강제하지 않는다.
+    ///
+    /// [`velocities_for_racket_velocity`]는 위치 3 + 방향유지 2, 총 5제약을
+    /// 걸어 레일+4관절(5 미지수)이 완전결정계가 돼 부하 분산 여지가 없다.
+    /// 스윙 임팩트는 그 순간 라켓 자세를 절대 불변으로 유지할 필요는 없고
+    /// (실제 스윙도 접촉 순간 라켓이 계속 회전 중이다) 목표 선속도만 내면
+    /// 되므로, 위치 3제약만 걸어 남는 2자유도를 관절 부하 분산에 쓴다.
+    /// 근거: 2026-07-23 실측 - 방향유지 제거만으로 이 arm의 실측 피크
+    /// 관절속도가 17.55→11.25 rad/s로 줄었다(단독으로 한계를 만족시키진
+    /// 못했지만, IK 시드 선택과 결합하면 유의미하다).
+    pub fn linear_velocities_for_racket_velocity(
+        &self,
+        pose: &RobotPose,
+        racket_velocity: Vector3<f64>,
+    ) -> Result<(f64, Vec<f64>), SwingPlanError> {
+        let err = || SwingPlanError::InverseKinematicsNoSolution {
+            target_x: racket_velocity.x,
+            target_y: racket_velocity.y,
+            target_z: racket_velocity.z,
+        };
+        let jacobian = self.position_jacobian_fd(pose).ok_or_else(err)?;
+        let jjt = &jacobian * jacobian.transpose() + DMatrix::identity(3, 3) * 1e-9;
+        let inverse = jjt.try_inverse().ok_or_else(err)?;
+        let target = DVector::from_vec(vec![racket_velocity.x, racket_velocity.y, racket_velocity.z]);
+        let velocities = jacobian.transpose() * inverse * target;
+        let has_rail = self.rail.is_some();
+        let (rail_velocity, offset) = if has_rail { (velocities[0], 1) } else { (0.0, 0) };
         return Ok((
             rail_velocity,
             velocities.iter().skip(offset).copied().collect(),

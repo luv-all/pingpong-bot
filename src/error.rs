@@ -34,6 +34,15 @@ pub enum SwingPlanError {
         incoming_velocity: [f64; 3],
         outgoing_velocity: [f64; 3],
     },
+    /// 목표 라켓속도를 관절속도로 역산한 결과가 특이점 근처처럼 관절
+    /// 속도 한계를 크게 벗어남 - 이 IK 해로 스윙을 시도하면 quintic
+    /// 균일 스케일다운(`fit_end_velocity`)이 다른 모든 관절까지
+    /// 저속으로 뭉개버려 사실상 "임팩트"가 사라진다.
+    NearSingularity {
+        joint_index: usize,
+        required_speed: f64,
+        speed_limit: f64,
+    },
 }
 
 /// 관측/삼각측량 관련 오류.
@@ -107,6 +116,15 @@ impl fmt::Display for SwingPlanError {
                 outgoing_velocity[0],
                 outgoing_velocity[1],
                 outgoing_velocity[2]
+            ),
+            Self::NearSingularity {
+                joint_index,
+                required_speed,
+                speed_limit,
+            } => write!(
+                f,
+                "특이점 근처 IK 해 - 관절 {joint_index} 필요속도 {required_speed:.2} rad/s \
+                 가 한계 {speed_limit:.2} rad/s를 크게 초과"
             ),
         };
     }

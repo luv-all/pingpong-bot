@@ -13,7 +13,7 @@
 //! 그러면 각 링크 질량중심 가속도에 중력 반작용이 포함돼 별도 중력 항 없이
 //! 정적 중력 토크가 자연히 나온다.
 
-use nalgebra::{Isometry3, Matrix3, Translation3, UnitQuaternion, Vector3};
+use nalgebra::{DMatrix, DVector, Isometry3, Matrix3, Translation3, UnitQuaternion, Vector3};
 
 use crate::constants::physics::G;
 use crate::robot::{Arm, Joints};
@@ -166,6 +166,58 @@ pub fn required_joint_torques_into(
     }
 }
 
+/// 중력·코리올리·원심력 항만 (가속 0에서의 필요 토크) [N*m].
+///
+/// `forward_dynamics`가 `required_joint_torques`를 뒤집는 데 쓴다.
+pub fn bias_torques(arm: &Arm, joints: &Joints, joint_velocities: &[f64]) -> Vec<f64> {
+    let n = joints.values.len();
+    return required_joint_torques(arm, joints, joint_velocities, &vec![0.0; n]);
+}
+
+/// 관성 행렬 M(q) [N*m / (rad/s^2)], 관절 `n x n`.
+///
+/// RNEA를 질량 행렬 계산에 재사용하는 표준 트릭: 속도 0에서 단위 가속도
+/// 열벡터마다 RNEA를 한 번씩 돌려 중력 성분을 빼면 그 열이 나온다
+/// (`tau(q,0,e_j) - tau(q,0,0) = M(q) e_j = M(:,j)`). 관절 n개면 RNEA n+1회.
+pub fn mass_matrix(arm: &Arm, joints: &Joints) -> DMatrix<f64> {
+    let n = joints.values.len();
+    let zero = vec![0.0; n];
+    let bias = required_joint_torques(arm, joints, &zero, &zero);
+    let mut m = DMatrix::zeros(n, n);
+    for j in 0..n {
+        let mut unit_accel = zero.clone();
+        unit_accel[j] = 1.0;
+        let tau = required_joint_torques(arm, joints, &zero, &unit_accel);
+        for i in 0..n {
+            m[(i, j)] = tau[i] - bias[i];
+        }
+    }
+    return m;
+}
+
+/// 정방향 동역학: 명령 토크로 실제 나오는 관절 각가속도 [rad/s^2].
+///
+/// `q̈ = M(q)^-1 (τ - bias(q,q̇))`. `M(q)`가 특이(자유도 손실 등)면 `None`.
+/// quintic 같은 사전 정의 궤적 모양 없이, 토크 명령을 그대로 강체 동역학에
+/// 적분해 "순수하게 토크로 낼 수 있는 움직임"을 시뮬레이션할 때 쓴다
+/// (`tools/swing_bench` 참고).
+pub fn forward_dynamics(
+    arm: &Arm,
+    joints: &Joints,
+    joint_velocities: &[f64],
+    joint_torques: &[f64],
+) -> Option<Vec<f64>> {
+    let n = joints.values.len();
+    if joint_velocities.len() != n || joint_torques.len() != n {
+        return None;
+    }
+    let bias = bias_torques(arm, joints, joint_velocities);
+    let m = mass_matrix(arm, joints);
+    let rhs = DVector::from_iterator(n, (0..n).map(|i| joint_torques[i] - bias[i]));
+    let accel = m.lu().solve(&rhs)?;
+    return Some(accel.iter().copied().collect());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +354,54 @@ mod tests {
             .expect("massless arm");
         let tau = required_joint_torques(&arm, &Joints::from_slice(&[0.3]), &[2.0], &[5.0]);
         assert!(tau[0].abs() < 1e-12, "질량 0 → 토크 0: {}", tau[0]);
+    }
+
+    #[test]
+    fn mass_matrix_is_symmetric() {
+        // 강체 사슬의 관성 행렬은 물리적으로 대칭이어야 한다.
+        let arm = Arm::competition().expect("competition arm");
+        let m = mass_matrix(&arm, &arm.default_joints);
+        let asym = (&m - m.transpose()).abs().max();
+        assert!(asym < 1e-9, "M(q)가 비대칭: max|M - M^T|={asym}");
+    }
+
+    #[test]
+    fn forward_dynamics_inverts_required_joint_torques() {
+        // q̈ 하나를 정하고 필요 토크를 역동역학으로 구한 뒤, 그 토크를 다시
+        // 정동역학에 넣으면 같은 q̈가 나와야 한다(선형계의 왕복 일관성).
+        let arm = Arm::competition().expect("competition arm");
+        let n = arm.joint_count();
+        let joints = arm.default_joints.clone();
+        let velocities = vec![0.3, -0.2, 0.15, -0.4];
+        let accelerations = vec![1.0, -0.5, 2.0, 0.75];
+        assert_eq!(velocities.len(), n);
+        assert_eq!(accelerations.len(), n);
+
+        let tau = required_joint_torques(&arm, &joints, &velocities, &accelerations);
+        let recovered =
+            forward_dynamics(&arm, &joints, &velocities, &tau).expect("M(q)가 특이가 아니어야");
+        for i in 0..n {
+            assert!(
+                (recovered[i] - accelerations[i]).abs() < 1e-6,
+                "joint {i}: recovered={} expected={}",
+                recovered[i],
+                accelerations[i]
+            );
+        }
+    }
+
+    #[test]
+    fn forward_dynamics_static_hold_needs_zero_accel_when_torque_matches_gravity() {
+        // 정지 상태에서 중력 상쇄 토크만 주면 가속도는 0이어야 한다.
+        let arm = Arm::competition().expect("competition arm");
+        let n = arm.joint_count();
+        let joints = arm.default_joints.clone();
+        let zero = vec![0.0; n];
+        let gravity_torque = bias_torques(&arm, &joints, &zero);
+        let accel =
+            forward_dynamics(&arm, &joints, &zero, &gravity_torque).expect("M(q) invertible");
+        for a in accel {
+            assert!(a.abs() < 1e-9, "중력 상쇄 토크인데 가속도 {a} != 0");
+        }
     }
 }

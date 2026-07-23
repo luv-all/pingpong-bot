@@ -1,0 +1,17 @@
+[package]
+name = "swing-bench"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "swing_bench"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.103"
+clap = { version = "4.6.1", features = ["derive"] }
+nalgebra = "0.35.0"
+pingpong-bot = { path = "../..", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"

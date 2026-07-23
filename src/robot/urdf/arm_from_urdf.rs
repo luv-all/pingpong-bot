@@ -1,5 +1,6 @@
 //! URDF → domain `Arm` 일반 revolute 직렬 체인 변환.
 
+use crate::constants::control::{CONTINUOUS_TORQUE_DERATE, MX28_STALL_TORQUE_NM, MX64_STALL_TORQUE_NM};
 use crate::{Arm, LinkInertial, SerialChain, SerialJoint};
 use nalgebra::{Isometry3, Matrix3, Vector3};
 use urdf_rs::JointType;
@@ -56,11 +57,32 @@ pub fn to_arm(urdf: &UrdfRobot, max_joint_speed: f64) -> Result<Arm, UrdfLoadErr
                     aggregated_inertials.push(LinkInertial::combine(&bodies));
                 }
                 current_agg = Some(vec![(Isometry3::identity(), child_inertial)]);
-                // URDF `<limit effort>`를 토크 한계로 쓴다 (effort<=0이면 무제한).
-                // competition() primitive와 달리 URDF에는 모터 모델이 인코딩돼
-                // 있지 않아, URDF가 명시한 effort를 관절 토크 상한으로 삼는다.
+                // 4-DOF 로봇의 알려진 관절 인덱스→모터 매핑(joint0=yaw,
+                // joint1=shoulder=MX-64R / joint2=elbow, joint3=wrist=MX-28T,
+                // 근거: `.omc/research/dynamixel-specs.md`)을 실제 모터 스펙
+                // 기반 토크 한계로 쓴다 — `Arm::competition()`과 동일 SSOT.
+                // URDF의 `<limit effort>`(예: "100")는 CAD 익스포터 기본값이라
+                // 실제 모터 정격과 무관해 쓰지 않는다. yaw(continuous)는 URDF에
+                // `<limit>` 태그 자체가 없어 effort가 0(→ 이전엔 무한대 폴백)
+                // 이었는데, 이 역시 실제로는 같은 MX-64R이라 무한대가 아니다.
+                // joint0(yaw)은 모터 2배 — URDF의 `Rigid 4`/`Rigid 5`가
+                // `base_link`에 MX-64R 두 대를 대칭 고정하는데, `Revolute 6`
+                // (yaw)은 그중 하나만 부모로 삼아 운동학적으로는 관절 1개지만
+                // 실기에서 두 모터가 기계적으로 결합돼 같은 축에 토크를 함께
+                // 낸다(2026-07-23, 하드웨어 담당자 확인, `Arm::competition()`과
+                // 동일 근거). 4관절을 벗어나는(향후) URDF만 옛
+                // effort-or-무한대로 되돌아간다.
+                let motor_derived_limit = match joint_torque_limits.len() {
+                    0 => Some(2.0 * MX64_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE),
+                    1 => Some(MX64_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE),
+                    2 | 3 => Some(MX28_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE),
+                    _ => None,
+                };
                 let effort = joint.limit.effort;
-                joint_torque_limits.push(if effort > 0.0 { effort } else { f64::INFINITY });
+                joint_torque_limits.push(
+                    motor_derived_limit
+                        .unwrap_or_else(|| if effort > 0.0 { effort } else { f64::INFINITY }),
+                );
                 pending = Isometry3::identity();
             }
             JointType::Fixed => {
