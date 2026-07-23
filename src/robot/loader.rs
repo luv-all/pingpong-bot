@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::Arm;
 use thiserror::Error;
 
+use crate::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
 use crate::robot::urdf::{SimRobotMount, UrdfLoadError, UrdfRobot};
 
 /// 빌드된 sim 로봇 — 제어용 `Arm` + (선택) URDF FK·mesh 뷰어.
@@ -54,7 +55,7 @@ impl RobotBuilder {
             ee_link: None,
             mount: None,
             mount_preset: None,
-            max_joint_speed: 2.5,
+            max_joint_speed: DYNAMIXEL_MAX_JOINT_SPEED_RAD_S,
         };
     }
 

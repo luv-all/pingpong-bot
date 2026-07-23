@@ -287,6 +287,17 @@ impl SwingTrajectory {
         return Joints { values };
     }
 
+    /// 임팩트 전/후 per-joint quintic 세그먼트 `(pre, post)`를 한 번에 만든다.
+    ///
+    /// Newton-Euler 토크 샘플링처럼 궤적을 여러 시점에서 반복 평가할 때, 매
+    /// 샘플마다 세그먼트를 재구성(관절당 3x3 LU)하지 않고 한 번 만들어 두고
+    /// `QuinticSegment::sample`로 `(각, 각속도, 각가속도)`를 뽑도록 노출한다.
+    /// 임팩트 시점 판정은 `t <= impact_time_secs`면 `pre`, 아니면 로컬 시간
+    /// `t - impact_time_secs`로 `post`를 쓴다.
+    pub fn joint_segments(&self) -> (Vec<QuinticSegment>, Vec<QuinticSegment>) {
+        return (self.pre_impact_segments(), self.follow_through_segments());
+    }
+
     /// 궤적 전 구간 최대 관절 각속도 [rad/s].
     pub fn peak_joint_speed(&self) -> f64 {
         let pre = self

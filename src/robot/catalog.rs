@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use crate::{Arm, ArmBuildError, constants::arm::MAX_JOINT_SPEED};
+use crate::{Arm, ArmBuildError, hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S};
 
 /// TOML / CLI 기본 id ([`ROBOTS`] 첫 항목과 맞출 것).
 pub const DEFAULT_ROBOT_ID: &str = "competition";
@@ -42,21 +42,21 @@ pub static ROBOTS: LazyLock<Vec<RobotEntry>> = LazyLock::new(|| {
             id: "competition",
             urdf_rel: None,
             ee_link: None,
-            max_joint_speed: MAX_JOINT_SPEED,
+            max_joint_speed: DYNAMIXEL_MAX_JOINT_SPEED_RAD_S,
             primitive: Some(build_competition),
         },
         RobotEntry {
             id: "urdf-test",
             urdf_rel: Some("assets/robots/urdf-test/urdf-test_description/urdf/urdf-test.urdf"),
             ee_link: Some("pingpong_paddle_v5_1"),
-            max_joint_speed: 2.5,
+            max_joint_speed: DYNAMIXEL_MAX_JOINT_SPEED_RAD_S,
             primitive: None,
         },
         RobotEntry {
             id: "4-dof",
             urdf_rel: Some("assets/robots/4-dof/urdf/all-4-export.urdf"),
             ee_link: Some("pingpong_paddle_v5_1"),
-            max_joint_speed: 2.5,
+            max_joint_speed: DYNAMIXEL_MAX_JOINT_SPEED_RAD_S,
             primitive: None,
         },
     ];
@@ -109,5 +109,24 @@ mod tests {
         assert!(find_robot("nope").is_none());
         assert!(robot_ids_csv().contains("urdf-test"));
         assert!(robot_ids_csv().contains("4-dof"));
+    }
+
+    #[test]
+    fn urdf_entries_link_inertials_match_joint_count() {
+        use crate::UrdfRobot;
+
+        for id in ["urdf-test", "4-dof"] {
+            let entry = find_robot(id).expect("카탈로그 항목");
+            let path = entry
+                .urdf_path(env!("CARGO_MANIFEST_DIR"))
+                .expect("urdf 항목은 경로가 있어야 함");
+            let urdf = UrdfRobot::from_file(&path, entry.ee_link).expect("URDF 로드");
+            let arm = urdf.to_arm(entry.max_joint_speed).expect("Arm 변환");
+            assert_eq!(
+                arm.link_inertials.len(),
+                arm.joint_count(),
+                "id={id}: link_inertials 개수가 joint_count와 달라야 함"
+            );
+        }
     }
 }

@@ -60,14 +60,15 @@ pub use pipeline::{
 pub use planner::{
     InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox, RailMotion, SwingTrajectory, accel,
     ball_past_midcourt_for_commit, clamp_above_table, in_swing_commit_window, plan_best_swing,
-    plan_return_to_center, plan_swing, rally_return_velocity, required_racket_velocity,
+    plan_coarse_track, plan_return_to_center, plan_swing, rally_return_velocity,
+    required_racket_velocity,
     robot_obbs, table_penetration, verify_impact_model,
 };
 pub use robot::rail::LinearRail;
 pub use robot::{
-    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, MountPreset, RacketPose, RobotBuildError,
-    RobotBuilder, RobotPose, RobotState, SerialChain, SerialChainError, SerialJoint, SimRobot,
-    UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfRobot,
+    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinkInertial, MountPreset, RacketPose,
+    RobotBuildError, RobotBuilder, RobotPose, RobotState, SerialChain, SerialChainError,
+    SerialJoint, SimRobot, UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfRobot,
 };
 pub use sim::{
     BallAction, BallEvent, BallScript, BallShooterSettings, BallState, BallVec3, ShooterLayout,

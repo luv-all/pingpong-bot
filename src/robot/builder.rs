@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::{Arm, JointLimit, SerialChain};
+use super::{Arm, JointLimit, LinkInertial, SerialChain};
 use crate::robot::rail::LinearRail;
 use crate::{Joints, Point3};
 
@@ -16,7 +16,11 @@ pub struct ArmBuilder {
     /// 최대 관절 속도 (미설정 시 2.5 rad/s)
     max_joint_speed: Option<f64>,
     /// arbitrary-axis 직렬 체인 (미설정 시 build 실패)
-    serial_model: Option<(SerialChain, Vec<Option<JointLimit>>, Joints)>,
+    serial_model: Option<(SerialChain, Vec<Option<JointLimit>>, Vec<LinkInertial>, Joints)>,
+    /// 합성 강체 관성 (미설정 시 `link_inertials` 그대로 사용 - fixed 하위 링크 미합성)
+    aggregated_inertials: Option<Vec<LinkInertial>>,
+    /// per-joint 토크 한계 [N*m] (미설정 시 무제한 = `f64::INFINITY`)
+    joint_torque_limits: Option<Vec<f64>>,
 }
 
 /// `ArmBuilder::build` 실패 이유.
@@ -39,10 +43,11 @@ pub enum ArmBuildError {
         min: f64,
         max: f64,
     },
-    /// 체인·한계·기본 관절각 개수가 서로 다름
+    /// 체인·한계·링크 관성·기본 관절각 개수가 서로 다름
     KinematicsJointCountMismatch {
         chain: usize,
         limits: usize,
+        link_inertials: usize,
         defaults: usize,
     },
     /// max_joint_speed <= 0
@@ -80,11 +85,12 @@ impl fmt::Display for ArmBuildError {
             Self::KinematicsJointCountMismatch {
                 chain,
                 limits,
+                link_inertials,
                 defaults,
             } => {
                 return write!(
                     f,
-                    "기구학 관절 개수가 다릅니다: chain={chain}, limits={limits}, defaults={defaults}"
+                    "기구학 관절 개수가 다릅니다: chain={chain}, limits={limits}, link_inertials={link_inertials}, defaults={defaults}"
                 );
             }
             Self::NonPositiveMaxJointSpeed { value } => {
@@ -148,9 +154,23 @@ impl ArmBuilder {
         mut self,
         chain: SerialChain,
         limits: Vec<Option<JointLimit>>,
+        link_inertials: Vec<LinkInertial>,
         default_joints: Joints,
     ) -> Self {
-        self.serial_model = Some((chain, limits, default_joints));
+        self.serial_model = Some((chain, limits, link_inertials, default_joints));
+        return self;
+    }
+
+    /// fixed 하위 링크까지 합성한 per-joint 강체 관성을 설정한다.
+    /// 미설정 시 build에서 `link_inertials`(원본 child link만)로 대체한다.
+    pub fn aggregated_inertials(mut self, aggregated: Vec<LinkInertial>) -> Self {
+        self.aggregated_inertials = Some(aggregated);
+        return self;
+    }
+
+    /// per-joint 토크 한계 [N*m]를 설정한다. 미설정 시 무제한.
+    pub fn joint_torque_limits(mut self, limits: Vec<f64>) -> Self {
+        self.joint_torque_limits = Some(limits);
         return self;
     }
 
@@ -163,9 +183,28 @@ impl ArmBuilder {
                 value: max_joint_speed,
             });
         }
-        let (chain, limits, default_joints) = self
+        let (chain, limits, link_inertials, default_joints) = self
             .serial_model
             .ok_or(ArmBuildError::MissingSerialChain)?;
-        return Arm::from_serial_chain(base, self.rail, chain, limits, default_joints, max_joint_speed);
+        // 미설정이면 합성 관성은 원본 child link, 토크 한계는 무제한으로 둔다
+        // (동역학을 안 쓰는 빌더 기반 테스트 arm이 그대로 동작하도록).
+        let joint_count = chain.joints.len();
+        let aggregated_inertials = self
+            .aggregated_inertials
+            .unwrap_or_else(|| link_inertials.clone());
+        let joint_torque_limits = self
+            .joint_torque_limits
+            .unwrap_or_else(|| vec![f64::INFINITY; joint_count]);
+        return Arm::from_serial_chain(
+            base,
+            self.rail,
+            chain,
+            limits,
+            link_inertials,
+            aggregated_inertials,
+            joint_torque_limits,
+            default_joints,
+            max_joint_speed,
+        );
     }
 }

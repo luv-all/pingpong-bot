@@ -4,9 +4,8 @@ use nalgebra::Vector3;
 
 use super::impact::{rally_return_velocity, required_racket_velocity};
 use crate::constants::{
-    G, JOINT_INERTIA, MAX_JOINT_ACCEL, MAX_JOINT_TORQUE, MIN_SWING_SECS,
-    RACKET_EFFECTIVE_RESTITUTION, SWING_COMMIT_MAX_BALL_Y_FRAC, SWING_COMMIT_MAX_SECS,
-    SWING_FOLLOW_THROUGH_SECS, table,
+    G, MAX_JOINT_ACCEL, MIN_SWING_SECS, RACKET_EFFECTIVE_RESTITUTION, SWING_COMMIT_MAX_BALL_Y_FRAC,
+    SWING_COMMIT_MAX_SECS, SWING_FOLLOW_THROUGH_SECS, table,
 };
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
@@ -176,6 +175,60 @@ pub fn plan_best_swing(
             target_z: 0.0,
         },
     )));
+}
+
+/// commit 전 값싼 rough 추종용 목표 포즈를 계산한다 (rough-to-fine의 rough).
+///
+/// 아직 공이 네트를 안 넘어 탄도가 안정되기 전 단계에서, 레일/관절을 예측
+/// 임팩트 쪽으로 미리 옮겨 두기 위한 best-effort 목표다. `plan_best_swing`의
+/// 다중 평면 랭킹·전 궤적 충돌 샘플링은 하지 않는다 (그건 commit 단계 몫).
+///
+/// 가장 임박한(time_to_impact 최소) 예측 하나만 골라 단일 IK 호출
+/// (`inverse_pose_with_rail`)로 rough 포즈를 구한다. IK가 수렴 못 하면 `None`
+/// — 확정 스윙이 아니라 rough 목표라 실패는 에러가 아니라 "이번 틱 스킵"이다.
+pub fn plan_coarse_track(arm: &Arm, predictions: &[Prediction]) -> Option<RobotPose> {
+    // 예측 hit plane들 중 로봇에 가장 가까운(= 가장 도달 가능성 높은) 하나를
+    // 고른다. 가장 먼 평면은 공이 아직 높이 떠 있어 팔 도달권 밖이라, rough
+    // 추종엔 base에 제일 가까운 임팩트가 "가장 관련 있는" 목표다. 레일이 x를
+    // 담당하므로 거리 비교에서 x는 빼고 y-z 오프셋만 본다(레일로 못 줄이는 축).
+    let prediction = predictions
+        .iter()
+        .filter(|prediction| {
+            prediction.time_to_impact_secs.is_finite() && prediction.time_to_impact_secs > 0.0
+        })
+        .min_by(|left, right| {
+            let cost = |prediction: &Prediction| {
+                let impact = prediction.impact_position.v;
+                (impact.y - arm.base.v.y).hypot(impact.z - arm.base.v.z)
+            };
+            cost(left)
+                .partial_cmp(&cost(right))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+
+    let impact_position = prediction.impact_position;
+    let v_in = prediction.incoming_velocity;
+    let v_out = rally_return_velocity(impact_position, v_in);
+    let delta = v_out - v_in;
+    if delta.norm() < 1e-6 {
+        return None;
+    }
+    let desired_normal = delta.normalize();
+    let racket_center = crate::Point3::from(
+        impact_position.v
+            - desired_normal
+                * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z),
+    );
+    // rough 단계라 예측 임팩트가 아직 팔 도달권 밖(공이 높이 떠 있는 초기
+    // 비행)이어도, 레일 x라도 미리 맞추도록 도달 구 안으로 클램프한 목표에
+    // IK를 건다(y=접수 깊이 우선 보존). coarse 추종은 레일이 있는 로봇 대상.
+    let rail = arm.rail.as_ref()?;
+    let (_rail_x, reachable) = arm.clamp_impact_for_rail(rail, racket_center);
+    // 기본 중앙 포즈를 힌트로 단일 IK. 실제 이동은 rate-limited 추종 루프가 함.
+    let hint = RobotPose::new(rail.default_x(), arm.default_joints.clone());
+    return arm
+        .inverse_pose_with_rail(reachable, desired_normal, &hint)
+        .ok();
 }
 
 /// 스윙 뒤 항상 시도할 최소 복귀 시간 [s].
@@ -368,14 +421,68 @@ fn trajectory_collision_free(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
     return true;
 }
 
-fn peak_required_torque(trajectory: &SwingTrajectory) -> f64 {
-    return JOINT_INERTIA * trajectory.peak_joint_acceleration();
+/// 궤적 전 구간을 샘플해 각 관절의 `|토크| / 토크한계` 최악 비율을 구한다.
+///
+/// Newton-Euler 역동역학으로 관절 토크를 계산하고, per-joint 연속 토크 한계
+/// (`Arm::joint_torque_limits`) 대비 이용률을 본다. 반환값 `<= 1.0` 이면 모든
+/// 관절이 토크 한계 안. 한계가 무한(`f64::INFINITY`)인 관절은 무시한다.
+fn peak_torque_utilization(arm: &Arm, trajectory: &SwingTrajectory) -> f64 {
+    // 토크 한계가 전부 무한(무제한)이면 동역학을 돌릴 필요가 없다.
+    if arm.joint_torque_limits.iter().all(|limit| !limit.is_finite()) {
+        return 0.0;
+    }
+    // 10ms 간격. quintic 가속 곡선은 매끄러워 이 간격이면 첨두 토크를 <1%
+    // 오차로 잡으면서 Newton-Euler 호출 수를 절반으로 줄인다(계획 지연 감소).
+    let samples = (trajectory.duration_secs / 0.01).ceil().max(1.0) as usize;
+    // 세그먼트를 한 번만 만들고(관절당 3x3 LU) 샘플마다 재사용한다.
+    let (pre, post) = trajectory.joint_segments();
+    let n = pre.len();
+    let mut joints = Joints {
+        values: vec![0.0; n],
+    };
+    let mut velocities = vec![0.0; n];
+    let mut accelerations = vec![0.0; n];
+    // 스크래치·출력 버퍼를 한 번만 만들어 모든 샘플에서 재사용(힙 할당 회피).
+    let mut scratch = crate::planner::dynamics::RneaScratch::new();
+    let mut torques = vec![0.0; n];
+    let mut worst = 0.0_f64;
+    for index in 0..=samples {
+        let time = trajectory.duration_secs * index as f64 / samples as f64;
+        let (segments, local_t) =
+            if time <= trajectory.impact_time_secs || trajectory.duration_secs <= trajectory.impact_time_secs {
+                (&pre, time)
+            } else {
+                (&post, time - trajectory.impact_time_secs)
+            };
+        for i in 0..n {
+            let (q, qd, qdd) = segments[i].sample(local_t);
+            joints.values[i] = q;
+            velocities[i] = qd;
+            accelerations[i] = qdd;
+        }
+        crate::planner::dynamics::required_joint_torques_into(
+            arm,
+            &joints,
+            &velocities,
+            &accelerations,
+            &mut scratch,
+            &mut torques,
+        );
+        for (torque, &limit) in torques.iter().zip(arm.joint_torque_limits.iter()) {
+            if limit.is_finite() && limit > 0.0 {
+                worst = worst.max(torque.abs() / limit);
+            }
+        }
+    }
+    return worst;
 }
 
-fn trajectory_within_limits(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
+/// 토크를 제외한 기구학 한계(관절 속도/가속/각도 범위, 레일 속도/범위)만 본다.
+/// 토크 샘플링(Newton-Euler)이 상대적으로 비싸서, 토크 이용률을 이미 따로
+/// 계산한 호출부(`fit_end_velocity`)가 중복 계산을 피하도록 분리했다.
+fn kinematic_limits_ok(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
     let joints_ok = trajectory.peak_joint_speed() <= arm.max_joint_speed
-        && trajectory.peak_joint_acceleration() <= MAX_JOINT_ACCEL
-        && peak_required_torque(trajectory) <= MAX_JOINT_TORQUE;
+        && trajectory.peak_joint_acceleration() <= MAX_JOINT_ACCEL;
     let rail_ok = arm
         .rail
         .as_ref()
@@ -399,6 +506,11 @@ fn trajectory_within_limits(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
     return true;
 }
 
+fn trajectory_within_limits(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
+    return kinematic_limits_ok(arm, trajectory)
+        && peak_torque_utilization(arm, trajectory) <= 1.0;
+}
+
 /// quintic이 관절 한계 안에 들어오도록 임팩트 각속도를 점진적으로 줄인다 ( 근사).
 fn fit_end_velocity(
     arm: &Arm,
@@ -419,13 +531,16 @@ fn fit_end_velocity(
             duration,
             rail,
         );
-        if trajectory_within_limits(arm, &trajectory) {
+        // 최악 위반 관절의 `|토크|/한계` 비율. >1 이면 그 역수로 끝속도를 줄여
+        // 토크 한계 안으로 끌어온다 (관절별 한계를 반영한 스케일). 이용률을 한
+        // 번만 계산하고 실현 가능 판정·스케일에 함께 쓴다.
+        let torque_util = peak_torque_utilization(arm, &trajectory);
+        if torque_util <= 1.0 && kinematic_limits_ok(arm, &trajectory) {
             return (end_velocity, rail);
         }
 
         let peak_speed = trajectory.peak_joint_speed();
         let peak_accel = trajectory.peak_joint_acceleration();
-        let peak_torque = peak_required_torque(&trajectory);
         let speed_scale = if peak_speed > arm.max_joint_speed {
             arm.max_joint_speed / peak_speed * 0.95
         } else {
@@ -436,8 +551,8 @@ fn fit_end_velocity(
         } else {
             1.0
         };
-        let torque_scale = if peak_torque > MAX_JOINT_TORQUE {
-            MAX_JOINT_TORQUE / peak_torque * 0.95
+        let torque_scale = if torque_util > 1.0 {
+            1.0 / torque_util * 0.95
         } else {
             1.0
         };
@@ -552,12 +667,40 @@ mod tests {
             RACKET_EFFECTIVE_RESTITUTION,
         )
         .expect("required racket velocity");
+        // 이 샷은 실제 per-joint 토크 한계(derated MX stall) 아래에서는 완전한
+        // 목표 라켓 속도를 못 낸다 — 작은 MX-28(elbow/wrist) 모터엔 과한 가속
+        // 이라 스윙이 토크로 스로틀된다. 예전 flat 토크 모델
+        // (MAX_JOINT_TORQUE=20, 사실상 가속 한계와 동일)에선 정확 일치를
+        // 통과했지만, Newton-Euler 동역학에선 물리적으로 제한된다. 따라서
+        // "정확히 목표 속도"가 아니라 (1) 목표 방향으로 밀고, (2) 목표를 넘지
+        // 않으며, (3) 궤적이 토크 한계에 걸려 있음을 검증한다.
+        //
+        // 관절 속도 상한도 `Arm::competition()`이 `16.0`(근거 없는 리터럴) 대신
+        // 실기 Dynamixel 스펙 기반 `DYNAMIXEL_MAX_JOINT_SPEED_RAD_S`(~2.88 rad/s,
+        // `.omc/research/dynamixel-specs.md`)를 쓰도록 바뀌면서 이 시나리오는
+        // 토크뿐 아니라 관절 속도로도 스로틀된다 — 두 제약이 겹쳐 `along`이
+        // 이전보다 더 낮아진다(관측값 ≈0.173). 임계값을 그만큼 낮춘다: 여전히
+        // "유의미하게 목표 방향으로 밀되 넘지 않음"을 검증하되, 이제는 더 느린
+        // 실기 팔의 실제 도달 가능 범위를 반영한다.
+        let along = actual_racket_velocity.dot(&desired_racket_velocity)
+            / desired_racket_velocity.norm_squared();
         assert!(
-            (actual_racket_velocity - desired_racket_velocity).norm() < 0.05,
-            "actual={actual_racket_velocity:?}, desired={desired_racket_velocity:?}, joint_speed={}, joint_accel={}, rail_speed={}",
+            along > 0.15 && along < 1.05,
+            "라켓 속도가 목표 방향의 유의미한(넘지 않는) 비율이어야: along={along}, \
+             actual={actual_racket_velocity:?}, desired={desired_racket_velocity:?}, \
+             joint_speed={}, joint_accel={}, rail_speed={}",
             trajectory.peak_joint_speed(),
             trajectory.peak_joint_acceleration(),
             trajectory.peak_rail_speed(),
+        );
+        let torque_util = peak_torque_utilization(&arm, &trajectory);
+        assert!(
+            torque_util <= 1.0 + 1e-3,
+            "실현 궤적은 토크 한계 안이어야: util={torque_util}"
+        );
+        assert!(
+            torque_util > 0.5,
+            "스윙이 토크로 제한됐어야(한계 근처): util={torque_util}"
         );
         assert!(
             crate::planner::collision::table_penetration(
@@ -578,8 +721,13 @@ mod tests {
     fn plan_swing_moves_rail_to_impact_x() {
         let arm = sample_three_dof_arm();
         let start = RobotPose::new(0.1, arm.default_joints.clone());
+        // 레일 목표를 0.8 → 0.5 배로 낮췄다: 5.0 m/s 실기 레일 속도로 재보정한
+        // 뒤(이전 12.0 m/s 근거 없는 리터럴), 0.1→1.22m(0.8배)를 0.3초 안에 도는
+        // 건 진짜로 실현 불가능해졌다(quintic peak 속도가 5.0 m/s 한계를 넘음).
+        // 0.5배는 같은 "레일이 임팩트 x로 움직인다"는 의도를 유지하면서 실제
+        // 도달 가능한 거리로 남겨둔다.
         let reachable = arm
-            .forward_kinematics_with_rail(table::WIDTH_X * 0.8, &arm.default_joints)
+            .forward_kinematics_with_rail(table::WIDTH_X * 0.5, &arm.default_joints)
             .expect("FK")
             .position;
         let impact = crate::Point3::new(reachable.v.x, table::DEFAULT_HIT_PLANE_Y, reachable.v.z);

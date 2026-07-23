@@ -24,11 +24,28 @@ pub const EKF_MEAS_JUMP_M: f64 = 0.6;
 /// 관절 각가속도 상한 [rad/s^2]. 토크 모델 붙이기 전 실행 가능성 근사.
 pub const MAX_JOINT_ACCEL: f64 = 400.0;
 
-/// 대각 관성 근사 토크 상한 [N*m]. 관절당, 시뮬용.
-pub const MAX_JOINT_TORQUE: f64 = 20.0;
+// --- 관절 토크 한계 (per-joint) ---
+//
+// 예전 `MAX_JOINT_TORQUE`/`JOINT_INERTIA` 스칼라 근사(torque ~= I*alpha)는
+// `src/planner/dynamics.rs`의 재귀 Newton-Euler 역동역학 + 아래 per-joint
+// 연속 토크 한계(`Arm::joint_torque_limits`)로 대체됐다. 더는 참조하는 곳이
+// 없어 제거했다.
+//
+// Robotis MX 시리즈 데이터시트는 stall torque만 공개하고 별도의 연속/정격
+// torque를 주지 않는다(`.omc/research/dynamixel-specs.md` §1). stall은 지속
+// 불가능한 순간 동작점이라 안전 한계로 그대로 쓰면 안 되므로, 12.0V stall을
+// `CONTINUOUS_TORQUE_DERATE`로 감쇠해 "지속 가능한 첨두 토크"를 근사한다.
+//
+// 주의(worker-1과 동일): 실측 버스 전압이 리포에 문서화돼 있지 않아 Robotis
+// 권장 12.0V 열을 가정했다. 버스 전압과 감쇠 계수 모두 실측 PSU/열 데이터로
+// 확인해야 하는 가정값이다.
 
-/// 관절 유효 관성 근사 [kg*m^2]. torque ~= I * alpha, 링크마다 같은 스텁.
-pub const JOINT_INERTIA: f64 = 0.05;
+/// 12.0V stall torque [N*m] - MX-64R (yaw, shoulder). specs.md §1.
+pub const MX64_STALL_TORQUE_NM: f64 = 6.0;
+/// 12.0V stall torque [N*m] - MX-28T (elbow, wrist). specs.md §1.
+pub const MX28_STALL_TORQUE_NM: f64 = 2.5;
+/// stall → 연속 토크 안전 한계 감쇠 계수 (엔지니어링 가정, 실측 확인 필요).
+pub const CONTINUOUS_TORQUE_DERATE: f64 = 0.5;
 
 /// 라켓 면 기본 open pitch [rad]. 손목 관절 초기값.
 pub const RACKET_OPEN_PITCH: f64 = 0.45;

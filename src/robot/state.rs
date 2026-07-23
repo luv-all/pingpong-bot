@@ -61,6 +61,14 @@ impl RobotState {
         self.targets = targets;
     }
 
+    /// 리니어 레일 목표 x [m]를 직접 설정한다.
+    ///
+    /// `set_targets`의 레일 짝. 보간은 하지 않는다 — `step_toward_targets`의
+    /// rate-limited 추종 루프가 설정된 목표를 향해 `rail.max_speed`로 접근한다.
+    pub fn set_rail_target(&mut self, rail_x: f64) {
+        self.rail_target = rail_x;
+    }
+
     /// quintic 스윙 궤적을 시작한다 (이미 스윙 중이면 무시).
     pub fn begin_swing(&mut self, trajectory: crate::SwingTrajectory) {
         if self.active_swing.is_some() {

@@ -1,6 +1,7 @@
 //! 스윙/충돌/임팩트/관절 궤적 계획.
 
 pub mod collision;
+pub mod dynamics;
 pub mod impact;
 pub mod physics;
 pub mod trajectory;
@@ -9,7 +10,7 @@ pub use collision::{OrientedBox, clamp_above_table, robot_obbs, table_penetratio
 pub use impact::{rally_return_velocity, required_racket_velocity, verify_impact_model};
 pub use physics::{
     PlannedIntercept, accel, ball_past_midcourt_for_commit, in_swing_commit_window,
-    plan_best_swing, plan_return_to_center, plan_swing,
+    plan_best_swing, plan_coarse_track, plan_return_to_center, plan_swing,
 };
 pub use trajectory::{RailMotion, SwingTrajectory};
 

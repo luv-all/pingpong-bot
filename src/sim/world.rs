@@ -9,7 +9,7 @@ use crate::{
     Arm, DomainError, InterceptWindow, PhysicsParams, Prediction, RobotPose, RobotState,
     ball_past_midcourt_for_commit,
     constants::{ball, table},
-    plan_best_swing,
+    plan_best_swing, plan_coarse_track,
 };
 use rapier3d::prelude::*;
 use tracing::{debug, warn};
@@ -371,9 +371,22 @@ impl SimWorld {
             return;
         }
 
-        // 상대 코트에 있으면 아직 이름 — 바운스·탄도 안정화 대기
+        // 상대 코트에 있으면 아직 이름 — 바운스·탄도 안정화 대기.
+        // 다만 손 놓고 기다리지 말고, 값싼 rough 추종(rough-to-fine의 rough)으로
+        // 레일/관절을 예측 임팩트 쪽으로 미리 옮겨 둔다. 목표만 설정하면 실제
+        // 이동은 rate-limited·table-clamped 추종 루프(step_toward_targets)가
+        // 처리하므로 max_joint_speed/rail.max_speed·충돌 안전을 자동 상속한다.
         let ball_y = f64::from(self.ball_position().y);
         if !ball_past_midcourt_for_commit(ball_y) {
+            if let Some(pose) = plan_coarse_track(&self.arm, &predictions) {
+                // rough 단계에서는 레일(느리고 이동거리 긴 lateral 축)만 예측
+                // 임팩트 쪽으로 미리 옮긴다. 팔 관절은 fine 스윙(plan_best_swing)에
+                // 맡긴다 — 아직 도달권 밖이라 clamp된 rough 목표로 팔을 미리 펴
+                // 두면 commit 스윙의 windup이 줄어 리턴이 약해지기 때문. 레일은
+                // rate-limited·범위 클램프된 추종 루프(step_toward_targets)가
+                // 옮기므로 rail.max_speed·안전 한계를 자동 상속한다.
+                self.robot.set_rail_target(pose.rail_x);
+            }
             return;
         }
         // 여기부터는 실제 `plan_best_swing`(IK·충돌 샘플링)을 도는 비싼
@@ -1038,9 +1051,15 @@ mod tests {
 
         let arm = test_arm();
         let world = SimWorld::new(arm.clone(), None);
-        let rail_x = world.robot().rail_x();
         // 기본 슈터가 첫 바운스 뒤 만드는 동적 y=0.30 후보.
         let impact = crate::Point3::new(table::WIDTH_X * 0.5, 0.30, 1.05);
+        // rail_x는 (레일 원점, 0.0)이 아니라 레일 중앙에서 시작한다: 5.0 m/s로
+        // 재보정한 실기 레일 속도로는 0.28초 안에 원점→테이블 중앙(0.76m)을
+        // 도는 quintic peak 속도가 한계를 살짝 넘어 실현 불가능해졌다. 실제
+        // 파이프라인에서는 commit 이전에 rough-tracking(`plan_coarse_track`)이
+        // 이미 레일을 임팩트 쪽으로 옮겨 두므로, 이 테스트도 "commit 시점의
+        // 레일은 이미 대략 근처"라는 현실적인 전제로 시작한다.
+        let rail_x = arm.rail.as_ref().expect("리니어").default_x();
         let start = RobotPose::new(rail_x, world.robot().joints().clone());
         let traj = plan_swing(
             &arm,
@@ -1281,6 +1300,74 @@ mod tests {
         assert!(
             worst_step < std::time::Duration::from_millis(15),
             "반복 Random Shoot 중 스텝 하나가 너무 오래 걸림: {worst_step:?}"
+        );
+    }
+
+    #[test]
+    fn coarse_tracking_moves_rail_toward_impact_before_commit() {
+        // rough-to-fine의 rough: 공이 아직 commit 임계(ball_past_midcourt) 전이라도,
+        // 값싼 coarse 추종이 레일을 예측 임팩트 쪽으로 미리 옮겨 둔다. 로봇을
+        // 테이블 중앙에서 시작시키고, 한쪽으로 치우친 샷을 쏜 뒤 commit 진입
+        // 전까지만 스텝을 돌려 레일이 임팩트 쪽으로 측정 가능하게 움직였는지 본다.
+        let arm = test_arm();
+        let center_rail_x = arm.rail.as_ref().expect("리니어").default_x();
+        let mut world = SimWorld::new(arm.clone(), None);
+        world.set_use_ground_truth(true);
+        *world.robot_mut() = RobotState::new(arm.default_joints.clone(), center_rail_x);
+
+        // 한쪽으로 크게 치우친 느린 샷 — 예측 임팩트 x가 중앙에서 벗어나고,
+        // 느려서 commit 전 추종 시간이 넉넉하다.
+        let (_yaw_min, yaw_max) = BallShooterSettings::yaw_range_for_lateral_deg(0.5);
+        let settings = BallShooterSettings {
+            lateral_offset_m: 0.5,
+            yaw_deg: yaw_max,
+            speed_mps: crate::sim::shooter::RANDOM_SHOT_SPEED_MIN_MPS,
+            ..BallShooterSettings::default()
+        };
+        world.shoot_ball(&settings);
+
+        let mut target_rail_x: Option<f64> = None;
+        let mut stepped_precommit = false;
+        for _ in 0..5_000 {
+            let ball_y = f64::from(world.ball_position().y);
+            if ball_past_midcourt_for_commit(ball_y) {
+                break; // commit 단계 진입 — pre-commit 이동만 관찰한다
+            }
+            // 이 시점의 coarse 목표(있으면)를 기록해 기대 이동 방향으로 삼는다.
+            let predictions: Vec<Prediction> = world
+                .intercept
+                .hit_planes()
+                .into_iter()
+                .filter_map(|plane| predict_impact(&world, plane))
+                .collect();
+            if let Some(pose) = plan_coarse_track(&world.arm, &predictions) {
+                target_rail_x = Some(pose.rail_x);
+            }
+            world.step(1.0 / 1000.0, None);
+            stepped_precommit = true;
+            assert!(!world.robot().is_swinging(), "commit 전엔 스윙 시작 금지");
+            assert!(!world.swing_committed, "pre-commit 단계에서 commit되면 안 됨");
+        }
+
+        assert!(stepped_precommit, "pre-commit 스텝이 실행돼야 함");
+        let target_rail_x =
+            target_rail_x.expect("pre-commit 중 coarse 목표(예측)가 나와야 함");
+        let rail_after = world.robot().rail_x();
+        let target_offset = target_rail_x - center_rail_x;
+        let moved = rail_after - center_rail_x;
+        // off-center 샷이라 coarse 목표가 중앙과 충분히 달라야 의미가 있다.
+        assert!(
+            target_offset.abs() > 0.02,
+            "off-center 샷의 coarse 목표가 중앙과 충분히 달라야: target={target_rail_x}, center={center_rail_x}"
+        );
+        // 레일이 중앙에서 예측 임팩트 쪽으로 측정 가능하게 움직였어야 한다.
+        assert!(
+            moved.abs() > 1e-3,
+            "coarse 추종으로 레일이 commit 전에 움직였어야: moved={moved}"
+        );
+        assert!(
+            moved.signum() == target_offset.signum(),
+            "레일이 예측 임팩트 쪽으로 움직였어야: moved={moved}, target_offset={target_offset}"
         );
     }
 

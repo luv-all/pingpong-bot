@@ -54,6 +54,12 @@ fn builder_produces_three_dof_arm() {
 }
 
 #[test]
+fn competition_link_inertials_match_joint_count() {
+    let arm = sample_competition_arm();
+    assert_eq!(arm.link_inertials.len(), arm.joint_count());
+}
+
+#[test]
 fn builder_rejects_missing_serial_chain() {
     let err = ArmBuilder::new()
         .base_xyz(table::WIDTH_X * 0.5, 0.0, table::SURFACE_Z)

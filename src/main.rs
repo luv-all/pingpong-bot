@@ -23,6 +23,7 @@ use pingpong_bot::{
 };
 #[cfg(feature = "real")]
 use pingpong_bot::{Hardware, RealHardware};
+use pingpong_bot::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
 use pingpong_bot::{PipelineConfig, find_robot, robot_ids_csv};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -281,7 +282,7 @@ fn load_robot(
             .urdf(path)
             .ee_link_opt(ee_link)
             .mount_preset(pingpong_bot::MountPreset::Rep103AtTableEnd)
-            .max_joint_speed(2.5)
+            .max_joint_speed(DYNAMIXEL_MAX_JOINT_SPEED_RAD_S)
             .build()
             .with_context(|| format!("로봇 빌드 실패: {}", path.display()))?;
         info!(

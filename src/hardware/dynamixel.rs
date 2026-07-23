@@ -13,6 +13,55 @@ use thiserror::Error;
 
 use crate::{HwError, Joints};
 
+/// Dynamixel Protocol 2.0 `Profile Velocity` 레지스터 단위 (velocity-based profile mode).
+///
+/// source: https://emanual.robotis.com/docs/en/dxl/mx/mx-64-2/ 와
+/// https://emanual.robotis.com/docs/en/dxl/mx/mx-28-2/ (Protocol 2.0 control table,
+/// address 112 "Profile Velocity"), retrieved 2026-07-23. MX-64/MX-28 동일.
+/// 자세한 조사 근거: `.omc/research/dynamixel-specs.md`.
+pub const PROFILE_VELOCITY_REV_MIN_PER_LSB: f64 = 0.229;
+
+/// MX-28T 무부하 속도 [rev/min], 12.0V (Robotis 권장 동작 전압).
+///
+/// source: https://emanual.robotis.com/docs/en/dxl/mx/mx-28-2/, retrieved 2026-07-23.
+/// 4축 체인에서 팔꿈치·손목을 구동하는 모터(`assets/robots/4-dof/README.md` 매핑).
+/// 어깨·yaw를 구동하는 MX-64R(63 rpm@12V)보다 느려서, 단일 스칼라 `max_joint_speed`의
+/// 기준을 이 쪽으로 잡는다 — 실제 로봇에서 팔 전체는 가장 느린 관절 속도로 제약된다.
+/// 실기 버스 전압은 이 repo 어디에도 명시돼 있지 않아 Robotis 권장값(12V)을 쓴다.
+const MX28_NO_LOAD_SPEED_RPM: f64 = 55.0;
+
+/// rev/min -> rad/s.
+const fn rev_min_to_rad_s(rev_min: f64) -> f64 {
+    return rev_min * TAU / 60.0;
+}
+
+/// Dynamixel Protocol 2.0 `Profile Velocity` 레지스터 값(velocity-based profile mode) ->
+/// 관절 각속도 [rad/s].
+///
+/// 1 LSB = 0.229 rev/min ([`PROFILE_VELOCITY_REV_MIN_PER_LSB`]). `config/real-hardware.toml`의
+/// `profile_velocity`가 이 단위. 예: `profile_velocity = 80` -> 80 * 0.229 = 18.32 rev/min
+/// -> 18.32 * 2*PI/60 ≈ 1.918 rad/s.
+pub fn dynamixel_profile_velocity_to_rad_s(profile_velocity: u32) -> f64 {
+    return rev_min_to_rad_s(f64::from(profile_velocity) * PROFILE_VELOCITY_REV_MIN_PER_LSB);
+}
+
+/// 실기(Dynamixel 4축) 물리 스펙 기반 관절 속도 상한 [rad/s] — **SSOT**.
+///
+/// `Arm::competition()`(`src/robot/mod.rs`)과 URDF 카탈로그(`urdf-test`, `4-dof`,
+/// `src/robot/catalog.rs`) 모두 같은 물리 로봇을 모델링하므로 (competition의 타입
+/// 문서 참고) 이 상수 하나를 공유한다. 예전에는 이 둘이 각각 `16.0`
+/// (`constants::arm::MAX_JOINT_SPEED`, 근거 없는 리터럴)과 `2.5`(placeholder)로
+/// 따로 놀았다 — 둘 다 삭제하고 이 값으로 통일.
+///
+/// `config/real-hardware.toml`의 `profile_velocity = 80` (-> `dynamixel_profile_velocity_to_rad_s(80)`
+/// ≈ 1.92 rad/s)이 아니라 [`MX28_NO_LOAD_SPEED_RPM`]을 기준으로 계산한다: 그 config 값은
+/// 파일 자체 주석("conservative 조그·검증용")에 물리적 상한이 아니라고 명시돼 있어,
+/// sim 궤적 계획(특히 이 브랜치의 rough-to-fine 스윙 다이나믹스)에 그대로 박아 넣으면
+/// 실기의 실제 스윙 능력을 과소평가하게 된다. 대신 무부하 속도에서 50% derate한다 —
+/// 부하(팔+라켓 질량, 공기저항) 아래 지속 구동 시 무부하 대비 대략적인 안전 마진으로,
+/// Robotis 공식 수치가 아닌 엔지니어링 판단이다.
+pub const DYNAMIXEL_MAX_JOINT_SPEED_RAD_S: f64 = rev_min_to_rad_s(MX28_NO_LOAD_SPEED_RPM) * 0.5;
+
 /// Python `_pack_u32` — Goal Position / Profile 값 패킹.
 #[cfg(feature = "real")]
 fn pack_u32(value: u32) -> Vec<u8> {
@@ -492,7 +541,23 @@ mod tests {
 
     use super::{
         DynamixelBus, DynamixelConfig, DynamixelConfigError, MotorMapping, config_from_toml,
+        dynamixel_profile_velocity_to_rad_s,
     };
+
+    #[test]
+    fn profile_velocity_to_rad_s_matches_hand_computed_value() {
+        // config/real-hardware.toml의 profile_velocity = 80.
+        // 80 LSB * 0.229 rev/min/LSB = 18.32 rev/min
+        // 18.32 rev/min * 2*PI rad/rev / 60 s/min ≈ 1.918466 rad/s
+        // source: https://emanual.robotis.com/docs/en/dxl/mx/mx-64-2/ (Profile Velocity
+        // unit, Protocol 2.0 control table, addr 112), retrieved 2026-07-23.
+        let rad_s = dynamixel_profile_velocity_to_rad_s(80);
+        assert!((rad_s - 1.918_466).abs() < 1e-4);
+
+        // 0 LSB -> 0 rad/s (register `0` also means "infinite velocity" on real hardware,
+        // but the pure unit conversion itself must still be 0).
+        assert!((dynamixel_profile_velocity_to_rad_s(0) - 0.0).abs() < 1e-12);
+    }
 
     #[test]
     fn motor_mapping_matches_python_reference() {

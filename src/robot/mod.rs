@@ -79,6 +79,63 @@ impl JointLimit {
     }
 }
 
+/// 링크 관성 - URDF `<inertial>` 원본 (질량/질량중심/관성텐서).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinkInertial {
+    /// 질량 [kg]
+    pub mass: f64,
+    /// 질량중심 - 링크 로컬(URDF origin) 좌표계 [m]
+    pub com: Point3,
+    /// 질량중심 기준 관성 텐서 [kg*m^2]
+    pub inertia: Matrix3<f64>,
+}
+
+impl LinkInertial {
+    /// 공통 기준 프레임에 배치된 여러 강체를 하나의 등가 강체로 합성한다
+    /// (평행축 정리). `bodies`의 각 원소는 `(배치 변환, 로컬 관성)`으로,
+    /// 배치 변환은 그 강체의 로컬 프레임을 공통 기준 프레임에 놓는 `Isometry3`다.
+    ///
+    /// fixed joint로 붙은 하위 링크(모터 몸체 등)를 actuated child link와 합쳐
+    /// 관절이 실제로 움직이는 강체의 질량/질량중심/관성텐서를 구할 때 쓴다.
+    /// 반환 관성텐서는 합성 질량중심 기준, 공통 기준 프레임 축으로 표현된다.
+    pub fn combine(bodies: &[(Isometry3<f64>, LinkInertial)]) -> LinkInertial {
+        let total_mass: f64 = bodies.iter().map(|(_, body)| body.mass).sum();
+        if total_mass <= 0.0 {
+            return LinkInertial {
+                mass: 0.0,
+                com: Point3::new(0.0, 0.0, 0.0),
+                inertia: Matrix3::zeros(),
+            };
+        }
+        // 기준 프레임에서의 각 강체 질량중심 위치.
+        let placed_com = |placement: &Isometry3<f64>, body: &LinkInertial| {
+            placement.rotation * body.com.v + placement.translation.vector
+        };
+        let mut com = Vector3::zeros();
+        for (placement, body) in bodies {
+            com += body.mass * placed_com(placement, body);
+        }
+        com /= total_mass;
+
+        let mut inertia = Matrix3::zeros();
+        for (placement, body) in bodies {
+            // 로컬 관성텐서를 기준 프레임 축으로 회전: R * I * Rᵀ.
+            let rotation = placement.rotation.to_rotation_matrix();
+            let rotated = rotation * body.inertia * rotation.transpose();
+            // 평행축 정리로 합성 질량중심 기준으로 이동.
+            let d = placed_com(placement, body) - com;
+            let translated =
+                body.mass * (Matrix3::identity() * d.dot(&d) - d * d.transpose());
+            inertia += rotated + translated;
+        }
+        return LinkInertial {
+            mass: total_mass,
+            com: Point3::from(com),
+            inertia,
+        };
+    }
+}
+
 /// 로봇 팔 불변 모델. sim/real/plan_swing이 같은 `Arm`을 참조한다.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Arm {
@@ -90,6 +147,17 @@ pub struct Arm {
     pub link_lengths: Vec<f64>,
     /// 축별 관절 한계. `None`은 URDF continuous 관절.
     pub limits: Vec<Option<JointLimit>>,
+    /// 축별 링크 관성 (질량/질량중심/텐서). `limits`/`link_lengths`와 같은 길이,
+    /// revolute 관절이 움직이는 child link 기준 (fixed 하위 링크 미포함, URDF 원본).
+    pub link_inertials: Vec<LinkInertial>,
+    /// 축별 "합성" 강체 관성 - actuated child link + 다음 revolute 관절까지의
+    /// fixed 하위 링크(모터 몸체 등)를 평행축 정리로 합친 값. Newton-Euler
+    /// 역동역학이 실제로 관절이 움직이는 강체 질량으로 쓴다. `link_inertials`와
+    /// 같은 길이, 각 관절 child link 로컬 프레임 기준.
+    pub aggregated_inertials: Vec<LinkInertial>,
+    /// 축별 관절 토크 한계 [N*m] - 모터 연속 토크 안전 한계.
+    /// `limits`/`link_inertials`와 같은 길이. `f64::INFINITY`는 무제한.
+    pub joint_torque_limits: Vec<f64>,
     /// 부팅 시 초기 관절각
     pub default_joints: Joints,
     /// 관절 추종 최대 각속도 [rad/s]
@@ -116,19 +184,29 @@ impl Arm {
     }
 
     /// URDF 등에서 보존한 일반 revolute 직렬 체인으로 팔을 만든다.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_serial_chain(
         base: Point3,
         rail: Option<LinearRail>,
         chain: SerialChain,
         limits: Vec<Option<JointLimit>>,
+        link_inertials: Vec<LinkInertial>,
+        aggregated_inertials: Vec<LinkInertial>,
+        joint_torque_limits: Vec<f64>,
         default_joints: Joints,
         max_joint_speed: f64,
     ) -> Result<Self, ArmBuildError> {
         let chain_count = chain.joints.len();
-        if chain_count != limits.len() || chain_count != default_joints.values.len() {
+        if chain_count != limits.len()
+            || chain_count != default_joints.values.len()
+            || chain_count != link_inertials.len()
+            || chain_count != aggregated_inertials.len()
+            || chain_count != joint_torque_limits.len()
+        {
             return Err(ArmBuildError::KinematicsJointCountMismatch {
                 chain: chain_count,
                 limits: limits.len(),
+                link_inertials: link_inertials.len(),
                 defaults: default_joints.values.len(),
             });
         }
@@ -168,6 +246,9 @@ impl Arm {
             rail,
             link_lengths,
             limits,
+            link_inertials,
+            aggregated_inertials,
+            joint_torque_limits,
             default_joints,
             max_joint_speed,
             chain,
@@ -181,8 +262,12 @@ impl Arm {
     /// 앱에서 쓰는 프리셋은 `crate::pipeline::ROBOTS`.
     /// primitive 모델도 URDF 모델과 같은 직렬 체인을 쓴다.
     pub fn competition() -> Result<Self, ArmBuildError> {
-        use crate::constants::arm::{BASE_Y, MAX_JOINT_SPEED, RAIL_MAX_SPEED};
+        use crate::constants::arm::{BASE_Y, RAIL_MAX_SPEED};
+        use crate::constants::control::{
+            CONTINUOUS_TORQUE_DERATE, MX28_STALL_TORQUE_NM, MX64_STALL_TORQUE_NM,
+        };
         use crate::constants::table;
+        use crate::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
 
         let joints = vec![
             SerialJoint::new(
@@ -212,6 +297,246 @@ impl Arm {
             Isometry3::translation(0.0, 0.0513, -0.034),
         )
         .expect("4-dof serial chain");
+        // `all-4-export.urdf`의 각 revolute 관절이 움직이는 child link `<inertial>` 원본값
+        // (질량 [kg], 질량중심 xyz [m], 관성텐서 ixx/ixy/ixz/iyy/iyz/izz [kg*m^2]; 전부 rpy=0).
+        let link_inertials = vec![
+            // yaw: FR05-H101_v1__1__1
+            LinkInertial {
+                mass: 0.05198831685263556,
+                com: Point3::new(0.02550000000002023, -1.1796119636642288e-16, 0.0256313146478562),
+                inertia: Matrix3::new(
+                    1.3e-05, 0.0, -0.0, //
+                    0.0, 2.7e-05, 0.0, //
+                    -0.0, 0.0, 2.6e-05,
+                ),
+            },
+            // shoulder: FR05-H101_v1_1
+            LinkInertial {
+                mass: 0.05198831685263556,
+                com: Point3::new(2.024828872279616e-14, -1.3530843112619095e-16, 0.010168685352143825),
+                inertia: Matrix3::new(
+                    1.3e-05, -0.0, 0.0, //
+                    -0.0, 2.7e-05, -0.0, //
+                    0.0, -0.0, 2.6e-05,
+                ),
+            },
+            // elbow: FR07-H101_v1_1
+            LinkInertial {
+                mass: 0.025998108201265576,
+                com: Point3::new(-3.365828433557125e-06, 0.021380623885861517, 6.089573290068984e-14),
+                inertia: Matrix3::new(
+                    4e-06, -0.0, 0.0, //
+                    -0.0, 9e-06, 0.0, //
+                    0.0, 0.0, 1e-05,
+                ),
+            },
+            // wrist: FR07-H101_v1__1__1
+            LinkInertial {
+                mass: 0.025998108201265576,
+                com: Point3::new(-3.3658284336170272e-06, 0.021380623885861483, 6.078471059822732e-14),
+                inertia: Matrix3::new(
+                    4e-06, -0.0, 0.0, //
+                    -0.0, 9e-06, 0.0, //
+                    0.0, 0.0, 1e-05,
+                ),
+            },
+        ];
+        // 각 revolute 관절이 실제로 움직이는 "합성" 강체 = actuated child link +
+        // 다음 revolute 관절까지의 fixed 하위 링크(모터 몸체/브래킷/패들)를 평행축
+        // 정리로 합친 것. 배치 변환은 `all-4-export.urdf`의 fixed joint(Rigid N)
+        // origin을 관절 child link 프레임부터 누적한 값(전부 rpy=0이라 순수 평행이동).
+        // 원본 질량/질량중심/텐서는 URDF `<inertial>` 그대로다.
+        let aggregated_inertials = vec![
+            // yaw child(FR05-H101) + Rigid7→FR05-B101 + Rigid7·Rigid8→MX-64R 몸체.
+            LinkInertial::combine(&[
+                (Isometry3::identity(), link_inertials[0]),
+                (
+                    Isometry3::translation(0.0255, 0.0, 0.036),
+                    LinkInertial {
+                        mass: 0.01879497598985593,
+                        com: Point3::new(
+                            -4.5090504680739274e-14,
+                            -0.0029557693246398953,
+                            0.0016902214716354585,
+                        ),
+                        inertia: Matrix3::new(
+                            2e-06, 0.0, 0.0, //
+                            0.0, 4e-06, 0.0, //
+                            0.0, 0.0, 5e-06,
+                        ),
+                    },
+                ),
+                (
+                    Isometry3::translation(0.0082, 0.004, 0.042),
+                    LinkInertial {
+                        mass: 0.126,
+                        com: Point3::new(
+                            0.017300000017253583,
+                            -0.019207753529397596,
+                            0.017451641868345094,
+                        ),
+                        inertia: Matrix3::new(
+                            5.186e-05, 0.0, 0.0, //
+                            0.0, 2.948e-05, -1.551e-06, //
+                            0.0, -1.551e-06, 4.344e-05,
+                        ),
+                    },
+                ),
+            ]),
+            // shoulder child(FR05-H101) + Rigid10→arm_v9 + Rigid11→FR07-S101 + Rigid12→MX-28T 몸체.
+            LinkInertial::combine(&[
+                (Isometry3::identity(), link_inertials[1]),
+                (
+                    Isometry3::translation(-0.0235, 0.0, 0.0248),
+                    LinkInertial {
+                        mass: 0.027,
+                        com: Point3::new(
+                            0.02362282770461404,
+                            1.947747047686965e-05,
+                            0.05189568925169269,
+                        ),
+                        inertia: Matrix3::new(
+                            2.666e-05, 0.0, 1.11e-07, //
+                            0.0, 3.21e-05, 0.0, //
+                            1.11e-07, 0.0, 1.077e-05,
+                        ),
+                    },
+                ),
+                (
+                    Isometry3::translation(0.0, -0.008, 0.1188),
+                    LinkInertial {
+                        mass: 0.011446844551351427,
+                        com: Point3::new(
+                            -2.0825301118992945e-14,
+                            0.008467333868896306,
+                            0.002214506791986759,
+                        ),
+                        inertia: Matrix3::new(
+                            1e-06, 0.0, 0.0, //
+                            0.0, 2e-06, 0.0, //
+                            0.0, 0.0, 2e-06,
+                        ),
+                    },
+                ),
+                (
+                    Isometry3::translation(-0.015, -0.0045, 0.1248),
+                    LinkInertial {
+                        mass: 0.072,
+                        com: Point3::new(
+                            0.015031845145486198,
+                            0.017984471617669542,
+                            0.014999999976589629,
+                        ),
+                        inertia: Matrix3::new(
+                            1.717e-05, 2.12e-07, 0.0, //
+                            2.12e-07, 1.251e-05, 0.0, //
+                            0.0, 0.0, 2.035e-05,
+                        ),
+                    },
+                ),
+            ]),
+            // elbow child(FR07-H101) + Rigid19→arm2_v2 + Rigid16→FR07-S101 + Rigid17→MX-28T 몸체.
+            LinkInertial::combine(&[
+                (Isometry3::identity(), link_inertials[2]),
+                (
+                    Isometry3::translation(0.007778, 0.03, 0.007778),
+                    LinkInertial {
+                        mass: 0.0217,
+                        com: Point3::new(
+                            -0.007777999999573574,
+                            0.03999999999999991,
+                            -0.007778000000000118,
+                        ),
+                        inertia: Matrix3::new(
+                            1.841e-05, 0.0, 0.0, //
+                            0.0, 4.818e-06, 0.0, //
+                            0.0, 0.0, 1.841e-05,
+                        ),
+                    },
+                ),
+                (
+                    Isometry3::translation(0.0, 0.11, 0.0),
+                    LinkInertial {
+                        mass: 0.011446844551351427,
+                        com: Point3::new(
+                            2.0689287956454638e-14,
+                            0.00221450679198662,
+                            0.000467333868896469,
+                        ),
+                        inertia: Matrix3::new(
+                            1e-06, 0.0, 0.0, //
+                            0.0, 2e-06, 0.0, //
+                            0.0, 0.0, 2e-06,
+                        ),
+                    },
+                ),
+                (
+                    Isometry3::translation(-0.015, 0.116, -0.0085),
+                    LinkInertial {
+                        mass: 0.072,
+                        com: Point3::new(
+                            0.015031845145486136,
+                            0.024284471617669556,
+                            0.008499999976589567,
+                        ),
+                        inertia: Matrix3::new(
+                            1.717e-05, 2.12e-07, 0.0, //
+                            2.12e-07, 1.251e-05, 0.0, //
+                            0.0, 0.0, 2.035e-05,
+                        ),
+                    },
+                ),
+            ]),
+            // wrist child(FR07-H101) + Rigid14→racket_joint + Rigid14·Rigid15→pingpong_paddle.
+            LinkInertial::combine(&[
+                (Isometry3::identity(), link_inertials[3]),
+                (
+                    Isometry3::translation(-0.007778, 0.03, -0.007778),
+                    LinkInertial {
+                        mass: 0.0265,
+                        com: Point3::new(
+                            0.007777999999983611,
+                            0.01501142035517336,
+                            -0.0015451576233940778,
+                        ),
+                        inertia: Matrix3::new(
+                            8.635e-06, 0.0, 0.0, //
+                            0.0, 1.349e-05, 0.0, //
+                            0.0, 0.0, 1.053e-05,
+                        ),
+                    },
+                ),
+                (
+                    Isometry3::translation(0.0, 0.0513, -0.034),
+                    LinkInertial {
+                        mass: 0.1729,
+                        com: Point3::new(
+                            6.7342507438505894e-15,
+                            -0.006399999999999961,
+                            -0.046816094811444026,
+                        ),
+                        inertia: Matrix3::new(
+                            0.0006375, 0.0, 0.0, //
+                            0.0, 0.0008405, 0.0, //
+                            0.0, 0.0, 0.0002094,
+                        ),
+                    },
+                ),
+            ]),
+        ];
+
+        // per-joint 연속 토크 안전 한계 [N*m]. 모터 매핑(specs.md §3):
+        // joint0=yaw=MX-64R, joint1=shoulder=MX-64R, joint2=elbow=MX-28T,
+        // joint3=wrist=MX-28T. stall(12.0V)을 CONTINUOUS_TORQUE_DERATE로 감쇠한
+        // 값을 쓴다 — stall은 지속 불가능한 순간 동작점이라 정상 상태 실현
+        // 가능성 판정에는 부적절하기 때문(자세한 근거/가정은 constants::control).
+        let joint_torque_limits = vec![
+            MX64_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
+            MX64_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
+            MX28_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
+            MX28_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
+        ];
+
         return Self::builder()
             .base_xyz(0.0, BASE_Y, table::SURFACE_Z)
             .linear_rail(
@@ -229,9 +554,12 @@ impl Arm {
                     Some(JointLimit::new(-2.007129, 1.48353)),
                     Some(JointLimit::new(-2.094395, 2.094395)),
                 ],
+                link_inertials,
                 Joints::from_slice(&[0.0, 0.0, -0.2617995, 0.0]),
             )
-            .max_joint_speed(MAX_JOINT_SPEED)
+            .aggregated_inertials(aggregated_inertials)
+            .joint_torque_limits(joint_torque_limits)
+            .max_joint_speed(DYNAMIXEL_MAX_JOINT_SPEED_RAD_S)
             .build();
     }
 
