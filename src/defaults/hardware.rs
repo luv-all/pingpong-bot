@@ -53,7 +53,7 @@ pub fn rail() -> RailConfig {
         pulses_per_meter: 250_000,
         reverse: true,
         x_min_m: 0.0,
-        x_max_m: 1.43,
+        x_max_m: 1.41,
         vel: 5.0,
         accel: 12.0,
         decel: 12.0,
