@@ -28,9 +28,9 @@ pub use camera::{
     triangulate_projections, triangulate_synced, triangulate_views,
 };
 pub use defaults::{
-    ControlParams, EstimatorParams, ImpactParams, PhysicsParams, arm, colormask, control, detector,
+    ControlParams, EstimatorParams, ImpactParams, PhysicsParams, colormask, control, detector,
     dynamixel, estimator, impact, intercept, physics, primitive_4dof, rail, rail_frame, robot,
-    scorer, shared_arm, shared_robot, urdf_4dof, urdf_test,
+    scorer, shared_robot, urdf_4dof, urdf_test,
 };
 pub use detector::{
     BallDetector, Candidate, CandidateGenerator, ColorSpace, ColormaskDetector, ColormaskParams,
@@ -60,9 +60,8 @@ pub use robot::{
     SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfModel,
 };
 pub use sim::{
-    BallAction, BallEvent, BallScript, BallShooterSettings, BallState, BallVec3, ShooterLayout,
-    SimBallEstimator, SimRuntimeControls, SimSession, SimSessionConfig, SimWorld,
-    new_shutdown_flag,
+    BallShooterSettings, BallState, ShooterLayout, SimBallEstimator, SimRuntimeControls,
+    SimSession, SimSessionConfig, SimWorld, new_shutdown_flag,
 };
 #[cfg(feature = "gui")]
 pub use sim::{SimViewerOptions, run_sim_viewer};

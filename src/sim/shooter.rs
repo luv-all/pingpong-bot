@@ -1,8 +1,14 @@
 //! 반대편 볼 슈터(발사기) — 로봇(y≈0) 반대(+y)에서 공을 쏴 탁구로봇이 받는 구조.
 
 use crate::constants::table;
+use crate::estimator::ballistics::predict_hit_plane;
+use crate::HitPlane;
+use nalgebra::Vector3;
 use rand::Rng;
 use rapier3d::prelude::{Rotation, Vector};
+
+/// GUI `randomized`가 네트 미달 샘플을 버리는 최대 재시도 횟수.
+const RANDOM_SHOT_NET_GATE_MAX_TRIES: usize = 48;
 
 /// `BallShooterSettings::randomized`가 뽑는 좌우 발사 위치(`lateral_offset_m`) 범위 [m].
 /// `random_shot_lateral_range_stays_within_table`이 이 전체 범위에서
@@ -13,29 +19,31 @@ pub const RANDOM_SHOT_LATERAL_MAX_M: f64 = 0.5;
 /// 랜덤 조준 목표를 로봇쪽 테이블 가장자리(y=0) 양 끝에서 이만큼 안쪽으로
 /// 제한한다.
 ///
-/// 처음엔 0.15로 잡았는데, 좌우 위치(lateral) × 그 위치에서 유효한 yaw 전체
-/// 범위 × 속도를 촘촘히 스윕해보니 각도가 비스듬할수록(각·좌우 극단 조합)
-/// "네트를 통과하는 하한 속도"와 "4-dof 로봇 리치 상한 속도" 사이의 여유가
-/// 줄어들어, padding=0.15에서는 둘을 동시에 만족하는 속도가 5.5 m/s
-/// 딱 한 점뿐이었다(즉 속도 랜덤화 여지가 사실상 없었음). padding을 넓혀
-/// 각도를 덜 극단적으로 만들수록 그 여유가 벌어진다(실측: 0.15→[5.5,5.5],
-/// 0.25→[5.4,5.5], 0.35→[5.3,5.5], 0.45→[5.2,5.5]). 0.45로 잡아
-/// 속도에도 실질적인 랜덤 폭(0.3 m/s)을 확보했다 — 좌우 위치(lateral)
-/// 쪽 다양성은 그대로 유지된다.
-pub const RANDOM_SHOT_TARGET_PADDING_M: f64 = 0.45;
+/// padding↓ → yaw 폭↑(가장자리 조준). 0.25 ≈ 조준 폭 1.03m (중앙±0.51).
+/// GUI/리치 SSOT는 `urdf_4dof` 격자(`random_shot_fine_grid_*`)다.
+pub const RANDOM_SHOT_TARGET_PADDING_M: f64 = 0.25;
 
 /// `BallShooterSettings::randomized`가 뽑는 속도 범위 [m/s].
-/// (기본 슬라이더 범위 3.0..=15.0보다 훨씬 좁다.)
-///
-/// `RANDOM_SHOT_TARGET_PADDING_M`과 함께 촘촘한 격자 실측으로 찾은 범위:
-/// 하한은 네트 통과(기본 pitch=-2°, 순수 탄도라 로봇 모델과 무관 — 비스듬한
-/// 샷일수록 마진이 줄어든다), 상한은 GUI가 실제로 쓰는 카탈로그 "4-dof"
-/// 로봇(`fourdof_robot`, URDF + `Rep103AtTableEnd`)의 리치 — `arm()`
-/// (손으로 만든 테스트용 팔)만으로는 상한 쪽 문제가 안 보였다(로봇마다 리치가
-/// 다름). [5.2, 5.5] 범위는 좌우 위치·yaw 전체 격자에서 두 조건 모두 실측
-/// 통과.
-pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 5.2;
-pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 5.5;
+pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 5.6;
+pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 5.9;
+
+/// 랜덤 발사구 높이 오프셋 [m] (`height_offset_m`, 슈터 로컬 up).
+pub const RANDOM_SHOT_HEIGHT_MIN_M: f64 = 0.24;
+pub const RANDOM_SHOT_HEIGHT_MAX_M: f64 = 0.32;
+
+/// 랜덤 topspin [rad/s] (+=topspin).
+pub const RANDOM_SHOT_TOPSPIN_MIN: f64 = -20.0;
+pub const RANDOM_SHOT_TOPSPIN_MAX: f64 = 20.0;
+/// 랜덤 sidespin [rad/s].
+pub const RANDOM_SHOT_SIDESPIN_MIN: f64 = -15.0;
+pub const RANDOM_SHOT_SIDESPIN_MAX: f64 = 15.0;
+
+/// 랜덤 pitch [deg] (+=위). 기본 −1° 근처 — 너무 올리면 네트, 너무 내리면 테이블.
+pub const RANDOM_SHOT_PITCH_MIN_DEG: f64 = -3.0;
+pub const RANDOM_SHOT_PITCH_MAX_DEG: f64 = 0.5;
+/// 랜덤 roll [deg] (발사축 기준).
+pub const RANDOM_SHOT_ROLL_MIN_DEG: f64 = -15.0;
+pub const RANDOM_SHOT_ROLL_MAX_DEG: f64 = 15.0;
 
 /// 슈터 설치 위치 (월드 좌표, Z-up).
 pub struct ShooterLayout;
@@ -43,12 +51,16 @@ pub struct ShooterLayout;
 impl ShooterLayout {
     /// 로봇은 y≈0, 슈터는 테이블 +y 끝(상대편).
     pub const MOUNT_X: f64 = table::WIDTH_X * 0.5;
-    /// 슈터 베이스 y [m]
-    pub const MOUNT_Y: f64 = table::LENGTH_Y - 0.12;
-    /// 슈터 본체 높이 [m] (테이블 면 기준)
-    pub const BODY_HEIGHT: f64 = 0.45;
-    /// 발사구가 본체 중심에서 조준 방향으로 돌출된 길이 [m]
+    /// 마운트 기준 발사구 전방 돌출 [m] (탄도 SSOT)
     pub const BARREL_FORWARD_M: f64 = 0.22;
+    /// 뷰어 직육면체 전체 크기 [m] (충돌 없음 — 표시 전용)
+    pub const VISUAL_SIZE_X: f64 = 0.10;
+    pub const VISUAL_SIZE_Y: f64 = 0.18;
+    pub const VISUAL_SIZE_Z: f64 = 0.14;
+    /// 슈터 마운트 y [m] — 본체는 테이블 밖, 발사구는 끝선(LENGTH_Y).
+    pub const MOUNT_Y: f64 = table::LENGTH_Y + Self::BARREL_FORWARD_M;
+    /// 슈터 마운트 기준 높이 [m] (테이블 면 → 중심). 탄도 SSOT.
+    pub const BODY_HEIGHT: f64 = 0.45;
 }
 
 /// GUI·런타임에서 조절하는 발사 파라미터.
@@ -62,6 +74,10 @@ pub struct BallShooterSettings {
     pub pitch_deg: f64,
     /// roll [deg] — 발사축 기준 롤 (스핀 축·발사구 위치 회전)
     pub roll_deg: f64,
+    /// 마운트 월드 오프셋 [m] — 기본 설치점(`ShooterLayout::MOUNT_*`) 기준
+    pub pos_offset_x_m: f64,
+    pub pos_offset_y_m: f64,
+    pub pos_offset_z_m: f64,
     /// 발사구 좌우 오프셋 [m] — 슈터 로컬 right
     pub lateral_offset_m: f64,
     /// 발사구 높이 오프셋 [m] — 슈터 로컬 up (본체 중심 기준)
@@ -77,12 +93,16 @@ pub struct BallShooterSettings {
 impl Default for BallShooterSettings {
     fn default() -> Self {
         return Self {
-            speed_mps: 5.0,
+            // 끝선 발사(비행거리↑) — 네트 클리어 기준
+            speed_mps: 5.6,
             yaw_deg: 0.0,
-            pitch_deg: -2.0,
+            pitch_deg: -1.0,
             roll_deg: 0.0,
+            pos_offset_x_m: 0.0,
+            pos_offset_y_m: 0.0,
+            pos_offset_z_m: 0.0,
             lateral_offset_m: 0.0,
-            height_offset_m: 0.19,
+            height_offset_m: 0.28,
             topspin_rad_s: 0.0,
             sidespin_rad_s: 0.0,
             drill_spin_rad_s: 0.0,
@@ -91,12 +111,12 @@ impl Default for BallShooterSettings {
 }
 
 impl BallShooterSettings {
-    /// 슈터 본체 중심 (월드).
+    /// 슈터 마운트 기준점 (월드) — 탄도·오프셋의 원점.
     pub fn mount_position(&self) -> Vector {
         return Vector::new(
-            ShooterLayout::MOUNT_X as f32,
-            ShooterLayout::MOUNT_Y as f32,
-            (table::SURFACE_Z + ShooterLayout::BODY_HEIGHT * 0.5) as f32,
+            (ShooterLayout::MOUNT_X + self.pos_offset_x_m) as f32,
+            (ShooterLayout::MOUNT_Y + self.pos_offset_y_m) as f32,
+            (table::SURFACE_Z + ShooterLayout::BODY_HEIGHT * 0.5 + self.pos_offset_z_m) as f32,
         );
     }
 
@@ -139,13 +159,20 @@ impl BallShooterSettings {
         return roll_q * aim;
     }
 
-    /// 발사구 위치 — 슈터 로컬 오프셋을 월드로 변환.
+    /// 발사구 위치 — 슈터 로컬 오프셋을 월드로 변환 (탄도 SSOT).
     pub fn muzzle_position(&self) -> Vector {
         let (forward, right, up) = self.local_basis();
         let local = forward * (ShooterLayout::BARREL_FORWARD_M as f32)
             + up * self.height_offset_m as f32
             + right * self.lateral_offset_m as f32;
         return self.mount_position() + local;
+    }
+
+    /// 뷰어 직육면체 중심 — 발사구가 전면에 오도록 조준축 뒤로 반 길이.
+    pub fn visual_position(&self) -> Vector {
+        let (forward, _, _) = self.local_basis();
+        let half_depth = (ShooterLayout::VISUAL_SIZE_Y * 0.5) as f32;
+        return self.muzzle_position() - forward * half_depth;
     }
 
     /// 조준 방향 × 속도.
@@ -170,8 +197,14 @@ impl BallShooterSettings {
     /// 두 샷이 진짜로 다른 궤적(다른 각도)이 된다 — `lateral_offset_m`만
     /// 바꾸는 평행이동과 달리.
     pub(crate) fn yaw_range_for_lateral_deg(lateral_offset_m: f64) -> (f64, f64) {
-        let mount_x = ShooterLayout::MOUNT_X + lateral_offset_m;
-        let mount_y = ShooterLayout::MOUNT_Y;
+        return Self::yaw_range_for_mount_deg(
+            ShooterLayout::MOUNT_X + lateral_offset_m,
+            ShooterLayout::MOUNT_Y,
+        );
+    }
+
+    /// 마운트 (x,y)에서 로봇쪽 테이블 padding 안쪽을 조준하는 yaw 범위 [deg].
+    pub(crate) fn yaw_range_for_mount_deg(mount_x: f64, mount_y: f64) -> (f64, f64) {
         let yaw_deg_for_target_x = |target_x: f64| -> f64 {
             let dx = target_x - mount_x;
             let dy = 0.0 - mount_y;
@@ -182,13 +215,14 @@ impl BallShooterSettings {
         return (yaw_left.min(yaw_right), yaw_left.max(yaw_right));
     }
 
-    /// `lateral_offset_m`(발사 위치)·`yaw_deg`(그 위치에서 기하학적으로 유효한
-    /// 조준 범위)·`speed_mps`를 안전 범위 안에서 랜덤화한 새 설정.
+    /// 좌우·yaw·속도만 안전 범위 안에서 랜덤화한다.
     ///
-    /// pitch·roll·height·spin은 호출 시점 값 그대로 유지된다.
-    pub fn randomized(&self, rng: &mut impl Rng) -> Self {
+    /// 접수·리치 회귀 테스트용 — 높이·스핀·pitch/roll은 호출 시점 값을 유지한다.
+    pub fn randomized_aim(&self, rng: &mut impl Rng) -> Self {
         let lateral_offset_m = rng.gen_range(RANDOM_SHOT_LATERAL_MIN_M..=RANDOM_SHOT_LATERAL_MAX_M);
-        let (yaw_min, yaw_max) = Self::yaw_range_for_lateral_deg(lateral_offset_m);
+        let mount_x = ShooterLayout::MOUNT_X + self.pos_offset_x_m + lateral_offset_m;
+        let mount_y = ShooterLayout::MOUNT_Y + self.pos_offset_y_m;
+        let (yaw_min, yaw_max) = Self::yaw_range_for_mount_deg(mount_x, mount_y);
         let yaw_deg = rng.gen_range(yaw_min..=yaw_max);
         let speed_mps = rng.gen_range(RANDOM_SHOT_SPEED_MIN_MPS..=RANDOM_SHOT_SPEED_MAX_MPS);
         return Self {
@@ -197,6 +231,64 @@ impl BallShooterSettings {
             speed_mps,
             ..self.clone()
         };
+    }
+
+    /// 발사 직후 탄도가 네트 게이트·hit-plane에 도달하는지 (ballistics + 스핀).
+    ///
+    /// Rapier와 같은 `PhysicsParams`(drag/magnus)로 적분한다.
+    pub fn clears_incoming_net_gate(&self) -> bool {
+        let muzzle = self.muzzle_position();
+        let vel = self.launch_velocity();
+        let omega = self.launch_angular_velocity();
+        let position = Vector3::new(f64::from(muzzle.x), f64::from(muzzle.y), f64::from(muzzle.z));
+        let velocity = Vector3::new(f64::from(vel.x), f64::from(vel.y), f64::from(vel.z));
+        let spin = Vector3::new(f64::from(omega.x), f64::from(omega.y), f64::from(omega.z));
+        let plane = HitPlane {
+            y: table::DEFAULT_HIT_PLANE_Y,
+        };
+        return predict_hit_plane(
+            position,
+            velocity,
+            spin,
+            plane,
+            &crate::defaults::physics(),
+        )
+        .is_some();
+    }
+
+    fn sample_randomized_params(&self, rng: &mut impl Rng) -> Self {
+        let mut shot = self.randomized_aim(rng);
+        shot.height_offset_m =
+            rng.gen_range(RANDOM_SHOT_HEIGHT_MIN_M..=RANDOM_SHOT_HEIGHT_MAX_M);
+        shot.topspin_rad_s = rng.gen_range(RANDOM_SHOT_TOPSPIN_MIN..=RANDOM_SHOT_TOPSPIN_MAX);
+        shot.sidespin_rad_s =
+            rng.gen_range(RANDOM_SHOT_SIDESPIN_MIN..=RANDOM_SHOT_SIDESPIN_MAX);
+        shot.pitch_deg = rng.gen_range(RANDOM_SHOT_PITCH_MIN_DEG..=RANDOM_SHOT_PITCH_MAX_DEG);
+        shot.roll_deg = rng.gen_range(RANDOM_SHOT_ROLL_MIN_DEG..=RANDOM_SHOT_ROLL_MAX_DEG);
+        return shot;
+    }
+
+    /// 좌우·높이·yaw·pitch·roll·속도·스핀을 안전 범위 안에서 랜덤화한 새 설정.
+    ///
+    /// 네트 미달(또는 hit-plane 미도달) 샘플은 ballistics로 버리고 다시 뽑는다.
+    /// drill·마운트 `pos_offset_*`는 호출 시점 값 그대로 유지된다.
+    /// (GUI는 결과를 슬라이더에 되돌려 슈터 자세가 보이게 유지한다.)
+    pub fn randomized(&self, rng: &mut impl Rng) -> Self {
+        for _ in 0..RANDOM_SHOT_NET_GATE_MAX_TRIES {
+            let shot = self.sample_randomized_params(rng);
+            if shot.clears_incoming_net_gate() {
+                return shot;
+            }
+        }
+        // 최후: 조준만 랜덤, pitch/높이/스핀은 기본(검증된 네트 통과) 값.
+        let defaults = Self::default();
+        let mut shot = self.randomized_aim(rng);
+        shot.pitch_deg = defaults.pitch_deg;
+        shot.roll_deg = defaults.roll_deg;
+        shot.height_offset_m = defaults.height_offset_m;
+        shot.topspin_rad_s = defaults.topspin_rad_s;
+        shot.sidespin_rad_s = defaults.sidespin_rad_s;
+        return shot;
     }
 }
 
@@ -221,6 +313,38 @@ impl std::fmt::Display for BallState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::SeedableRng;
+
+    #[test]
+    fn visual_body_sits_outside_table_end() {
+        let s = BallShooterSettings::default();
+        let visual = s.visual_position();
+        // 본체 중심은 테이블 끝 밖(+y).
+        assert!(
+            visual.y > table::LENGTH_Y as f32,
+            "visual center should be past table end, y={}",
+            visual.y
+        );
+        let muzzle = s.muzzle_position();
+        // 발사구는 끝선 근처(테이블 위/경계).
+        assert!(
+            (muzzle.y - table::LENGTH_Y as f32).abs() < 0.05,
+            "muzzle should be near table end, y={}",
+            muzzle.y
+        );
+    }
+
+    #[test]
+    fn visual_front_face_matches_muzzle() {
+        let s = BallShooterSettings::default();
+        let (forward, _, _) = s.local_basis();
+        let front = s.visual_position() + forward * (ShooterLayout::VISUAL_SIZE_Y * 0.5) as f32;
+        let muzzle = s.muzzle_position();
+        assert!(
+            (front - muzzle).length_squared() < 1e-10,
+            "front={front:?} muzzle={muzzle:?}"
+        );
+    }
 
     #[test]
     fn default_aims_toward_robot_with_slight_drop() {
@@ -278,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn randomized_only_touches_lateral_yaw_speed() {
+    fn randomized_varies_aim_height_spin() {
         let base = BallShooterSettings {
             pitch_deg: -7.0,
             roll_deg: 12.0,
@@ -295,16 +419,53 @@ mod tests {
                 .contains(&shot.lateral_offset_m));
             assert!((RANDOM_SHOT_SPEED_MIN_MPS..=RANDOM_SHOT_SPEED_MAX_MPS)
                 .contains(&shot.speed_mps));
+            assert!((RANDOM_SHOT_HEIGHT_MIN_M..=RANDOM_SHOT_HEIGHT_MAX_M)
+                .contains(&shot.height_offset_m));
+            assert!((RANDOM_SHOT_TOPSPIN_MIN..=RANDOM_SHOT_TOPSPIN_MAX)
+                .contains(&shot.topspin_rad_s));
+            assert!((RANDOM_SHOT_SIDESPIN_MIN..=RANDOM_SHOT_SIDESPIN_MAX)
+                .contains(&shot.sidespin_rad_s));
+            assert!((RANDOM_SHOT_PITCH_MIN_DEG..=RANDOM_SHOT_PITCH_MAX_DEG)
+                .contains(&shot.pitch_deg));
+            assert!((RANDOM_SHOT_ROLL_MIN_DEG..=RANDOM_SHOT_ROLL_MAX_DEG)
+                .contains(&shot.roll_deg));
             let (yaw_min, yaw_max) =
                 BallShooterSettings::yaw_range_for_lateral_deg(shot.lateral_offset_m);
             assert!(shot.yaw_deg >= yaw_min - 1e-9 && shot.yaw_deg <= yaw_max + 1e-9);
 
-            assert_eq!(shot.pitch_deg, base.pitch_deg);
-            assert_eq!(shot.roll_deg, base.roll_deg);
-            assert_eq!(shot.height_offset_m, base.height_offset_m);
-            assert_eq!(shot.topspin_rad_s, base.topspin_rad_s);
-            assert_eq!(shot.sidespin_rad_s, base.sidespin_rad_s);
+            assert_eq!(shot.pos_offset_x_m, base.pos_offset_x_m);
+            assert_eq!(shot.pos_offset_y_m, base.pos_offset_y_m);
+            assert_eq!(shot.pos_offset_z_m, base.pos_offset_z_m);
             assert_eq!(shot.drill_spin_rad_s, base.drill_spin_rad_s);
+            assert!(
+                shot.clears_incoming_net_gate(),
+                "randomized는 네트 게이트를 통과하는 샷만 반환해야 함: {shot:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sample_without_gate_often_clips_net_but_randomized_does_not() {
+        let base = BallShooterSettings::default();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let mut raw_clips = 0;
+        for _ in 0..80 {
+            if !base.sample_randomized_params(&mut rng).clears_incoming_net_gate() {
+                raw_clips += 1;
+            }
+        }
+        assert!(
+            raw_clips > 5,
+            "전제: 필터 없는 샘플 중 네트 미달이 있어야 함 (clips={raw_clips})"
+        );
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        for _ in 0..80 {
+            let shot = base.randomized(&mut rng);
+            assert!(
+                shot.clears_incoming_net_gate(),
+                "필터 후 샷이 네트 게이트 미달: {shot:?}"
+            );
         }
     }
 }

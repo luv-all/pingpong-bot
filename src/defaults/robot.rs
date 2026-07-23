@@ -100,16 +100,6 @@ pub fn shared_robot() -> Arc<Robot> {
     return Arc::new(robot().expect("defaults::robot"));
 }
 
-/// 호환 별칭 — `primitive_4dof().arm` (호출부 이전용, 곧 제거).
-pub fn arm() -> Result<Arm, RobotBuildError> {
-    return Ok((*primitive_4dof()?.arm).clone());
-}
-
-/// 호환 별칭 — `shared_robot().arm`.
-pub fn shared_arm() -> Arc<Arm> {
-    return Arc::clone(&shared_robot().arm);
-}
-
 /// `assets/robots/4-dof` URDF 프리셋 (진단·비교용).
 pub fn urdf_4dof() -> Result<Robot, RobotBuildError> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

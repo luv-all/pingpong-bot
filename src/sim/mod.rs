@@ -4,10 +4,11 @@
 //! - `SimSession`: 물리 스레드 + 공유 월드
 //! - `viewer`: kiss3d 3D + egui 슈터 패널 (feature `gui`)
 
-mod ball_script;
-pub(crate) mod controls;
 mod estimator;
 pub mod arm_bodies;
+pub(crate) mod controls;
+pub(crate) mod debug_overlays;
+pub(crate) mod debug_snap;
 #[cfg(feature = "gui")]
 mod mesh_loader;
 #[cfg(feature = "gui")]
@@ -20,8 +21,9 @@ mod viewer;
 pub(crate) mod world;
 
 pub use arm_bodies::ArmMultibody;
-pub use ball_script::{BallAction, BallEvent, BallScript, BallVec3};
 pub use controls::{SimRuntimeControls, new_shutdown_flag};
+pub use debug_overlays::DebugOverlays;
+pub use debug_snap::{CommitPhase, SimDebugSnapshot};
 pub use estimator::{SimBallEstimator, predict_impact};
 pub use session::{SimSession, SimSessionConfig};
 pub use shooter::{BallShooterSettings, BallState, ShooterLayout};

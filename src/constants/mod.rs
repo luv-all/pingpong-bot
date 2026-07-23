@@ -6,6 +6,7 @@ pub mod ball;
 pub mod geometry;
 pub mod physics;
 pub mod table;
+pub mod viewer;
 
 pub use ball::RADIUS as BALL_RADIUS;
 pub use physics::{G, G_Z};

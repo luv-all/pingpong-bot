@@ -11,7 +11,7 @@ use super::controls::SimRuntimeControls;
 use super::world::{SimStepInput, SimWorld};
 use crate::camera::SimCamera;
 use crate::hardware::SimHardware;
-use crate::robot::urdf::UrdfModel;
+use crate::robot::Robot;
 
 /// sim 실행 설정.
 #[derive(Debug, Clone, Copy)]
@@ -83,18 +83,16 @@ pub struct SimSession {
 }
 
 impl SimSession {
-    /// `arm` — sim·real·제어가 공유하는 불변 로봇 모델 (plan §2).
+    /// `robot` — sim·real·제어가 공유하는 불변 로봇 모델 (plan §2).
     pub fn new(
         config: SimSessionConfig,
-        arm: Arc<crate::Arm>,
-        urdf: Option<Arc<UrdfModel>>,
+        robot: Robot,
         controls: Arc<Mutex<SimRuntimeControls>>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         return Self::with_physics(
             config,
-            arm,
-            urdf,
+            robot,
             controls,
             shutdown,
             crate::defaults::physics(),
@@ -104,13 +102,12 @@ impl SimSession {
     /// config `[physics]`를 Rapier 월드에 반영한다.
     pub fn with_physics(
         config: SimSessionConfig,
-        arm: Arc<crate::Arm>,
-        urdf: Option<Arc<UrdfModel>>,
+        robot: Robot,
         controls: Arc<Mutex<SimRuntimeControls>>,
         shutdown: Arc<AtomicBool>,
         physics: crate::PhysicsParams,
     ) -> Self {
-        let world = Arc::new(Mutex::new(SimWorld::with_physics(arm, urdf, physics)));
+        let world = Arc::new(Mutex::new(SimWorld::with_physics(robot, physics)));
         let sim_time = Arc::new(Mutex::new(0.0_f64));
         let clock = Arc::new(SimClockHandle::new(Arc::clone(&sim_time)));
         let physics_shutdown = Arc::clone(&shutdown);
@@ -126,7 +123,11 @@ impl SimSession {
         let physics_dt = 1.0 / config.physics_hz;
 
         let physics_handle = thread::spawn(move || {
-            let wall_origin = Instant::now();
+            // wall 경과 × scale로 절대 목표를 잡으면 배속 변경 시 목표가 튀어
+            // (느리게 하면 sim이 멈춰 버리고, 빠르게 하면 거대한 catch-up 부채가 생긴다).
+            // wall Δt × 현재 scale만큼만 sim을 진행한다.
+            let mut last_wall = Instant::now();
+            let mut sim_debt = 0.0_f64;
             loop {
                 if physics_shutdown.load(Ordering::Acquire) {
                     break;
@@ -140,33 +141,28 @@ impl SimSession {
                         .max(0.01)
                 };
 
-                let target_sim = wall_origin.elapsed().as_secs_f64() * time_scale;
+                let now = Instant::now();
+                // 디버거 정지 등으로 wall이 커지면 한 번에 폭주하지 않게 캡.
+                let wall_dt = now.saturating_duration_since(last_wall).as_secs_f64().min(0.05);
+                last_wall = now;
+                sim_debt += wall_dt * time_scale;
+
+                // 고배속에서도 따라갈 수 있게 스텝 상한을 scale에 비례.
+                let max_catchup = ((8.0 * time_scale).ceil() as u32).clamp(8, 256);
                 let mut catchup_steps = 0_u32;
-                const MAX_CATCHUP_STEPS: u32 = 8;
-                loop {
+                while sim_debt >= physics_dt && catchup_steps < max_catchup {
                     if physics_shutdown.load(Ordering::Acquire) {
                         return;
                     }
-                    let current = {
-                        let w = physics_world.lock().expect("sim 월드");
-                        w.sim_time
-                    };
-                    if current >= target_sim {
-                        break;
-                    }
-                    let (shoot, park, shooter, ball_script) = {
+                    let (shoot, park, shooter) = {
                         let mut ctrl = physics_controls.lock().expect("sim controls");
                         let shoot = ctrl.shoot_requested;
                         let park = ctrl.park_requested;
                         ctrl.shoot_requested = false;
                         ctrl.park_requested = false;
-                        let script = std::mem::take(&mut ctrl.ball_script_queue);
-                        (shoot, park, ctrl.shooter.clone(), script)
+                        (shoot, park, ctrl.shooter.clone())
                     };
                     let mut w = physics_world.lock().expect("sim 월드");
-                    if !ball_script.is_empty() {
-                        w.enqueue_ball_events(ball_script);
-                    }
                     w.step(
                         physics_dt,
                         Some(SimStepInput {
@@ -176,10 +172,12 @@ impl SimSession {
                         }),
                     );
                     *physics_time.lock().expect("sim 시간") = w.sim_time;
+                    sim_debt -= physics_dt;
                     catchup_steps += 1;
-                    if catchup_steps >= MAX_CATCHUP_STEPS {
-                        break;
-                    }
+                }
+                // 계속 밀리면 오래된 부채는 버리고 실시간성 유지.
+                if sim_debt > physics_dt * f64::from(max_catchup) {
+                    sim_debt = physics_dt * f64::from(max_catchup);
                 }
 
                 thread::sleep(Duration::from_micros(500));
