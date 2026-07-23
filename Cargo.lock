@@ -652,6 +652,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "calib-table-pnp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "opencv",
+ "pingpong-bot",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "calloop"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

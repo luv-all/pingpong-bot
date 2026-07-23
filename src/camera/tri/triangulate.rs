@@ -5,7 +5,7 @@ use std::time::Instant;
 use crate::{BallObservation, CameraId, DomainError, ObservationError, PixelPoint, Point3};
 use nalgebra::{DMatrix, Matrix3x4};
 
-use super::calibration::{Calibration, CameraParams};
+use crate::camera::calib::{Calibration, CameraParams};
 
 /// 관측 시계열에서 `sync_time`에 해당하는 픽셀 위치를 선형 보간한다.
 pub fn sample_at(observations: &[BallObservation], sync_time: Instant) -> Option<PixelPoint> {
@@ -77,7 +77,7 @@ pub fn triangulate_synced(
 
 /// OpenCV로 뷰를 합친다. 3뷰 이상은 OpenCV의 2뷰 API 제약 때문에 DLT를 쓴다.
 pub fn triangulate_views(views: &[(Matrix3x4<f64>, PixelPoint)]) -> Option<Point3> {
-    return crate::camera::opencv_tri::triangulate_views(views);
+    return super::opencv_tri::triangulate_views(views);
 }
 
 /// 알려진 픽셀/투영행렬로 DLT 삼각측량 (동차 SVD).

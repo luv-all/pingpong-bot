@@ -22,10 +22,12 @@ pub type Point3 = nalgebra::Point3<f64>;
 pub use camera::{
     BallObservation, Calibration, CameraId, CameraParams, CharucoBoardSpec, CharucoCalibReport,
     CharucoFrameDetect, ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource,
-    MIN_CHARUCO_CORNERS, OpenCvCapture, PixelPoint, PreviewAction, SimCamera, calibrate_charuco,
+    MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, OpenCvCapture, PixelPoint, PreviewAction, SimCamera,
+    TABLE_LANDMARK_COUNT, TableLandmark, TablePnpResult, calibrate_charuco, calibrate_table_pnp,
     destroy_window, detect_and_draw_charuco, dlt_triangulate, draw_cam_label, draw_circle_px,
-    draw_debug_lines, draw_help_lines, draw_world_velocity, hstack_bgr, sample_at, show_bgr,
-    triangulate_projections, triangulate_synced, triangulate_views,
+    draw_debug_lines, draw_help_lines, draw_world_velocity, ensure_reproj_below, ensure_reproj_ok,
+    hstack_bgr, sample_at, show_bgr, table_landmark_mesh_edges, table_landmarks,
+    triangulate_projections, triangulate_synced, triangulate_views, upsert_camera,
 };
 pub use defaults::{
     ControlParams, EstimatorParams, ImpactParams, PhysicsParams, colormask, control, detector,

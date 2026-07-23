@@ -1,7 +1,7 @@
 //! OpenCV ChArUco 보드 → 카메라 인트린식·왜곡 (`Calibration` JSON).
 //!
-//! 외부 R|t는 피팅하지 않는다. sim look-at을 자리표시자로 두고 K·dist만 덮어쓴다.
-//! 멀티캠 번들·월드 외부 pose는 후속.
+//! 외부 R|t는 피팅하지 않는다. 외참은 [`super::table_pnp`] / `calib-table-pnp`를 쓴다.
+//! 이 모듈은 K·dist만 덮어쓰고, sim look-at을 자리표시자로 둔다.
 
 use std::ffi::OsStr;
 use std::fs;

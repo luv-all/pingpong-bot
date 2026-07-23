@@ -67,8 +67,9 @@ pub fn hstack_bgr(panels: &[Mat]) -> CvResult<Mat> {
 }
 
 /// 이미지 높이 기준 오버레이 스케일 (720p ≈ 1.0). Hershey는 유니코드 미지원.
+/// 모자이크처럼 세로가 커져도 글자가 폭주하지 않게 상한을 낮춘다.
 fn overlay_scale(img_h: i32) -> f64 {
-    return (img_h as f64 / 720.0).clamp(0.55, 2.2);
+    return (img_h as f64 / 720.0).clamp(0.5, 1.0);
 }
 
 struct TextBlock {
