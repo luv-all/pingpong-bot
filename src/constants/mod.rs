@@ -11,7 +11,7 @@ pub mod impact;
 pub mod physics;
 pub mod table;
 
-pub use arm::{BASE_Y, RAIL_MAX_SPEED};
+pub use arm::{BASE_Y, MOUNT_HEIGHT_OFFSET_M, RAIL_MAX_SPEED};
 pub use ball::RADIUS as BALL_RADIUS;
 pub use ball::{
     RESTITUTION as DEFAULT_RESTITUTION, TABLE_BOUNCE_FRICTION, TABLE_BOUNCE_RESTITUTION,

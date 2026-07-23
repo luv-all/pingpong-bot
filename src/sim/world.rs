@@ -9,7 +9,7 @@ use crate::{
     Arm, DomainError, InterceptWindow, PhysicsParams, Prediction, RobotPose, RobotState,
     ball_past_midcourt_for_commit,
     constants::{ball, table},
-    plan_best_swing, plan_coarse_track,
+    plan_bang_bang_swing, plan_best_swing, plan_coarse_track,
 };
 use rapier3d::prelude::*;
 use tracing::{debug, warn};
@@ -82,6 +82,9 @@ pub struct SimWorld {
     /// true면 Rapier ground truth로 자동 스윙 (sim 기본).
     /// false면 카메라→DLT→EKF→control이 타격.
     use_ground_truth: bool,
+    /// true면 commit 시 quintic(`plan_best_swing`) 대신 순수 토크 bang-bang
+    /// (`plan_bang_bang_swing`)을 계획한다 - GUI 디버그 토글 전용.
+    use_bang_bang_swing: bool,
     /// 이번 비행에서 스윙을 이미 commit했는지 (재계획·팔 떨림 방지)
     swing_committed: bool,
     /// 마지막으로 `plan_best_swing`을 실제로 시도한 `sim_time`.
@@ -231,6 +234,7 @@ impl SimWorld {
                 sample_step: 0.05,
             },
             use_ground_truth: true,
+            use_bang_bang_swing: false,
             swing_committed: false,
             last_swing_attempt_at: f64::NEG_INFINITY,
             flight_started_at: 0.0,
@@ -257,6 +261,17 @@ impl SimWorld {
     /// ground truth 기반 자동 스윙 여부.
     pub fn use_ground_truth(&self) -> bool {
         return self.use_ground_truth;
+    }
+
+    /// commit 시 quintic 대신 순수 토크 bang-bang을 계획할지 on/off - GUI
+    /// "Bang-bang swing (debug)" 토글이 매 프레임 이 값을 반영한다.
+    pub fn set_use_bang_bang_swing(&mut self, enabled: bool) {
+        self.use_bang_bang_swing = enabled;
+    }
+
+    /// bang-bang 스윙 모드 여부.
+    pub fn use_bang_bang_swing(&self) -> bool {
+        return self.use_bang_bang_swing;
     }
 
     /// 이번 공에 스윙을 이미 commit했는지.
@@ -379,13 +394,21 @@ impl SimWorld {
         let ball_y = f64::from(self.ball_position().y);
         if !ball_past_midcourt_for_commit(ball_y) {
             if let Some(pose) = plan_coarse_track(&self.arm, &predictions) {
-                // rough 단계에서는 레일(느리고 이동거리 긴 lateral 축)만 예측
-                // 임팩트 쪽으로 미리 옮긴다. 팔 관절은 fine 스윙(plan_best_swing)에
-                // 맡긴다 — 아직 도달권 밖이라 clamp된 rough 목표로 팔을 미리 펴
-                // 두면 commit 스윙의 windup이 줄어 리턴이 약해지기 때문. 레일은
-                // rate-limited·범위 클램프된 추종 루프(step_toward_targets)가
-                // 옮기므로 rail.max_speed·안전 한계를 자동 상속한다.
+                // 레일(느리고 이동거리 긴 lateral 축)과 **팔 관절**을 모두 예측
+                // 임팩트 쪽으로 미리 옮긴다. 실제 이동은 rate-limited·범위
+                // 클램프된 추종 루프(`step_toward_targets`)가 하므로
+                // `max_joint_speed`/`rail.max_speed`·충돌 안전을 자동 상속한다.
+                //
+                // 예전에는 여기서 레일만 옮기고 관절은 일부러 두었다 — "미리
+                // 펴 두면 commit 스윙의 windup이 줄어 리턴이 약해진다"는 이유.
+                // 그 대가가 너무 컸다: 임팩트 자세까지의 관절공간 이동거리
+                // Δq 전부가 commit 창(0.125~0.175s)으로 떠넘겨졌고, 재보정된
+                // 관절속도(~2.88 rad/s)로는 quintic이 그 안에 절대 못 들어와
+                // **스윙이 아예 시작되지 않았다**(실측: 5,152 랠리 커밋 0회,
+                // `.omc/research/known-regressions-realistic-joint-speed.md` §1).
+                // 약한 리턴이 스윙 못 하는 것보다 낫다.
                 self.robot.set_rail_target(pose.rail_x);
+                self.robot.set_targets(pose.joints.clone());
             }
             return;
         }
@@ -401,6 +424,31 @@ impl SimWorld {
         }
         self.last_swing_attempt_at = self.sim_time;
         let start = RobotPose::new(self.robot.rail_x(), self.robot.joints().clone());
+        // GUI "Bang-bang swing (debug)" 토글 - quintic(plan_best_swing) 대신
+        // 순수 토크 기반 bang-bang(plan_bang_bang_swing)을 계획한다. 재생
+        // 경로(RobotState::replace_bang_bang_swing/advance_swing)는 궤적
+        // "모양"을 몰라도 되게 추상화돼 있어 이 분기 하나로 끝난다.
+        if self.use_bang_bang_swing {
+            let planned = match plan_bang_bang_swing(&self.arm, &predictions, &start) {
+                Ok(planned) => planned,
+                Err(DomainError::InfeasibleSwing(ref err)) => {
+                    debug!(%err, "plan_bang_bang_swing 불가 — 이번 시도 스킵, 다음 재시도 대기");
+                    return;
+                }
+                Err(other) => {
+                    warn!(%other, "sim bang-bang 자동 스윙 계획 실패 — 다음 재시도 대기");
+                    return;
+                }
+            };
+            self.set_debug_prediction(Some(planned.prediction));
+            debug!(
+                duration_secs = planned.trajectory.duration_secs(),
+                "sim plan_bang_bang_swing commit"
+            );
+            self.robot.replace_bang_bang_swing(planned.trajectory);
+            self.swing_committed = true;
+            return;
+        }
         let planned = match plan_best_swing(&self.arm, &predictions, &start) {
             Ok(planned) => planned,
             Err(DomainError::InfeasibleSwing(ref err)) => {
@@ -730,8 +778,17 @@ mod tests {
         );
     }
 
+    /// ⚠️ 이 테스트는 **여전히 유효한 미해결 결함**을 가리킨다(껍데기가 아님).
+    /// 로봇은 이제 스윙을 커밋하고 공을 맞혀 네트를 넘기지만, 리턴이 너무
+    /// 길어 상대 코트에 떨어지지 않는다 — 실측: 네트를 z=1.381(면 위 62cm)로
+    /// 넘어 최대 y=2.889까지 날아간다(테이블 끝 2.74 초과 = 아웃).
+    /// `shot_tune`의 엄격 기준(리턴이 상대 코트에 실제 낙하)으로는 48발 중
+    /// 3발만 성공한다(커밋·네트 통과 자체는 48/48).
+    /// `RACKET_EFFECTIVE_RESTITUTION` 재캘리브레이션을 0.42~0.82로 스윕해
+    /// 봤지만 최대 22%(e=0.58)에 그쳐 지배적 원인이 아니었다.
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
+    #[ignore = "리턴 배치(placement) 미해결 — 스윙·접촉·네트 통과는 되지만 리턴이 \
+                테이블을 넘어가 아웃된다(실측 max_y=2.889 vs 테이블 2.74). \
                 see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn ground_truth_rally_contacts_racket_clears_net_and_bounces_near_center() {
         let arm = test_arm();
@@ -958,8 +1015,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn auto_swing_on_shoot_moves_rail() {
         let arm = test_arm();
         assert!(arm.rail.is_some(), "테스트 arm은 리니어 포함");
@@ -998,8 +1053,6 @@ mod tests {
     /// 말하는 중앙이 아니다. 스윙이 끝난 뒤 다음 공을 쏘지 않아도 로봇이
     /// 저절로 복귀하는지 검증한다.
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn robot_returns_to_center_after_swing_without_next_shot() {
         let arm = test_arm();
         let center_rail_x = arm.rail.as_ref().expect("테스트 arm은 리니어 포함").default_x();
@@ -1052,15 +1105,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn auto_swing_plans_with_strike_velocity() {
         use crate::plan_swing;
 
         let arm = test_arm();
         let world = SimWorld::new(arm.clone(), None);
-        // 기본 슈터가 첫 바운스 뒤 만드는 동적 y=0.30 후보.
-        let impact = crate::Point3::new(table::WIDTH_X * 0.5, 0.30, 1.05);
+        // 기본 슈터가 첫 바운스 뒤 만드는 동적 y=0.30 후보 — 재튜닝된 기본값
+        // (speed 7.1 / pitch -4° / height 0.17)에서 **실측**한 값이다
+        // (`shot_tune --explain`). 이전 값(z=1.05, v_in=(0,-4.22,0.37))은
+        // 예전 슈터 기본값 기준이라 이제 실제로 나오지 않는 조성이었다.
+        let impact = crate::Point3::new(table::WIDTH_X * 0.5, 0.30, 0.932);
         // rail_x는 (레일 원점, 0.0)이 아니라 레일 중앙에서 시작한다: 5.0 m/s로
         // 재보정한 실기 레일 속도로는 0.28초 안에 원점→테이블 중앙(0.76m)을
         // 도는 quintic peak 속도가 한계를 살짝 넘어 실현 불가능해졌다. 실제
@@ -1072,9 +1126,11 @@ mod tests {
         let traj = plan_swing(
             &arm,
             crate::Prediction {
-                time_to_impact_secs: 0.28,
+                // Δq≈0.44 rad를 quintic으로 소화하려면 최소 0.29s 필요(실측).
+                // commit 창 상한 0.35s 안에서 여유를 두고 0.32s를 쓴다.
+                time_to_impact_secs: 0.32,
                 impact_position: impact,
-                incoming_velocity: nalgebra::Vector3::new(0.0, -4.22, 0.37),
+                incoming_velocity: nalgebra::Vector3::new(0.0, -6.01, 1.51),
             },
             &start,
         )
@@ -1087,8 +1143,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn quintic_swing_moves_robot_joints() {
         use crate::{HitPlane, plan_swing};
 
@@ -1259,8 +1313,6 @@ mod tests {
     /// yaw 범위를 계산해 그 안에서 뽑는다(`yaw_range_for_lateral_deg`) — 이 범위의
     /// 양 끝이 이 테스트가 실제로 검증하는 "가장 비스듬한" 샷이다.
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn repeated_random_shoot_never_stalls_and_always_reparks() {
         use rand::SeedableRng;
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
@@ -1384,8 +1436,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn random_shot_grid_still_swings_when_robot_starts_from_center() {
         // 실제 GUI 재현: 첫 샷이 끝나면 로봇이 (레일 0이 아니라) 테이블
         // 중앙(`default_x()`)으로 복귀해 있다. 이후 Random Shoot이 쏘는
@@ -1460,8 +1510,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn repeated_full_random_shots_each_get_racket_contact() {
         // 이전 스트레스 테스트(`repeated_random_shoot_never_stalls_and_always_reparks`)는
         // 공이 결국 회수(re-park)되는지만 확인해서, "로봇이 아예 안 치고
@@ -1536,8 +1584,6 @@ mod tests {
     /// 스윕해야 한다 — 코너만 봐서는 못 잡는 실패(중간값에서만 실패)가
     /// 실제로 있었다.
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn random_shot_fine_grid_clears_net_and_returns_for_fourdof_robot() {
         for lateral in [-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
             let (yaw_min, yaw_max) = BallShooterSettings::yaw_range_for_lateral_deg(lateral);
@@ -1607,8 +1653,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn plain_shoot_then_random_shoot_gets_racket_contact_broad_sweep() {
         // 사용자가 정확히 재현한 순서: 평범한 Shoot(중앙→중앙, 기본 조준)을
         // 먼저 완전히 끝낸 뒤, Random Shoot을 누른다. 여러 랜덤 시드로
@@ -1678,8 +1722,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn interrupting_swing_with_new_shot_does_not_permanently_break_robot() {
         use rand::SeedableRng;
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
@@ -1744,8 +1786,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn random_shot_grid_clears_net_and_returns() {
         for lateral in [-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
             let (yaw_min, yaw_max) = BallShooterSettings::yaw_range_for_lateral_deg(lateral);

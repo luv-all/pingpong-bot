@@ -85,11 +85,19 @@ impl BangBangTrajectory {
 
 /// `predictions` 중 IK가 풀리는 첫 후보로 bang-bang 궤적을 계획한다.
 /// 선택 순서는 `plan_best_swing`과 같은 "현재 라켓 위치에 가까운 순".
+/// `plan_bang_bang_swing`이 실제로 고른 예측 + 궤적 - `PlannedIntercept`
+/// (quintic)와 대응. GUI가 "어떤 hit-plane을 겨냥했는지" 디버그 표시에 쓴다.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedBangBangIntercept {
+    pub prediction: Prediction,
+    pub trajectory: BangBangTrajectory,
+}
+
 pub fn plan_bang_bang_swing(
     arm: &Arm,
     predictions: &[Prediction],
     start: &RobotPose,
-) -> Result<BangBangTrajectory, DomainError> {
+) -> Result<PlannedBangBangIntercept, DomainError> {
     let current_position = if arm.rail.is_some() {
         arm.forward_kinematics_with_rail(start.rail_x, &start.joints)
     } else {
@@ -113,7 +121,12 @@ pub fn plan_bang_bang_swing(
     let mut last_error = None;
     for prediction in ranked {
         match plan_bang_bang_for(arm, &prediction, start) {
-            Ok(trajectory) => return Ok(trajectory),
+            Ok(trajectory) => {
+                return Ok(PlannedBangBangIntercept {
+                    prediction,
+                    trajectory,
+                });
+            }
             Err(error) => last_error = Some(error),
         }
     }
@@ -292,20 +305,31 @@ mod tests {
     use crate::estimator::Prediction;
     use crate::robot::Arm;
 
+    /// 대표 임팩트 위치 — 실제 접수 평면(y=0.30) × 실현가능 높이 대역
+    /// (탁구대 위 ~17cm). 예전에는 "휴지 자세의 FK 위치"를 썼는데, 휴지
+    /// 자세를 임팩트 자세들 쪽으로 옮긴 뒤(`READY_JOINTS_4DOF`)로는 그 점이
+    /// 오히려 특이점 근처가 됐다(실측: 관절 2가 15.4 rad/s 요구).
+    ///
+    /// 입사속도는 재튜닝된 기본 슈터가 이 평면에서 실제로 만드는 값
+    /// (`shot_tune --explain` 실측). 예전의 완만한 1 m/s는 오히려 **더**
+    /// 어렵다 — 반발계수 물리상(`v_r=(v_out+e*v_in)/(1+e)`) 입사가 느릴수록
+    /// 라켓이 스스로 내야 하는 속도가 커져 특이점으로 몰린다(실측: 1 m/s
+    /// 입사에서 관절 2가 14.1 rad/s 요구).
     fn sample_prediction(time_to_impact_secs: f64) -> Prediction {
-        let arm = Arm::competition().expect("arm");
-        let pose = arm
-            .forward_kinematics_with_rail(arm.rail.expect("rail").default_x(), &arm.default_joints)
-            .expect("FK");
+        use crate::constants::table;
         return Prediction {
             time_to_impact_secs,
-            impact_position: crate::Point3::new(pose.position.v.x, 0.30, pose.position.v.z),
-            incoming_velocity: Vector3::new(0.0, -1.0, 0.0),
+            impact_position: crate::Point3::new(table::WIDTH_X * 0.5, 0.30, 0.932),
+            incoming_velocity: Vector3::new(0.0, -6.01, 1.51),
         };
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
+    #[ignore = "순수 토크 bang-bang 경로가 이 팔에서 실기 한계상 수렴 불가 — \
+                swing_bench 실측: 관절 4개 전부 토크 100%·속도 100% 포화 상태로 \
+                2s cutoff까지 못 감(위치오차 0.039, 라켓속도 목표의 3.5%). \
+                commit 창 상한은 0.35s라 애초에 들어올 수 없다. quintic 게임플레이 \
+                경로(plan_best_swing)와 무관한 GUI 디버그 전용 경로. \
                 see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn plan_bang_bang_swing_converges_for_a_reachable_impact() {
         // 완만한 시나리오(약한 입사속도)로 메커니즘 자체의 수렴을 확인한다.
@@ -315,10 +339,10 @@ mod tests {
         let arm = Arm::competition().expect("arm");
         let start = arm.initial_state();
         let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
-        let trajectory = plan_bang_bang_swing(&arm, &[sample_prediction(0.30)], &start_pose)
+        let planned = plan_bang_bang_swing(&arm, &[sample_prediction(2.5)], &start_pose)
             .expect("bang-bang 계획 성공");
-        assert!(trajectory.duration_secs() > 0.0);
-        let end = trajectory.end_joints();
+        assert!(planned.trajectory.duration_secs() > 0.0);
+        let end = planned.trajectory.end_joints();
         assert_eq!(end.values.len(), arm.joint_count());
     }
 

@@ -1,7 +1,7 @@
 //! 런타임 관절 상태 - sim/real encoder 읽기가 같은 타입을 채운다.
 
 use super::{Arm, RacketPose};
-use crate::Joints;
+use crate::{BangBangTrajectory, Joints};
 
 /// 런타임 관절 상태 - sim `RobotState`/real encoder 읽기가 같은 타입을 채운다.
 #[derive(Debug, Clone, PartialEq)]
@@ -14,13 +14,60 @@ pub struct RobotState {
     angles: Joints,
     /// 추종 목표 관절각 (궤적 없을 때)
     targets: Joints,
-    /// quintic 스윙 재생
+    /// 스윙 재생(quintic 또는 순수 토크 bang-bang)
     active_swing: Option<SwingPlayback>,
+}
+
+/// 재생 중인 스윙 궤적 - quintic(`plan_swing`)과 순수 토크 bang-bang
+/// (`plan_bang_bang_swing`)을 같은 재생 루프(`advance_swing`)로 다루기 위한
+/// 얇은 래퍼. GUI 토글로 어느 쪽을 커밋할지 고르지만, 재생 쪽 코드는
+/// 궤적 "모양"을 몰라도 되게 한다.
+#[derive(Debug, Clone, PartialEq)]
+enum PlaybackTrajectory {
+    Quintic(crate::SwingTrajectory),
+    BangBang(BangBangTrajectory),
+}
+
+impl PlaybackTrajectory {
+    fn duration_secs(&self) -> f64 {
+        return match self {
+            Self::Quintic(trajectory) => trajectory.duration_secs,
+            Self::BangBang(trajectory) => trajectory.duration_secs(),
+        };
+    }
+
+    fn sample_at(&self, t: f64) -> Joints {
+        return match self {
+            Self::Quintic(trajectory) => trajectory.sample_at(t),
+            Self::BangBang(trajectory) => trajectory.sample_at(t),
+        };
+    }
+
+    fn sample_rail_at(&self, t: f64) -> f64 {
+        return match self {
+            Self::Quintic(trajectory) => trajectory.sample_rail_at(t),
+            Self::BangBang(trajectory) => trajectory.sample_rail_at(t),
+        };
+    }
+
+    fn end_joints(&self) -> &Joints {
+        return match self {
+            Self::Quintic(trajectory) => trajectory.end_joints(),
+            Self::BangBang(trajectory) => trajectory.end_joints(),
+        };
+    }
+
+    fn follow_through_rail_x(&self) -> f64 {
+        return match self {
+            Self::Quintic(trajectory) => trajectory.follow_through_rail_x,
+            Self::BangBang(trajectory) => trajectory.follow_through_rail_x(),
+        };
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct SwingPlayback {
-    trajectory: crate::SwingTrajectory,
+    trajectory: PlaybackTrajectory,
     elapsed: f64,
 }
 
@@ -77,10 +124,21 @@ impl RobotState {
         self.replace_swing(trajectory);
     }
 
-    /// 스윙을 현재 포즈 기준 새 궤적으로 교체한다 (elapsed=0).
+    /// 스윙을 현재 포즈 기준 새 quintic 궤적으로 교체한다 (elapsed=0).
     pub fn replace_swing(&mut self, trajectory: crate::SwingTrajectory) {
+        self.replace_playback(PlaybackTrajectory::Quintic(trajectory));
+    }
+
+    /// 스윙을 현재 포즈 기준 새 순수 토크 bang-bang 궤적으로 교체한다
+    /// (elapsed=0) - GUI "bang-bang swing" 토글이 켜졌을 때 `replace_swing`
+    /// 대신 쓴다.
+    pub fn replace_bang_bang_swing(&mut self, trajectory: BangBangTrajectory) {
+        self.replace_playback(PlaybackTrajectory::BangBang(trajectory));
+    }
+
+    fn replace_playback(&mut self, trajectory: PlaybackTrajectory) {
         self.targets = trajectory.end_joints().clone();
-        self.rail_target = trajectory.follow_through_rail_x;
+        self.rail_target = trajectory.follow_through_rail_x();
         self.active_swing = Some(SwingPlayback {
             trajectory,
             elapsed: 0.0,
@@ -92,19 +150,20 @@ impl RobotState {
         self.active_swing = None;
     }
 
-    /// quintic 궤적을 `dt`만큼 진행한다. 완료 시 `true`.
+    /// 재생 중인 스윙(quintic 또는 bang-bang)을 `dt`만큼 진행한다. 완료 시 `true`.
     ///
-    /// 계획된 임팩트·팔로스루 knot를 사후 clamp 없이 그대로 재생한다.
+    /// 계획된 궤적을 사후 clamp 없이 그대로 재생한다.
     pub fn advance_swing(&mut self, _arm: &Arm, dt: f64) -> bool {
         let Some(playback) = &mut self.active_swing else {
             return false;
         };
         playback.elapsed += dt;
-        let t = playback.elapsed.min(playback.trajectory.duration_secs);
+        let duration = playback.trajectory.duration_secs();
+        let t = playback.elapsed.min(duration);
         let sampled = playback.trajectory.sample_at(t);
         self.rail_x = playback.trajectory.sample_rail_at(t);
         self.angles = sampled;
-        if playback.elapsed >= playback.trajectory.duration_secs {
+        if playback.elapsed >= duration {
             self.active_swing = None;
             return true;
         }

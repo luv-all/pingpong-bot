@@ -21,6 +21,8 @@ pub struct PanelUiState {
     pub script_delay_s: f32,
     /// 임펄스 크기 [N·s] (−y 방향)
     pub script_impulse_ns: f32,
+    /// commit 시 quintic 대신 순수 토크 bang-bang을 쓸지 - 디버그 토글.
+    pub use_bang_bang_swing: bool,
 }
 
 impl PanelUiState {
@@ -31,6 +33,7 @@ impl PanelUiState {
             camera_dist: 4.5,
             script_delay_s: 0.0,
             script_impulse_ns: 0.05,
+            use_bang_bang_swing: controls.use_bang_bang_swing,
         };
     }
 }
@@ -169,6 +172,14 @@ pub fn draw(
                         .text("camera zoom [m]"),
                 );
                 ui.label("3D: drag = orbit, scroll = zoom");
+                ui.checkbox(
+                    &mut ui_state.use_bang_bang_swing,
+                    "Bang-bang swing (pure torque, debug)",
+                );
+                ui.label(
+                    "켜면 commit 스윙을 quintic 대신 순수 토크(bang-bang)로 계획 — \
+                     궤적 '모양' 제약 없이 실기 토크 한계만으로 육안 비교용",
+                );
             });
 
             ui.horizontal(|ui| {
@@ -230,6 +241,7 @@ pub fn draw(
         // 그대로 재현해버린다.
         ctrl.shooter = ui_state.shooter.clone();
         ctrl.time_scale = ui_state.time_scale;
+        ctrl.use_bang_bang_swing = ui_state.use_bang_bang_swing;
         if shoot {
             ctrl.request_shoot();
         }

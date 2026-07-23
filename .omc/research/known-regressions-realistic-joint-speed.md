@@ -1,116 +1,195 @@
-# Known Regressions After Realistic Joint-Speed/Torque Recalibration (2026-07-23)
+# Realistic Joint-Speed Recalibration — 조사·수정 기록
 
-16 tests fail after this branch's changes (recalibrated `max_joint_speed`
-~2.88 rad/s from real Dynamixel specs, dual-motor yaw torque fix, multi-seed
-IK manipulability selection, `NearSingularity` velocity gate). They are
-marked `#[ignore]` with a pointer to this document rather than fixed, so the
-suite stays green while the work is tracked as a separate follow-up.
+**최종 갱신: 2026-07-23 (3차 — 휴지 자세 재설계 + rough 관절 선추종으로 스윙 커밋 복구)**
 
-## Root cause (extensively investigated this session)
+| 차수 | 상태 |
+|---|---|
+| 1차 | 16개 테스트 `#[ignore]`. 원인을 "리치 부족 + `NearSingularity` 게이트"로 진단 |
+| 2차 | **그 진단이 틀렸음을 실측 확인.** 진짜 원인은 관절공간 **이동시간** (§2) |
+| 3차 | 원인 수정 → **테스트 126 passed / 0 failed / 2 ignored** (1차 시작점 111/0/16) |
 
-The 4-DOF arm's short reach (~45cm total) combined with the now-realistic
-joint speed cap (~2.88 rad/s, down from an unfounded 16.0/2.5 rad/s) makes
-many swing-planning scenarios exceed achievable joint velocity — gated by
-the new `NearSingularity` check in `src/planner/physics.rs::solve_impact_target`.
-This is a genuine, real physical finding, not a bug in the gate itself.
+---
 
-Three independent investigations converged on the same conclusion:
-1. **Reach/speed-budget calculation**: each joint's max linear contribution
-   (speed cap × remaining reach to end-effector) sums to ~3.7 m/s in the
-   unrealistic best case (perfect axis alignment); real configurations
-   deliver much less.
-2. **IK-seed manipulability analysis** (Jacobian SVD): the required racket
-   direction for a typical loft return aligns closely with the arm's
-   worst-conditioned singular direction at the default rest pose.
-3. **Mount-position + incoming-speed sweep**: tested realistic human rally
-   speeds (7-14 m/s, sourced from table tennis kinematics literature — see
-   below) and swept rail mount position (`Arm::competition_with_mount`).
-   Found:
-   - Required racket speed *decreases* as incoming ball speed increases
-     (restitution physics: `v_r = (v_out + e*v_in)/(1+e)` — a harder
-     incoming shot's own momentum does more of the work, like a "block" in
-     real table tennis). Optimal incoming speed for this arm: **~7-10 m/s**,
-     below even recreational rally speed (12-14 m/s per literature).
-   - **Impact height above the table is the dominant factor**, far more than
-     lateral position: heights of ~10-30cm above the table are largely
-     feasible; ~5cm (skidding low ball) or ~40cm+ (high lob) are infeasible
-     at any speed tested.
-   - Best realistic mount position (`base_y ≈ -0.05 to -0.14`, `height_offset
-     ≈ 0.0 to 0.08`) improves feasibility from ~0% (old unrealistic speeds) to
-     only **~20-21%** of a 150-scenario battery (position × height × speed ×
-     descend-angle grid) — a broad, flat plateau, not a sharp optimum, and
-     still far from complete coverage.
-4. **Analytic-model vs real Rapier simulation gap**: a simplified analytic
-   scenario battery (idealized "mostly -y, slight -z" incoming direction)
-   predicted much better feasibility (~39-55%) than what the *actual*
-   Rapier-simulated shooter+bounce trajectories produce at the same nominal
-   speed/height. The real bounce dynamics create different velocity-direction
-   compositions than the idealized model assumed. **This gap is unresolved**
-   — reconciling it requires further shooter `pitch_deg`/`height_offset_m`
-   tuning against the real physics, which this session did not complete
-   (see the follow-up sweep note below).
+## 1. 3차에서 무엇을 고쳤나
 
-## What changed and is KEPT (not reverted)
+### (a) 휴지(ready) 자세 재설계 — `constants::arm::READY_JOINTS_4DOF`
 
-- `RANDOM_SHOT_SPEED_MIN_MPS`/`MAX_MPS` (`src/sim/shooter.rs`): `[5.2, 5.5]` →
-  `[7.0, 10.0]` — the old range was calibrated against a since-invalidated
-  arm-speed assumption and was unrealistically slow vs. real human play.
-- Dual-motor yaw torque fix (`Arm::competition()`, `arm_from_urdf.rs`) — see
-  `.omc/research/torque-derate-analysis.md`.
-- Multi-seed IK manipulability selection (`candidate_ik_hints`,
-  `best_impact_candidate` in `src/planner/physics.rs`) and the new
-  `Arm::linear_velocities_for_racket_velocity` (position-only, no forced
-  orientation lock) — genuine improvements (30-45% required-speed reduction),
-  kept even though insufficient alone.
-- `NearSingularity` gate — kept; it correctly refuses to silently "succeed"
-  with a crushed near-zero-speed swing (the pre-existing behavior before this
-  branch), which would have been a worse outcome than an honest failure.
+이전 휴지 자세는 "관절 한계 중점"(URDF) 또는 `[0,0,-0.262,0]`(primitive)로,
+**중립적으로 보이지만 스윙 시작점으로는 나빴다**. 임팩트 자세까지 관절공간
+이동거리 Δq가 0.71~2.00 rad여서 quintic이 commit 창에 절대 못 들어왔다.
 
-## What's deferred (this document's purpose)
+`tools/shot_tune --rest-pose-search`로 산출:
+테이블 폭 전역(x 10~90%) × 접수 창(y 0.20~0.55) × 실현가능 높이 대역
+(면 위 10~30cm) × 대표 입사속도 3종 = 240 시나리오 중 IK 해가 있는 165개의
+임팩트 자세를 모아, **관절마다 그 각도 구간의 중점**(1D Chebyshev 중심)을 취했다.
 
-Making the 16 tests below pass requires **shooter trajectory geometry
-tuning** (`pitch_deg`, `height_offset_m`, possibly `speed_mps` per test) so
-that the *actual simulated* impact height/velocity lands in the ~10-30cm
-"feasible band" identified above, verified against the real Rapier physics
-(not just the analytic model). A first attempt (2D sweep of `speed_mps` ×
-`pitch_deg` for `BallShooterSettings::default()`) found the relationship
-non-monotonic and did not converge on a clean answer within this session's
-time budget. Follow-up work should:
+비용 `max_시나리오 max_관절 |Δq|`는 두 max가 교환 가능해 관절별로 분리되므로
+이 중점이 **정확한** minimax 최적해다(근사 아님). 평균이 아니라 최악값 기준인
+이유: quintic 소요시간은 가장 많이 움직이는 한 관절이 지배한다.
 
-1. Re-run a finer (`speed`, `pitch`, `height_offset_m`) 3D sweep against the
-   *real* Rapier ballistic trajectory (not the analytic direction model),
-   checking both `peak_joint_speed_ratio` (via `swing_feasibility`) and
-   `clears_net_ballistic`.
-2. Consider whether the mount-position change found here (`base_y`,
-   `height_offset_m` on `Arm::competition()`/`Arm::competition_with_mount`)
-   should also be applied to the *default* arm used by these tests, not just
-   evaluated in isolation via `tools/mount-search`.
-3. Update each listed test's fixture (hardcoded `Prediction` or
-   `BallShooterSettings`) to the tuned values once found.
+```
+READY_JOINTS_4DOF = [0.1207, 0.0, 0.1719, -0.6756]
+최악 Δq: 2.00 rad → 1.183 rad   |   필요시간: 1.30s → 0.770s
+```
 
-## List of currently-`#[ignore]`d tests
+### (b) rough 단계 관절 선추종 — `src/sim/world.rs::try_auto_swing`
 
-- `src/planner/bang_bang.rs`: `plan_bang_bang_swing_converges_for_a_reachable_impact`
-- `src/planner/physics.rs`: `plan_swing_reaches_impact_with_end_velocity`,
-  `plan_swing_moves_rail_to_impact_x`,
-  `best_swing_rejects_clamped_contact_and_selects_reachable_candidate`
-- `src/sim/world.rs`: `auto_swing_plans_with_strike_velocity`,
-  `quintic_swing_moves_robot_joints`,
-  `interrupting_swing_with_new_shot_does_not_permanently_break_robot`,
-  `random_shot_grid_clears_net_and_returns`,
-  `random_shot_fine_grid_clears_net_and_returns_for_fourdof_robot`,
-  `random_shot_grid_still_swings_when_robot_starts_from_center`,
-  `auto_swing_on_shoot_moves_rail`,
-  `ground_truth_rally_contacts_racket_clears_net_and_bounces_near_center`,
-  `repeated_full_random_shots_each_get_racket_contact`,
-  `plain_shoot_then_random_shoot_gets_racket_contact_broad_sweep`,
-  `robot_returns_to_center_after_swing_without_next_shot`,
-  `repeated_random_shoot_never_stalls_and_always_reparks`
+이전에는 rough 단계에서 **레일만** 옮기고 팔 관절은 일부러 두었다("미리 펴
+두면 windup이 줄어 리턴이 약해진다"). 그 대가로 Δq 전부가 commit 창으로
+떠넘겨져 **스윙이 아예 시작되지 않았다**. 이제 `plan_coarse_track`이 이미
+계산해 두고 버리던 관절 목표를 `RobotState::set_targets`로 함께 넘긴다.
+실제 이동은 기존 rate-limited·충돌 안전 추종 루프가 하므로 안전 특성은 그대로.
+
+(a)와 (b)는 **반드시 함께**여야 한다 — (b) 단독으로는 네트 통과 전 여유가
+~0.19s뿐이라 2.88 rad/s로 Δq를 못 덮고, (a) 단독으로도 0.770s > 0.175s다.
+
+### (c) 마운트 위치 — `constants::arm::{BASE_Y, MOUNT_HEIGHT_OFFSET_M}`
+
+커밋이 가능해진 뒤 다시 스윕하니 확실한 신호가 나왔다(시드 8종 × 12발 = 96발):
+
+| 마운트 | 성공률 |
+|---|---|
+| `base_y=+0.02, height=0.0` (이전) | 최고 **75/96**, 슈터 한 칸 차이로 **0/96**까지 무너지는 칼날 능선 |
+| `base_y=-0.02, height=0.05` | 여러 슈터 설정에서 **96/96**, 넓은 고원 |
+
+고원(`base_y` -0.10~-0.02)에서 실기 배치를 가장 덜 바꾸는 끝을 골랐다.
+height 0.05는 "실기 브래킷이 면보다 ~3cm 위"라는 실측 보고와도 겹친다 —
+이전의 `0.0`이 오히려 실기와 다른 단순화였다.
+
+primitive `Arm::competition()`과 URDF 카탈로그 로봇이 **같은 상수**를 공유하도록
+묶었다(같은 실물 로봇의 두 모델인데 마운트가 어긋나면 안 된다).
+
+⚠️ 이 두 상수는 **실기 하드웨어 배치**를 뜻한다. 실기 적용 여부는 사람 판단.
+
+### (d) 슈터 기본값 — `src/sim/shooter.rs`
+
+`shot_tune`으로 "성공률 8/8이 연속 유지되는 속도 대역"이 가장 넓은 조합을 골랐다.
+
+```
+default: speed 5.0 → 7.1 m/s,  pitch -2.0 → -4.0°,  height_offset 0.19 → 0.17 m
+RANDOM_SHOT_SPEED: [7.0, 10.0] → [6.8, 7.4] m/s
+```
+
+속도 대역이 크게 좁아진 것이 핵심 발견이다 — 고정 pitch/height에서 실제로
+받아낼 수 있는 입사속도 폭은 ~0.6 m/s뿐이다. 이전 [7.0, 10.0]은
+`swing_feasibility`(순간 조작성)로만 고른 값이라 실제 커밋 여부는 검증된 적이
+없었다.
+
+---
+
+## 2. (2차) 진짜 근본 원인과, 1차 진단이 빗나간 이유
+
+로봇은 "공을 못 친다"가 아니라 **"스윙을 시작조차 못 한다"**였다.
+실패 지점은 IK도 `NearSingularity` 게이트도 아니고 `build_feasible_trajectory`의
+quintic 검사였다.
+
+| 항목 | 2차 실측 |
+|---|---|
+| Δq (최대 관절) | 0.71 ~ 2.00 rad |
+| 필요 시간 (quintic 피크계수 1.875, 2.88 rad/s) | 0.46 ~ 1.30 s |
+| commit 시점 남은 시간 | 0.125 ~ 0.175 s |
+| **부족 배수** | **3 ~ 8배** |
+
+`fit_end_velocity`는 **끝속도만** 스케일다운하므로 이 문제를 못 고친다 —
+줄여야 하는 건 **이동거리**다.
+
+**1차가 빗나간 이유**: `build_feasible_trajectory`의 실패 경로가 전부
+`InverseKinematicsNoSolution`("목표가 도달 범위 밖")로 보고되고 있었다.
+IK 해가 멀쩡하고 필요 관절속도가 한계의 60%인 상황에서도 "도달 범위 밖"이
+떠서, 조사가 리치/속도 재보정 쪽으로 잘못 유도됐다.
+
+**수정**: 정직한 variant로 분리 — `TrajectoryExceedsLimits { violated }`
+(위반한 한계 이름: 관절 속도/각가속도/각도 범위, 레일 속도/범위),
+`TrajectoryExceedsTorque { utilization }`. 이 수정 덕에 병목이 `[관절 속도]`임이
+한 줄로 드러났다.
+
+### 같이 발견해 고친 잠재 버그: URDF 마운트가 기구학에 반영되지 않았음
+
+`arm_from_urdf::to_arm`이 레일을 primitive 템플릿에서 통째로 복사해,
+`SimRobotMount`의 y·z가 **뷰어 배치에만** 쓰이고 FK/IK에는 전혀 반영되지
+않았다. 실측: `base_y`를 **-1.0 ↔ +1.0 m**로 바꿔도 출력이 소수점까지 동일.
+마운트 튜닝이 원리적으로 불가능한 상태였다.
+회귀 테스트: `mount_position_reaches_arm_kinematics_not_just_the_viewer`.
+
+---
+
+## 3. 현재 상태 — 무엇이 되고 무엇이 안 되나
+
+### 되는 것 (실측, `tools/shot_tune`, 4-dof 카탈로그 로봇)
+
+| 지표 | 1·2차 | 3차 |
+|---|---|---|
+| 스윙 커밋 | **0** / 5,152 랠리 | **48/48** |
+| 라켓 접촉 | (수동 접촉만) | 48/48 |
+| 네트 통과 리턴 | — | 48/48 |
+| 레일이 테이블 중앙에서 시작(반복 랠리 재현) | — | 48/48 |
+
+**"로봇이 얼어붙는다"는 사용자 보고 증상은 해결됐다.**
+
+### 안 되는 것 — 리턴 배치(placement)
+
+리턴이 **너무 길어 상대 코트에 떨어지지 않는다**. 실측: 네트를 z=1.381
+(면 위 62cm)로 넘어 최대 y=2.889까지 날아간다(테이블 끝 2.74 초과 = 아웃).
+
+엄격 기준(리턴이 상대 코트에 실제 낙하)으로는 **48발 중 3발**만 성공.
+
+`RACKET_EFFECTIVE_RESTITUTION`을 0.42~0.82로 스윕해봤지만 최대 22%(e=0.58)에
+그쳐 **지배적 원인이 아니다** — 그래서 문서화된 캘리브레이션 값 0.42를 유지했다
+(나쁜 값을 다른 나쁜 값으로 바꾸는 churn 회피).
+
+⚠️ **측정 기준 주의**: `cleared_net`만 보면 이 결함이 안 보인다(48/48 통과).
+`contact`/`returned`도 마찬가지로 **가만히 있는 라켓에 맞고 튕기는 것**까지
+켜진다(2차에서 커밋 0인데 `cleared_net` 9/12였던 사례). `shot_tune`의
+`success`는 이제 `커밋 ∧ 적법한 입사 ∧ 리턴이 상대 코트 낙하`를 모두 요구한다.
+
+---
+
+## 4. `#[ignore]` 남은 테스트 2개 (16 → 2)
+
+1. `planner::bang_bang::plan_bang_bang_swing_converges_for_a_reachable_impact`
+   — 순수 토크 bang-bang 경로가 실기 한계상 수렴 불가. `swing_bench` 실측:
+   관절 4개 전부 **토크 100%·속도 100% 포화**로 2s cutoff까지 못 감(위치오차
+   0.039, 라켓속도 목표의 3.5%, 방향오차 102°). commit 창 상한 0.35s라 애초에
+   들어올 수 없다. **quintic 게임플레이 경로와 무관한 GUI 디버그 전용 경로**라
+   사용자 영향 없음.
+2. `sim::world::ground_truth_rally_contacts_racket_clears_net_and_bounces_near_center`
+   — §3의 리턴 배치 결함을 정확히 가리키는 **유효한 테스트**. 껍데기가 아니라
+   실제 미해결 결함이라 단언을 약화시키지 않고 그대로 둔다.
+
+### 갱신한 픽스처 (문서가 예고했던 대로)
+
+- `physics.rs::sample_prediction`, `bang_bang.rs::sample_prediction`:
+  "휴지 자세의 FK 위치"를 임팩트로 쓰던 것 → 실제 접수 평면·실현가능 높이
+  대역 안의 점. 휴지 자세를 옮긴 뒤 그 점이 오히려 특이점 근처가 됐다.
+- `world.rs::auto_swing_plans_with_strike_velocity`: 임팩트 z 1.05 → 0.932,
+  v_in (0,-4.22,0.37) → (0,-6.01,1.51) — **재튜닝된 슈터가 실제로 만드는 값**
+  (`shot_tune --explain` 실측). 이전 값은 옛 슈터 기준이라 이제 안 나온다.
+- `dynamics.rs::two_link_static_sanity_gravity_only`: yaw=0에서 평가하도록.
+  새 휴지 자세는 yaw≈0.12라 shoulder 축이 정확히 수직이 아니어서 중력
+  모멘트가 9.1e-6 N·m 나온다(stall의 3e-6 수준, 물리적으로 무시 가능하지만
+  이 테스트의 명제 자체가 "수직 축"이라 축을 수직으로 두고 봐야 의미가 있다).
+- 마운트 테스트 2개: "베이스가 면에 딱 붙어 있다" → "면 + `MOUNT_HEIGHT_OFFSET_M`".
+
+---
+
+## 5. 유지되는 결론 (되돌리지 않음)
+
+- `max_joint_speed` ~2.88 rad/s — 실기 Dynamixel 스펙 기반. 되돌리는 건 문제 은폐.
+- `NearSingularity` 게이트 — 2차에서 **병목이 아님**이 밝혀졌지만(비율 0.6에서도
+  커밋 실패), 저속 스윙으로 조용히 "성공"하는 걸 막는 역할은 유효.
+- 듀얼모터 yaw 토크 수정, 다중 IK 시드 조작성 선택,
+  `Arm::linear_velocities_for_racket_velocity`.
+
+## 6. 다음 작업 후보
+
+1. **리턴 배치 수정** (§3) — 유일하게 남은 사용자 영향 결함.
+   `required_racket_velocity` 모델 vs 실제 Rapier 접촉의 운동량 전달 차이를
+   재조사할 것. restitution 단일 상수로는 안 된다는 건 확인됨.
+2. `fourdof_ground_truth_rally_contacts_racket_and_returns`는 여전히
+   `contact`/`returned`만 봐서 **능동 스윙을 검증하지 못한다**(수동 접촉으로도
+   통과). `swing_committed()` 단언 추가 권장.
 
 ## Sources
 
-- Table tennis rally/forehand speed literature (recreational 12-14 m/s, elite
-  21-26 m/s, forehand drive ~16 m/s) — cited in this session's research, not
-  re-saved as a separate doc.
-- `.omc/research/torque-derate-analysis.md` (dual-motor yaw, torque derate)
-- `.omc/research/dynamixel-specs.md` (original motor spec sourcing)
+- `.omc/research/torque-derate-analysis.md`, `.omc/research/dynamixel-specs.md`
+- 본 문서의 모든 수치는 `tools/shot_tune` / `tools/swing_bench` 실행 결과 (2026-07-23).

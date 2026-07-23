@@ -8,12 +8,34 @@ use urdf_rs::JointType;
 use super::{UrdfLoadError, UrdfRobot, fk};
 
 pub fn to_arm(urdf: &UrdfRobot, max_joint_speed: f64) -> Result<Arm, UrdfLoadError> {
-    let defaults = urdf.default_joints();
+    // URDF의 관절 한계 중점(`UrdfRobot::default_joints`)은 "중립적으로 보이는"
+    // 자세일 뿐 스윙 시작점으로는 나쁘다 — 임팩트 자세까지 관절공간 이동이
+    // 멀어 commit 창 안에 quintic이 안 들어온다. 4축 경진용 체인은 근거 있는
+    // 휴지 자세 상수를 쓴다(`READY_JOINTS_4DOF` 주석에 산출 과정).
+    // 축 수가 다른 URDF(예: 3축 `urdf-test`)는 이 상수가 의미가 없으므로
+    // 기존 한계 중점을 그대로 둔다.
+    let mut defaults = urdf.default_joints();
+    if defaults.values.len() == crate::constants::arm::READY_JOINTS_4DOF.len() {
+        defaults = crate::Joints::from_slice(&crate::constants::arm::READY_JOINTS_4DOF);
+    }
     let limits = urdf.joint_limits();
     let template = Arm::competition().map_err(|e| UrdfLoadError::ArmConversion {
         reason: format!("레일·베이스 템플릿: {e}"),
     })?;
-    let rail = template.rail.expect("competition arm은 레일 포함");
+    // 레일의 이동 범위(x_min/x_max)·최대속도는 실기 하드웨어 제원이라
+    // primitive 템플릿에서 그대로 가져오되, **베이스가 놓인 위치**(y·z)는
+    // 이 URDF의 마운트(`SimRobotMount`)를 따른다.
+    //
+    // 이전에는 레일 전체를 템플릿에서 복사해 `urdf.mount`의 y·z가 기구학에
+    // 전혀 반영되지 않았다(2026-07-23 발견). `Arm::mount_at_rail`은 레일이
+    // 있으면 `rail.mount_point()`만 보고 `Arm::base`(= 마운트 translation)를
+    // 무시하므로, 마운트를 어디로 옮겨도 FK/IK 결과가 한 치도 안 바뀌었다
+    // (실측: base_y를 -1.0m ↔ +1.0m로 바꿔도 `swing_feasibility` 출력이
+    // 완전히 동일). 마운트 위치는 뷰어 배치에만 쓰이고 기구학과 조용히
+    // 어긋나 있었던 셈이라, 마운트 위치 튜닝 자체가 불가능했다.
+    let mut rail = template.rail.expect("competition arm은 레일 포함");
+    rail.mount_y = urdf.mount.position[1];
+    rail.mount_z = urdf.mount.position[2];
     let full_chain = fk::chain_joint_indices(&urdf.robot, &urdf.ee_link).ok_or_else(|| {
         UrdfLoadError::ArmConversion {
             reason: format!("root에서 EE `{}`까지 체인을 찾을 수 없습니다", urdf.ee_link),

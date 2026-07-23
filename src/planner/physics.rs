@@ -422,7 +422,7 @@ const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
 /// 끝에서 반대쪽 끝으로 급하게 움직이는 궤적을 못 만든다 — 매 스윙 뒤 항상
 /// 중앙으로 복귀시켜 다음 스윙의 시작 조건을 일정하게 유지한다. 볼 예측이
 /// 없으므로 `plan_swing`과 달리 목표 소요 시간이 정해져 있지 않다 — 관절·
-/// 레일 속도/가속/토크 한계(`trajectory_within_limits`)를 만족할 때까지
+/// 레일 속도/가속/토크 한계(`kinematic_limit_violation`·`peak_torque_utilization`)를 만족할 때까지
 /// 소요 시간을 점진적으로 늘려가며 찾는다.
 pub fn plan_return_to_center(arm: &Arm, start: &RobotPose) -> Result<SwingTrajectory, DomainError> {
     let center_joints = arm.default_joints.clone();
@@ -527,18 +527,24 @@ fn build_feasible_trajectory(
         duration,
         fitted_rail,
     );
-    if !trajectory_within_limits(arm, &trajectory) {
-        return Err(SwingPlanError::InverseKinematicsNoSolution {
-            target_x: fitted_rail.end,
-            target_y: 0.0,
-            target_z: table::SURFACE_Z,
+    // 두 원인(관절 각도/속도 vs 토크)을 나눠 보고한다 — 어느 쪽이 병목인지에
+    // 따라 대응이 완전히 다르기 때문(전자는 기구학/마운트, 후자는 모터 선정).
+    if let Some(violated) = kinematic_limit_violation(arm, &trajectory) {
+        return Err(SwingPlanError::TrajectoryExceedsLimits {
+            rail_end_x: fitted_rail.end,
+            violated,
+        });
+    }
+    let torque_utilization = peak_torque_utilization(arm, &trajectory);
+    if torque_utilization > 1.0 {
+        return Err(SwingPlanError::TrajectoryExceedsTorque {
+            rail_end_x: fitted_rail.end,
+            utilization: torque_utilization,
         });
     }
     if !trajectory_collision_free(arm, &trajectory) {
-        return Err(SwingPlanError::InverseKinematicsNoSolution {
-            target_x: fitted_rail.end,
-            target_y: 0.0,
-            target_z: table::SURFACE_Z,
+        return Err(SwingPlanError::TrajectoryCollides {
+            rail_end_x: fitted_rail.end,
         });
     }
     return Ok(trajectory);
@@ -656,34 +662,46 @@ fn peak_torque_utilization(arm: &Arm, trajectory: &SwingTrajectory) -> f64 {
 /// 토크 샘플링(Newton-Euler)이 상대적으로 비싸서, 토크 이용률을 이미 따로
 /// 계산한 호출부(`fit_end_velocity`)가 중복 계산을 피하도록 분리했다.
 fn kinematic_limits_ok(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
-    let joints_ok = trajectory.peak_joint_speed() <= arm.max_joint_speed
-        && trajectory.peak_joint_acceleration() <= MAX_JOINT_ACCEL;
-    let rail_ok = arm
+    return kinematic_limit_violation(arm, trajectory).is_none();
+}
+
+/// 어떤 기구학 한계를 위반했는지 이름을 돌려준다 (`None`이면 위반 없음).
+///
+/// 단순 bool이면 "궤적이 한계를 넘음"까지만 알 수 있어, 마운트/슈터
+/// 튜닝으로 고칠 수 있는 문제인지(관절 각도·레일 범위) 아니면 시간
+/// 예산 문제인지(속도·가속) 구분이 안 된다. 실제로 이 구분이 없어서
+/// 2026-07-23 조사가 한동안 엉뚱한 축(리치/관절속도 재보정)을 팠다.
+fn kinematic_limit_violation(
+    arm: &Arm,
+    trajectory: &SwingTrajectory,
+) -> Option<&'static str> {
+    if trajectory.peak_joint_speed() > arm.max_joint_speed {
+        return Some("관절 속도");
+    }
+    if trajectory.peak_joint_acceleration() > MAX_JOINT_ACCEL {
+        return Some("관절 각가속도");
+    }
+    if arm
         .rail
         .as_ref()
-        .map_or(true, |rail| trajectory.peak_rail_speed() <= rail.max_speed);
-    if !joints_ok || !rail_ok {
-        return false;
+        .is_some_and(|rail| trajectory.peak_rail_speed() > rail.max_speed)
+    {
+        return Some("레일 속도");
     }
     let samples = (trajectory.duration_secs / 0.002).ceil() as usize;
     for index in 0..=samples.max(1) {
         let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
         if !arm.joints_in_limits(&trajectory.sample_at(time)) {
-            return false;
+            return Some("관절 각도 범위");
         }
         if let Some(rail) = &arm.rail {
             let x = trajectory.sample_rail_at(time);
             if !(rail.x_min..=rail.x_max).contains(&x) {
-                return false;
+                return Some("레일 이동 범위");
             }
         }
     }
-    return true;
-}
-
-fn trajectory_within_limits(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
-    return kinematic_limits_ok(arm, trajectory)
-        && peak_torque_utilization(arm, trajectory) <= 1.0;
+    return None;
 }
 
 /// quintic이 관절 한계 안에 들어오도록 임팩트 각속도를 점진적으로 줄인다 ( 근사).
@@ -763,17 +781,29 @@ mod tests {
         return RobotPose::new(rail_x, arm.default_joints.clone());
     }
 
+    /// 대표 임팩트 높이 [m] — 탁구대 면 위. 1차 조사가 찾아낸 "실현 가능
+    /// 대역"(10~30cm)의 한가운데.
+    const SAMPLE_IMPACT_HEIGHT_M: f64 = 0.18;
+
+    /// 이 팔이 실제로 마주치는 대표 임팩트 예측.
+    ///
+    /// 예전에는 "휴지 자세의 FK 위치"를 그대로 임팩트로 썼다 — 휴지 자세가
+    /// 관절 한계 중점이던 시절엔 그게 자명하게 도달 가능한 점이라 편했다.
+    /// 휴지 자세를 임팩트 자세들 쪽으로 옮긴 뒤(`READY_JOINTS_4DOF`)로는
+    /// 그 점이 오히려 **특이점 근처**가 됐다(실측: 관절 2가 9.77 rad/s 요구).
+    /// "휴지 자세가 가리키는 곳"은 애초에 물리적 의미가 없는 임팩트라,
+    /// 실제 접수 창·실현가능 높이 대역 안의 점으로 바꾼다.
     fn sample_prediction(time_to_impact_secs: f64) -> Prediction {
-        let arm = sample_three_dof_arm();
-        let rail_x = arm.rail.as_ref().map(|r| r.default_x()).unwrap_or(0.0);
-        let impact_position = arm
-            .forward_kinematics_with_rail(rail_x, &arm.default_joints)
-            .expect("기본 자세 FK")
-            .position;
         return Prediction {
             time_to_impact_secs,
-            impact_position,
-            incoming_velocity: Vector3::new(0.0, -4.0, -0.2),
+            impact_position: crate::Point3::new(
+                table::WIDTH_X * 0.5,
+                table::DEFAULT_HIT_PLANE_Y,
+                table::SURFACE_Z + SAMPLE_IMPACT_HEIGHT_M,
+            ),
+            // 튜닝된 슈터가 바운스 뒤 실제로 만드는 조성(수평 ~7 m/s에
+            // 완만한 상승)에 맞춘다.
+            incoming_velocity: Vector3::new(0.0, -7.0, 0.7),
         };
     }
 
@@ -795,8 +825,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn plan_swing_reaches_impact_with_end_velocity() {
         let arm = sample_three_dof_arm();
         let start = sample_start(&arm);
@@ -895,8 +923,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn plan_swing_moves_rail_to_impact_x() {
         let arm = sample_three_dof_arm();
         let start = RobotPose::new(0.1, arm.default_joints.clone());
@@ -905,15 +931,17 @@ mod tests {
         // 건 진짜로 실현 불가능해졌다(quintic peak 속도가 5.0 m/s 한계를 넘음).
         // 0.5배는 같은 "레일이 임팩트 x로 움직인다"는 의도를 유지하면서 실제
         // 도달 가능한 거리로 남겨둔다.
-        let reachable = arm
-            .forward_kinematics_with_rail(table::WIDTH_X * 0.5, &arm.default_joints)
-            .expect("FK")
-            .position;
-        let impact = crate::Point3::new(reachable.v.x, table::DEFAULT_HIT_PLANE_Y, reachable.v.z);
+        // 임팩트는 레일 중앙(x) × 접수 평면(y) × 실현가능 높이 대역(z).
+        // 시작 레일이 0.1이므로 레일이 실제로 x 쪽으로 움직여야 한다.
+        let impact = crate::Point3::new(
+            table::WIDTH_X * 0.5,
+            table::DEFAULT_HIT_PLANE_Y,
+            table::SURFACE_Z + SAMPLE_IMPACT_HEIGHT_M,
+        );
         let prediction = Prediction {
             time_to_impact_secs: 0.3,
             impact_position: impact,
-            incoming_velocity: Vector3::new(0.0, -5.0, -0.2),
+            incoming_velocity: Vector3::new(0.0, -7.0, 0.7),
         };
         let trajectory = plan_swing(&arm, prediction, &start).expect("스윙 계획");
         let pose = arm
@@ -927,12 +955,14 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "known regression after realistic joint-speed recalibration — \
-                see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn best_swing_rejects_clamped_contact_and_selects_reachable_candidate() {
         let arm = sample_three_dof_arm();
         let start = sample_start(&arm);
-        let reachable = sample_prediction(0.18);
+        // 0.18s는 이 팔이 휴지 자세에서 임팩트 자세까지 quintic으로 가기엔
+        // 너무 짧다(실측 최소 ~0.29s) — 이 테스트가 보려는 건 "도달 불가
+        // 후보를 버리고 도달 가능 후보를 고르는가"지 시간 예산이 아니라서,
+        // 실제로 실현 가능한 시간을 준다.
+        let reachable = sample_prediction(0.32);
         let mut unreachable = reachable;
         unreachable.impact_position.v.x = 100.0;
         unreachable.impact_position.v.y = 0.55;
@@ -1006,6 +1036,12 @@ mod tests {
             0.30,
             RailMotion::fixed(start.rail_x),
         );
-        assert!(!trajectory_within_limits(&arm, &trajectory));
+        // 한계 위반은 "무엇을" 어겼는지까지 잡힌다 (이전엔 bool 하나였다).
+        assert_eq!(
+            kinematic_limit_violation(&arm, &trajectory),
+            Some("관절 속도"),
+            "임팩트 각속도 4.0 rad/s는 한계 {:.2} rad/s를 넘어야 함",
+            arm.max_joint_speed
+        );
     }
 }

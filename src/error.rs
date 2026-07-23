@@ -43,6 +43,26 @@ pub enum SwingPlanError {
         required_speed: f64,
         speed_limit: f64,
     },
+    /// 임팩트 자세·목표속도 자체는 도달 가능한데, 거기까지 잇는 quintic
+    /// 궤적(+ 팔로스루)이 중간에 관절 각도/속도 한계를 벗어남.
+    ///
+    /// 이전에는 이 실패가 `InverseKinematicsNoSolution`으로 보고돼
+    /// "목표가 팔 도달 범위 밖"이라는 **사실과 다른** 메시지가 나갔다
+    /// (2026-07-23). 실제로는 목표에 IK 해가 멀쩡히 있고 필요 관절속도도
+    /// 한계의 60% 수준인데도 같은 메시지가 떠, 조사 방향이 리치/속도
+    /// 재보정 쪽으로 잘못 유도됐다.
+    TrajectoryExceedsLimits {
+        rail_end_x: f64,
+        /// 실제로 위반한 한계 이름 (관절 속도/각가속도/각도 범위, 레일 속도/범위).
+        violated: &'static str,
+    },
+    /// 궤적이 관절 각도/속도 한계는 지키지만 **토크** 한계를 넘음.
+    /// `utilization`은 최악 관절의 `|토크|/한계` 비율(>1이면 초과).
+    TrajectoryExceedsTorque { rail_end_x: f64, utilization: f64 },
+    /// 임팩트 자세는 도달 가능한데 궤적 중간에 테이블 등과 충돌한다.
+    ///
+    /// 위와 같은 이유로 별도 variant로 분리했다.
+    TrajectoryCollides { rail_end_x: f64 },
 }
 
 /// 관측/삼각측량 관련 오류.
@@ -125,6 +145,28 @@ impl fmt::Display for SwingPlanError {
                 f,
                 "특이점 근처 IK 해 - 관절 {joint_index} 필요속도 {required_speed:.2} rad/s \
                  가 한계 {speed_limit:.2} rad/s를 크게 초과"
+            ),
+            Self::TrajectoryExceedsLimits {
+                rail_end_x,
+                violated,
+            } => write!(
+                f,
+                "임팩트 자세는 도달 가능하나 quintic 궤적이 중간에 [{violated}] \
+                 한계를 벗어남 (레일 끝 x={rail_end_x:.3} m)"
+            ),
+            Self::TrajectoryExceedsTorque {
+                rail_end_x,
+                utilization,
+            } => write!(
+                f,
+                "임팩트 자세는 도달 가능하나 궤적이 토크 한계를 초과 \
+                 (최악 관절 이용률 {:.0}%, 레일 끝 x={rail_end_x:.3} m)",
+                utilization * 100.0
+            ),
+            Self::TrajectoryCollides { rail_end_x } => write!(
+                f,
+                "임팩트 자세는 도달 가능하나 궤적 중간에 충돌 발생 \
+                 (레일 끝 x={rail_end_x:.3} m)"
             ),
         };
     }

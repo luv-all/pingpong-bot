@@ -302,12 +302,15 @@ mod tests {
         // 수평 축(yaw/elbow/wrist)은 유한한 중력 토크를 낸다.
         let arm = Arm::competition().expect("competition arm");
         let n = arm.joint_count();
-        let tau = required_joint_torques(
-            &arm,
-            &arm.default_joints,
-            &vec![0.0; n],
-            &vec![0.0; n],
-        );
+        // yaw=0에서 평가한다. shoulder 축이 정확히 월드 z(수직)가 되는 것은
+        // yaw가 0일 때뿐이라, 휴지 자세(`READY_JOINTS_4DOF`, yaw≈0.12 rad)를
+        // 그대로 쓰면 축이 살짝 기울어 중력 모멘트가 정확히 0이 아니다
+        // (실측 9.1e-6 N*m — stall 토크의 3e-6 수준으로 물리적으로는 무시할
+        // 값이지만, 이 테스트가 검증하려는 명제는 "수직 축에는 중력
+        // 모멘트가 없다"이므로 축을 수직으로 두고 봐야 의미가 있다).
+        let mut joints = arm.default_joints.clone();
+        joints.values[0] = 0.0;
+        let tau = required_joint_torques(&arm, &joints, &vec![0.0; n], &vec![0.0; n]);
         // shoulder 축은 월드 z(수직)라 중력 모멘트가 0에 가깝다.
         assert!(
             tau[1].abs() < 1e-6,

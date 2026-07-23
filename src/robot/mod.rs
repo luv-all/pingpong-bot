@@ -23,6 +23,7 @@ pub use catalog::{
     DEFAULT_ROBOT_ID, ROBOTS, RobotEntry, find_robot, robot_ids_csv, shared_competition_arm,
 };
 pub use loader::{MountPreset, RobotBuildError, RobotBuilder, SimRobot};
+pub use urdf::SimRobotMount;
 pub use serial::{SerialChain, SerialChainError, SerialJoint};
 pub use state::RobotState;
 pub use urdf::{UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfRobot};
@@ -262,8 +263,10 @@ impl Arm {
     /// 앱에서 쓰는 프리셋은 `crate::pipeline::ROBOTS`.
     /// primitive 모델도 URDF 모델과 같은 직렬 체인을 쓴다.
     pub fn competition() -> Result<Self, ArmBuildError> {
-        use crate::constants::arm::BASE_Y;
-        return Self::competition_with_mount(BASE_Y, 0.0);
+        use crate::constants::arm::{BASE_Y, MOUNT_HEIGHT_OFFSET_M};
+        // URDF 카탈로그 로봇과 **같은** 마운트를 써야 한다 — 같은 실물 로봇의
+        // 두 모델이다(`SimRobotMount::rep103_z_up_at_table_end`도 이 상수들).
+        return Self::competition_with_mount(BASE_Y, MOUNT_HEIGHT_OFFSET_M);
     }
 
     /// [`Arm::competition`]과 같지만 레일 마운트 위치(테이블과의 거리·높이)를
@@ -574,7 +577,8 @@ impl Arm {
                     Some(JointLimit::new(-2.094395, 2.094395)),
                 ],
                 link_inertials,
-                Joints::from_slice(&[0.0, 0.0, -0.2617995, 0.0]),
+                // 휴지 자세는 근거 있는 SSOT 상수 — 산출 근거는 그쪽 주석 참고.
+                Joints::from_slice(&crate::constants::arm::READY_JOINTS_4DOF),
             )
             .aggregated_inertials(aggregated_inertials)
             .joint_torque_limits(joint_torque_limits)

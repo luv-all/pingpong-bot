@@ -40,8 +40,22 @@ pub const RANDOM_SHOT_TARGET_PADDING_M: f64 = 0.45;
 /// (블록 기술과 같은 원리), 임팩트 높이가 정상 범위(테이블 위 10~30cm)일
 /// 때 6~10 m/s 부근에서 최적이었다. 이 범위는 레크리에이션 랠리 속도의
 /// 하한(12-14 m/s)보다도 낮아 사람이 정상적으로만 쳐도 커버된다.
-pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 7.0;
-pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 10.0;
+/// **2026-07-23 3차 갱신** — 위 [7.0, 10.0]은 `swing_feasibility`(순간 조작성)
+/// 기준으로만 고른 값이라, 실제로 로봇이 스윙을 커밋해 받아치는지는 검증된
+/// 적이 없었다. 휴지 자세 재설계 + rough 관절 선추종으로 커밋이 가능해진 뒤
+/// `tools/shot_tune`(실제 Rapier 랠리 성공률)으로 다시 재면, 이 팔이 실제로
+/// 받아낼 수 있는 입사속도 대역은 훨씬 좁다:
+///
+/// `pitch=-4°, height_offset=0.17m` 기준 성공률 8/8이 연속으로 유지되는 구간이
+/// **6.8 ~ 7.4 m/s**다(0.2 m/s 격자 실측). 6.6 이하·7.6 이상은 급격히 무너진다.
+/// 다른 pitch/height를 골라도 연속 대역 폭은 비슷하게 ~0.6 m/s였고, 그중 이
+/// 조합이 가장 넓었다.
+///
+/// 이 대역은 사람 랠리 속도(레크리에이션 12-14 m/s)보다 여전히 느리다 — 이
+/// 팔의 관절속도 예산(~2.88 rad/s)이 그만큼 빡빡하다는 뜻이지, 슈터를 더
+/// 빠르게 만들 수 있다는 뜻이 아니다.
+pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 6.8;
+pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 7.4;
 
 /// 슈터 설치 위치 (월드 좌표, Z-up).
 pub struct ShooterLayout;
@@ -82,13 +96,19 @@ pub struct BallShooterSettings {
 
 impl Default for BallShooterSettings {
     fn default() -> Self {
+        // speed/pitch/height는 `tools/shot_tune` 실측으로 고른 값 —
+        // `pitch=-4°, height=0.17m`이 "성공률 8/8이 연속으로 유지되는 속도
+        // 대역"이 가장 넓은 조합이었고(6.8~7.4 m/s), speed는 그 대역의
+        // 중앙값(7.1)을 쓴다. 근거는 `RANDOM_SHOT_SPEED_MIN_MPS` 주석 참고.
+        // 예전 값(5.0 / -2.0° / 0.19m)에서는 로봇이 스윙을 아예 커밋하지
+        // 못했다(실측 커밋 0회) — 공은 가만히 있는 라켓에 맞고 튕길 뿐이었다.
         return Self {
-            speed_mps: 5.0,
+            speed_mps: 7.1,
             yaw_deg: 0.0,
-            pitch_deg: -2.0,
+            pitch_deg: -4.0,
             roll_deg: 0.0,
             lateral_offset_m: 0.0,
-            height_offset_m: 0.19,
+            height_offset_m: 0.17,
             topspin_rad_s: 0.0,
             sidespin_rad_s: 0.0,
             drill_spin_rad_s: 0.0,
