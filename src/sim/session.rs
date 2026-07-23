@@ -5,14 +5,13 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::Clock;
 use tracing::info;
 
 use super::controls::SimRuntimeControls;
 use super::world::{SimStepInput, SimWorld};
 use crate::camera::SimCamera;
 use crate::hardware::SimHardware;
-use crate::robot::urdf::UrdfRobot;
+use crate::robot::urdf::UrdfModel;
 
 /// sim 실행 설정.
 #[derive(Debug, Clone, Copy)]
@@ -59,10 +58,9 @@ impl SimClockHandle {
     pub fn sim_time_secs(&self) -> f64 {
         return *self.sim_time.lock().expect("sim 시간");
     }
-}
 
-impl Clock for SimClockHandle {
-    fn now(&self) -> Instant {
+    /// sim 경과를 wall `Instant`로 노출 (관측 타임스탬프용).
+    pub fn now(&self) -> Instant {
         let secs = *self.sim_time.lock().expect("sim 시간");
         return self.origin + Duration::from_secs_f64(secs);
     }
@@ -89,7 +87,7 @@ impl SimSession {
     pub fn new(
         config: SimSessionConfig,
         arm: Arc<crate::Arm>,
-        urdf: Option<Arc<UrdfRobot>>,
+        urdf: Option<Arc<UrdfModel>>,
         controls: Arc<Mutex<SimRuntimeControls>>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
@@ -99,7 +97,7 @@ impl SimSession {
             urdf,
             controls,
             shutdown,
-            crate::entry::competition_physics(),
+            crate::defaults::physics(),
         );
     }
 
@@ -107,7 +105,7 @@ impl SimSession {
     pub fn with_physics(
         config: SimSessionConfig,
         arm: Arc<crate::Arm>,
-        urdf: Option<Arc<UrdfRobot>>,
+        urdf: Option<Arc<UrdfModel>>,
         controls: Arc<Mutex<SimRuntimeControls>>,
         shutdown: Arc<AtomicBool>,
         physics: crate::PhysicsParams,

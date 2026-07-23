@@ -1,0 +1,139 @@
+//! 활성 로봇 · URDF 프리셋.
+//!
+//! 런타임이 쓰는 것은 [`robot`]. 바꾸려면 그 본문만 고친다.
+//! 리니어모터 철제 프레임 위치는 [`rail_frame`].
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use nalgebra::{Isometry3, UnitQuaternion, Vector3};
+
+use crate::constants::table;
+use crate::robot::{
+    Arm, ArmBuildError, JointLimit, Joints, MountPreset, RailFrame, Robot, RobotBuildError,
+    RobotBuilder, SerialChain, SerialJoint,
+};
+
+/// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·윗면 기준).
+///
+/// 실측: 끝면 뒤 20 cm, 윗면 위 20 cm.
+pub fn rail_frame() -> RailFrame {
+    return RailFrame {
+        behind_table_end: 0.20,
+        above_table: 0.20,
+    };
+}
+
+/// 경연용 4-dof primitive.
+pub fn arm() -> Result<Arm, ArmBuildError> {
+    const MAX_JOINT_SPEED: f64 = 16.0;
+    const RAIL_MAX_SPEED: f64 = 12.0;
+
+    let frame = rail_frame();
+    let mount_y = frame.mount_y();
+    let mount_z = frame.mount_z();
+
+    let joints = vec![
+        SerialJoint::new(
+            Isometry3::translation(-0.02575, 0.028, 0.0601),
+            Vector3::new(-1.0, 0.0, 0.0),
+        )
+        .expect("4-dof q0 axis"),
+        SerialJoint::new(
+            Isometry3::translation(0.0255, 0.0, 0.0825),
+            Vector3::new(0.0, 0.0, -1.0),
+        )
+        .expect("4-dof q1 axis"),
+        SerialJoint::new(
+            Isometry3::translation(0.0, 0.025, 0.1398),
+            Vector3::new(-1.0, 0.0, 0.0),
+        )
+        .expect("4-dof q2 axis"),
+        SerialJoint::new(
+            Isometry3::translation(0.0, 0.1518, 0.0),
+            Vector3::new(-1.0, 0.0, 0.0),
+        )
+        .expect("4-dof q3 axis"),
+    ];
+    let chain = SerialChain::new(
+        UnitQuaternion::identity(),
+        joints,
+        Isometry3::translation(0.0, 0.0513, -0.034),
+    )
+    .expect("4-dof serial chain");
+    return Arm::builder()
+        .base_xyz(0.0, mount_y, mount_z)
+        .linear_rail(mount_y, mount_z, 0.0, table::WIDTH_X, RAIL_MAX_SPEED)
+        .serial_chain(
+            chain,
+            vec![
+                None,
+                Some(JointLimit::new(-0.523599, 0.523599)),
+                Some(JointLimit::new(-2.007129, 1.48353)),
+                Some(JointLimit::new(-2.094395, 2.094395)),
+            ],
+            Joints::from_slice(&[0.0, 0.0, -0.2617995, 0.0]),
+        )
+        .max_joint_speed(MAX_JOINT_SPEED)
+        .build();
+}
+
+/// `arm()`을 `Arc`로 (파이프라인·테스트용).
+pub fn shared_arm() -> Arc<Arm> {
+    return Arc::new(arm().expect("defaults::arm"));
+}
+
+/// `assets/robots/4-dof` URDF 프리셋 (진단·비교용).
+pub fn urdf_4dof() -> Result<Robot, RobotBuildError> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/robots/4-dof/urdf/all-4-export.urdf");
+    return RobotBuilder::new()
+        .urdf(&path)
+        .ee_link_opt(Some("pingpong_paddle_v5_1"))
+        .mount_preset(MountPreset::Rep103AtTableEnd)
+        .max_joint_speed(16.0)
+        .build();
+}
+
+/// `assets/robots/urdf-test` 프리셋.
+pub fn urdf_test() -> Result<Robot, RobotBuildError> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+        "assets/robots/urdf-test/urdf-test_description/urdf/urdf-test.urdf",
+    );
+    return RobotBuilder::new()
+        .urdf(&path)
+        .ee_link_opt(Some("pingpong_paddle_v5_1"))
+        .mount_preset(MountPreset::Rep103AtTableEnd)
+        .max_joint_speed(16.0)
+        .build();
+}
+
+/// **지금 쓰는 로봇.** 바꾸려면 이 함수 본문만 고친다 (`urdf_4dof` 등).
+pub fn robot() -> Result<Robot, ArmBuildError> {
+    return Ok(Robot::from_arm(arm()?));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::table;
+
+    #[test]
+    fn rail_frame_mounts_behind_and_above_table() {
+        let frame = rail_frame();
+        assert!((frame.mount_y() - (-0.20)).abs() < 1e-12);
+        assert!((frame.mount_z() - (table::SURFACE_Z + 0.20)).abs() < 1e-12);
+        assert_eq!(frame.mount_xyz0(), [0.0, -0.20, table::SURFACE_Z + 0.20]);
+    }
+
+    #[test]
+    fn arm_follows_rail_frame() {
+        let arm = arm().expect("arm");
+        let frame = rail_frame();
+        assert!((arm.base.coords.y - frame.mount_y()).abs() < 1e-12);
+        assert!((arm.base.coords.z - frame.mount_z()).abs() < 1e-12);
+        let rail = arm.rail.expect("rail");
+        assert!((rail.mount_y - frame.mount_y()).abs() < 1e-12);
+        assert!((rail.mount_z - frame.mount_z()).abs() < 1e-12);
+    }
+}

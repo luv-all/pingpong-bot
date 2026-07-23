@@ -316,7 +316,7 @@ pub fn draw_world_velocity(
     let Some(from) = params.project_world(origin) else {
         return Ok(());
     };
-    let tip = Point3::from(origin.v + vel * dt_draw);
+    let tip = Point3::from(origin.coords + vel * dt_draw);
     let Some(to) = params.project_world(tip) else {
         return draw_circle_px(img, from, 6, color, 2);
     };

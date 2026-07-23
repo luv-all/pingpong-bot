@@ -67,7 +67,7 @@ pub struct SimWorld {
     /// 테이블·공 반발 등
     pub physics: PhysicsParams,
     /// URDF 기반 FK·뷰어 (선택)
-    pub urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>,
+    pub urdf: Option<Arc<crate::robot::urdf::UrdfModel>>,
     /// 런타임 관절 상태 (명령 / 플래너)
     pub robot: RobotState,
     /// sim 경과 시간 [s]
@@ -106,14 +106,14 @@ impl SimWorld {
     /// 탁구대·슈터·주차된 공·로봇 라켓을 배치한다.
     ///
     /// 제어·Rapier 라켓·URDF 뷰어는 같은 관절 순서와 기구학을 사용한다.
-    pub fn new(arm: Arc<Arm>, urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>) -> Self {
-        return Self::with_physics(arm, urdf, crate::entry::competition_physics());
+    pub fn new(arm: Arc<Arm>, urdf: Option<Arc<crate::robot::urdf::UrdfModel>>) -> Self {
+        return Self::with_physics(arm, urdf, crate::defaults::physics());
     }
 
     /// config `[physics]` 반발 등을 Rapier collider에 반영한다.
     pub fn with_physics(
         arm: Arc<Arm>,
-        urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>,
+        urdf: Option<Arc<crate::robot::urdf::UrdfModel>>,
         physics: PhysicsParams,
     ) -> Self {
         let mut integration_parameters = IntegrationParameters::default();
@@ -181,7 +181,7 @@ impl SimWorld {
         let default_shooter = BallShooterSettings::default();
 
         // 다물체 암: τ_max 모터 추종 (볼 충돌체는 붙이지 않음 — 링크 프레임 ≠ FK 라켓).
-        let mount = nalgebra::Vector3::new(robot.rail_x(), arm.base.v.y, arm.base.v.z);
+        let mount = nalgebra::Vector3::new(robot.rail_x(), arm.base.coords.y, arm.base.coords.z);
         let arm_bodies = ArmMultibody::spawn(
             &mut rigid_body_set,
             &mut collider_set,
@@ -638,7 +638,7 @@ impl SimWorld {
     }
 
     /// URDF 모델 (있으면 FK·뷰어에 사용).
-    pub fn urdf(&self) -> Option<&crate::robot::urdf::UrdfRobot> {
+    pub fn urdf(&self) -> Option<&crate::robot::urdf::UrdfModel> {
         return self.urdf.as_deref();
     }
 
@@ -657,7 +657,7 @@ impl SimWorld {
             return urdf.mount;
         }
         return crate::robot::urdf::SimRobotMount {
-            position: [self.arm.base.v.x, self.arm.base.v.y, self.arm.base.v.z],
+            position: [self.arm.base.coords.x, self.arm.base.coords.y, self.arm.base.coords.z],
             rpy: [0.0, 0.0, 0.0],
         };
     }
@@ -690,7 +690,7 @@ impl SimWorld {
     /// 테스트: yaw 모터 max_force를 덮어쓴다.
     #[cfg(test)]
     pub fn set_yaw_motor_max_force_for_test(&mut self, tau0: f64) {
-        let mut torques = crate::tunables::current().control.max_joint_torques;
+        let mut torques = crate::defaults::control().max_joint_torques;
         torques[0] = tau0;
         self.arm_bodies
             .set_motor_max_forces(&mut self.multibody_joint_set, &torques);
@@ -708,7 +708,7 @@ mod tests {
     use crate::{Arm, RobotPose, constants::table};
 
     fn test_arm() -> Arc<Arm> {
-        return Arc::new(crate::entry::competition_arm().expect("테스트용 4DOF arm"));
+        return Arc::new(crate::defaults::arm().expect("테스트용 4DOF arm"));
     }
 
     #[test]
@@ -764,11 +764,10 @@ mod tests {
 
     #[test]
     fn ground_truth_rally_contacts_racket_clears_net_and_bounces_near_center() {
-        crate::entry::install_competition_tunables();
         let arm = test_arm();
         let mut world = SimWorld::new(arm, None);
         world.set_use_ground_truth(true);
-        world.set_intercept_window(crate::entry::competition_intercept());
+        world.set_intercept_window(crate::defaults::intercept());
 
         let collider_for_body = |body_handle| {
             world
@@ -858,21 +857,9 @@ mod tests {
         );
     }
 
-    /// 진단용 — `catalog::find_robot("4-dof")`가 실제 카탈로그 경로(URDF +
-    /// `RobotBuilder`)로 만드는 팔·마운트 그대로 로드한다. `competition()`
-    /// 처럼 손으로 만든 것이 아니라 `main.rs::load_robot`과 동일 경로.
-    fn fourdof_robot() -> (Arc<Arm>, Option<Arc<crate::robot::urdf::UrdfRobot>>) {
-        let entry = crate::robot::catalog::find_robot("4-dof").expect("4-dof 카탈로그 항목");
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join(entry.urdf_rel.expect("4-dof는 URDF 필수"));
-        let built = crate::robot::RobotBuilder::new()
-            .urdf(&path)
-            .ee_link_opt(entry.ee_link)
-            .mount_preset(crate::robot::MountPreset::Rep103AtTableEnd)
-            .max_joint_speed(entry.max_joint_speed)
-            .build()
-            .expect("4-dof RobotBuilder 빌드");
-        return (built.arm, built.urdf);
+    /// 진단용 — `defaults::urdf_4dof` (URDF + RobotBuilder).
+    fn fourdof_robot() -> crate::Robot {
+        return crate::defaults::urdf_4dof().expect("4-dof URDF");
     }
 
     /// 기본 슈터 샷이 네트 위를 여유 있게 지나가는지 회귀 검증한다.
@@ -935,14 +922,15 @@ mod tests {
         panic!("공이 네트 y를 지나가지 않음 — 샷이 테이블 위에서 멈췄거나 이탈함");
     }
 
-    /// `competition()` primitive는 이미 랠리 통합 테스트가 있지만
+    /// `defaults::arm()` primitive는 이미 랠리 통합 테스트가 있지만
     /// (`ground_truth_rally_contacts_racket_clears_net_and_bounces_near_center`),
-    /// 카탈로그 `"4-dof"` URDF 로봇(`main.rs::load_robot`과 동일 경로로 조립)은
+    /// `defaults::urdf_4dof` URDF 로봇은
     /// 한 번도 같은 방식으로 검증된 적이 없었다.
     #[test]
     fn fourdof_ground_truth_rally_contacts_racket_and_returns() {
-        let (arm, urdf) = fourdof_robot();
-        let mut world = SimWorld::new(arm.clone(), urdf);
+        let robot = fourdof_robot();
+        let arm = robot.arm.clone();
+        let mut world = SimWorld::new(robot.arm.clone(), robot.urdf);
         world.set_use_ground_truth(true);
 
         let collider_for_body = |body_handle| {
@@ -966,7 +954,7 @@ mod tests {
         for _ in 0..4_000 {
             world.step(1.0 / 1000.0, None);
 
-            let ee = world.robot().racket_pose(&arm).expect("FK").position.v;
+            let ee = world.robot().racket_pose(&arm).expect("FK").position.coords;
             let ball = world.ball_position();
             let dx = f64::from(ball.x) - ee.x;
             let dy = f64::from(ball.y) - ee.y;
@@ -1090,8 +1078,12 @@ mod tests {
         let arm = test_arm();
         let world = SimWorld::new(arm.clone(), None);
         let rail_x = world.robot().rail_x();
-        // 기본 슈터가 첫 바운스 뒤 만드는 동적 y=0.30 후보.
-        let impact = crate::Point3::new(table::WIDTH_X * 0.5, 0.30, 1.05);
+        // 기본 접수 평면 근처의 도달 가능 임팩트.
+        let impact = crate::Point3::new(
+            table::WIDTH_X * 0.5,
+            table::DEFAULT_HIT_PLANE_Y,
+            table::SURFACE_Z + 0.28,
+        );
         let start = RobotPose::new(rail_x, world.robot().joints().clone());
         let traj = plan_swing(
             &arm,
@@ -1130,7 +1122,7 @@ mod tests {
         let reachable = arm
             .forward_kinematics_with_rail(world.robot().rail_x(), world.robot().joints())
             .expect("FK");
-        let impact = crate::Point3::new(impact_x, hit_plane.y, reachable.position.v.z);
+        let impact = crate::Point3::new(impact_x, hit_plane.y, reachable.position.coords.z);
         let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
         let trajectory = plan_swing(
             &arm,
@@ -1168,7 +1160,7 @@ mod tests {
 
     #[test]
     fn effective_sim_mount_follows_rail_x() {
-        let arm = Arc::new(crate::entry::competition_arm().expect("arm"));
+        let arm = Arc::new(crate::defaults::arm().expect("arm"));
         let mut world = SimWorld::new(arm, None);
         let x = 0.42;
         let joints = world.robot().joints().clone();
@@ -1476,8 +1468,8 @@ mod tests {
     }
 
 
-    /// `random_shot_grid_clears_net_and_returns`는 `competition_arm()`(손으로
-    /// 만든 테스트용 팔)만 검증한다 — 실제 GUI가 쓰는 카탈로그 "4-dof" 로봇
+    /// `random_shot_grid_clears_net_and_returns`는 `arm()`(손으로
+    /// 만든 테스트용 팔)만 검증한다 — `defaults::urdf_4dof` 로봇
     /// (`fourdof_robot`, URDF + `Rep103AtTableEnd`)은 리치가 달라 같은 범위가
     /// 안전하지 않을 수 있다(실측으로 확인됨 — 아래 좌우 위치·yaw 촘촘한
     /// 격자에서 5.6 m/s부터 임팩트 지점이 도달 범위 밖으로 나가는 조합이
@@ -1501,8 +1493,8 @@ mod tests {
                         speed_mps: speed,
                         ..BallShooterSettings::default()
                     };
-                    let (arm, urdf) = fourdof_robot();
-                    let mut world = SimWorld::new(arm, urdf);
+                    let robot = fourdof_robot();
+                    let mut world = SimWorld::new(robot.arm, robot.urdf);
                     world.set_use_ground_truth(true);
 
                     let ball_collider = world
@@ -1559,13 +1551,12 @@ mod tests {
         // 사용자가 정확히 재현한 순서: 평범한 Shoot(중앙→중앙, 기본 조준)을
         // 먼저 완전히 끝낸 뒤, Random Shoot을 누른다. 여러 랜덤 시드로
         // 넓게 스윕해서 실패하는 조합이 있는지 찾는다. 사용자가 실제로
-        // 돌리는 건 `competition_arm()`이 아니라 카탈로그 "4-dof" 로봇
-        // (`main.rs::load_robot`과 동일 경로)이므로 그걸로 재현한다.
+        // 돌리는 건 `arm()`이 아니라 `defaults::urdf_4dof` 이므로 그걸로 재현한다.
         use rand::SeedableRng;
 
         for seed in 0..200_u64 {
-            let (arm, urdf) = fourdof_robot();
-            let mut world = SimWorld::new(arm, urdf);
+            let robot = fourdof_robot();
+            let mut world = SimWorld::new(robot.arm, robot.urdf);
             world.set_use_ground_truth(true);
 
             // 1구: 평범한 Shoot.
@@ -1774,7 +1765,6 @@ mod tests {
 
     #[test]
     fn dual_yaw_motor_max_force_is_double_single_in_world() {
-        crate::entry::install_competition_tunables();
         let arm = test_arm();
         let mut world = SimWorld::new(arm, None);
         world.set_yaw_motor_max_force_for_test(12.0);

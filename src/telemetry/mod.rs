@@ -25,8 +25,8 @@ impl Telemetry for TracingTelemetry {
             TelemetryEvent::Prediction(prediction) => {
                 debug!(
                     time_to_impact_secs = prediction.time_to_impact_secs,
-                    x = prediction.impact_position.v.x,
-                    y = prediction.impact_position.v.y,
+                    x = prediction.impact_position.coords.x,
+                    y = prediction.impact_position.coords.y,
                     "궤적 예측"
                 );
             }

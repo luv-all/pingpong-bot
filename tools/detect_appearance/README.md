@@ -1,13 +1,14 @@
 # detect-appearance
 
-appearance 레이어만 **좌우 비교** — `colormask` | `contour`.
+appearance 레이어만 **좌우 비교** — `colormask` | `contour`.  
+파라미터는 `defaults::colormask()` · `defaults::scorer()`.
 
 fuse·ROI·motion은 [detect-full](../detect_full/README.md).
 
 ```bash
 cargo run -p detect-appearance
-cargo run -p detect-appearance -- --config config/default.toml
 cargo run -p detect-appearance -- --path clip.mp4 -o out/
+cargo run -p detect-appearance -- --images ./frames
 ```
 
-파라미터: `[vision.appearance.colormask]`(색) · `[vision.scorer]`(면적·원형도 hard cut, 양쪽 공통).
+`q` / ESC 종료.

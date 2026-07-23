@@ -6,14 +6,14 @@ use crate::Point3;
 use crate::constants::physics::G_Z;
 use crate::constants::table;
 use crate::error::SwingPlanError;
-use crate::tunables;
+use crate::defaults;
 
 /// 네트를 넘고 상대 코트 중앙에 바운드하는 출사 속도.
 ///
 /// 목표 바운드는 `(WIDTH/2, LENGTH*3/4, SURFACE+BALL_RADIUS)`이며,
 /// 무저항 중력 탄도의 경계값 문제를 풀어 `v_out`을 구한다.
 pub fn rally_return_velocity(impact: Point3, _v_in: Vector3<f64>) -> Vector3<f64> {
-    let impact_cfg = tunables::current().impact;
+    let impact_cfg = defaults::impact();
     let target = Vector3::new(
         table::WIDTH_X * 0.5,
         table::LENGTH_Y * 0.75,
@@ -21,7 +21,7 @@ pub fn rally_return_velocity(impact: Point3, _v_in: Vector3<f64>) -> Vector3<f64
     );
     let t = impact_cfg.rally_time_to_bounce;
     let gravity_displacement = Vector3::new(0.0, 0.0, 0.5 * G_Z * t * t);
-    let mut v_out = (target - impact.v - gravity_displacement) / t;
+    let mut v_out = (target - impact.coords - gravity_displacement) / t;
 
     let speed = v_out.norm();
     if speed > impact_cfg.max_return_speed && speed > f64::EPSILON {
@@ -81,15 +81,15 @@ pub fn verify_impact_model(
 pub fn clears_net_ballistic(impact: Point3, v_out: Vector3<f64>) -> bool {
     let y_net = table::LENGTH_Y * 0.5;
     let z_min =
-        table::SURFACE_Z + table::NET_HEIGHT + tunables::current().impact.net_clearance * 0.5;
+        table::SURFACE_Z + table::NET_HEIGHT + defaults::impact().net_clearance * 0.5;
     if v_out.y <= 1e-6 {
         return false;
     }
-    let t = (y_net - impact.v.y) / v_out.y;
+    let t = (y_net - impact.coords.y) / v_out.y;
     if t <= 0.0 || t > 2.0 {
         return false;
     }
-    let z = impact.v.z + v_out.z * t + 0.5 * G_Z * t * t;
+    let z = impact.coords.z + v_out.z * t + 0.5 * G_Z * t * t;
     return z >= z_min;
 }
 
@@ -100,7 +100,7 @@ fn vector3_to_array(v: Vector3<f64>) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physics_config::PhysicsParams;
+    use crate::defaults::PhysicsParams;
 
     #[test]
     fn rally_return_clears_net_toward_far_half() {
@@ -121,8 +121,8 @@ mod tests {
         let v_out = rally_return_velocity(impact, Vector3::new(0.2, -5.0, -0.7));
         let bounce_z = table::SURFACE_Z + crate::constants::BALL_RADIUS;
         assert!(v_out.y > 0.0);
-        let t = tunables::current().impact.rally_time_to_bounce;
-        let z_at_bounce = impact.v.z + v_out.z * t + 0.5 * G_Z * t * t;
+        let t = defaults::impact().rally_time_to_bounce;
+        let z_at_bounce = impact.coords.z + v_out.z * t + 0.5 * G_Z * t * t;
         assert!((z_at_bounce - bounce_z).abs() < 1e-6);
     }
 
@@ -132,7 +132,7 @@ mod tests {
         let v_in = Vector3::new(0.1, -5.0, -0.5);
         let v_out = rally_return_velocity(impact, v_in);
         let normal = (v_out - v_in).normalize();
-        let e = crate::entry::competition_physics().restitution;
+        let e = crate::defaults::physics().restitution;
         let v_r = required_racket_velocity(v_in, v_out, normal, e).expect("v_r");
         assert!(verify_impact_model(v_in, v_out, v_r, normal, e));
     }

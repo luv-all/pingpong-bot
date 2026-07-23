@@ -4,12 +4,12 @@ use crate::{Arm, SerialChain, SerialJoint};
 use nalgebra::{Isometry3, Vector3};
 use urdf_rs::JointType;
 
-use super::{UrdfLoadError, UrdfRobot, fk};
+use super::{UrdfLoadError, UrdfModel, fk};
 
-pub fn to_arm(urdf: &UrdfRobot, max_joint_speed: f64) -> Result<Arm, UrdfLoadError> {
+pub fn to_arm(urdf: &UrdfModel, max_joint_speed: f64) -> Result<Arm, UrdfLoadError> {
     let defaults = urdf.default_joints();
     let limits = urdf.joint_limits();
-    let template = crate::entry::competition_arm().map_err(|e| UrdfLoadError::ArmConversion {
+    let template = crate::defaults::arm().map_err(|e| UrdfLoadError::ArmConversion {
         reason: format!("레일·베이스 템플릿: {e}"),
     })?;
     let rail = template.rail.expect("competition arm은 레일 포함");

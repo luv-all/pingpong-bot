@@ -5,9 +5,9 @@
 use nalgebra::Vector3;
 
 use crate::constants::{ball, table};
-use crate::physics_config::PhysicsParams;
+use crate::defaults::PhysicsParams;
 use crate::planner::physics::accel;
-use crate::tunables;
+use crate::defaults;
 use crate::{HitPlane, Point3, Prediction};
 
 /// 위치/속도에서 접수 평면 교차를 반암시적 오일러(+바운스)로 예측한다.
@@ -25,7 +25,7 @@ pub fn predict_hit_plane(
         plane,
         &PhysicsParams {
             drag: drag_coefficient,
-            ..crate::entry::competition_physics()
+            ..crate::defaults::physics()
         },
     );
 }
@@ -37,7 +37,7 @@ pub fn predict_hit_plane_with(
     plane: HitPlane,
     physics: &PhysicsParams,
 ) -> Option<Prediction> {
-    let est = tunables::current().estimator;
+    let est = defaults::estimator();
     let vy = velocity.y;
     if vy > -est.min_approach_speed_y {
         return None;
@@ -99,7 +99,7 @@ fn rest_height() -> f64 {
 /// 테이블에 붙어 느리게 구르는 상태 (비행/바운스 중이면 false).
 fn is_table_rolling(position: Vector3<f64>, velocity: Vector3<f64>) -> bool {
     let on_table =
-        position.z <= rest_height() + tunables::current().estimator.min_strike_clearance;
+        position.z <= rest_height() + defaults::estimator().min_strike_clearance;
     let flat = velocity.z.abs() < 0.5;
     return on_table && flat;
 }
@@ -119,7 +119,7 @@ pub fn semi_implicit_euler(
         dt,
         &PhysicsParams {
             drag: drag_coefficient,
-            ..crate::entry::competition_physics()
+            ..crate::defaults::physics()
         },
     );
 }
@@ -154,7 +154,7 @@ pub fn semi_implicit_euler_with(
 mod tests {
     use super::*;
     use crate::constants::table;
-    use crate::tunables;
+    use crate::defaults;
 
     #[test]
     fn default_shot_like_impact_at_hit_plane() {
@@ -168,8 +168,8 @@ mod tests {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
         let pred = predict_hit_plane(position, velocity, plane, 0.0).expect("예측");
-        assert!((pred.impact_position.v.y - plane.y).abs() < 1e-5);
-        assert!(pred.time_to_impact_secs > tunables::current().estimator.min_lead);
+        assert!((pred.impact_position.coords.y - plane.y).abs() < 1e-5);
+        assert!(pred.time_to_impact_secs > defaults::estimator().min_lead);
         assert!(pred.incoming_velocity.y < 0.0);
     }
 

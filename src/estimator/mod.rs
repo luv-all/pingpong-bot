@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use nalgebra::Vector3;
 
-use crate::geometry::Point3;
+use crate::Point3;
 
 pub mod ballistics;
 pub mod ekf;
@@ -14,7 +14,7 @@ pub mod traj_measure;
 pub use ballistics::{predict_hit_plane, predict_hit_plane_with, semi_implicit_euler};
 pub use ekf::BallEkf;
 pub use identify::{
-    drag_from_trajectory, friction_from_tangential_speeds, physics_coeffs_toml,
+    drag_from_trajectory, format_physics_for_defaults, friction_from_tangential_speeds,
     restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
 pub use traj_measure::{

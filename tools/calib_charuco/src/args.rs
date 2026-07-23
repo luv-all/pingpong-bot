@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use pingpong_bot::{CharucoBoardSpec, DEFAULT_CONFIG_PATH, calibration_path_from_config};
+use pingpong_bot::CharucoBoardSpec;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -23,13 +23,9 @@ pub struct Args {
     #[arg(long, value_name = "DIR")]
     pub images_dir: Option<PathBuf>,
 
-    /// 출력 Calibration JSON. 생략 시 --config 의 calibration_path, 없으면 calibration.json
+    /// 출력 Calibration JSON. 생략 시 calibration.json
     #[arg(short = 'o', long)]
     pub output: Option<PathBuf>,
-
-    /// 런타임 TOML (기본 출력 경로용 calibration_path)
-    #[arg(long, value_name = "PATH", default_value = DEFAULT_CONFIG_PATH)]
-    pub config: PathBuf,
 
     /// 종료 시 보정에 필요한 최소 저장 장수
     #[arg(long, default_value_t = 10)]
@@ -68,11 +64,8 @@ pub fn board_spec(args: &Args) -> CharucoBoardSpec {
 }
 
 pub fn resolve_output(args: &Args) -> PathBuf {
-    if let Some(ref out) = args.output {
-        return out.clone();
-    }
-    if let Ok(Some(path)) = calibration_path_from_config(&args.config) {
-        return path;
-    }
-    return PathBuf::from("calibration.json");
+    return args
+        .output
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("calibration.json"));
 }

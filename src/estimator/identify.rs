@@ -122,25 +122,26 @@ fn mean_clamped(xs: &[f64], lo: f64, hi: f64) -> Option<f64> {
     return Some(ok.iter().sum::<f64>() / ok.len() as f64);
 }
 
-/// 측정값을 TOML 스니펫으로 포맷. config / constants 반영용.
-pub fn physics_coeffs_toml(
+/// 측정값을 `defaults::physics()` 붙여넣기용 스니펫으로 포맷.
+pub fn format_physics_for_defaults(
     restitution: Option<f64>,
     friction: Option<f64>,
     drag: Option<f64>,
 ) -> String {
     let mut lines = vec![
-        "# pingpong physics coeffs (tools/measure_*)".to_string(),
-        "# constants::ball / physics 또는 [physics] 섹션에 반영".to_string(),
+        "// measure_* → paste into defaults::physics()".to_string(),
+        "PhysicsParams {".to_string(),
     ];
     if let Some(e) = restitution {
-        lines.push(format!("restitution = {e:.6}"));
+        lines.push(format!("    restitution: {e:.6},"));
     }
     if let Some(mu) = friction {
-        lines.push(format!("friction = {mu:.6}"));
+        lines.push(format!("    friction: {mu:.6},"));
     }
     if let Some(k) = drag {
-        lines.push(format!("drag = {k:.8}"));
+        lines.push(format!("    drag: {k:.8},"));
     }
+    lines.push("}".to_string());
     lines.push(String::new());
     return lines.join("\n");
 }

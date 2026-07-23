@@ -6,7 +6,6 @@
 //! 조립은 `ArmBuilder`, 런타임 추종은 `RobotState`.
 
 pub mod builder;
-pub mod catalog;
 mod loader;
 pub mod rail;
 pub mod serial;
@@ -19,17 +18,14 @@ mod tests;
 use nalgebra::{DMatrix, DVector, Isometry3, Matrix3, UnitQuaternion, Vector3};
 
 pub use builder::{ArmBuildError, ArmBuilder};
-pub use catalog::{
-    DEFAULT_ROBOT_ID, ROBOTS, RobotEntry, find_robot, robot_ids_csv, shared_competition_arm,
-};
-pub use loader::{MountPreset, RobotBuildError, RobotBuilder, SimRobot};
+pub use loader::{MountPreset, Robot, RobotBuildError, RobotBuilder};
+pub use rail::{LinearRail, RailFrame};
 pub use serial::{SerialChain, SerialChainError, SerialJoint};
 pub use state::RobotState;
-pub use urdf::{UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfRobot};
+pub use urdf::{UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfModel};
 
-use self::rail::LinearRail;
 use crate::error::SwingPlanError;
-use crate::geometry::Point3;
+use crate::Point3;
 
 /// revolute 관절각 [rad].
 #[derive(Debug, Clone, PartialEq)]
@@ -201,7 +197,7 @@ impl Arm {
             .rail
             .as_ref()
             .map(|rail| rail.home_x())
-            .unwrap_or(self.base.v.x);
+            .unwrap_or(self.base.coords.x);
         return RobotState::new(self.default_joints.clone(), rail_x);
     }
 
@@ -232,13 +228,13 @@ impl Arm {
 
     /// 주어진 마운트 원점에서 FK.
     pub fn forward_kinematics_at(&self, mount: Point3, joints: &Joints) -> Option<RacketPose> {
-        let (ee, _) = self.chain.forward_with_joint_frames(mount.v, &joints.values)?;
+        let (ee, _) = self.chain.forward_with_joint_frames(mount.coords, &joints.values)?;
         return Some(racket_pose_from_isometry(ee));
     }
 
     /// 마운트부터 EE까지의 체인 점 - OBB/뷰어 공용.
     pub fn chain_points(&self, rail_x: f64, joints: &Joints) -> Option<Vec<Vector3<f64>>> {
-        let mount = self.mount_at_rail(rail_x).v;
+        let mount = self.mount_at_rail(rail_x).coords;
         let (ee, frames) = self.chain.forward_with_joint_frames(mount, &joints.values)?;
         let mut points = Vec::with_capacity(frames.len() + 2);
         points.push(mount);
@@ -324,9 +320,9 @@ impl Arm {
             || hint.joints.values.len() != self.joint_count()
         {
             return Err(SwingPlanError::InverseKinematicsNoSolution {
-                target_x: target.v.x,
-                target_y: target.v.y,
-                target_z: target.v.z,
+                target_x: target.coords.x,
+                target_y: target.coords.y,
+                target_z: target.coords.z,
             });
         }
         let target_normal = target_normal.normalize();
@@ -363,9 +359,9 @@ impl Arm {
         let task = |pose: RacketPose| {
             let normal_error = target_normal - pose.normal;
             DVector::from_vec(vec![
-                target.v.x - pose.position.v.x,
-                target.v.y - pose.position.v.y,
-                target.v.z - pose.position.v.z,
+                target.coords.x - pose.position.coords.x,
+                target.coords.y - pose.position.coords.y,
+                target.coords.z - pose.position.coords.z,
                 normal_error.dot(&tangent_a),
                 normal_error.dot(&tangent_b),
             ])
@@ -373,7 +369,7 @@ impl Arm {
 
         let mut seeds = vec![make_values(hint.rail_x, &hint.joints)];
         if let Some(rail) = &self.rail {
-            seeds.push(make_values(rail.clamp_x(target.v.x), &self.default_joints));
+            seeds.push(make_values(rail.clamp_x(target.coords.x), &self.default_joints));
             seeds.push(make_values(rail.default_x(), &self.default_joints));
         }
         let mut best: Option<(f64, RobotPose)> = None;
@@ -383,7 +379,7 @@ impl Arm {
                 let Some(pose) = self.forward_kinematics_with_rail(rail_x, &joints) else {
                     break;
                 };
-                let position_error = (target.v - pose.position.v).norm();
+                let position_error = (target.coords - pose.position.coords).norm();
                 let normal_error = (target_normal - pose.normal).norm();
                 let score = position_error + normal_error;
                 if best
@@ -453,16 +449,16 @@ impl Arm {
             let pose = self
                 .forward_kinematics_with_rail(candidate.rail_x, &candidate.joints)
                 .expect("validated pose IK candidate");
-            if (target.v - pose.position.v).norm() <= POSITION_TOLERANCE
+            if (target.coords - pose.position.coords).norm() <= POSITION_TOLERANCE
                 && (target_normal - pose.normal).norm() <= NORMAL_TOLERANCE
             {
                 return Ok(candidate);
             }
         }
         return Err(SwingPlanError::InverseKinematicsNoSolution {
-            target_x: target.v.x,
-            target_y: target.v.y,
-            target_z: target.v.z,
+            target_x: target.coords.x,
+            target_y: target.coords.y,
+            target_z: target.coords.z,
         });
     }
 
@@ -517,7 +513,7 @@ impl Arm {
                 let Some(pose) = self.forward_kinematics_at(mount, &joints) else {
                     break;
                 };
-                let error = target.v - pose.position.v;
+                let error = target.coords - pose.position.coords;
                 let error_norm = error.norm();
                 if error_norm < best_error {
                     best_error = error_norm;
@@ -555,9 +551,9 @@ impl Arm {
             });
         }
         return Err(SwingPlanError::InverseKinematicsNoSolution {
-            target_x: target.v.x,
-            target_y: target.v.y,
-            target_z: target.v.z,
+            target_x: target.coords.x,
+            target_y: target.coords.y,
+            target_z: target.coords.z,
         });
     }
 
@@ -574,7 +570,7 @@ impl Arm {
     /// 가능하면 hit-plane y를 유지하고 xz(레일/높이)만 줄인다.
     /// 구면 투영만 하면 y가 로봇 쪽으로 당겨져 타이밍/접촉이 어긋난다.
     pub fn clamp_impact_for_rail(&self, rail: &LinearRail, target: Point3) -> (f64, Point3) {
-        let rail_x = rail.clamp_x(target.v.x);
+        let rail_x = rail.clamp_x(target.coords.x);
         let mount = rail.mount_point(rail_x);
         return (
             rail_x,
@@ -585,7 +581,7 @@ impl Arm {
     /// `y`(접수 깊이)를 우선 보존하며 도달 구 안으로 투영한다.
     fn clamp_preserving_y(mount: Point3, target: Point3, arm_length: f64) -> Point3 {
         let max_reach = (arm_length - 1e-3).max(0.0);
-        let rel = target.v - mount.v;
+        let rel = target.coords - mount.coords;
         let distance = rel.norm();
         if distance <= max_reach || distance < f64::EPSILON {
             return target;
@@ -600,19 +596,19 @@ impl Arm {
             if lat_norm > 1e-9 {
                 let scale = (max_lat / lat_norm).min(1.0);
                 return Point3::from(
-                    mount.v + Vector3::new(lateral.x * scale, y_comp, lateral.z * scale),
+                    mount.coords + Vector3::new(lateral.x * scale, y_comp, lateral.z * scale),
                 );
             }
-            return Point3::from(mount.v + Vector3::new(0.0, y_comp, 0.0));
+            return Point3::from(mount.coords + Vector3::new(0.0, y_comp, 0.0));
         }
 
         // y 자체만으로도 도달 불능 - 구면 투영 폴백
-        return Point3::from(mount.v + rel * (max_reach / distance));
+        return Point3::from(mount.coords + rel * (max_reach / distance));
     }
 
     /// 라켓 위치에 대한 3xN 자코비안 `dp/dq` (마운트 기준).
     fn position_jacobian_at(&self, mount: Point3, joints: &Joints) -> Option<DMatrix<f64>> {
-        let (ee, frames) = self.chain.forward_with_joint_frames(mount.v, &joints.values)?;
+        let (ee, frames) = self.chain.forward_with_joint_frames(mount.coords, &joints.values)?;
         let ee_position = ee.translation.vector;
         let mut jacobian = DMatrix::zeros(3, frames.len());
         for (index, (joint_position, joint_axis)) in frames.iter().enumerate() {
@@ -660,9 +656,9 @@ impl Arm {
         values.extend_from_slice(&pose.joints.values);
         let output = |racket: RacketPose| {
             DVector::from_vec(vec![
-                racket.position.v.x,
-                racket.position.v.y,
-                racket.position.v.z,
+                racket.position.coords.x,
+                racket.position.coords.y,
+                racket.position.coords.z,
                 racket.normal.dot(&tangent_a),
                 racket.normal.dot(&tangent_b),
             ])

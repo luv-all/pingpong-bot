@@ -2,7 +2,7 @@
 
 다중 웹캠을 **가로 한 창**으로 보는 프리뷰. CLI 없음.
 
-`src/main.rs`의 `DEVICES`만 수정:
+장치 인덱스는 [`tools/cam_preview/src/main.rs`](src/main.rs)의 `DEVICES`만 수정:
 
 ```rust
 const DEVICES: &[i32] = &[0, 1];
@@ -16,6 +16,7 @@ Arducam B0332는 열자마자 `MJPG` + `1280x800` + `120fps` + 짧은 노출을 
 | 키 | 동작 |
 |----|------|
 | `Space` | 동결 / 해제 |
+| `e` | 짧은 노출 재시도 (macOS AVFoundation에선 대개 무시) |
 | `q` / ESC | 종료 |
 
 ## 글로벌 셔터 vs 모션 블러

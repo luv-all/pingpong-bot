@@ -188,12 +188,12 @@ mod tests {
         );
         let ids = [CameraId::new(0), CameraId::new(1), CameraId::new(2)];
         let recovered = triangulate_projections(&calibration, &ids, truth).expect("DLT");
-        let err = (recovered.v - truth.v).norm();
+        let err = (recovered.coords - truth.coords).norm();
         assert!(
             err < 1e-3,
             "noise-free DLT error {err} m (truth={:?} got={:?})",
-            truth.v,
-            recovered.v
+            truth.coords,
+            recovered.coords
         );
     }
 
@@ -204,7 +204,7 @@ mod tests {
         let recovered =
             triangulate_projections(&calibration, &[CameraId::new(0), CameraId::new(2)], truth)
                 .expect("2-view DLT");
-        assert!((recovered.v - truth.v).norm() < 1e-3);
+        assert!((recovered.coords - truth.coords).norm() < 1e-3);
     }
 
     #[test]
@@ -245,6 +245,6 @@ mod tests {
             series.iter().map(|(id, s)| (*id, s.as_slice())).collect();
         let mid = base + Duration::from_millis(5);
         let recovered = triangulate_synced(&refs, mid, &calibration).expect("synced DLT");
-        assert!((recovered.v - truth.v).norm() < 1e-3);
+        assert!((recovered.coords - truth.coords).norm() < 1e-3);
     }
 }

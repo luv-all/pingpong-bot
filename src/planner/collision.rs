@@ -49,7 +49,7 @@ impl OrientedBox {
     pub fn from_racket(pose: &RacketPose) -> Self {
         let axes = quat_to_axes(pose.orientation);
         return Self {
-            center: pose.position.v,
+            center: pose.position.coords,
             axes,
             half_extents: Vector3::new(RACKET_HALF_X, RACKET_HALF_Y, RACKET_HALF_Z),
         };
@@ -126,7 +126,7 @@ pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
     let wrist = wrist_index
         .and_then(|index| joints.values.get(index))
         .copied()
-        .unwrap_or(crate::tunables::current().control.racket_open_pitch);
+        .unwrap_or(crate::defaults::control().racket_open_pitch);
 
     for _ in 0..TABLE_CLAMP_ITERS {
         let depth = table_penetration(arm, rail_x, &current);
@@ -137,9 +137,9 @@ pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
             break;
         };
         let lifted = Point3::new(
-            pose.position.v.x,
-            pose.position.v.y,
-            pose.position.v.z + depth + TABLE_CLEARANCE,
+            pose.position.coords.x,
+            pose.position.coords.y,
+            pose.position.coords.z + depth + TABLE_CLEARANCE,
         );
         let Ok(mut solved) = (if let Some(rail) = &arm.rail {
             arm.inverse_kinematics_with_rail(rail, rail_x, lifted, Some(&current))
@@ -203,28 +203,24 @@ fn orthonormal_plane(axis: Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::robot::Arm;
 
     #[test]
     fn deep_racket_penetrates_table() {
-        let arm = crate::entry::competition_arm().expect("arm");
-        let rail_x = arm.rail.as_ref().map(|r| r.home_x()).unwrap_or(0.0);
-        let mut joints = arm.default_joints.clone();
-        let mut deepest = 0.0;
-        for q0 in [-1.0, 0.0, 1.0] {
-            for q1 in [-0.5, 0.0, 0.5] {
-                for q2 in [-2.0, -1.0, 0.0, 1.4] {
-                    for q3 in [-2.0, -1.0, 0.0, 1.0, 2.0] {
-                        let candidate = Joints::from_slice(&[q0, q1, q2, q3]);
-                        let depth = table_penetration(&arm, rail_x, &candidate);
-                        if depth > deepest {
-                            deepest = depth;
-                            joints = candidate;
-                        }
-                    }
-                }
-            }
-        }
+        let arm = crate::defaults::arm().expect("arm");
+        let rail = arm.rail.expect("rail");
+        let rail_x = rail.home_x();
+        // 프로파일 마운트가 테이블 위 20cm라서 임의 관절 스윕이 관통을 못 찾을 수 있다.
+        // 테이블 면 아래로 접은 자세로 클램프 경로를 검증한다.
+        let joints = Joints::from_slice(&[0.0, 0.0, 1.4, 1.5]);
+        let before = table_penetration(&arm, rail_x, &joints);
+        let joints = if before > 0.0 {
+            joints
+        } else {
+            let below =
+                crate::Point3::new(rail_x, table::DEFAULT_HIT_PLANE_Y, table::SURFACE_Z - 0.05);
+            arm.inverse_kinematics_with_rail(&rail, rail_x, below, Some(&arm.default_joints))
+                .unwrap_or(joints)
+        };
         let before = table_penetration(&arm, rail_x, &joints);
         assert!(before > 0.0, "의도적 저자세는 관통해야 함: {before}");
         let clamped = clamp_above_table(&arm, rail_x, &joints);
@@ -237,7 +233,7 @@ mod tests {
 
     #[test]
     fn default_pose_clears_table() {
-        let arm = crate::entry::competition_arm().expect("arm");
+        let arm = crate::defaults::arm().expect("arm");
         let rail_x = arm.rail.as_ref().map(|r| r.home_x()).unwrap_or(0.0);
         let depth = table_penetration(&arm, rail_x, &arm.default_joints);
         assert!(depth <= 1e-4, "기본 자세는 테이블 위: {depth}");

@@ -5,13 +5,13 @@ use crate::constants::table;
 use crate::error::SwingPlanError;
 use crate::{Joints, Point3};
 
-fn sample_competition_arm() -> Arm {
-    return crate::entry::competition_arm().expect("테스트용 4DOF arm");
+fn sample_arm() -> Arm {
+    return crate::defaults::arm().expect("테스트용 4DOF arm");
 }
 
 #[test]
 fn wrist_open_tilts_racket_face() {
-    let arm = sample_competition_arm();
+    let arm = sample_arm();
     let flat = arm
         .with_wrist_open(&arm.default_joints, 0.1)
         .expect("wrist");
@@ -28,7 +28,7 @@ fn wrist_open_tilts_racket_face() {
 
 #[test]
 fn racket_face_points_toward_opponent_not_ceiling() {
-    let arm = sample_competition_arm();
+    let arm = sample_arm();
     let pose = arm.forward_kinematics(&arm.default_joints).expect("FK");
     assert!(
         pose.normal.y > 0.5,
@@ -49,7 +49,7 @@ fn racket_face_points_toward_opponent_not_ceiling() {
 
 #[test]
 fn builder_produces_three_dof_arm() {
-    let arm = sample_competition_arm();
+    let arm = sample_arm();
     assert_eq!(arm.joint_count(), 4);
 }
 
@@ -64,16 +64,16 @@ fn builder_rejects_missing_serial_chain() {
 
 #[test]
 fn default_arm_produces_racket_pose() {
-    let arm = sample_competition_arm();
+    let arm = sample_arm();
     let state = arm.initial_state();
     let pose = state.racket_pose(&arm).expect("FK");
-    assert!(pose.position.v.y > arm.base.v.y);
-    assert!(pose.position.v.z >= arm.base.v.z);
+    assert!(pose.position.coords.y > arm.base.coords.y);
+    assert!(pose.position.coords.z >= arm.base.coords.z);
 }
 
 #[test]
 fn step_moves_angles_toward_targets() {
-    let arm = sample_competition_arm();
+    let arm = sample_arm();
     let mut state = arm.initial_state();
     state.set_targets(Joints::from_slice(&[0.5, 0.8, -0.2, 0.45]));
     state.step_toward_targets(&arm, 0.1);
@@ -82,7 +82,7 @@ fn step_moves_angles_toward_targets() {
 
 #[test]
 fn rejects_wrong_joint_count_in_fk() {
-    let arm = sample_competition_arm();
+    let arm = sample_arm();
     assert!(
         arm.forward_kinematics(&Joints::from_slice(&[0.0]))
             .is_none()
@@ -91,17 +91,17 @@ fn rejects_wrong_joint_count_in_fk() {
 
 #[test]
 fn inverse_kinematics_round_trips_forward_kinematics() {
-    let arm = sample_competition_arm();
+    let arm = sample_arm();
     let joints = Joints::from_slice(&[0.2, 0.2, -0.3, -0.45]);
     let pose = arm.forward_kinematics(&joints).expect("FK");
     let solved = arm.inverse_kinematics(pose.position).expect("IK");
     let again = arm.forward_kinematics(&solved).expect("FK again");
-    assert!((again.position.v - pose.position.v).norm() < 1e-5);
+    assert!((again.position.coords - pose.position.coords).norm() < 1e-5);
 }
 
 #[test]
 fn pose_ik_round_trips_position_and_face_normal_with_rail() {
-    let arm = crate::entry::competition_arm().expect("arm");
+    let arm = crate::defaults::arm().expect("arm");
     let expected = RobotPose::new(0.62, Joints::from_slice(&[0.08, 0.12, -0.55, -0.28]));
     let target = arm
         .forward_kinematics_with_rail(expected.rail_x, &expected.joints)
@@ -114,13 +114,13 @@ fn pose_ik_round_trips_position_and_face_normal_with_rail() {
     let actual = arm
         .forward_kinematics_with_rail(solved.rail_x, &solved.joints)
         .expect("solved FK");
-    assert!((actual.position.v - target.position.v).norm() < 2e-4);
+    assert!((actual.position.coords - target.position.coords).norm() < 2e-4);
     assert!((actual.normal - target.normal).norm() < 1e-3);
 }
 
 #[test]
 fn generalized_velocity_ik_moves_center_without_rotating_face() {
-    let arm = crate::entry::competition_arm().expect("arm");
+    let arm = crate::defaults::arm().expect("arm");
     let pose = RobotPose::new(0.62, Joints::from_slice(&[0.08, 0.12, -0.55, -0.28]));
     let before = arm
         .forward_kinematics_with_rail(pose.rail_x, &pose.joints)
@@ -145,7 +145,7 @@ fn generalized_velocity_ik_moves_center_without_rotating_face() {
     let after = arm
         .forward_kinematics_with_rail(after_pose.rail_x, &after_pose.joints)
         .expect("after FK");
-    let actual_velocity = (after.position.v - before.position.v) / dt;
+    let actual_velocity = (after.position.coords - before.position.coords) / dt;
     let normal_velocity = (after.normal - before.normal) / dt;
     assert!((actual_velocity - desired).norm() < 1e-3);
     assert!(normal_velocity.norm() < 1e-3);
@@ -153,7 +153,7 @@ fn generalized_velocity_ik_moves_center_without_rotating_face() {
 
 #[test]
 fn generalized_velocity_ik_can_move_inward_from_rail_max() {
-    let arm = crate::entry::competition_arm().expect("arm");
+    let arm = crate::defaults::arm().expect("arm");
     let rail = arm.rail.expect("rail");
     let pose = RobotPose::new(rail.x_max, arm.default_joints.clone());
     let (rail_velocity, _) = arm
@@ -167,7 +167,7 @@ fn generalized_velocity_ik_can_move_inward_from_rail_max() {
 
 #[test]
 fn inverse_kinematics_rejects_unreachable_target() {
-    let arm = sample_competition_arm();
+    let arm = sample_arm();
     let err = arm
         .inverse_kinematics(Point3::new(10.0, 10.0, 10.0))
         .unwrap_err();
@@ -179,16 +179,16 @@ fn inverse_kinematics_rejects_unreachable_target() {
 
 #[test]
 fn clamp_impact_preserves_hit_plane_y_when_possible() {
-    let arm = sample_competition_arm();
+    let arm = sample_arm();
     let rail = arm.rail.as_ref().expect("competition rail");
     let far = Point3::new(0.76, 0.30, table::SURFACE_Z + 0.25);
     let (rail_x, clamped) = arm.clamp_impact_for_rail(rail, far);
     assert!(
-        (clamped.v.y - 0.30).abs() < 1e-9,
+        (clamped.coords.y - 0.30).abs() < 1e-9,
         "도달 밖이어도 y는 hit plane 유지: {}",
-        clamped.v.y
+        clamped.coords.y
     );
     let mount = rail.mount_point(rail_x);
     let max_reach = arm.arm_length();
-    assert!((clamped.v - mount.v).norm() <= max_reach + 1e-6);
+    assert!((clamped.coords - mount.coords).norm() <= max_reach + 1e-6);
 }

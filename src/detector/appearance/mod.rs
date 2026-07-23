@@ -3,5 +3,5 @@
 mod colormask;
 mod contour;
 
-pub use colormask::{ColorSpace, ColormaskConfig, ColormaskDetector, ParseColorSpaceError};
+pub use colormask::{ColorSpace, ColormaskParams, ColormaskDetector, ParseColorSpaceError};
 pub use contour::ContourDetector;

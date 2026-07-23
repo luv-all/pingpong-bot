@@ -14,9 +14,9 @@ use urdf_rs::{JointType, Robot};
 pub use mount::SimRobotMount;
 pub use visual::{UrdfGeometry, UrdfLinkVisual};
 
-/// 파싱된 URDF 로봇 — sim 뷰어·라켓 FK에 사용.
+/// 파싱된 URDF 모델 — sim 뷰어 메시·마운트·(선택) URDF FK.
 #[derive(Debug, Clone)]
-pub struct UrdfRobot {
+pub struct UrdfModel {
     /// URDF `<robot name="...">`
     pub name: String,
     /// URDF 파일 기준 디렉터리 (`package://`·상대 mesh 경로 해석용)
@@ -49,7 +49,7 @@ pub enum UrdfLoadError {
     ArmConversion { reason: String },
 }
 
-impl UrdfRobot {
+impl UrdfModel {
     /// URDF 파일을 읽는다. `ee_link`가 `None`이면 마지막 child link를 사용한다.
     pub fn from_file(path: impl AsRef<Path>, ee_link: Option<&str>) -> Result<Self, UrdfLoadError> {
         let path = path.as_ref();
@@ -304,7 +304,7 @@ mod tests {
         );
 
         let urdf =
-            UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load urdf-test");
+            UrdfModel::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load urdf-test");
         assert_eq!(urdf.name, "urdf-test");
         assert_eq!(urdf.joint_count(), 3);
         assert_eq!(
@@ -326,7 +326,7 @@ mod tests {
             .end_effector_pose_in_sim(&joints.values)
             .expect("URDF FK");
         let actual = arm.forward_kinematics(&joints).expect("domain FK");
-        assert!((actual.position.v - expected.position.v).norm() < 1e-9);
+        assert!((actual.position.coords - expected.position.coords).norm() < 1e-9);
         assert!((actual.normal - expected.normal).norm() < 1e-9);
         assert_eq!(
             arm.with_wrist_open(&joints, 0.7).expect("3축 no-op"),
@@ -345,7 +345,7 @@ mod tests {
             path.display()
         );
 
-        let urdf = UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
+        let urdf = UrdfModel::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
         assert_eq!(urdf.name, "all-4-export");
         assert_eq!(urdf.joint_count(), 4);
         assert_eq!(
@@ -381,7 +381,7 @@ mod tests {
                 .forward_kinematics(&Joints { values })
                 .expect("domain FK");
             assert!(
-                (actual.position.v - expected.position.v).norm() < 1e-9,
+                (actual.position.coords - expected.position.coords).norm() < 1e-9,
                 "URDF/domain EE position mismatch: actual={:?} expected={:?}",
                 actual.position,
                 expected.position
@@ -417,7 +417,7 @@ mod tests {
             .inverse_kinematics_near(target, Some(&hint))
             .expect("URDF 수치 IK");
         let solved_pose = arm.forward_kinematics(&solved).expect("solved FK");
-        assert!((solved_pose.position.v - target.v).norm() < 1e-5);
+        assert!((solved_pose.position.coords - target.coords).norm() < 1e-5);
     }
 
     #[test]
@@ -430,8 +430,8 @@ mod tests {
             path.display()
         );
 
-        let urdf = UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
-        let primitive = crate::entry::competition_arm().expect("competition primitive");
+        let urdf = UrdfModel::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
+        let primitive = crate::defaults::arm().expect("competition primitive");
         for values in [
             vec![0.0, 0.0, -0.25, 0.0],
             vec![0.15, 0.2, -0.4, 0.35],
@@ -444,7 +444,7 @@ mod tests {
                 })
                 .expect("primitive FK");
             assert!(
-                (actual.position.v - expected.position.v).norm() < 1e-9,
+                (actual.position.coords - expected.position.coords).norm() < 1e-9,
                 "values={values:?}, actual={:?}, expected={:?}",
                 actual.position,
                 expected.position
@@ -460,7 +460,7 @@ mod tests {
         let path = dir.join("arm.urdf");
         std::fs::write(&path, SAMPLE_URDF).expect("write urdf");
 
-        let urdf = UrdfRobot::from_file(&path, Some("racket")).expect("load");
+        let urdf = UrdfModel::from_file(&path, Some("racket")).expect("load");
         assert_eq!(urdf.joint_count(), 3);
         assert_eq!(urdf.ee_link, "racket");
         assert!(urdf.end_effector_pose(&[0.0, 0.5, -0.3]).is_some());

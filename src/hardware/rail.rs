@@ -1,8 +1,7 @@
-//! AXL 리니어 레일 TOML 설정·클램프·soft-limit 인자.
+//! AXL 리니어 레일 설정·클램프·soft-limit 인자.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use serde::Deserialize;
 use thiserror::Error;
 
 /// `AxmSignalSetSoftLimit` 인자 (미터 단위).
@@ -15,9 +14,10 @@ pub struct SoftLimitArgs {
     pub negative_m: f64,
 }
 
-/// AXL 리니어 레일 TOML 설정.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(default)]
+/// AXL 리니어 레일 설정.
+///
+/// 앱 벤치 값은 [`crate::defaults::rail`]. 여기 `Default`는 비활성 골격이다.
+#[derive(Debug, Clone, PartialEq)]
 pub struct RailConfig {
     pub enabled: bool,
     pub dll_path: PathBuf,
@@ -80,7 +80,7 @@ impl Default for RailConfig {
     }
 }
 
-/// 레일 TOML/설정 검증·로드 실패.
+/// 레일 설정 검증 실패.
 #[derive(Debug, Error)]
 pub enum RailConfigError {
     #[error("enabled=true일 때 dll_path는 비어 있으면 안 됩니다")]
@@ -91,10 +91,6 @@ pub enum RailConfigError {
     InvalidRange,
     #[error("motion 파라미터가 유효하지 않습니다")]
     MotionParams,
-    #[error("TOML 파싱 실패: {0}")]
-    Toml(#[from] toml::de::Error),
-    #[error("설정 파일 읽기 실패: {0}")]
-    Io(#[from] std::io::Error),
 }
 
 impl RailConfig {
@@ -166,28 +162,6 @@ impl RailConfig {
     }
 }
 
-#[derive(Deserialize)]
-struct RuntimeHardwareDocument {
-    hardware: RuntimeHardwareSection,
-}
-
-#[derive(Deserialize)]
-struct RuntimeHardwareSection {
-    rail: RailConfig,
-}
-
-/// 전체 런타임 TOML에서 `[hardware.rail]`만 읽는다.
-pub fn config_from_toml(text: &str) -> Result<RailConfig, RailConfigError> {
-    let document: RuntimeHardwareDocument = toml::from_str(text)?;
-    document.hardware.rail.validate()?;
-    return Ok(document.hardware.rail);
-}
-
-pub fn load_rail_config(path: &Path) -> Result<RailConfig, RailConfigError> {
-    let text = std::fs::read_to_string(path)?;
-    return config_from_toml(&text);
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -220,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn soft_limit_args_mirror_toml_meters() {
+    fn soft_limit_args_mirror_meters() {
         let cfg = RailConfig {
             x_min_m: -0.15,
             x_max_m: 0.40,

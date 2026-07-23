@@ -11,7 +11,7 @@ use opencv::imgcodecs;
 use pingpong_bot::{
     CameraId, ColormaskDetector, ContourDetector, FrameSource, ImageDirSource, OpenCvCapture,
     PixelPoint, PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
-    draw_help_lines, hstack_bgr, load_vision_from_config, show_bgr,
+    draw_help_lines, hstack_bgr, show_bgr,
 };
 
 use cli::Args;
@@ -46,14 +46,11 @@ fn main() -> Result<()> {
     }
 
     let mut source = open_source(&args)?;
-    let vision = load_vision_from_config(&args.config)?;
-    let mut colormask = ColormaskDetector::try_from(&vision.appearance.colormask)?;
-    let mut contour = ContourDetector::from(&vision.scorer);
-    let scorer = pingpong_bot::Scorer::from(&vision.scorer);
-    println!(
-        "appearance colormask|contour (from {})",
-        args.config.display()
-    );
+    let scorer = pingpong_bot::scorer();
+    let mut colormask = ColormaskDetector::new(pingpong_bot::colormask());
+    let mut contour = ContourDetector::from(&scorer);
+    let scorer = pingpong_bot::Scorer::from(&scorer);
+    println!("appearance colormask|contour (from defaults::*)");
 
     let window = "detect:appearance";
     let wait_ms = args

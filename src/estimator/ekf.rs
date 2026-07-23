@@ -12,8 +12,8 @@ use nalgebra::{Matrix3, Matrix6, Vector3, Vector6};
 
 use super::ballistics::{predict_hit_plane_with, semi_implicit_euler};
 use crate::estimator::Estimator;
-use crate::physics_config::PhysicsParams;
-use crate::tunables;
+use crate::defaults::PhysicsParams;
+use crate::defaults;
 use crate::{HitPlane, Point3, Prediction};
 
 /// EKF 상태: 위치/속도 + 공분산.
@@ -34,7 +34,7 @@ impl BallEkf {
     pub fn new(drag_coefficient: f64) -> Self {
         return Self::with_physics(PhysicsParams {
             drag: drag_coefficient,
-            ..crate::entry::competition_physics()
+            ..crate::defaults::physics()
         });
     }
 
@@ -53,7 +53,7 @@ impl BallEkf {
 
     /// 임베드 `[physics]` 기본값으로 생성.
     pub fn with_defaults() -> Self {
-        return Self::with_physics(crate::entry::competition_physics());
+        return Self::with_physics(crate::defaults::physics());
     }
 
     /// 필터를 비운다 (다음 관측에서 재시드).
@@ -105,19 +105,19 @@ impl BallEkf {
             } else if self.initialized && self.velocity_seeded && dt > 1e-4 {
                 self.predict_step(dt);
                 // 주차<->발사 텔레포트: 예측 후에도 잔차가 크면 리셋
-                if (measured.v - self.position).norm() > tunables::current().control.ekf_meas_jump_m {
+                if (measured.coords - self.position).norm() > defaults::control().ekf_meas_jump_m {
                     self.reset();
                 }
             } else if self.initialized && !self.velocity_seeded {
                 // 시드 전: 원시 위치 점프만 검사
-                if (measured.v - self.position).norm() > tunables::current().control.ekf_meas_jump_m {
+                if (measured.coords - self.position).norm() > defaults::control().ekf_meas_jump_m {
                     self.reset();
                 }
             }
         }
 
         if !self.initialized {
-            self.position = measured.v;
+            self.position = measured.coords;
             self.velocity = Vector3::zeros();
             self.covariance = Matrix6::identity() * 0.1;
             self.initialized = true;
@@ -131,8 +131,8 @@ impl BallEkf {
             if let Some(prev) = self.last_time {
                 let dt = timestamp.duration_since(prev).as_secs_f64();
                 if dt > 1e-4 {
-                    self.velocity = (measured.v - self.position) / dt;
-                    self.position = measured.v;
+                    self.velocity = (measured.coords - self.position) / dt;
+                    self.position = measured.coords;
                     self.covariance = Matrix6::identity() * 0.05;
                     self.velocity_seeded = true;
                     self.last_time = Some(timestamp);
@@ -141,7 +141,7 @@ impl BallEkf {
             }
         }
 
-        let r = Matrix3::identity() * tunables::current().estimator.r_meas;
+        let r = Matrix3::identity() * defaults::estimator().r_meas;
         let p_ht = self.covariance.fixed_view::<6, 3>(0, 0).into_owned();
         let s = self.covariance.fixed_view::<3, 3>(0, 0) + r;
         let Some(s_inv) = s.try_inverse() else {
@@ -149,7 +149,7 @@ impl BallEkf {
             return;
         };
         let gain = p_ht * s_inv;
-        let innovation = measured.v - self.position;
+        let innovation = measured.coords - self.position;
         let dx: Vector6<f64> = gain * innovation;
         self.position += Vector3::new(dx[0], dx[1], dx[2]);
         self.velocity += Vector3::new(dx[3], dx[4], dx[5]);
@@ -181,8 +181,8 @@ impl BallEkf {
 
 fn process_noise(dt: f64) -> Matrix6<f64> {
     let mut q = Matrix6::zeros();
-    let qp = tunables::current().estimator.q_pos * dt.max(1e-3);
-    let qv = tunables::current().estimator.q_vel * dt.max(1e-3);
+    let qp = defaults::estimator().q_pos * dt.max(1e-3);
+    let qv = defaults::estimator().q_vel * dt.max(1e-3);
     for i in 0..3 {
         q[(i, i)] = qp;
         q[(i + 3, i + 3)] = qv;
@@ -225,7 +225,7 @@ mod tests {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
         let pred = ekf.predict_to(plane).expect("hit plane");
-        assert!((pred.impact_position.v.y - plane.y).abs() < 1e-4);
+        assert!((pred.impact_position.coords.y - plane.y).abs() < 1e-4);
         assert!(pred.incoming_velocity.y < 0.0);
     }
 
@@ -295,9 +295,9 @@ mod tests {
             ekf.update_position(Point3::from(pos), time);
             if let Some(pred) = ekf.predict_to(plane) {
                 if in_swing_commit_window(pred.time_to_impact_secs)
-                    && pos.y <= table::LENGTH_Y * tunables::current().control.swing_commit_max_ball_y_frac
+                    && pos.y <= table::LENGTH_Y * defaults::control().swing_commit_max_ball_y_frac
                 {
-                    let err = (pred.impact_position.v - truth0.impact_position.v).norm();
+                    let err = (pred.impact_position.coords - truth0.impact_position.coords).norm();
                     best_err = best_err.min(err);
                 }
             }

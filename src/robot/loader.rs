@@ -6,15 +6,33 @@ use std::sync::Arc;
 use crate::Arm;
 use thiserror::Error;
 
-use crate::robot::urdf::{SimRobotMount, UrdfLoadError, UrdfRobot};
+use crate::robot::urdf::{SimRobotMount, UrdfLoadError, UrdfModel};
 
-/// 빌드된 sim 로봇 — 제어용 `Arm` + (선택) URDF FK·mesh 뷰어.
+/// 제어용 `Arm` + (선택) URDF 메시·마운트.
+///
+/// - 단순 빌더 → `arm`만 (`urdf = None`)
+/// - URDF 빌더 → `to_arm()`으로 만든 `arm` + 원본 `UrdfModel`
 #[derive(Debug, Clone)]
-pub struct SimRobot {
-    /// plan_swing·관절 추종용 (4축 FK)
+pub struct Robot {
+    /// plan_swing·관절 추종용 FK
     pub arm: Arc<Arm>,
     /// mesh 뷰어·URDF FK (없으면 primitive 렌더)
-    pub urdf: Option<Arc<UrdfRobot>>,
+    pub urdf: Option<Arc<UrdfModel>>,
+}
+
+impl Robot {
+    /// URDF 없이 primitive `Arm`만 가진 로봇.
+    pub fn from_arm(arm: Arm) -> Self {
+        return Self {
+            arm: Arc::new(arm),
+            urdf: None,
+        };
+    }
+
+    /// 이미 `Arc`인 `Arm`으로 조립 (URDF 없음).
+    pub fn from_shared_arm(arm: Arc<Arm>) -> Self {
+        return Self { arm, urdf: None };
+    }
 }
 
 /// sim 배치 프리셋.
@@ -22,11 +40,11 @@ pub struct SimRobot {
 pub enum MountPreset {
     /// 내장 competition primitive / mesh 없는 URDF
     Competition,
-    /// REP-103 Z-up URDF — 탁구대 y≈0 끝
+    /// REP-103 Z-up URDF — [`crate::defaults::rail_frame`] 마운트
     Rep103AtTableEnd,
 }
 
-/// [`SimRobot`] 조립 빌더.
+/// [`Robot`] 조립 빌더.
 #[derive(Debug, Clone)]
 pub struct RobotBuilder {
     urdf_path: Option<PathBuf>,
@@ -112,23 +130,20 @@ impl RobotBuilder {
         };
     }
 
-    /// primitive 전용 — `shared_competition_arm()` 등 fallback `Arm`으로 조립.
-    pub fn build_primitive(fallback: Arc<Arm>) -> SimRobot {
-        return SimRobot {
-            arm: fallback,
-            urdf: None,
-        };
+    /// primitive 전용 — `defaults::shared_arm()` 등 fallback `Arm`으로 조립.
+    pub fn build_primitive(fallback: Arc<Arm>) -> Robot {
+        return Robot::from_shared_arm(fallback);
     }
 
-    /// `SimRobot`을 조립한다 (URDF 필수).
-    pub fn build(self) -> Result<SimRobot, RobotBuildError> {
+    /// URDF를 읽어 `Arm` + `UrdfModel`을 조립한다.
+    pub fn build(self) -> Result<Robot, RobotBuildError> {
         let path = self
             .urdf_path
             .as_ref()
             .ok_or(RobotBuildError::MissingUrdfPath)?;
 
         let ee = self.ee_link.as_deref();
-        let mut urdf = UrdfRobot::from_file(path, ee)?;
+        let mut urdf = UrdfModel::from_file(path, ee)?;
         urdf.mount = self.resolve_mount();
 
         let arm =
@@ -137,7 +152,7 @@ impl RobotBuilder {
                     reason: e.to_string(),
                 })?;
 
-        return Ok(SimRobot {
+        return Ok(Robot {
             arm: Arc::new(arm),
             urdf: Some(Arc::new(urdf)),
         });
@@ -155,7 +170,7 @@ mod tests {
     use super::*;
 
     fn test_fallback_arm() -> Arc<Arm> {
-        return Arc::new(crate::entry::competition_arm().expect("test arm"));
+        return Arc::new(crate::defaults::arm().expect("test arm"));
     }
 
     #[test]
@@ -191,7 +206,7 @@ mod tests {
             .join("assets/robots/4-dof/urdf/all-4-export.urdf");
         assert!(
             path.exists(),
-            "URDF 테스트 자산이 없습니다: {}",
+            "URDF 테스트 파일이 없습니다: {}",
             path.display()
         );
         let robot = RobotBuilder::new()

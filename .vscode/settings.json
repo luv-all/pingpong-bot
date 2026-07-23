@@ -6,6 +6,7 @@
     "flow-icons.folders.associations": {
         "camera": "video",
         "constants": "constant",
+        "defaults": "config",
         "detector": "filter",
         "estimator": "atom",
         "hardware": "controller",

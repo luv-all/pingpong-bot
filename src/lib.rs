@@ -4,23 +4,20 @@
 //! 기능별 모듈로 나눈다.
 
 pub mod camera;
-pub mod clock;
-pub mod config_resolve;
 pub mod constants;
 pub mod detector;
-pub mod entry;
+pub mod defaults;
 pub mod error;
 pub mod estimator;
-pub mod geometry;
 pub mod hardware;
-pub mod local;
-pub mod physics_config;
 pub mod pipeline;
 pub mod planner;
 pub mod robot;
 pub mod sim;
 pub mod telemetry;
-pub mod tunables;
+
+/// 월드 좌표 점 [m] — `nalgebra::Point3<f64>`.
+pub type Point3 = nalgebra::Point3<f64>;
 
 pub use camera::{
     BallObservation, Calibration, CameraId, CameraParams, CharucoBoardSpec, CharucoCalibReport,
@@ -30,56 +27,37 @@ pub use camera::{
     draw_debug_lines, draw_help_lines, draw_world_velocity, hstack_bgr, sample_at, show_bgr,
     triangulate_projections, triangulate_synced, triangulate_views,
 };
-pub use entry::{
-    competition_arm, competition_detector, competition_dynamixel, competition_intercept,
-    competition_physics, competition_tunables, install_competition_tunables,
-};
-pub use local::{DEFAULT_LOCAL_PATH, LocalMachine};
-pub use clock::Clock;
-pub use config_resolve::{
-    DEFAULT_CONFIG_PATH, calibration_path_from_config, resolve_calibration_path,
+pub use defaults::{
+    ControlParams, EstimatorParams, ImpactParams, PhysicsParams, arm, colormask, control, detector,
+    dynamixel, estimator, impact, intercept, physics, rail, rail_frame, robot, scorer, shared_arm,
+    urdf_4dof, urdf_test,
 };
 pub use detector::{
-    Appearance, AppearanceParams, BallDetector, Candidate, CandidateGenerator, ColorSpace,
-    ColormaskConfig, ColormaskDetector, ColormaskParams, ContourDetector, FuseDetector,
-    IntoCandidateGenerators, MotionParams, MotionPrior, ParseAppearanceError,
-    ParseColorSpaceError, RoiTrack, Scorer, ScorerParams, VisionCameraConfig, VisionConfig, fuse,
-    fuse_from_vision, fuse_vision, load_vision_from_config, passthrough_detect, scorer_from_vision,
-    track, track_vision, undistort_frame, vision_from_toml,
+    BallDetector, Candidate, CandidateGenerator, ColorSpace, ColormaskDetector, ColormaskParams,
+    ContourDetector, FuseDetector, IntoCandidateGenerators, MotionPrior, ParseColorSpaceError,
+    RoiTrack, Scorer, ScorerParams, fuse, passthrough_detect, track, undistort_frame,
 };
 pub use error::{DomainError, HwError, ObservationError, SwingPlanError};
 pub use estimator::{
     BallEkf, BounceEvent, Estimator, HitPlane, Prediction, RollEvent, TrajPoint, detect_bounces,
-    detect_rolls, drag_from_trajectory, friction_from_tangential_speeds, mean_bounce_e,
-    mean_roll_mu, physics_coeffs_toml, predict_hit_plane, restitution_from_bounce_heights,
+    detect_rolls, drag_from_trajectory, format_physics_for_defaults, friction_from_tangential_speeds,
+    mean_bounce_e, mean_roll_mu, predict_hit_plane, restitution_from_bounce_heights,
     restitution_from_normal_speeds,
 };
-pub use geometry::Point3;
 #[cfg(feature = "real")]
 pub use hardware::RealHardware;
 pub use hardware::{Hardware, SimHardware};
-pub use physics_config::{
-    PhysicsConfig, PhysicsParams, load_physics_from_config, merge_physics_into_config,
-};
-pub use tunables::{
-    ControlParams, EstimatorParams, ImpactParams, Tunables, current as current_tunables,
-    install as install_tunables,
-};
-pub use pipeline::{
-    CameraFeed, DEFAULT_ROBOT_ID, PipelineConfig, PipelineError, PipelineThread, ROBOTS,
-    RobotEntry, find_robot, robot_ids_csv, run, shared_competition_arm,
-};
+pub use pipeline::{CameraFeed, PipelineConfig, PipelineError, PipelineThread, run};
 pub use planner::{
     InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox, RailMotion, SwingTrajectory, accel,
     ball_past_midcourt_for_commit, clamp_above_table, in_swing_commit_window, plan_best_swing,
     plan_return_to_center, plan_swing, rally_return_velocity, required_racket_velocity,
     robot_obbs, table_penetration, verify_impact_model,
 };
-pub use robot::rail::LinearRail;
 pub use robot::{
-    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, MountPreset, RacketPose, RobotBuildError,
-    RobotBuilder, RobotPose, RobotState, SerialChain, SerialChainError, SerialJoint, SimRobot,
-    UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfRobot,
+    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, MountPreset, RacketPose,
+    RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose, RobotState, SerialChain,
+    SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfModel,
 };
 pub use sim::{
     BallAction, BallEvent, BallScript, BallShooterSettings, BallState, BallVec3, ShooterLayout,

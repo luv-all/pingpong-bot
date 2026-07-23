@@ -17,8 +17,6 @@
 
 use nalgebra::Isometry3;
 
-use crate::constants::table;
-
 use super::fk;
 
 /// sim에서 URDF 루트를 올릴 위치·자세.
@@ -31,20 +29,22 @@ pub struct SimRobotMount {
 }
 
 impl SimRobotMount {
-    /// 이미 sim Z-up으로 작성된 URDF.
-    pub fn competition_placed() -> Self {
+    /// [`crate::robot::RailFrame`] 위 — `base_link` 원점 = 프로파일 마운트.
+    pub fn on_rail_frame(frame: crate::robot::RailFrame) -> Self {
         return Self {
-            position: [0.0, 0.02, table::SURFACE_Z],
+            position: frame.mount_xyz0(),
             rpy: [0.0, 0.0, 0.0],
         };
     }
 
-    /// REP-103 Z-up URDF → sim Z-up. `base_link` z=0이 탁구대 윗면에 닿도록 배치.
+    /// 이미 sim Z-up으로 작성된 URDF — [`crate::defaults::rail_frame`] 배치.
+    pub fn competition_placed() -> Self {
+        return Self::on_rail_frame(crate::defaults::rail_frame());
+    }
+
+    /// REP-103 Z-up URDF → sim Z-up — [`crate::defaults::rail_frame`] 배치.
     pub fn rep103_z_up_at_table_end() -> Self {
-        return Self {
-            position: [0.0, 0.02, table::SURFACE_Z],
-            rpy: [0.0, 0.0, 0.0],
-        };
+        return Self::on_rail_frame(crate::defaults::rail_frame());
     }
 
     pub(crate) fn isometry(self) -> Isometry3<f64> {
@@ -53,7 +53,7 @@ impl SimRobotMount {
 }
 
 pub(crate) fn default_sim_mount(robot_name: &str) -> SimRobotMount {
-    // CAD/Onshape export (REP-103 Z-up) — 탁구대 로봇 끝에 base 배치
+    // CAD/Onshape export (REP-103 Z-up) — 철제 프로파일(`defaults::rail_frame`) 위 배치
     return match robot_name {
         "urdf-test" | "all-4-export" => SimRobotMount::rep103_z_up_at_table_end(),
         _ => SimRobotMount::competition_placed(),
@@ -64,8 +64,7 @@ pub(crate) fn default_sim_mount(robot_name: &str) -> SimRobotMount {
 mod tests {
     use std::path::PathBuf;
 
-    use super::*;
-    use crate::robot::urdf::UrdfRobot;
+    use crate::robot::urdf::UrdfModel;
 
     #[test]
     fn rep103_mount_puts_base_on_table_and_arm_toward_plus_y() {
@@ -77,7 +76,7 @@ mod tests {
             path.display()
         );
         let urdf =
-            UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load urdf-test");
+            UrdfModel::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load urdf-test");
         assert_eq!(urdf.mount.rpy, [0.0, 0.0, 0.0]);
 
         let joints = urdf.default_joints().values;
@@ -91,23 +90,28 @@ mod tests {
             .end_effector_pose_in_sim(joints.as_slice())
             .expect("ee");
 
+        let frame = crate::defaults::rail_frame();
         assert!(
-            (base[2] - table::SURFACE_Z).abs() < 0.01,
-            "base z≈탁구대 면: {}",
+            (base[2] - frame.mount_z()).abs() < 0.01,
+            "base z≈프로파일 마운트: {}",
             base[2]
         );
-        assert!(base[1] < 0.15, "base y≈로봇 끝: {}", base[1]);
         assert!(
-            ee.position.v.y > base[1],
-            "팔 +y(테이블): base_y={} ee_y={}",
-            base[1],
-            ee.position.v.y
+            (base[1] - frame.mount_y()).abs() < 0.01,
+            "base y≈프로파일 마운트: {}",
+            base[1]
         );
         assert!(
-            ee.position.v.z >= base[2] - 0.02,
-            "베이스가 탁구대 아래로 꺼지지 않음: base_z={} ee_z={}",
+            ee.position.coords.y > base[1],
+            "팔 +y(테이블): base_y={} ee_y={}",
+            base[1],
+            ee.position.coords.y
+        );
+        assert!(
+            ee.position.coords.z >= base[2] - 0.02,
+            "베이스가 마운트보다 많이 아래로 꺼지지 않음: base_z={} ee_z={}",
             base[2],
-            ee.position.v.z
+            ee.position.coords.z
         );
     }
 
@@ -120,7 +124,7 @@ mod tests {
             "URDF 테스트 자산이 없습니다: {}",
             path.display()
         );
-        let urdf = UrdfRobot::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
+        let urdf = UrdfModel::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
         assert_eq!(urdf.mount.rpy, [0.0, 0.0, 0.0]);
         assert_eq!(urdf.name, "all-4-export");
 
@@ -135,16 +139,22 @@ mod tests {
             .end_effector_pose_in_sim(joints.as_slice())
             .expect("ee");
 
+        let frame = crate::defaults::rail_frame();
         assert!(
-            (base[2] - table::SURFACE_Z).abs() < 0.01,
-            "base z≈탁구대 면: {}",
+            (base[2] - frame.mount_z()).abs() < 0.01,
+            "base z≈프로파일 마운트: {}",
             base[2]
         );
         assert!(
-            ee.position.v.y > base[1],
+            (base[1] - frame.mount_y()).abs() < 0.01,
+            "base y≈프로파일 마운트: {}",
+            base[1]
+        );
+        assert!(
+            ee.position.coords.y > base[1],
             "4-dof 팔이 테이블(+y)로: base_y={} ee_y={}",
             base[1],
-            ee.position.v.y
+            ee.position.coords.y
         );
     }
 }

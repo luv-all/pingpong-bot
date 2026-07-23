@@ -12,7 +12,7 @@ use super::controls::SimRuntimeControls;
 use super::mesh_loader;
 use super::panel;
 use super::world::SimWorld;
-use crate::robot::urdf::{UrdfLinkVisual, UrdfRobot};
+use crate::robot::urdf::{UrdfLinkVisual, UrdfModel};
 
 /// sim 3D + 제어 패널 옵션.
 pub struct SimViewerOptions {
@@ -21,7 +21,7 @@ pub struct SimViewerOptions {
     /// 공유 sim 월드
     pub world: Arc<Mutex<SimWorld>>,
     /// URDF 모델 (kiss3d 로봇 mesh 대신 사용)
-    pub urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>,
+    pub urdf: Option<Arc<crate::robot::urdf::UrdfModel>>,
     /// 창 닫을 때 파이프라인 종료
     pub shutdown: Arc<AtomicBool>,
 }
@@ -140,17 +140,18 @@ fn build_static_scene(scene: &mut SceneNode3d) {
         .set_color(Color::new(0.25, 0.25, 0.28, 1.0))
         .set_position(Vec3::new(tcx, tcy, 0.01));
 
-    let rail_y = 0.02_f32;
+    let frame = crate::defaults::rail_frame();
+    let rail_y = frame.mount_y() as f32;
     let rail_h = crate::constants::geometry::RAIL_VISUAL_HEIGHT as f32;
     let rail_w = crate::constants::geometry::RAIL_VISUAL_WIDTH as f32;
-    let rail_z = (table::SURFACE_Z as f32) - rail_h * 0.5;
+    let rail_z = frame.mount_z() as f32 - rail_h * 0.5;
     scene
         .add_cube(table::WIDTH_X as f32, rail_w, rail_h)
         .set_color(Color::new(0.35, 0.38, 0.42, 1.0))
         .set_position(Vec3::new((table::WIDTH_X * 0.5) as f32, rail_y, rail_z));
 }
 
-fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfRobot>) -> SceneDynamics {
+fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfModel>) -> SceneDynamics {
     let ball = scene
         .add_sphere(ball::RADIUS as f32)
         .set_color(Color::new(1.0, 0.55, 0.05, 1.0));
@@ -220,7 +221,7 @@ fn build_primitive_robot_nodes(scene: &mut SceneNode3d) -> DynamicNodes {
     };
 }
 
-fn build_urdf_nodes(scene: &mut SceneNode3d, urdf: &UrdfRobot) -> Vec<UrdfVisualNode> {
+fn build_urdf_nodes(scene: &mut SceneNode3d, urdf: &UrdfModel) -> Vec<UrdfVisualNode> {
     return urdf
         .link_visuals()
         .into_iter()
@@ -241,7 +242,7 @@ fn add_urdf_visual(scene: &mut SceneNode3d, vis: &UrdfLinkVisual) -> SceneNode3d
     return mesh_loader::add_geometry(scene, &vis.geometry, color);
 }
 
-fn sync_scene_dynamics(nodes: &mut SceneDynamics, world: &SimWorld, urdf: Option<&UrdfRobot>) {
+fn sync_scene_dynamics(nodes: &mut SceneDynamics, world: &SimWorld, urdf: Option<&UrdfModel>) {
     let ball = world.ball_position();
     nodes.ball.set_position(to_vec3(ball));
 
@@ -279,7 +280,7 @@ fn sync_impact_debug_markers(nodes: &mut SceneDynamics, world: &SimWorld) {
         nodes.impact_ring.set_position(HIDDEN);
         return;
     };
-    let p = pred.impact_position.v;
+    let p = pred.impact_position.coords;
     nodes.impact_ring.set_position(Vec3::new(
         p.x as f32,
         p.y as f32,
@@ -329,7 +330,7 @@ fn sync_primitive_robot(nodes: &mut DynamicNodes, world: &SimWorld) {
 
 fn sync_urdf_robot(
     nodes: &mut [UrdfVisualNode],
-    urdf: &UrdfRobot,
+    urdf: &UrdfModel,
     joints: &[f64],
     mount: crate::robot::urdf::SimRobotMount,
 ) {

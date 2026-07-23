@@ -172,7 +172,7 @@ pub fn fuse(generators: impl IntoCandidateGenerators, scorer: Scorer) -> FuseDet
 mod tests {
     use super::*;
     use crate::CameraId;
-    use crate::detector::{ColorSpace, ColormaskConfig, ColormaskDetector, ContourDetector, ScorerParams};
+    use crate::detector::{ColorSpace, ColormaskParams, ColormaskDetector, ContourDetector, ScorerParams};
     use opencv::core::{CV_8UC3, Mat, Point, Scalar, Size};
     use opencv::imgproc;
     use std::time::Instant;
@@ -197,7 +197,7 @@ mod tests {
     fn fuse_dsl_single_generator_no_box() {
         let frame = white_blob_frame();
         let mut det = fuse(
-            ColormaskDetector::new(ColormaskConfig {
+            ColormaskDetector::new(ColormaskParams {
                 space: ColorSpace::Ycrcb,
                 c0_min: 50,
                 c0_max: 255,
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn fuse_dsl_generators_macro_and_motion_weight() {
         let frame = white_blob_frame();
-        let colormask = ColormaskDetector::new(ColormaskConfig {
+        let colormask = ColormaskDetector::new(ColormaskParams {
             space: ColorSpace::Ycrcb,
             c0_min: 50,
             c0_max: 255,

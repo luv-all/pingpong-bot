@@ -15,7 +15,6 @@ mod sim;
 mod real;
 
 pub use axl_rail::AxlRail;
-pub use rail::load_rail_config;
 pub use sim::SimHardware;
 
 #[cfg(feature = "real")]

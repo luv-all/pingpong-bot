@@ -6,9 +6,7 @@
 //! - `enable_torque(true)` = profile 재적용 → (추가) Goal=Present → Torque ON
 
 use std::f64::consts::TAU;
-use std::path::Path;
 
-use serde::Deserialize;
 use thiserror::Error;
 
 use crate::{HwError, Joints};
@@ -26,15 +24,14 @@ fn pack_u8(value: u8) -> Vec<u8> {
 }
 
 /// 마스터 goal tick을 `2 * zero_tick - master`로 미러하는 슬레이브.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MirrorSlave {
     pub master_id: u8,
     pub slave_id: u8,
 }
 
-/// Dynamixel Protocol 2.0 버스 설정. 벤치 숫자는 `crate::entry`에서 조립한다.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(default)]
+/// Dynamixel Protocol 2.0 버스 설정. 벤치 숫자는 `crate::defaults`에서 조립한다.
+#[derive(Debug, Clone, PartialEq)]
 pub struct DynamixelConfig {
     pub port: String,
     pub baudrate: u32,
@@ -55,7 +52,6 @@ pub struct DynamixelConfig {
     pub joint_signs: Vec<i8>,
     pub joint_offsets_rad: Vec<f64>,
     pub motor_angle_limits_deg: Vec<[f64; 2]>,
-    #[serde(default)]
     pub mirror_slaves: Vec<MirrorSlave>,
 }
 
@@ -87,7 +83,7 @@ impl Default for DynamixelConfig {
     }
 }
 
-/// Dynamixel TOML/설정 검증·로드 실패.
+/// Dynamixel 설정 검증 실패.
 #[derive(Debug, Error)]
 pub enum DynamixelConfigError {
     #[error("4-DOF RealHardware에는 motor_ids가 4개여야 합니다 (현재 {joint_count})")]
@@ -114,10 +110,6 @@ pub enum DynamixelConfigError {
     MirrorSlaveInMotorIds { slave_id: u8 },
     #[error("mirror_slaves: id {id}가 중복됩니다")]
     MirrorDuplicateId { id: u8 },
-    #[error("TOML 파싱 실패: {0}")]
-    Toml(#[from] toml::de::Error),
-    #[error("설정 파일 읽기 실패: {0}")]
-    Io(#[from] std::io::Error),
 }
 
 impl DynamixelConfig {
@@ -197,28 +189,6 @@ impl DynamixelConfig {
         let max_tick = self.ticks_per_revolution.saturating_sub(1).max(0);
         return mirrored.clamp(0, max_tick);
     }
-}
-
-#[derive(Deserialize)]
-struct RuntimeHardwareDocument {
-    hardware: RuntimeHardwareSection,
-}
-
-#[derive(Deserialize)]
-struct RuntimeHardwareSection {
-    dynamixel: DynamixelConfig,
-}
-
-/// 전체 런타임 TOML에서 `[hardware.dynamixel]`만 읽는다.
-pub fn config_from_toml(text: &str) -> Result<DynamixelConfig, DynamixelConfigError> {
-    let document: RuntimeHardwareDocument = toml::from_str(text)?;
-    document.hardware.dynamixel.validate()?;
-    return Ok(document.hardware.dynamixel);
-}
-
-pub fn load_config(path: &Path) -> Result<DynamixelConfig, DynamixelConfigError> {
-    let text = std::fs::read_to_string(path)?;
-    return config_from_toml(&text);
 }
 
 /// URDF 관절각과 Dynamixel 절대 tick 사이의 순수 좌표 변환.
@@ -580,14 +550,12 @@ fn read_transport_error() -> HwError {
 #[cfg(test)]
 mod tests {
     use crate::Joints;
-    use crate::entry::competition_dynamixel;
+    use crate::defaults::dynamixel;
 
-    use super::{
-        DynamixelBus, DynamixelConfig, DynamixelConfigError, MotorMapping, config_from_toml,
-    };
+    use super::{DynamixelBus, DynamixelConfig, DynamixelConfigError, MotorMapping};
 
     fn bench_config() -> DynamixelConfig {
-        return competition_dynamixel();
+        return dynamixel();
     }
 
     #[test]
@@ -679,21 +647,4 @@ mod tests {
         assert_eq!(cfg.mirror_tick(t200), t160);
     }
 
-    #[test]
-    fn reads_dynamixel_section_from_runtime_toml() {
-        let config = config_from_toml(
-            r#"
-[hardware.dynamixel]
-port = "COM9"
-motor_ids = [1, 3, 4, 5]
-joint_signs = [-1, 1, 1, 1]
-joint_offsets_rad = [0.0, 0.0, 0.0, 0.0]
-motor_angle_limits_deg = [[90.0, 220.0], [135.0, 225.0], [92.0, 230.0], [120.0, 220.0]]
-"#,
-        )
-        .expect("config");
-
-        assert_eq!(config.port, "COM9");
-        assert_eq!(config.baudrate, 57_600);
-    }
 }

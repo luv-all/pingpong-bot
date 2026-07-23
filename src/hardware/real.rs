@@ -1,11 +1,11 @@
-//! Dynamixel 4축 실물 하드웨어 어댑터와 선택적 AXL 레일 pose reader.
+//! Dynamixel 4축 실물 하드웨어 어댑터와 선택적 AXL 레일 동기 재생.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use super::axl_rail::AxlRail;
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
@@ -15,8 +15,8 @@ use crate::{Hardware, HwError, RobotPose, SwingTrajectory};
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
     bus: Arc<Mutex<DynamixelBus>>,
-    /// `None`이면 `rail_x = 0` (레일 비활성).
-    rail: Option<AxlRail>,
+    /// `None`이면 `rail_x = 0` (레일 비활성). executor와 pose 읽기가 공유.
+    rail: Arc<Mutex<Option<AxlRail>>>,
     busy: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     executor: Option<JoinHandle<()>>,
@@ -55,7 +55,7 @@ impl RealHardware {
         };
         return Ok(Self {
             bus: Arc::new(Mutex::new(bus)),
-            rail,
+            rail: Arc::new(Mutex::new(rail)),
             busy: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
             executor: None,
@@ -64,7 +64,8 @@ impl RealHardware {
     }
 
     fn read_rail_x_m(&mut self) -> Result<f64, HwError> {
-        return match &mut self.rail {
+        let mut guard = self.rail.lock().map_err(|_| HwError::ReadFailed)?;
+        return match guard.as_mut() {
             None => Ok(0.0),
             Some(rail) => rail.read_x_m(),
         };
@@ -89,15 +90,10 @@ impl Hardware for RealHardware {
             debug!("Dynamixel 스윙 실행 중 — 중복 명령 무시");
             return Ok(());
         }
-        if (trajectory.rail.end - trajectory.rail.start).abs() > 1e-4
-            || trajectory.rail.end_velocity.abs() > 1e-4
-            || (trajectory.follow_through_rail_x - trajectory.rail.end).abs() > 1e-4
-        {
-            warn!("AXL 레일 스윙 동기 미구현 — 관절 궤적만 실행");
-        }
 
         let trajectory = trajectory.clone();
         let bus = Arc::clone(&self.bus);
+        let rail = Arc::clone(&self.rail);
         let busy = Arc::clone(&self.busy);
         self.cancel.store(false, Ordering::Release);
         let cancel = Arc::clone(&self.cancel);
@@ -111,14 +107,26 @@ impl Hardware for RealHardware {
                 let elapsed = started.elapsed().as_secs_f64();
                 let sample_time = elapsed.min(trajectory.duration_secs);
                 let joints = trajectory.sample_at(sample_time);
-                let result = bus
+                let rail_x = trajectory.sample_rail_at(sample_time);
+
+                let joints_ok = bus
                     .lock()
                     .map_err(|_| ())
-                    .and_then(|mut bus| bus.write_joints(&joints).map_err(|_| ()));
-                if result.is_err() {
+                    .and_then(|mut bus| bus.write_joints(&joints).map_err(|_| ()))
+                    .is_ok();
+                if !joints_ok {
                     error!(sample_time, "Dynamixel goal position 전송 실패 — 스윙 중단");
                     break;
                 }
+
+                if let Ok(mut guard) = rail.lock()
+                    && let Some(rail_hw) = guard.as_mut()
+                    && rail_hw.command_abs_m(rail_x).is_err()
+                {
+                    error!(sample_time, rail_x, "AXL 레일 목표 전송 실패 — 스윙 중단");
+                    break;
+                }
+
                 if elapsed >= trajectory.duration_secs {
                     break;
                 }
@@ -163,17 +171,12 @@ mod tests {
     use crate::{Hardware, Joints, RailMotion, SwingTrajectory};
 
     use super::RealHardware;
-    use crate::entry::competition_dynamixel;
+    use crate::defaults::dynamixel;
     use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
 
-    #[test]
-    fn dry_run_read_pose_uses_rail_position() {
-        let dynamixel = DynamixelConfig {
-            stream_hz: 500.0,
-            ..competition_dynamixel()
-        };
-        let rail = RailConfig {
+    fn test_rail() -> RailConfig {
+        return RailConfig {
             enabled: true,
             dll_path: PathBuf::from("unused.dll"),
             pulses_per_meter: 1000,
@@ -186,8 +189,16 @@ mod tests {
             max_vel: 1.0,
             ..RailConfig::default()
         };
+    }
 
-        let mut hardware = RealHardware::dry_run(dynamixel, Some(rail)).expect("dry-run hardware");
+    #[test]
+    fn dry_run_read_pose_uses_rail_position() {
+        let dynamixel = DynamixelConfig {
+            stream_hz: 500.0,
+            ..dynamixel()
+        };
+        let mut hardware =
+            RealHardware::dry_run(dynamixel, Some(test_rail())).expect("dry-run hardware");
 
         assert_eq!(hardware.read_pose().expect("pose").rail_x, 0.0);
     }
@@ -196,7 +207,7 @@ mod tests {
     fn dry_run_executes_trajectory_and_reports_busy_state() {
         let config = DynamixelConfig {
             stream_hz: 500.0,
-            ..crate::entry::competition_dynamixel()
+            ..crate::defaults::dynamixel()
         };
         let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
         let trajectory = SwingTrajectory::new(
@@ -221,10 +232,43 @@ mod tests {
     }
 
     #[test]
+    fn dry_run_syncs_rail_with_joint_trajectory() {
+        let config = DynamixelConfig {
+            stream_hz: 500.0,
+            ..crate::defaults::dynamixel()
+        };
+        let mut hardware =
+            RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
+        let trajectory = SwingTrajectory::new(
+            Joints::from_slice(&[0.0; 4]),
+            Joints::from_slice(&[0.05; 4]),
+            vec![0.0; 4],
+            vec![0.0; 4],
+            0.04,
+            RailMotion {
+                start: 0.0,
+                end: 0.25,
+                start_velocity: 0.0,
+                end_velocity: 0.0,
+            },
+        );
+
+        hardware.command(&trajectory).expect("command");
+        thread::sleep(Duration::from_millis(100));
+        assert!(!hardware.is_busy());
+
+        let pose = hardware.read_pose().expect("pose");
+        assert!((pose.rail_x - 0.25).abs() < 1e-9);
+        for angle in pose.joints.values {
+            assert!((angle - 0.05).abs() < 0.002);
+        }
+    }
+
+    #[test]
     fn drop_cancels_long_running_trajectory_promptly() {
         let config = DynamixelConfig {
             stream_hz: 500.0,
-            ..crate::entry::competition_dynamixel()
+            ..crate::defaults::dynamixel()
         };
         let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
         let trajectory = SwingTrajectory::new(

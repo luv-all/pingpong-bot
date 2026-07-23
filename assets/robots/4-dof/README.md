@@ -18,9 +18,7 @@ ROS install의 절대 `file:///Users/...` 경로를 넣지 말 것.
 ## 실행
 
 ```bash
-cp config/example.toml config/4-dof.toml
-# config/4-dof.toml에서 robot = "4-dof"
-cargo run -p pingpong-bot -- config/4-dof.toml
+cargo run -p pingpong-bot -- --robot 4-dof
 ```
 
 ## 관절
@@ -44,5 +42,5 @@ URDF movable joint 순서와 모터 ID 순서는 고정이다.
 | Revolute 13 | 4 | +1 | |
 | Revolute 18 | 5 | +1 | |
 
-미러·포트·리밋 SSOT는 [`src/entry/competition.rs`](../../../src/entry/competition.rs)의
-`competition_dynamixel()`이다.
+미러·포트·리밋 SSOT는 [`src/defaults.rs`](../../../src/defaults.rs)의
+`dynamixel()`이다.

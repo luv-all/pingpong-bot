@@ -1,8 +1,0 @@
-# 레거시: 예전에는 `cargo run -- config/4-dof.toml`로 카탈로그 4-dof를 켰다.
-# 앱 배선 SSOT는 `src/entry/`이며, 로봇 선택은 CLI로 한다:
-#
-#   cargo run -p pingpong-bot -- --robot 4-dof
-#
-# 이 파일은 참고용으로만 남긴다 (RuntimeConfig TOML SSOT 아님).
-# URDF·EE·마운트는 `src/robot/catalog.rs`의 "4-dof" 항목 +
-# `MountPreset::Rep103AtTableEnd`가 담당한다.

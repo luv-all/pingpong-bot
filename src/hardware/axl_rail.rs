@@ -79,14 +79,26 @@ impl AxlRail {
         return Ok(normalize_m(self.config.board_to_domain_abs(board_m)));
     }
 
-    /// 도메인 절대 위치를 클램프한 뒤 보드 좌표로 변환해 이동한다. 반환값은 도메인 명령.
-    pub fn move_abs_m(&mut self, x: f64) -> Result<f64, HwError> {
+    /// 도메인 절대 목표를 건다. Live는 모션 완료를 기다리지 않는다 (궤적 샘플링용).
+    pub fn command_abs_m(&mut self, x: f64) -> Result<f64, HwError> {
         let domain_m = normalize_m(self.config.clamp_m(x));
-        let board_m = normalize_m(self.config.domain_to_board_abs(domain_m));
         match &mut self.kind {
             RailKind::DryRun { position_m } => *position_m = domain_m,
             #[cfg(all(windows, feature = "real"))]
-            RailKind::Live(live) => live.move_abs_m(&self.config, board_m)?,
+            RailKind::Live(live) => {
+                let board_m = normalize_m(self.config.domain_to_board_abs(domain_m));
+                live.command_abs_m(&self.config, board_m)?;
+            }
+        }
+        return Ok(domain_m);
+    }
+
+    /// 도메인 절대 위치로 이동하고(클램프), Live면 정지까지 기다린다. 반환값은 도메인 명령.
+    pub fn move_abs_m(&mut self, x: f64) -> Result<f64, HwError> {
+        let domain_m = self.command_abs_m(x)?;
+        #[cfg(all(windows, feature = "real"))]
+        if let RailKind::Live(live) = &mut self.kind {
+            live.wait_idle(self.config.axis)?;
         }
         return Ok(domain_m);
     }
@@ -96,7 +108,6 @@ impl AxlRail {
         let current_domain = self.read_x_m()?;
         return self.move_abs_m(current_domain + dx);
     }
-
 }
 
 fn normalize_m(x: f64) -> f64 {
@@ -204,7 +215,7 @@ impl AxlLive {
         return Err(read_position_error(actual_status, command_status));
     }
 
-    fn move_abs_m(&mut self, config: &RailConfig, commanded_m: f64) -> Result<(), HwError> {
+    fn command_abs_m(&mut self, config: &RailConfig, commanded_m: f64) -> Result<(), HwError> {
         check_axl("AxmMotSetAbsRelMode", unsafe {
             (self.ffi.axm_mot_set_abs_rel_mode)(config.axis, 0)
         })?;
@@ -217,12 +228,15 @@ impl AxlLive {
                 config.decel,
             )
         })?;
+        return Ok(());
+    }
 
+    fn wait_idle(&mut self, axis: i32) -> Result<(), HwError> {
         let deadline = std::time::Instant::now() + MOVE_POLL_TIMEOUT;
         loop {
             let mut in_motion = 0;
             check_axl("AxmStatusReadInMotion", unsafe {
-                (self.ffi.axm_status_read_in_motion)(config.axis, &mut in_motion)
+                (self.ffi.axm_status_read_in_motion)(axis, &mut in_motion)
             })?;
             if in_motion == 0 {
                 return Ok(());

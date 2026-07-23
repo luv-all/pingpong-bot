@@ -19,9 +19,7 @@ use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
 use tracing::{info, info_span, warn};
 
-pub use crate::robot::catalog::{
-    DEFAULT_ROBOT_ID, ROBOTS, RobotEntry, find_robot, robot_ids_csv, shared_competition_arm,
-};
+use crate::defaults::shared_arm;
 
 const OBSERVATION_CHANNEL_CAPACITY: usize = 64;
 const CONTROL_HZ: f64 = 100.0;
@@ -47,7 +45,7 @@ impl Default for PipelineConfig {
                 sample_step: 0.05,
             },
             control_hz: CONTROL_HZ,
-            arm: shared_competition_arm(),
+            arm: shared_arm(),
             calibration: Calibration::sim(3),
         };
     }

@@ -8,9 +8,9 @@ use opencv::core::Scalar;
 use opencv::prelude::*;
 use pingpong_bot::{
     BallDetector, BounceEvent, Calibration, CameraId, FrameSource, OpenCvCapture, PixelPoint,
-    Point3, PreviewAction, TrajPoint, VisionConfig, destroy_window, detect_bounces, draw_cam_label,
-    draw_circle_px, draw_debug_lines, draw_help_lines, draw_world_velocity, fuse_from_vision,
-    hstack_bgr, mean_bounce_e, show_bgr, triangulate_views,
+    Point3, PreviewAction, TrajPoint, destroy_window, detect_bounces, draw_cam_label, draw_circle_px,
+    draw_debug_lines, draw_help_lines, draw_world_velocity, hstack_bgr, mean_bounce_e, show_bgr,
+    triangulate_views,
 };
 
 pub struct CaptureResult {
@@ -90,7 +90,6 @@ pub fn run_capture(
     calibration: &Path,
     videos: &[PathBuf],
     devices: &[i32],
-    vision: &VisionConfig,
     preview: bool,
     wait_ms: i32,
     max_frames: usize,
@@ -110,8 +109,8 @@ pub fn run_capture(
     }
 
     let mut detectors: Vec<Box<dyn BallDetector>> = (0..sources.len())
-        .map(|_| fuse_from_vision(vision).map(|d| Box::new(d) as Box<dyn BallDetector>))
-        .collect::<Result<Vec<_>>>()?;
+        .map(|_| Box::new(pingpong_bot::detector()) as Box<dyn BallDetector>)
+        .collect();
 
     let window = "measure:restitution";
     let mut traj = Vec::new();
@@ -230,7 +229,7 @@ pub fn run_capture(
             ));
             lines.push(format!(
                 "contact=({:.3},{:.3},{:.3})",
-                ev.contact.v.x, ev.contact.v.y, ev.contact.v.z
+                ev.contact.coords.x, ev.contact.coords.y, ev.contact.coords.z
             ));
         } else {
             lines.push("bounce: waiting".into());

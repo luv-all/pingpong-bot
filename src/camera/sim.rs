@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::{CameraId, Clock, PixelPoint};
+use crate::{CameraId, PixelPoint};
 use rapier3d::prelude::Vector;
 
 use super::projection::CameraView;
@@ -104,7 +104,7 @@ mod tests {
     use crate::sim::SimSessionConfig;
 
     fn test_arm() -> Arc<Arm> {
-        return Arc::new(crate::entry::competition_arm().expect("테스트용 4DOF arm"));
+        return Arc::new(crate::defaults::arm().expect("테스트용 4DOF arm"));
     }
 
     #[test]

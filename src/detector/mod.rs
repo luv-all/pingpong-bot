@@ -5,7 +5,7 @@
 //! 2. [`scorer`] — area · circularity · motion soft weight
 //! 3. [`motion`] — `MotionPrior` 마스크 (optional soft boost)
 //!
-//! **조립 DSL SSOT:** [`dsl`] (`fuse_vision` / `track_vision`).
+//! **조립 SSOT:** [`crate::defaults::detector`].
 //!
 //! ```ignore
 //! use pingpong_bot::{fuse, generators, track, ColormaskDetector, Scorer};
@@ -16,20 +16,13 @@
 //! )
 //! .with_motion_weight(0.5);
 //!
-//! let det = fuse(
-//!     generators![colormask, contour],
-//!     Scorer::shape(20.0, 20_000.0, 0.55).with_motion_weight(0.5),
-//! )
-//! .with_motion_weight(0.5);
-//!
 //! let mut d = track(det, 80);
-//! // TOML:
-//! let mut d = track_vision(&vision)?;
+//! // 또는
+//! let mut d = pingpong_bot::detector();
 //! ```
 
 mod appearance;
 mod candidate;
-pub mod dsl;
 mod fuse;
 mod motion;
 mod params;
@@ -43,14 +36,9 @@ use crate::camera::Frame;
 // DX: appearance는 `detector::appearance::{...}`로도, detector 루트로도 쓸 수 있다.
 pub use appearance::*;
 pub use candidate::Candidate;
-pub use dsl::{fuse_vision, scorer_from_vision, track_vision};
 pub use fuse::{CandidateGenerator, FuseDetector, IntoCandidateGenerators, fuse};
 pub use motion::MotionPrior;
-pub use params::{
-    Appearance, AppearanceParams, ColormaskParams, MotionParams, ParseAppearanceError,
-    ScorerParams, VisionCameraConfig, VisionConfig, fuse_from_vision, load_vision_from_config,
-    vision_from_toml,
-};
+pub use params::ScorerParams;
 pub use scorer::Scorer;
 pub use track::{RoiTrack, track};
 pub use undistort::undistort_frame;

@@ -49,7 +49,7 @@ fn velocity(a: &TrajPoint, b: &TrajPoint) -> Option<Vector3<f64>> {
     if dt < 1e-4 {
         return None;
     }
-    return Some((b.pos.v - a.pos.v) / dt);
+    return Some((b.pos.coords - a.pos.coords) / dt);
 }
 
 fn tangential_speed(v: Vector3<f64>) -> f64 {
@@ -73,7 +73,7 @@ pub fn detect_bounces(traj: &[TrajPoint]) -> Vec<BounceEvent> {
             i += 1;
             continue;
         };
-        let near_table = traj[i].pos.v.z < floor + 0.10;
+        let near_table = traj[i].pos.coords.z < floor + 0.10;
         let bounce = v_in.z < -0.25 && v_out.z > 0.15 && near_table;
         if bounce {
             let vin_n = (-v_in.z).max(1e-6);
@@ -113,7 +113,7 @@ pub fn detect_rolls(traj: &[TrajPoint]) -> Vec<RollEvent> {
             }
             continue;
         };
-        let on_table = (traj[i].pos.v.z - floor).abs() < 0.04 && v.z.abs() < 0.6;
+        let on_table = (traj[i].pos.coords.z - floor).abs() < 0.04 && v.z.abs() < 0.6;
         if on_table {
             if run_start.is_none() {
                 run_start = Some(i.saturating_sub(1));

@@ -4,10 +4,10 @@
 
 ## Phase 3a — 진입점 SSOT
 
-- [x] `src/entry/competition.rs` — arm · physics · tunables · detector · dynamixel · intercept
-- [x] `Arm::competition` 제거 → `competition_arm()`
+- [x] `src/defaults.rs` — arm · physics · tunables · detector · dynamixel · intercept
+- [x] `Arm::competition` 제거 → `arm()`
 - [x] 도메인 `Default`/`from_embedded` competition 프리셋 제거
-- [x] Vision 조립은 entry `fuse(generators![…])`; `fuse_vision`은 툴 어댑터
+- [x] Vision 조립은 defaults `fuse(generators![…])`; `fuse_vision`은 툴 어댑터
 - [x] `main` = entry + local/CLI
 
 ## Phase 1 — 미러 + 축별 토크
@@ -23,7 +23,7 @@
 - [x] `config/default.toml` · `example.toml` 삭제
 - [x] `src/local.rs` + `config/local.example.toml`
 - [x] `config/real-hardware.toml` = jog_rail 보드 오버레이만
-- [x] `jog_axis` → `competition_dynamixel()` + `--port`
+- [x] `jog_axis` → `dynamixel()` + `--port`
 
 ## Phase 2 — Rapier 다물체
 
@@ -35,4 +35,4 @@
 
 1. 진입점 파일만 읽고 파이프라인 설명 가능
 2. `Arm`/`DynamixelConfig`에 `competition` 프리셋 메서드 없음
-3. 테스트는 entry / fixtures로 조립
+3. 테스트는 defaults / fixtures로 조립

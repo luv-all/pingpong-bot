@@ -1,25 +1,20 @@
-//! fuse 본선 디버그 — DSL 조립 + ROI 토글 (`r`).
-//!
-//! 조립 SSOT: [`pingpong_bot::detector::dsl`] (`fuse_vision` / `track_vision`).
-//! 이 파일의 [`build_detector`]가 그 DSL을 **인라인**으로 쓴다.
+//! fuse 본선 디버그 — `defaults::detector()` + ROI 토글 (`r`).
 //!
 //! appearance만: [detect-appearance](../detect_appearance/README.md).
 
 mod cli;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use clap::Parser;
 use opencv::core::Scalar;
 use opencv::imgcodecs;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    Appearance, BallDetector, CameraId, ColormaskDetector, ContourDetector, FrameSource,
-    FuseDetector, ImageDirSource, OpenCvCapture, PixelPoint, PreviewAction, RoiTrack, Scorer,
-    VisionConfig, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines,
-    fuse, hstack_bgr, load_vision_from_config, show_bgr, track,
+    BallDetector, CameraId, FrameSource, ImageDirSource, OpenCvCapture, PixelPoint, PreviewAction,
+    destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines, hstack_bgr,
+    show_bgr,
 };
-use pingpong_bot::generators;
 
 use cli::Args;
 
@@ -46,64 +41,6 @@ fn open_source(args: &Args) -> Result<Box<dyn FrameSource>> {
     ));
 }
 
-/// TOML → fuse DSL → track.
-///
-/// ```ignore
-/// fuse(ColormaskDetector::…, Scorer::…).with_motion_weight(w)
-/// fuse(generators![colormask, contour], …).with_motion_weight(w)
-/// track(det, roi_half_px)
-/// ```
-fn build_detector(vision: &VisionConfig) -> Result<RoiTrack> {
-    ensure!(
-        !vision.generators.is_empty(),
-        "vision.generators는 비어 있으면 안 됩니다"
-    );
-
-    let w = vision.motion.weight;
-    let scorer = Scorer::from(&vision.scorer).with_motion_weight(w);
-
-    let det: FuseDetector = match vision.generators.as_slice() {
-        [Appearance::Colormask] => fuse(
-            ColormaskDetector::try_from(&vision.appearance.colormask)?,
-            scorer,
-        )
-        .with_motion_weight(w),
-
-        [Appearance::Contour] => {
-            fuse(ContourDetector::from(&vision.scorer), scorer).with_motion_weight(w)
-        }
-
-        [Appearance::Colormask, Appearance::Contour] => fuse(
-            generators![
-                ColormaskDetector::try_from(&vision.appearance.colormask)?,
-                ContourDetector::from(&vision.scorer),
-            ],
-            scorer,
-        )
-        .with_motion_weight(w),
-
-        [Appearance::Contour, Appearance::Colormask] => fuse(
-            generators![
-                ContourDetector::from(&vision.scorer),
-                ColormaskDetector::try_from(&vision.appearance.colormask)?,
-            ],
-            scorer,
-        )
-        .with_motion_weight(w),
-
-        gens => {
-            // 라이브러리 SSOT (임의 길이)
-            let _ = gens;
-            return Ok(track(
-                pingpong_bot::fuse_vision(vision)?,
-                vision.roi_half_px,
-            ));
-        }
-    };
-
-    return Ok(track(det, vision.roi_half_px));
-}
-
 fn main() -> Result<()> {
     let args = Args::parse();
     if let Some(dir) = &args.output {
@@ -111,12 +48,11 @@ fn main() -> Result<()> {
     }
 
     let mut source = open_source(&args)?;
-    let vision = load_vision_from_config(&args.config)?;
-    let mut detector = build_detector(&vision)?;
+    let mut detector = pingpong_bot::detector();
     if args.no_roi {
         detector.set_roi_enabled(false);
     }
-    println!("{} (from {})", detector, args.config.display());
+    println!("{} (from defaults::detector())", detector);
     println!("keys: r = ROI toggle, q/ESC = quit");
 
     let window = "detect:full";

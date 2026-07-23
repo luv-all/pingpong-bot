@@ -1,6 +1,6 @@
 //! 시뮬 암 링크 바디 — Rapier multibody + 관절 모터 effort 상한.
 //!
-//! `motor_max_force` = [`crate::tunables`] `max_joint_torques` (entry SSOT, yaw 듀얼=12).
+//! `motor_max_force` = [`crate::defaults`] `max_joint_torques` (defaults SSOT, yaw 듀얼=12).
 //! 볼 충돌체는 기본적으로 붙이지 않는다 — `SimWorld`는 FK 키네마틱 라켓을 쓴다.
 //! (`attach_racket_collider=true`는 EE 실험·단위 테스트용.)
 
@@ -9,7 +9,7 @@ use rapier3d::prelude::*;
 
 use crate::constants::geometry::{RACKET_HALF_X, RACKET_HALF_Y, RACKET_HALF_Z};
 use crate::robot::{Arm, Joints};
-use crate::tunables;
+use crate::defaults;
 
 /// 위치 추종 게인 — τ 여유 있을 때 명령각에 가깝게, 포화 시에만 지연.
 const MOTOR_STIFFNESS: f32 = 1200.0;
@@ -35,7 +35,7 @@ impl ArmMultibody {
         restitution: f32,
         attach_racket_collider: bool,
     ) -> Self {
-        let torques = tunables::current().control.max_joint_torques;
+        let torques = defaults::control().max_joint_torques;
         let n = arm.joint_count().min(initial.values.len());
         let base = bodies.insert(
             RigidBodyBuilder::kinematic_position_based()
@@ -210,13 +210,12 @@ fn link_mass(index: usize, count: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entry::{competition_arm, install_competition_tunables};
-    use crate::geometry::Point3;
+    use crate::defaults::arm;
+    use crate::Point3;
 
     #[test]
     fn spawns_four_joints_dual_yaw_torque_from_entry() {
-        install_competition_tunables();
-        let arm = competition_arm().expect("arm");
+        let arm = arm().expect("arm");
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
         let mut joints = MultibodyJointSet::new();
@@ -225,20 +224,19 @@ mod tests {
             &mut colliders,
             &mut joints,
             &arm,
-            Point3::new(0.0, 0.02, 0.76).v,
+            Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords,
             &arm.default_joints,
             0.85,
             true,
         );
         assert_eq!(mb.joint_count(), 4);
-        assert_eq!(tunables::current().control.max_joint_torques[0], 12.0);
-        assert_eq!(tunables::current().control.max_joint_torques[1], 6.0);
+        assert_eq!(defaults::control().max_joint_torques[0], 12.0);
+        assert_eq!(defaults::control().max_joint_torques[1], 6.0);
     }
 
     #[test]
     fn dual_yaw_motor_force_exceeds_single() {
-        install_competition_tunables();
-        let arm = competition_arm().expect("arm");
+        let arm = arm().expect("arm");
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
         let mut joints = MultibodyJointSet::new();
@@ -247,7 +245,7 @@ mod tests {
             &mut colliders,
             &mut joints,
             &arm,
-            Point3::new(0.0, 0.02, 0.76).v,
+            Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords,
             &arm.default_joints,
             0.85,
             true,

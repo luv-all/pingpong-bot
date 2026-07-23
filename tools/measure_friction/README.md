@@ -1,16 +1,26 @@
 # measure-friction
 
-테이블 위 **롤**에서 $\mu$를 구하고 `[physics].friction`에 넣는다.
+테이블 위 **롤**에서 $\mu$를 측정한다.  
+파일은 건드리지 않는다 — stdout에 `defaults::physics()` 붙여넣기용 Rust 스니펫만 출력.
 
 ## 영상 (권장)
 
 ```bash
-# 인자 없음 → device 0,1 + TOML calibration_path
-cargo run -p measure-friction
+# 캡처 모드: --calibration 필수 (미지정 device면 0,1)
+cargo run -p measure-friction -- --calibration calibration.json
 
-cargo run -p measure-friction -- --device 0 --device 1
+cargo run -p measure-friction -- \
+  --calibration calibration.json \
+  --device 0 --device 1
 
-cargo run -p measure-friction -- --config config/experiment.toml --video a.mp4 --video b.mp4
+cargo run -p measure-friction -- \
+  --calibration calibration.json \
+  --video a.mp4 --video b.mp4
 ```
 
-`--calibration`으로 덮어쓰기 가능. 기본 `--config`는 `config/default.toml`.
+## 수동 / sim
+
+```bash
+cargo run -p measure-friction -- --vt-pairs 2.0:1.4
+cargo run -p measure-friction -- --sim
+```

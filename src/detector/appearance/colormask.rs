@@ -1,5 +1,6 @@
 //! YCrCb / HSV 색 마스크로 공 검출.
 
+use anyhow::{Result, ensure};
 use clap::ValueEnum;
 use opencv::core::{Point, Scalar, Vector};
 use opencv::imgproc;
@@ -13,10 +14,7 @@ use super::super::scorer::Scorer;
 use crate::PixelPoint;
 use crate::camera::Frame;
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, serde::Serialize, serde::Deserialize,
-)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum ColorSpace {
     #[default]
@@ -58,7 +56,7 @@ impl std::fmt::Display for ParseColorSpaceError {
 impl std::error::Error for ParseColorSpaceError {}
 
 #[derive(Debug, Clone)]
-pub struct ColormaskConfig {
+pub struct ColormaskParams {
     pub space: ColorSpace,
     pub c0_min: u8,
     pub c0_max: u8,
@@ -68,22 +66,31 @@ pub struct ColormaskConfig {
     pub c2_max: u8,
 }
 
+impl ColormaskParams {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.c0_min <= self.c0_max, "c0_min <= c0_max");
+        ensure!(self.c1_min <= self.c1_max, "c1_min <= c1_max");
+        ensure!(self.c2_min <= self.c2_max, "c2_min <= c2_max");
+        return Ok(());
+    }
+}
+
 pub struct ColormaskDetector {
-    config: ColormaskConfig,
+    params: ColormaskParams,
 }
 
 impl ColormaskDetector {
-    pub fn new(config: ColormaskConfig) -> Self {
-        return Self { config };
+    pub fn new(params: ColormaskParams) -> Self {
+        return Self { params };
     }
 
     pub fn space(&self) -> ColorSpace {
-        return self.config.space;
+        return self.params.space;
     }
 
     fn color_mask(&self, frame: &Frame) -> Option<Mat> {
         let mut converted = Mat::default();
-        let code = match self.config.space {
+        let code = match self.params.space {
             ColorSpace::Ycrcb => imgproc::COLOR_BGR2YCrCb,
             ColorSpace::Hsv => imgproc::COLOR_BGR2HSV,
         };
@@ -100,15 +107,15 @@ impl ColormaskDetector {
         }
 
         let lo = Scalar::new(
-            f64::from(self.config.c0_min),
-            f64::from(self.config.c1_min),
-            f64::from(self.config.c2_min),
+            f64::from(self.params.c0_min),
+            f64::from(self.params.c1_min),
+            f64::from(self.params.c2_min),
             0.0,
         );
         let hi = Scalar::new(
-            f64::from(self.config.c0_max),
-            f64::from(self.config.c1_max),
-            f64::from(self.config.c2_max),
+            f64::from(self.params.c0_max),
+            f64::from(self.params.c1_max),
+            f64::from(self.params.c2_max),
             0.0,
         );
         let mut mask = Mat::default();
@@ -119,7 +126,7 @@ impl ColormaskDetector {
     }
 
     /// 검출 + 색 마스크(BGR). 선택 컨투어는 초록.
-    /// hard cut은 호출측 `[vision.scorer]` (`Scorer`)를 쓴다.
+    /// hard cut은 호출측 `Scorer`를 쓴다.
     pub fn detect_debug(&mut self, frame: &Frame, scorer: &Scorer) -> (Option<PixelPoint>, Mat) {
         let empty = || empty_bgr(frame);
         let Some(mask) = self.color_mask(frame) else {
@@ -214,7 +221,7 @@ mod tests {
         )
         .unwrap();
         let frame = Frame::new(CameraId(0), img, Instant::now());
-        let config = ColormaskConfig {
+        let params = ColormaskParams {
             space: ColorSpace::Ycrcb,
             c0_min: 50,
             c0_max: 255,
@@ -223,7 +230,7 @@ mod tests {
             c2_min: 0,
             c2_max: 255,
         };
-        let mut det = ColormaskDetector::new(config);
+        let mut det = ColormaskDetector::new(params);
         let pixel = det.detect(&frame).expect("should find blob");
         assert!((pixel.x - 100.0).abs() < 5.0, "x={}", pixel.x);
         assert!((pixel.y - 80.0).abs() < 5.0, "y={}", pixel.y);

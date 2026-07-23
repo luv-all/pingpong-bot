@@ -204,7 +204,7 @@ pub fn draw(
                 ui.separator();
                 ui.heading("Hit plane prediction");
                 if let Some(pred) = &status.debug_prediction {
-                    let p = pred.impact_position.v;
+                    let p = pred.impact_position.coords;
                     ui.label(format!("t_impact: {:.3} s", pred.time_to_impact_secs));
                     ui.label(format!("impact: ({:.3}, {:.3}, {:.3}) m", p.x, p.y, p.z));
                     ui.label(format!(

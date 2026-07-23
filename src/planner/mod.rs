@@ -13,6 +13,8 @@ pub use physics::{
 };
 pub use trajectory::{RailMotion, SwingTrajectory};
 
+use anyhow::{Result, ensure};
+
 use crate::estimator::HitPlane;
 
 /// 로봇 앞에서 탐색할 동적 인터셉트 y 구간.
@@ -26,20 +28,25 @@ pub struct InterceptWindow {
 pub const MAX_INTERCEPT_SAMPLES: usize = 1_024;
 
 impl InterceptWindow {
-    pub fn hit_planes(self) -> Vec<HitPlane> {
-        if !self.y_min.is_finite()
-            || !self.y_max.is_finite()
-            || !self.sample_step.is_finite()
-            || self.y_min > self.y_max
-            || self.sample_step <= 0.0
-        {
-            return Vec::new();
-        }
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.y_min.is_finite(), "y_min finite");
+        ensure!(self.y_max.is_finite(), "y_max finite");
+        ensure!(self.sample_step.is_finite(), "sample_step finite");
+        ensure!(self.y_min <= self.y_max, "y_min <= y_max");
+        ensure!(self.sample_step > 0.0, "sample_step > 0");
         let intervals = ((self.y_max - self.y_min) / self.sample_step).ceil();
-        if !intervals.is_finite() || intervals + 1.0 > MAX_INTERCEPT_SAMPLES as f64 {
+        ensure!(
+            intervals.is_finite() && intervals + 1.0 <= MAX_INTERCEPT_SAMPLES as f64,
+            "intercept samples <= {MAX_INTERCEPT_SAMPLES}"
+        );
+        return Ok(());
+    }
+
+    pub fn hit_planes(self) -> Vec<HitPlane> {
+        if self.validate().is_err() {
             return Vec::new();
         }
-        let intervals = intervals as usize;
+        let intervals = ((self.y_max - self.y_min) / self.sample_step).ceil() as usize;
         let mut planes = Vec::with_capacity(intervals + 1);
         for index in 0..intervals {
             planes.push(HitPlane {

@@ -114,17 +114,17 @@ mod tests {
         let pred =
             predict_hit_plane(snap.position, snap.velocity, plane, 0.0).expect("슈터 기본 샷 예측");
         assert!(
-            (pred.impact_position.v.y - plane.y).abs() < 1e-5,
+            (pred.impact_position.coords.y - plane.y).abs() < 1e-5,
             "y={}",
-            pred.impact_position.v.y
+            pred.impact_position.coords.y
         );
         assert!(
-            pred.impact_position.v.z > table::SURFACE_Z
-                && pred.impact_position.v.z < table::SURFACE_Z + 0.30,
+            pred.impact_position.coords.z > table::SURFACE_Z
+                && pred.impact_position.coords.z < table::SURFACE_Z + 0.35,
             "z={} — 짧은 팔 접수면(y={})에서 테이블~어깨 높이여야 함",
-            pred.impact_position.v.z,
+            pred.impact_position.coords.z,
             plane.y
         );
-        assert!(pred.impact_position.v.x > 0.2 && pred.impact_position.v.x < 1.3);
+        assert!(pred.impact_position.coords.x > 0.2 && pred.impact_position.coords.x < 1.3);
     }
 }

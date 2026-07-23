@@ -1,7 +1,7 @@
 //! ROI 추적 래퍼 — 전체 탐색으로 잡은 뒤, 놓치기 전까지 ROI만 본다.
 //!
 //! ```ignore
-//! let mut d = track(fuse_from_vision(&vision)?, vision.roi_half_px);
+//! let mut d = track(inner, 80);
 //! d.set_roi_enabled(false); // 전체 프레임만 (detect-full `r` 토글)
 //! ```
 //!
@@ -138,7 +138,7 @@ impl BallDetector for RoiTrack {
 mod tests {
     use super::*;
     use crate::CameraId;
-    use crate::detector::{ColorSpace, ColormaskConfig, ColormaskDetector};
+    use crate::detector::{ColorSpace, ColormaskParams, ColormaskDetector};
     use opencv::core::{CV_8UC3, Point, Scalar, Size};
     use opencv::imgproc;
     use std::time::Instant;
@@ -161,7 +161,7 @@ mod tests {
 
     #[test]
     fn track_acquires_then_uses_roi() {
-        let cfg = ColormaskConfig {
+        let cfg = ColormaskParams {
             space: ColorSpace::Ycrcb,
             c0_min: 50,
             c0_max: 255,

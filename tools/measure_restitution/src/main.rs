@@ -1,6 +1,6 @@
 //! 공 낙하 바운스 전후 속도비로 반발계수 e를 측정 (plan §3.4).
 //!
-//! 산출물: `config.toml` `[physics].restitution` / `drag` (기본 `config/default.toml`)
+//! 산출물: stdout에 `defaults::physics()` 붙여넣기 스니펫.
 
 mod capture_loop;
 
@@ -13,19 +13,18 @@ use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{
-    Arm, DEFAULT_CONFIG_PATH, PhysicsConfig, PhysicsParams, drag_from_trajectory,
-    merge_physics_into_config, physics_coeffs_toml, resolve_calibration_path,
-    restitution_from_bounce_heights, restitution_from_normal_speeds,
+    drag_from_trajectory, format_physics_for_defaults, restitution_from_bounce_heights,
+    restitution_from_normal_speeds,
 };
 use pingpong_bot::{BallVec3, SimWorld};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "measure_restitution",
-    about = "반발계수 e 측정 → config [physics]. 영상 멀티캠 또는 수동 숫자"
+    about = "반발계수 e 측정 → defaults::physics() 스니펫. 영상 멀티캠 또는 수동 숫자"
 )]
 struct Args {
-    /// Calibration JSON. 생략 시 --config 의 calibration_path
+    /// Calibration JSON (캡처 모드 필수)
     #[arg(long, value_name = "PATH")]
     calibration: Option<PathBuf>,
     #[arg(long = "video", value_name = "PATH")]
@@ -51,18 +50,26 @@ struct Args {
     sim_ballistics: bool,
     #[arg(long, value_name = "PATH")]
     drag_csv: Option<PathBuf>,
-    /// 런타임 TOML (calibration_path · [physics] merge)
-    #[arg(long, value_name = "PATH", default_value = DEFAULT_CONFIG_PATH)]
-    config: PathBuf,
-    #[arg(long)]
-    dry_run: bool,
     #[arg(long, default_value_t = 0.40)]
     drop_height: f64,
 }
 
+#[derive(Default)]
+struct Patch {
+    restitution: Option<f64>,
+    friction: Option<f64>,
+    drag: Option<f64>,
+}
+
+impl Patch {
+    fn is_empty(&self) -> bool {
+        return self.restitution.is_none() && self.friction.is_none() && self.drag.is_none();
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
-    let mut patch = PhysicsConfig::default();
+    let mut patch = Patch::default();
 
     if let Some(ref csv) = args.drag_csv {
         let samples = load_traj_csv(csv)?;
@@ -83,14 +90,14 @@ fn main() -> Result<()> {
         || !has_other;
 
     if run_capture {
-        let cal = resolve_calibration_path(&args.config, args.calibration.clone())
-            .map_err(anyhow::Error::msg)?;
-        let vision = pingpong_bot::load_vision_from_config(&args.config)?;
+        let cal = args
+            .calibration
+            .clone()
+            .context("--calibration PATH 필요 (캡처 모드)")?;
         let result = capture_loop::run_capture(
             &cal,
             &args.videos,
             &args.devices,
-            &vision,
             !args.no_preview,
             args.wait_ms,
             args.max_frames,
@@ -130,7 +137,7 @@ fn main() -> Result<()> {
         let e = measure_e_ballistics(args.drop_height)?;
         println!(
             "restitution e = {e:.6}  (ballistics; configured={})",
-            pingpong_bot::competition_physics().restitution
+            pingpong_bot::physics().restitution
         );
         patch.restitution = Some(e);
     }
@@ -139,7 +146,7 @@ fn main() -> Result<()> {
         let e = measure_e_in_sim(args.drop_height)?;
         println!(
             "restitution e = {e:.6}  (sim drop; configured physics.restitution={})",
-            pingpong_bot::competition_physics().restitution
+            pingpong_bot::physics().restitution
         );
         patch.restitution = Some(e);
     }
@@ -147,7 +154,7 @@ fn main() -> Result<()> {
     if patch.is_empty() {
         bail!(
             "입력이 없습니다. 예:\n  \
-             cargo run -p measure-restitution   # 기본 device 0,1 + --config calibration_path\n  \
+             cargo run -p measure-restitution -- --calibration calib.json\n  \
              --device 0 --device 1\n  \
              --calibration calib.json --video cam0.mp4 --video cam1.mp4\n  \
              --heights 0.40,0.29,0.21\n  \
@@ -155,22 +162,9 @@ fn main() -> Result<()> {
         );
     }
 
-    if args.dry_run {
-        print!(
-            "{}",
-            physics_coeffs_toml(patch.restitution, patch.friction, patch.drag)
-        );
-        return Ok(());
-    }
-
-    let merged = merge_physics_into_config(&args.config, &patch)
-        .with_context(|| format!("config 갱신 실패: {}", args.config.display()))?;
-    println!(
-        "updated {} [physics] restitution={:?} friction={:?} drag={:?}",
-        args.config.display(),
-        merged.restitution,
-        merged.friction,
-        merged.drag
+    print!(
+        "{}",
+        format_physics_for_defaults(patch.restitution, patch.friction, patch.drag)
     );
     return Ok(());
 }
@@ -209,7 +203,7 @@ fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
 }
 
 fn measure_e_in_sim(drop_height: f64) -> Result<f64> {
-    let arm = Arc::new(pingpong_bot::competition_arm().context("competition arm")?);
+    let arm = Arc::new(pingpong_bot::arm().context("competition arm")?);
     let mut world = SimWorld::new(arm, None);
     world.set_use_ground_truth(false);
 

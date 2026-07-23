@@ -128,7 +128,7 @@ impl CameraParams {
 
     /// 월드 점 -> 픽셀. 카메라 뒤/이미지 밖이면 `None`.
     pub fn project_world(&self, point: Point3) -> Option<PixelPoint> {
-        let x_cam = self.rotation * point.v + self.translation;
+        let x_cam = self.rotation * point.coords + self.translation;
         if x_cam.z <= 0.05 {
             return None;
         }
