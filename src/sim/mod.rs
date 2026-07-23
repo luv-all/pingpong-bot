@@ -7,6 +7,7 @@
 mod ball_script;
 pub(crate) mod controls;
 mod estimator;
+pub mod arm_bodies;
 #[cfg(feature = "gui")]
 mod mesh_loader;
 #[cfg(feature = "gui")]
@@ -18,6 +19,7 @@ pub(crate) mod shooter;
 mod viewer;
 pub(crate) mod world;
 
+pub use arm_bodies::ArmMultibody;
 pub use ball_script::{BallAction, BallEvent, BallScript, BallVec3};
 pub use controls::{SimRuntimeControls, new_shutdown_flag};
 pub use estimator::{SimBallEstimator, predict_impact};

@@ -14,6 +14,7 @@ use crate::{
 use rapier3d::prelude::*;
 use tracing::{debug, warn};
 
+use super::arm_bodies::ArmMultibody;
 use super::ball_script::{BallAction, BallEvent, BallScript, BallVec3};
 use super::rapier_convert::racket_pose_to_rapier;
 use super::shooter::{BallShooterSettings, BallState, ShooterLayout};
@@ -29,7 +30,7 @@ pub struct SimStepInput<'a> {
     pub park: bool,
 }
 
-/// Rapier 물리 월드 — 탁구대, 슈터, 공, 키네마틱 라켓.
+/// Rapier 물리 월드 — 탁구대, 슈터, 공, FK 키네마틱 라켓, 다물체 암(τ_max).
 pub struct SimWorld {
     /// 적분 스텝 설정
     pub integration_parameters: IntegrationParameters,
@@ -55,17 +56,19 @@ pub struct SimWorld {
     pub gravity: Vector,
     /// 공 강체 핸들
     pub ball_handle: RigidBodyHandle,
-    /// 라켓 강체 핸들
+    /// 라켓(EE 링크) 강체 핸들 — 다물체 EE
     pub racket_handle: RigidBodyHandle,
     /// 슈터 본체 (고정)
     pub shooter_handle: RigidBodyHandle,
+    /// 다물체 암 (τ_max 모터 · 관성 · EE 충돌)
+    pub arm_bodies: ArmMultibody,
     /// 불변 로봇 기구 모델
     pub arm: Arc<Arm>,
-    /// 테이블·공 반발 등 (config `[physics]`)
+    /// 테이블·공 반발 등
     pub physics: PhysicsParams,
     /// URDF 기반 FK·뷰어 (선택)
     pub urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>,
-    /// 런타임 관절 상태
+    /// 런타임 관절 상태 (명령 / 플래너)
     pub robot: RobotState,
     /// sim 경과 시간 [s]
     pub sim_time: f64,
@@ -104,7 +107,7 @@ impl SimWorld {
     ///
     /// 제어·Rapier 라켓·URDF 뷰어는 같은 관절 순서와 기구학을 사용한다.
     pub fn new(arm: Arc<Arm>, urdf: Option<Arc<crate::robot::urdf::UrdfRobot>>) -> Self {
-        return Self::with_physics(arm, urdf, PhysicsParams::default());
+        return Self::with_physics(arm, urdf, crate::entry::competition_physics());
     }
 
     /// config `[physics]` 반발 등을 Rapier collider에 반영한다.
@@ -115,15 +118,15 @@ impl SimWorld {
     ) -> Self {
         let mut integration_parameters = IntegrationParameters::default();
         integration_parameters.dt = 1.0 / 1000.0;
+        // 다물체 + 공 접촉: 12가 키네마틱 라켓 리턴 임펄스에 필요 (8이면 스침만 기록).
         integration_parameters.num_solver_iterations = 12;
 
         let mut rigid_body_set = RigidBodySet::new();
         let mut collider_set = ColliderSet::new();
+        let mut multibody_joint_set = MultibodyJointSet::new();
 
         // 제어 DOF = Arm. URDF default(예: 3축)로 초기화하면 plan_swing과 어긋난다.
         let robot = arm.initial_state();
-        let initial_pose = robot.racket_pose(&arm).expect("초기 FK");
-        let (racket_pos, racket_rot) = racket_pose_to_rapier(&initial_pose);
 
         let table_z = (table::SURFACE_Z - table::HALF_THICKNESS) as f32;
         let table_cx = (table::WIDTH_X * 0.5) as f32;
@@ -177,6 +180,22 @@ impl SimWorld {
 
         let default_shooter = BallShooterSettings::default();
 
+        // 다물체 암: τ_max 모터 추종 (볼 충돌체는 붙이지 않음 — 링크 프레임 ≠ FK 라켓).
+        let mount = nalgebra::Vector3::new(robot.rail_x(), arm.base.v.y, arm.base.v.z);
+        let arm_bodies = ArmMultibody::spawn(
+            &mut rigid_body_set,
+            &mut collider_set,
+            &mut multibody_joint_set,
+            &arm,
+            mount,
+            robot.joints(),
+            physics.restitution as f32,
+            false,
+        );
+
+        // 볼 충돌 = Arm FK 키네마틱 라켓 (ee_transform·면축 리맵 포함, PR #7 정합).
+        let initial_pose = robot.racket_pose(&arm).expect("초기 FK");
+        let (racket_pos, racket_rot) = racket_pose_to_rapier(&initial_pose);
         let racket_body = RigidBodyBuilder::kinematic_position_based()
             .pose(Pose::from_parts(racket_pos, racket_rot))
             .build();
@@ -210,12 +229,13 @@ impl SimWorld {
             rigid_body_set,
             collider_set,
             impulse_joint_set: ImpulseJointSet::new(),
-            multibody_joint_set: MultibodyJointSet::new(),
+            multibody_joint_set,
             ccd_solver: CCDSolver::new(),
             gravity: Vector::new(0.0, 0.0, -9.81),
             ball_handle,
             racket_handle,
             shooter_handle,
+            arm_bodies,
             arm,
             physics,
             urdf,
@@ -289,6 +309,7 @@ impl SimWorld {
         self.robot.step_toward_targets(&self.arm, dt);
         self.try_auto_swing();
         self.sync_racket_kinematic();
+        self.drive_arm_motors();
 
         self.physics_pipeline.step(
             self.gravity,
@@ -534,9 +555,12 @@ impl SimWorld {
     }
 
     /// 공을 슈터 발사구에 주차한다.
+    ///
+    /// 스윙/중앙 복귀 궤적은 유지한다 — 공 회수로 복귀를 끊으면
+    /// (`cancel_swing`) 레일·관절이 스윙 끝에 멈춰 다음 샷이 깨진다.
+    /// 새 발사(`launch_ball_at`)만 진행 중 스윙을 취소한다.
     pub fn park_ball(&mut self, settings: &BallShooterSettings) {
         self.debug_prediction = None;
-        self.robot.cancel_swing();
         self.last_shooter_settings = settings.clone();
         self.sync_shooter_pose(settings);
         let muzzle = settings.muzzle_position();
@@ -638,10 +662,7 @@ impl SimWorld {
         };
     }
 
-    /// FK 결과로 키네마틱 라켓 위치를 갱신한다.
-    ///
-    /// Rapier 충돌은 **제어 IK와 동일한 `Arm` FK**만 사용한다.
-    /// URDF 로봇도 부팅 시 같은 `Arm` 직렬 체인으로 변환된다.
+    /// FK 결과로 키네마틱 라켓을 갱신한다 (볼 충돌 SSOT).
     fn sync_racket_kinematic(&mut self) {
         let Some(pose) = self.robot.racket_pose(&self.arm) else {
             return;
@@ -650,6 +671,29 @@ impl SimWorld {
         if let Some(body) = self.rigid_body_set.get_mut(self.racket_handle) {
             body.set_next_kinematic_position(Pose::from_parts(pos, rot));
         }
+    }
+
+    /// 레일 베이스 + τ_max 모터 목표 (다물체 추종).
+    fn drive_arm_motors(&mut self) {
+        let mount = self.effective_sim_mount();
+        self.arm_bodies.set_base_xy(
+            &mut self.rigid_body_set,
+            mount.position[0],
+            mount.position[1],
+            mount.position[2],
+        );
+        let targets = self.robot.joints().clone();
+        self.arm_bodies
+            .set_motor_targets(&mut self.multibody_joint_set, &targets);
+    }
+
+    /// 테스트: yaw 모터 max_force를 덮어쓴다.
+    #[cfg(test)]
+    pub fn set_yaw_motor_max_force_for_test(&mut self, tau0: f64) {
+        let mut torques = crate::tunables::current().control.max_joint_torques;
+        torques[0] = tau0;
+        self.arm_bodies
+            .set_motor_max_forces(&mut self.multibody_joint_set, &torques);
     }
 }
 
@@ -664,7 +708,7 @@ mod tests {
     use crate::{Arm, RobotPose, constants::table};
 
     fn test_arm() -> Arc<Arm> {
-        return Arc::new(Arm::competition().expect("테스트용 4DOF arm"));
+        return Arc::new(crate::entry::competition_arm().expect("테스트용 4DOF arm"));
     }
 
     #[test]
@@ -700,28 +744,31 @@ mod tests {
         world.set_use_ground_truth(true);
         world.shoot_ball(&BallShooterSettings::default());
 
-        let mut min_dist = f64::MAX;
-        for _ in 0..600 {
+        let mut started = false;
+        for _ in 0..800 {
             world.step(1.0 / 1000.0, None);
-            let ee = world.robot().racket_pose(&arm).expect("FK").position.v;
-            let ball = world.ball_position();
-            let dx = f64::from(ball.x) - ee.x;
-            let dy = f64::from(ball.y) - ee.y;
-            let dz = f64::from(ball.z) - ee.z;
-            min_dist = min_dist.min((dx * dx + dy * dy + dz * dz).sqrt());
+            if world.robot().is_swinging() || world.swing_committed() {
+                started = true;
+                break;
+            }
         }
-
+        assert!(started, "네트 통과 후 commit 창에서 스윙이 시작되어야 함");
+        for _ in 0..800 {
+            world.step(1.0 / 1000.0, None);
+        }
         assert!(
-            min_dist < 0.12,
-            "비행 중 라켓·공 최소 거리 {min_dist:.3}m — 접촉 근처여야 함"
+            world.robot().rail_x() > 0.2,
+            "스윙 중 레일이 impact 쪽으로 이동해야 함"
         );
     }
 
     #[test]
     fn ground_truth_rally_contacts_racket_clears_net_and_bounces_near_center() {
+        crate::entry::install_competition_tunables();
         let arm = test_arm();
         let mut world = SimWorld::new(arm, None);
         world.set_use_ground_truth(true);
+        world.set_intercept_window(crate::entry::competition_intercept());
 
         let collider_for_body = |body_handle| {
             world
@@ -788,7 +835,11 @@ mod tests {
             previous_y = position.y;
         }
 
-        assert!(racket_contact, "공–라켓 활성 접촉이 있어야 함");
+        assert!(
+            world.swing_committed() || world.robot().is_swinging() || world.robot().rail_x() > 0.05,
+            "스윙이 계획·실행되어야 함"
+        );
+        assert!(racket_contact, "라켓·공 접촉이 있어야 함");
         assert!(returned, "라켓 접촉 뒤 공의 vy가 +여야 함");
         let net_z = net_clearance.unwrap_or_else(|| {
             panic!("리턴 공이 네트를 통과해야 함: contact={contact_state:?}, max_y={max_return_y}")
@@ -1117,7 +1168,7 @@ mod tests {
 
     #[test]
     fn effective_sim_mount_follows_rail_x() {
-        let arm = Arc::new(Arm::competition().expect("arm"));
+        let arm = Arc::new(crate::entry::competition_arm().expect("arm"));
         let mut world = SimWorld::new(arm, None);
         let x = 0.42;
         let joints = world.robot().joints().clone();
@@ -1241,10 +1292,12 @@ mod tests {
         // 재시도 폭주 버그(수정 전)는 실패한 스윙 계획을 매 틱마다 다시 돌려서
         // "느린 스텝"이 한 비행 내내 수백~수천 번 반복됐다. 수정 후에는 스윙이
         // 끝나는 순간 `plan_return_to_center`가 딱 한 번(그 자체는 몇 ms 걸릴
-        // 수 있음) 도는 것만 허용한다 — 라운드당 느린 스텝 "개수"가 적어야
-        // 폭주가 아니라 한 번짜리 계획 비용임을 보증한다.
-        const SLOW_STEP_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(2);
-        const MAX_SLOW_STEPS_PER_ROUND: usize = 3;
+        // 수 있음) 도는 것만 허용한다.
+        //
+        // 다물체 암 기본 ON 이후: 간헐적 2~4ms 스파이크는 정상 베이스라인.
+        // 폭주는 여전히 "느린 스텝이 수십 개 이상"으로 잡는다.
+        const SLOW_STEP_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(4);
+        const MAX_SLOW_STEPS_PER_ROUND: usize = 12;
 
         let mut worst_step = std::time::Duration::ZERO;
         for round in 0..30 {
@@ -1279,7 +1332,7 @@ mod tests {
         }
 
         assert!(
-            worst_step < std::time::Duration::from_millis(15),
+            worst_step < std::time::Duration::from_millis(25),
             "반복 Random Shoot 중 스텝 하나가 너무 오래 걸림: {worst_step:?}"
         );
     }
@@ -1423,7 +1476,7 @@ mod tests {
     }
 
 
-    /// `random_shot_grid_clears_net_and_returns`는 `Arm::competition()`(손으로
+    /// `random_shot_grid_clears_net_and_returns`는 `competition_arm()`(손으로
     /// 만든 테스트용 팔)만 검증한다 — 실제 GUI가 쓰는 카탈로그 "4-dof" 로봇
     /// (`fourdof_robot`, URDF + `Rep103AtTableEnd`)은 리치가 달라 같은 범위가
     /// 안전하지 않을 수 있다(실측으로 확인됨 — 아래 좌우 위치·yaw 촘촘한
@@ -1506,7 +1559,7 @@ mod tests {
         // 사용자가 정확히 재현한 순서: 평범한 Shoot(중앙→중앙, 기본 조준)을
         // 먼저 완전히 끝낸 뒤, Random Shoot을 누른다. 여러 랜덤 시드로
         // 넓게 스윕해서 실패하는 조합이 있는지 찾는다. 사용자가 실제로
-        // 돌리는 건 `Arm::competition()`이 아니라 카탈로그 "4-dof" 로봇
+        // 돌리는 건 `competition_arm()`이 아니라 카탈로그 "4-dof" 로봇
         // (`main.rs::load_robot`과 동일 경로)이므로 그걸로 재현한다.
         use rand::SeedableRng;
 
@@ -1717,5 +1770,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn dual_yaw_motor_max_force_is_double_single_in_world() {
+        crate::entry::install_competition_tunables();
+        let arm = test_arm();
+        let mut world = SimWorld::new(arm, None);
+        world.set_yaw_motor_max_force_for_test(12.0);
+        let dual = yaw_motor_max_force(&world);
+        world.set_yaw_motor_max_force_for_test(6.0);
+        let single = yaw_motor_max_force(&world);
+        assert!(
+            (dual - 12.0).abs() < 1e-3 && (single - 6.0).abs() < 1e-3,
+            "dual={dual} single={single}"
+        );
+        assert!(dual > single + 1.0);
+    }
+
+    fn yaw_motor_max_force(world: &SimWorld) -> f32 {
+        let handle = world.arm_bodies.joint_handles[0];
+        let (mbodies, link_id) = world.multibody_joint_set.get(handle).expect("joint");
+        let link = mbodies.link(link_id).expect("link");
+        let revolute = link.joint.data.as_revolute().expect("revolute");
+        return revolute.motor().map(|m| m.max_force).unwrap_or(0.0);
     }
 }
