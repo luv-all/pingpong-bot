@@ -38,7 +38,7 @@ impl RailFrame {
 /// 탁구대 한쪽 변에 설치된 X축 리니어 레일.
 ///
 /// 팔 베이스는 레일 위에서 좌우로 이동하고, 팔은 주로 Y/Z 평면에서 접수한다.
-/// y/z는 [`RailFrame`] 에서 오고, 값은 `crate::defaults::arm` 빌더 체인에서 명시한다.
+/// y/z는 [`RailFrame`] 에서 오고, 값은 `crate::defaults::primitive_4dof` 빌더 체인에서 명시한다.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinearRail {
     /// 레일 위 베이스 고정 y [m] ([`RailFrame::mount_y`])

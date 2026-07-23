@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn deep_racket_penetrates_table() {
-        let arm = crate::defaults::arm().expect("arm");
+        let arm = crate::defaults::primitive_4dof().expect("arm").arm;
         let rail = arm.rail.expect("rail");
         let rail_x = rail.home_x();
         // 프로파일 마운트가 테이블 위 20cm라서 임의 관절 스윕이 관통을 못 찾을 수 있다.
@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn default_pose_clears_table() {
-        let arm = crate::defaults::arm().expect("arm");
+        let arm = crate::defaults::primitive_4dof().expect("arm").arm;
         let rail_x = arm.rail.as_ref().map(|r| r.home_x()).unwrap_or(0.0);
         let depth = table_penetration(&arm, rail_x, &arm.default_joints);
         assert!(depth <= 1e-4, "기본 자세는 테이블 위: {depth}");

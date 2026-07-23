@@ -15,7 +15,7 @@
 //! | [`control`] | [`control`] |
 //! | [`impact`] | [`impact`] |
 //! | [`estimator`] | [`estimator`] |
-//! | [`robot`] | [`robot`] / [`arm`] / [`rail_frame`] / [`urdf_4dof`] |
+//! | [`robot`] | [`robot`] / [`primitive_4dof`] / [`shared_robot`] / [`rail_frame`] / [`urdf_4dof`] |
 //! | [`vision`] | [`detector`] / [`scorer`] / [`colormask`] |
 //! | [`hardware`] | [`dynamixel`] / [`rail`] |
 //! | [`planner`] | [`intercept`] |
@@ -37,7 +37,7 @@ pub use hardware::{dynamixel, rail};
 pub use impact::{ImpactParams, impact};
 pub use physics::{PhysicsParams, physics};
 pub use planner::intercept;
-pub use robot::{arm, rail_frame, robot, shared_arm, urdf_4dof, urdf_test};
+pub use robot::{arm, primitive_4dof, rail_frame, robot, shared_arm, shared_robot, urdf_4dof, urdf_test};
 pub use vision::{colormask, detector, scorer};
 
 #[cfg(test)]
@@ -60,7 +60,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_arm_is_4dof() {
-        assert_eq!(shared_arm().joint_count(), 4);
+    fn shared_robot_is_4dof() {
+        assert_eq!(shared_robot().arm.joint_count(), 4);
     }
 }

@@ -9,10 +9,10 @@ use super::{UrdfLoadError, UrdfModel, fk};
 pub fn to_arm(urdf: &UrdfModel, max_joint_speed: f64) -> Result<Arm, UrdfLoadError> {
     let defaults = urdf.default_joints();
     let limits = urdf.joint_limits();
-    let template = crate::defaults::arm().map_err(|e| UrdfLoadError::ArmConversion {
+    let template = crate::defaults::primitive_4dof().map_err(|e| UrdfLoadError::ArmConversion {
         reason: format!("레일·베이스 템플릿: {e}"),
     })?;
-    let rail = template.rail.expect("competition arm은 레일 포함");
+    let rail = template.arm.rail.clone().expect("competition arm은 레일 포함");
     let full_chain = fk::chain_joint_indices(&urdf.robot, &urdf.ee_link).ok_or_else(|| {
         UrdfLoadError::ArmConversion {
             reason: format!("root에서 EE `{}`까지 체인을 찾을 수 없습니다", urdf.ee_link),

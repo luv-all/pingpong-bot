@@ -98,18 +98,17 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
 
-    use crate::Arm;
     use crate::sim::SimRuntimeControls;
     use crate::sim::SimSession;
     use crate::sim::SimSessionConfig;
 
-    fn test_arm() -> Arc<Arm> {
-        return Arc::new(crate::defaults::arm().expect("테스트용 4DOF arm"));
+    fn test_robot() -> crate::robot::Robot {
+        return crate::defaults::primitive_4dof().expect("테스트용 4DOF robot");
     }
 
     #[test]
     fn sim_camera_emits_frames() {
-        let arm = test_arm();
+        let robot = test_robot();
         let controls = Arc::new(Mutex::new(SimRuntimeControls::default()));
         let shutdown = Arc::new(AtomicBool::new(false));
         let mut session = SimSession::new(
@@ -119,8 +118,7 @@ mod tests {
                 time_scale: 50.0,
                 camera_count: 2,
             },
-            arm,
-            None,
+            robot,
             controls,
             shutdown,
         );

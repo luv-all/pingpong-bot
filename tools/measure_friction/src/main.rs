@@ -5,13 +5,12 @@
 mod capture_loop;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{format_physics_for_defaults, friction_from_tangential_speeds};
-use pingpong_bot::{BallVec3, SimWorld};
+use pingpong_bot::SimWorld;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -132,17 +131,17 @@ fn main() -> Result<()> {
 }
 
 fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
-    let arm = Arc::new(pingpong_bot::arm().context("competition arm")?);
-    let mut world = SimWorld::new(arm, None);
+    let robot = pingpong_bot::primitive_4dof().context("competition arm")?;
+    let mut world = SimWorld::new(robot);
     world.set_use_ground_truth(false);
 
     let x = table::WIDTH_X * 0.5;
     let y = table::LENGTH_Y * 0.35;
     let z0 = table::SURFACE_Z + ball::RADIUS + drop_height;
     world.launch_ball_at(
-        BallVec3::new(x as f32, y as f32, z0 as f32),
-        BallVec3::new(horiz_speed as f32, 0.0, -0.01),
-        BallVec3::new(0.0, 0.0, 0.0),
+        [x as f32, y as f32, z0 as f32],
+        [horiz_speed as f32, 0.0, -0.01],
+        [0.0, 0.0, 0.0],
     );
 
     let dt = 1.0 / 1000.0;

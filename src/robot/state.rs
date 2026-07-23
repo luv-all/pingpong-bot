@@ -73,8 +73,9 @@ impl RobotState {
 
     /// 스윙을 현재 포즈 기준 새 궤적으로 교체한다 (elapsed=0).
     pub fn replace_swing(&mut self, trajectory: crate::SwingTrajectory) {
-        self.targets = trajectory.end_joints().clone();
+        self.targets = trajectory.sample_at(0.0);
         self.rail_target = trajectory.follow_through_rail_x;
+        self.rail_x = trajectory.sample_rail_at(0.0);
         self.active_swing = Some(SwingPlayback {
             trajectory,
             elapsed: 0.0,
@@ -82,14 +83,60 @@ impl RobotState {
         });
     }
 
+    /// 재생 중인 스윙 궤적 (없으면 `None`).
+    pub fn active_trajectory(&self) -> Option<&crate::SwingTrajectory> {
+        return self.active_swing.as_ref().map(|s| &s.trajectory);
+    }
+
     /// 진행 중 스윙을 취소한다 (다음 공 발사 전).
     pub fn cancel_swing(&mut self) {
         self.active_swing = None;
     }
 
+    /// 시뮬 폐루프: 궤적·레일 명령만 갱신한다. 측정 관절각은 건드리지 않는다.
+    pub fn step_commands(&mut self, arm: &Arm, dt: f64) {
+        if self.active_swing.is_some() {
+            let finished = self.advance_swing_commands(dt);
+            if finished && !self.is_at_center(arm) {
+                let start = crate::RobotPose::new(self.rail_x, self.angles.clone());
+                if let Ok(trajectory) = crate::plan_return_to_center(arm, &start) {
+                    self.replace_swing(trajectory);
+                }
+            }
+            return;
+        }
+        if let Some(rail) = &arm.rail {
+            let diff = self.rail_target - self.rail_x;
+            let step = (rail.max_speed * dt).min(diff.abs());
+            self.rail_x += diff.signum() * step;
+        }
+    }
+
+    /// 스윙 시계만 진행하고 `targets`·`rail_x`를 샘플한다 (각도 덮어쓰기 없음).
+    fn advance_swing_commands(&mut self, dt: f64) -> bool {
+        let Some(playback) = &mut self.active_swing else {
+            return false;
+        };
+        playback.elapsed += dt;
+        let t = playback.elapsed.min(playback.trajectory.duration_secs);
+        self.targets = playback.trajectory.sample_at(t);
+        self.rail_x = playback.trajectory.sample_rail_at(t);
+        if playback.elapsed >= playback.trajectory.duration_secs {
+            self.active_swing = None;
+            return true;
+        }
+        return false;
+    }
+
+    /// 물리 다물체에서 읽은 관절각을 반영한다.
+    pub fn set_measured_joints(&mut self, joints: Joints) {
+        self.angles = joints;
+    }
+
     /// quintic 궤적을 `dt`만큼 진행한다. 완료 시 `true`.
     ///
     /// 계획된 임팩트·팔로스루 knot를 사후 clamp 없이 그대로 재생한다.
+    /// 시뮬 폐루프는 [`Self::step_commands`] + 다물체 측정을 쓴다.
     /// 토크 포화 추종은 [`Self::advance_swing_torque_limited`] / Rapier [`crate::sim::ArmMultibody`].
     pub fn advance_swing(&mut self, _arm: &Arm, dt: f64) -> bool {
         let Some(playback) = &mut self.active_swing else {
@@ -225,7 +272,7 @@ mod tests {
 
     #[test]
     fn playback_targets_and_reaches_follow_through_end() {
-        let arm = crate::defaults::arm().expect("arm");
+        let arm = crate::defaults::primitive_4dof().expect("arm").arm;
         let start = arm.initial_state();
         let mut impact = start.joints().clone();
         impact.values[0] += 0.01;
@@ -245,8 +292,9 @@ mod tests {
             0.0,
         );
         let mut state = start;
+        let start_joints = state.joints().clone();
         state.replace_swing(trajectory);
-        assert_eq!(state.targets, end);
+        assert_eq!(state.targets, start_joints);
         assert!(state.advance_swing(&arm, 0.26));
         for (actual, expected) in state.joints().values.iter().zip(end.values) {
             assert!((actual - expected).abs() < 1e-12);
@@ -255,7 +303,7 @@ mod tests {
 
     #[test]
     fn dual_yaw_torque_tracks_farther_than_single() {
-        let arm = crate::defaults::arm().expect("arm");
+        let arm = crate::defaults::primitive_4dof().expect("arm").arm;
         let start = arm.initial_state();
         let mut impact = start.joints().clone();
         impact.values[0] += 0.5;

@@ -421,17 +421,43 @@ mod tests {
     }
 
     #[test]
-    fn competition_primitive_matches_simplified_4dof_urdf_chain() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("assets/robots/4-dof/urdf/all-4-export.urdf");
+    fn competition_primitive_handle_lies_in_blade_plane() {
+        use crate::constants::geometry::{RACKET_HALF_Z, RACKET_HANDLE_LENGTH};
+
+        let primitive = crate::defaults::primitive_4dof().expect("competition primitive").arm;
+        let joints = primitive.default_joints.clone();
+        let rail_x = primitive
+            .rail
+            .as_ref()
+            .map(|rail| rail.default_x())
+            .unwrap_or(0.0);
+        let pose = primitive
+            .forward_kinematics_with_rail(rail_x, &joints)
+            .expect("FK");
+        let points = primitive
+            .chain_points(rail_x, &joints)
+            .expect("chain points");
+        assert!(points.len() >= 2);
+        let wrist = points[points.len() - 2];
+        let tip = points[points.len() - 1];
+        let handle = tip - wrist;
+
+        // 손잡이는 면 법선이 아니라 면 안에서 타격점을 평행 이동시킨다.
+        let along_normal = handle.dot(&pose.normal).abs();
         assert!(
-            path.exists(),
-            "URDF 테스트 자산이 없습니다: {}",
-            path.display()
+            (along_normal - RACKET_HALF_Z).abs() < 1e-6,
+            "손잡이 법선 성분은 면 반두께여야 함: along_normal={along_normal}"
+        );
+        let in_plane = (handle - pose.normal * handle.dot(&pose.normal)).norm();
+        assert!(
+            (in_plane - RACKET_HANDLE_LENGTH).abs() < 1e-6,
+            "면내 손잡이 길이 불일치: in_plane={in_plane}"
         );
 
+        // 관절 체인(법선)은 URDF simplified 4-dof와 같아야 한다.
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/robots/4-dof/urdf/all-4-export.urdf");
         let urdf = UrdfModel::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
-        let primitive = crate::defaults::arm().expect("competition primitive");
         for values in [
             vec![0.0, 0.0, -0.25, 0.0],
             vec![0.15, 0.2, -0.4, 0.35],
@@ -444,12 +470,11 @@ mod tests {
                 })
                 .expect("primitive FK");
             assert!(
-                (actual.position.coords - expected.position.coords).norm() < 1e-9,
-                "values={values:?}, actual={:?}, expected={:?}",
-                actual.position,
-                expected.position
+                (actual.normal - expected.normal).norm() < 1e-9,
+                "values={values:?}, normal actual={:?} expected={:?}",
+                actual.normal,
+                expected.normal
             );
-            assert!((actual.normal - expected.normal).norm() < 1e-9);
         }
     }
 

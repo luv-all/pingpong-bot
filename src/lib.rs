@@ -29,8 +29,8 @@ pub use camera::{
 };
 pub use defaults::{
     ControlParams, EstimatorParams, ImpactParams, PhysicsParams, arm, colormask, control, detector,
-    dynamixel, estimator, impact, intercept, physics, rail, rail_frame, robot, scorer, shared_arm,
-    urdf_4dof, urdf_test,
+    dynamixel, estimator, impact, intercept, physics, primitive_4dof, rail, rail_frame, robot,
+    scorer, shared_arm, shared_robot, urdf_4dof, urdf_test,
 };
 pub use detector::{
     BallDetector, Candidate, CandidateGenerator, ColorSpace, ColormaskDetector, ColormaskParams,

@@ -6,7 +6,6 @@ mod capture_loop;
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -16,7 +15,7 @@ use pingpong_bot::{
     drag_from_trajectory, format_physics_for_defaults, restitution_from_bounce_heights,
     restitution_from_normal_speeds,
 };
-use pingpong_bot::{BallVec3, SimWorld};
+use pingpong_bot::SimWorld;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -170,8 +169,10 @@ fn main() -> Result<()> {
 }
 
 fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
+    use pingpong_bot::defaults;
     use pingpong_bot::estimator::ballistics::semi_implicit_euler;
 
+    let physics = defaults::physics();
     let floor = table::SURFACE_Z + ball::RADIUS;
     let mut pos = Vector3::new(
         table::WIDTH_X * 0.5,
@@ -185,7 +186,7 @@ fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
     let mut prev_vz: f64 = 0.0;
 
     for _ in 0..10_000 {
-        let (np, nv) = semi_implicit_euler(pos, vel, dt, 0.0);
+        let (np, nv) = semi_implicit_euler(pos, vel, Vector3::zeros(), dt, &physics);
         if vin.is_none() && prev_vz < -0.5 && nv.z >= 0.0 {
             vin = Some((-prev_vz).max(1e-6_f64));
             vout = Some(nv.z.max(0.0_f64));
@@ -203,17 +204,17 @@ fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
 }
 
 fn measure_e_in_sim(drop_height: f64) -> Result<f64> {
-    let arm = Arc::new(pingpong_bot::arm().context("competition arm")?);
-    let mut world = SimWorld::new(arm, None);
+    let robot = pingpong_bot::primitive_4dof().context("competition arm")?;
+    let mut world = SimWorld::new(robot);
     world.set_use_ground_truth(false);
 
     let x = table::WIDTH_X * 0.5;
     let y = table::LENGTH_Y * 0.35;
     let z0 = table::SURFACE_Z + ball::RADIUS + drop_height;
     world.launch_ball_at(
-        BallVec3::new(x as f32, y as f32, z0 as f32),
-        BallVec3::new(0.0, 0.0, -0.01),
-        BallVec3::new(0.0, 0.0, 0.0),
+        [x as f32, y as f32, z0 as f32],
+        [0.0, 0.0, -0.01],
+        [0.0, 0.0, 0.0],
     );
 
     let dt = 1.0 / 1000.0;

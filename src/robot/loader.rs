@@ -130,9 +130,9 @@ impl RobotBuilder {
         };
     }
 
-    /// primitive 전용 — `defaults::shared_arm()` 등 fallback `Arm`으로 조립.
-    pub fn build_primitive(fallback: Arc<Arm>) -> Robot {
-        return Robot::from_shared_arm(fallback);
+    /// primitive 전용 — fallback [`Robot`]으로 조립.
+    pub fn build_primitive(fallback: Robot) -> Robot {
+        return fallback;
     }
 
     /// URDF를 읽어 `Arm` + `UrdfModel`을 조립한다.
@@ -169,13 +169,13 @@ impl Default for RobotBuilder {
 mod tests {
     use super::*;
 
-    fn test_fallback_arm() -> Arc<Arm> {
-        return Arc::new(crate::defaults::arm().expect("test arm"));
+    fn test_fallback_robot() -> Robot {
+        return crate::defaults::primitive_4dof().expect("test arm");
     }
 
     #[test]
     fn primitive_builds_from_explicit_arm() {
-        let robot = RobotBuilder::build_primitive(test_fallback_arm());
+        let robot = RobotBuilder::build_primitive(test_fallback_robot());
         assert!(robot.urdf.is_none());
         assert_eq!(robot.arm.joint_count(), 4);
     }

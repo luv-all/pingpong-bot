@@ -2,16 +2,19 @@
 //!
 //! 런타임이 쓰는 것은 [`robot`]. 바꾸려면 그 본문만 고친다.
 //! 리니어모터 철제 프레임 위치는 [`rail_frame`].
+//!
+//! 공유·배선은 항상 [`Robot`] (`shared_robot`). FK/IK가 필요하면 `robot.arm`을 본다.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use nalgebra::{Isometry3, UnitQuaternion, Vector3};
 
+use crate::constants::geometry;
 use crate::constants::table;
 use crate::robot::{
-    Arm, ArmBuildError, JointLimit, Joints, MountPreset, RailFrame, Robot, RobotBuildError,
-    RobotBuilder, SerialChain, SerialJoint,
+    Arm, JointLimit, Joints, MountPreset, RailFrame, Robot, RobotBuildError, RobotBuilder,
+    SerialChain, SerialJoint,
 };
 
 /// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·윗면 기준).
@@ -24,8 +27,10 @@ pub fn rail_frame() -> RailFrame {
     };
 }
 
-/// 경연용 4-dof primitive.
-pub fn arm() -> Result<Arm, ArmBuildError> {
+/// 경연용 단순 4-dof (URDF 없음) → [`Robot`].
+///
+/// mesh가 필요하면 [`urdf_4dof`]. 활성 배선은 [`robot`].
+pub fn primitive_4dof() -> Result<Robot, RobotBuildError> {
     const MAX_JOINT_SPEED: f64 = 16.0;
     const RAIL_MAX_SPEED: f64 = 12.0;
 
@@ -55,13 +60,20 @@ pub fn arm() -> Result<Arm, ArmBuildError> {
         )
         .expect("4-dof q3 axis"),
     ];
+
     let chain = SerialChain::new(
         UnitQuaternion::identity(),
         joints,
-        Isometry3::translation(0.0, 0.0513, -0.034),
+        // CAD tip: +Y=면 법선, −Z=손잡이(면 내, 홈 포즈 기준). 타격점은 면 평행 이동.
+        Isometry3::translation(
+            0.0,
+            -geometry::RACKET_HALF_Z,
+            -geometry::RACKET_HANDLE_LENGTH,
+        ),
     )
     .expect("4-dof serial chain");
-    return Arm::builder()
+
+    let built = Arm::builder()
         .base_xyz(0.0, mount_y, mount_z)
         .linear_rail(mount_y, mount_z, 0.0, table::WIDTH_X, RAIL_MAX_SPEED)
         .serial_chain(
@@ -75,12 +87,27 @@ pub fn arm() -> Result<Arm, ArmBuildError> {
             Joints::from_slice(&[0.0, 0.0, -0.2617995, 0.0]),
         )
         .max_joint_speed(MAX_JOINT_SPEED)
-        .build();
+        .build()
+        .map_err(|e| RobotBuildError::ArmConversion {
+            reason: e.to_string(),
+        })?;
+
+    return Ok(Robot::from_arm(built));
 }
 
-/// `arm()`을 `Arc`로 (파이프라인·테스트용).
+/// `robot()`을 `Arc`로 (파이프라인·테스트용).
+pub fn shared_robot() -> Arc<Robot> {
+    return Arc::new(robot().expect("defaults::robot"));
+}
+
+/// 호환 별칭 — `primitive_4dof().arm` (호출부 이전용, 곧 제거).
+pub fn arm() -> Result<Arm, RobotBuildError> {
+    return Ok((*primitive_4dof()?.arm).clone());
+}
+
+/// 호환 별칭 — `shared_robot().arm`.
 pub fn shared_arm() -> Arc<Arm> {
-    return Arc::new(arm().expect("defaults::arm"));
+    return Arc::clone(&shared_robot().arm);
 }
 
 /// `assets/robots/4-dof` URDF 프리셋 (진단·비교용).
@@ -97,9 +124,8 @@ pub fn urdf_4dof() -> Result<Robot, RobotBuildError> {
 
 /// `assets/robots/urdf-test` 프리셋.
 pub fn urdf_test() -> Result<Robot, RobotBuildError> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
-        "assets/robots/urdf-test/urdf-test_description/urdf/urdf-test.urdf",
-    );
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("assets/robots/urdf-test/urdf-test_description/urdf/urdf-test.urdf");
     return RobotBuilder::new()
         .urdf(&path)
         .ee_link_opt(Some("pingpong_paddle_v5_1"))
@@ -109,8 +135,8 @@ pub fn urdf_test() -> Result<Robot, RobotBuildError> {
 }
 
 /// **지금 쓰는 로봇.** 바꾸려면 이 함수 본문만 고친다 (`urdf_4dof` 등).
-pub fn robot() -> Result<Robot, ArmBuildError> {
-    return Ok(Robot::from_arm(arm()?));
+pub fn robot() -> Result<Robot, RobotBuildError> {
+    return urdf_4dof();
 }
 
 #[cfg(test)]
@@ -127,8 +153,9 @@ mod tests {
     }
 
     #[test]
-    fn arm_follows_rail_frame() {
-        let arm = arm().expect("arm");
+    fn primitive_follows_rail_frame() {
+        let robot = primitive_4dof().expect("primitive_4dof");
+        let arm = robot.arm.as_ref();
         let frame = rail_frame();
         assert!((arm.base.coords.y - frame.mount_y()).abs() < 1e-12);
         assert!((arm.base.coords.z - frame.mount_z()).abs() < 1e-12);

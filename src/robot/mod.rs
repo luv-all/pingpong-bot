@@ -1,9 +1,9 @@
 //! 로봇 팔 기구학.
 //!
-//! `Arm`은 sim/real이 같이 쓰는 불변 기하 모델이다. 부팅 때 한 번 만들고
-//! `Arc<Arm>`으로 넘긴다. FK/IK랑 스윙 계획은 이 타입만 본다.
+//! `Arm`은 sim/real이 같이 쓰는 불변 기하 모델이다. 부팅 때 [`Robot`]으로 조립하고
+//! `robot.arm`으로 FK/IK·스윙 계획에 넘긴다. 공유 배선은 [`crate::defaults::shared_robot`].
 //!
-//! 조립은 `ArmBuilder`, 런타임 추종은 `RobotState`.
+//! 조립은 `ArmBuilder` / `RobotBuilder`, 런타임 추종은 `RobotState`.
 
 pub mod builder;
 mod loader;

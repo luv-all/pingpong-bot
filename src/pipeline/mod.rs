@@ -11,15 +11,15 @@ use std::time::{Duration, Instant};
 use crate::camera::{CameraParams, FrameSource, HintSource};
 use crate::detector::{BallDetector, passthrough_detect, undistort_frame};
 use crate::{
-    Arm, BallObservation, CameraId, DomainError, Estimator, Hardware, InterceptWindow, Prediction,
-    SwingPlanError, Telemetry, TelemetryEvent, plan_best_swing,
+    BallObservation, CameraId, DomainError, Estimator, Hardware, InterceptWindow, Prediction,
+    Robot, SwingPlanError, Telemetry, TelemetryEvent, plan_best_swing,
 };
 use crate::{Calibration, triangulate_synced};
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
 use tracing::{info, info_span, warn};
 
-use crate::defaults::shared_arm;
+use crate::defaults::shared_robot;
 
 const OBSERVATION_CHANNEL_CAPACITY: usize = 64;
 const CONTROL_HZ: f64 = 100.0;
@@ -31,7 +31,7 @@ pub struct PipelineConfig {
     /// 제어 루프 주파수 [Hz]
     pub control_hz: f64,
     /// sim·real 공통 불변 로봇 모델 (plan §2, §7.2)
-    pub arm: Arc<Arm>,
+    pub robot: Arc<Robot>,
     /// 카메라 캘리브 (삼각측량)
     pub calibration: Calibration,
 }
@@ -45,7 +45,7 @@ impl Default for PipelineConfig {
                 sample_step: 0.05,
             },
             control_hz: CONTROL_HZ,
-            arm: shared_arm(),
+            robot: shared_robot(),
             calibration: Calibration::sim(3),
         };
     }
@@ -206,7 +206,7 @@ pub fn run(
     let slot = Arc::clone(&predictions);
     let telemetry_control = Arc::clone(&telemetry);
     let shutdown_control = Arc::clone(&shutdown);
-    let arm = Arc::clone(&config.arm);
+    let arm = Arc::clone(&config.robot.arm);
     let tick = Duration::from_secs_f64(1.0 / config.control_hz);
     handles.push((
         PipelineThread::Control,

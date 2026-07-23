@@ -13,5 +13,5 @@ pub const HALF_THICKNESS: f64 = 0.0125;
 /// 네트 상단 높이 (테이블 면 기준). ITTF 15.25 cm.
 pub const NET_HEIGHT: f64 = 0.1525;
 /// 기본 접수 평면 y [m]. 로봇 앞에서 공을 맞출 깊이.
-/// `defaults::rail_frame` 마운트(y=−0.20) + `defaults::arm` 도달(~0.38 m)에 맞춤.
+/// 면내 손잡이: 홈 tip ≈ y=0.02이지만, 스윙 IK로 손목을 앞으로 밀어 y≈0.08까지 맞춘다.
 pub const DEFAULT_HIT_PLANE_Y: f64 = 0.08;
