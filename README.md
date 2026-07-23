@@ -380,7 +380,7 @@ cargo build -p pingpong-bot --release
 | **로봇 프리셋** (TOML `robot`, `robot/catalog.rs` `ROBOTS`) | ✅ |
 | **URDF mesh** (TOML `urdf_path` 또는 프리셋 `urdf_rel`) + 제어→URDF 관절 매핑 | ✅ |
 | Z-up 좌표계 + `HitPlane { y }` 접수 평면 | ✅ |
-| **BallScript** (시간·위치·속도·임펄스 스케줄) | ✅ |
+| **Shoot / Random / Park** (슈터 GUI) | ✅ |
 | **RobotBuilder** (URDF mesh + sim 마운트) | ✅ |
 | `sample_at` 타임스탬프 보간 | ✅ |
 | DLT/OpenCV 삼각측량 (`camera`, 2뷰는 `triangulatePoints`) | ✅ |

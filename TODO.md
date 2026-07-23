@@ -125,7 +125,7 @@ SSOT 매핑: `test-manipulator` `DynamixelConfig` (ID 1/3/4/5, signs, tick limit
   - 관측: 테이블 면을 굴러가면 인터셉트 평면 교차가 없어 스윙이 안 나감 — 의도인지 구멍인지 판정
 - [ ] 라켓–공 충돌이 Rapier에서 신뢰 가능한지 (CCD·라켓 collider vs 키네마틱)
 - [ ] ground truth/EKF 타격 성공률 스모크 기준 (예: N발 중 M리턴)
-- [ ] BallScript 시나리오 세트 (네트 넘김, 바운스 후, 사이드)
+- [ ] 네트 넘김 / 바운스 후 / 사이드 샷 시나리오 테스트 세트
 - [ ] GUI: 프리셋/`--robot` 표시, hit-plane·예측 마커 유지보수
 
 ---
