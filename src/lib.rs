@@ -29,13 +29,14 @@ pub use camera::{
 };
 pub use defaults::{
     ControlParams, EstimatorParams, ImpactParams, PhysicsParams, colormask, control, detector,
-    dynamixel, estimator, impact, intercept, physics, primitive_4dof, rail, rail_frame, robot,
+    dynamixel, estimator, impact, intercept, physics, primitive_4dof, rail, rail_frame, robot, roi,
     scorer, shared_robot, urdf_4dof, urdf_test,
 };
 pub use detector::{
-    BallDetector, Candidate, CandidateGenerator, ColorSpace, ColormaskDetector, ColormaskParams,
-    ContourDetector, FuseDetector, IntoCandidateGenerators, MotionPrior, ParseColorSpaceError,
-    RoiTrack, Scorer, ScorerParams, fuse, passthrough_detect, track, undistort_frame,
+    BallDetector, Candidate, CandidateGenerator, ColorContourCascade, ColorSpace, ColormaskDetector,
+    ColormaskParams, ContourDetector, FuseDetector, IntoCandidateGenerators, MotionPrior,
+    ParseColorSpaceError, RoiParams, RoiTrack, Scorer, ScorerParams, fuse, passthrough_detect,
+    track, undistort_frame,
 };
 pub use error::{DomainError, HwError, ObservationError, SwingPlanError};
 pub use estimator::{

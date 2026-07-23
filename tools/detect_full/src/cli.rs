@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(about = "fuse 본선 — ROI는 r 키로 토글")]
+#[command(about = "fuse 본선 — adaptive ROI 튜닝 + 단계 패널")]
 pub struct Args {
     #[arg(long)]
     pub images: Option<PathBuf>,

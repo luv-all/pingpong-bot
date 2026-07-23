@@ -16,7 +16,7 @@
 //! | [`impact`] | [`impact`] |
 //! | [`estimator`] | [`estimator`] |
 //! | [`robot`] | [`robot`] / [`primitive_4dof`] / [`shared_robot`] / [`rail_frame`] / [`urdf_4dof`] |
-//! | [`vision`] | [`detector`] / [`scorer`] / [`colormask`] |
+//! | [`vision`] | [`detector`] / [`scorer`] / [`colormask`] / [`roi`] |
 //! | [`hardware`] | [`dynamixel`] / [`rail`] |
 //! | [`planner`] | [`intercept`] |
 //!
@@ -38,7 +38,7 @@ pub use impact::{ImpactParams, impact};
 pub use physics::{PhysicsParams, physics};
 pub use planner::intercept;
 pub use robot::{primitive_4dof, rail_frame, robot, shared_robot, urdf_4dof, urdf_test};
-pub use vision::{colormask, detector, scorer};
+pub use vision::{colormask, detector, roi, scorer};
 
 #[cfg(test)]
 mod tests {
@@ -53,6 +53,7 @@ mod tests {
         intercept().validate().unwrap();
         scorer().validate().unwrap();
         colormask().validate().unwrap();
+        roi().validate().unwrap();
         dynamixel().validate().unwrap();
         rail().validate().unwrap();
         assert!((control().max_joint_torques[0] - 12.0).abs() < 1e-12);

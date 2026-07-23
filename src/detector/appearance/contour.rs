@@ -17,6 +17,7 @@ pub struct ContourDetector {
     min_area_px: f64,
     max_area_px: f64,
     min_circularity: f64,
+    last_area: Option<f64>,
 }
 
 impl ContourDetector {
@@ -25,10 +26,27 @@ impl ContourDetector {
             min_area_px: params.min_area_px,
             max_area_px: params.max_area_px,
             min_circularity: params.min_circularity,
+            last_area: None,
         };
     }
 
-    fn edge_mask(&self, frame: &Frame) -> Option<Mat> {
+    /// Canny 엣지 마스크. cascade·디버그용.
+    pub fn edge_mask(&self, frame: &Frame) -> Option<Mat> {
+        return self.edge_mask_from_gray(&Self::gray(frame)?);
+    }
+
+    /// `gate`가 0인 픽셀은 무시하고 Canny — colormask 통과 영역만 contour.
+    pub fn edge_mask_gated(&self, frame: &Frame, gate: &Mat) -> Option<Mat> {
+        let gray = Self::gray(frame)?;
+        let mut gated = Mat::zeros(gray.rows(), gray.cols(), gray.typ())
+            .ok()?
+            .to_mat()
+            .ok()?;
+        gray.copy_to_masked(&mut gated, gate).ok()?;
+        return self.edge_mask_from_gray(&gated);
+    }
+
+    fn gray(frame: &Frame) -> Option<Mat> {
         let mut gray = Mat::default();
         if imgproc::cvt_color(
             &frame.image,
@@ -41,9 +59,13 @@ impl ContourDetector {
         {
             return None;
         }
+        return Some(gray);
+    }
+
+    fn edge_mask_from_gray(&self, gray: &Mat) -> Option<Mat> {
         let mut blur = Mat::default();
         if imgproc::gaussian_blur(
-            &gray,
+            gray,
             &mut blur,
             opencv::core::Size::new(5, 5),
             0.0,
@@ -80,6 +102,7 @@ impl ContourDetector {
 
     /// 검출 + Canny 엣지(BGR). 선택 컨투어는 초록.
     pub fn detect_debug(&mut self, frame: &Frame) -> (Option<PixelPoint>, Mat) {
+        self.last_area = None;
         let empty = || {
             Mat::zeros(frame.image.rows(), frame.image.cols(), frame.image.typ())
                 .ok()
@@ -112,6 +135,7 @@ impl ContourDetector {
             0.0,
         );
         if let Some(c) = scorer.pick_best(&cands, |_| 0.0) {
+            self.last_area = Some(c.area);
             draw_candidate_contour(&mut edges_bgr, &c.contour);
             return (Some(c.pixel), edges_bgr);
         }
@@ -153,5 +177,9 @@ impl From<&ScorerParams> for ContourDetector {
 impl BallDetector for ContourDetector {
     fn detect(&mut self, frame: &Frame) -> Option<PixelPoint> {
         return self.detect_debug(frame).0;
+    }
+
+    fn last_area(&self) -> Option<f64> {
+        return self.last_area;
     }
 }

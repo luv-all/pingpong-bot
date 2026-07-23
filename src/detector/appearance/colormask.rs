@@ -77,18 +77,23 @@ impl ColormaskParams {
 
 pub struct ColormaskDetector {
     params: ColormaskParams,
+    last_area: Option<f64>,
 }
 
 impl ColormaskDetector {
     pub fn new(params: ColormaskParams) -> Self {
-        return Self { params };
+        return Self {
+            params,
+            last_area: None,
+        };
     }
 
     pub fn space(&self) -> ColorSpace {
         return self.params.space;
     }
 
-    fn color_mask(&self, frame: &Frame) -> Option<Mat> {
+    /// 색 마스크 (단일 채널). cascade·디버그용.
+    pub fn color_mask(&self, frame: &Frame) -> Option<Mat> {
         let mut converted = Mat::default();
         let code = match self.params.space {
             ColorSpace::Ycrcb => imgproc::COLOR_BGR2YCrCb,
@@ -128,6 +133,7 @@ impl ColormaskDetector {
     /// 검출 + 색 마스크(BGR). 선택 컨투어는 초록.
     /// hard cut은 호출측 `Scorer`를 쓴다.
     pub fn detect_debug(&mut self, frame: &Frame, scorer: &Scorer) -> (Option<PixelPoint>, Mat) {
+        self.last_area = None;
         let empty = || empty_bgr(frame);
         let Some(mask) = self.color_mask(frame) else {
             return (None, empty());
@@ -149,6 +155,7 @@ impl ColormaskDetector {
         let cands = self.candidates_from_mask(&mask);
         let best = scorer.pick_best(&cands, |_| 0.0);
         if let Some(c) = best {
+            self.last_area = Some(c.area);
             draw_candidate_contour(&mut mask_bgr, &c.contour);
             return (Some(c.pixel), mask_bgr);
         }
@@ -189,6 +196,10 @@ impl BallDetector for ColormaskDetector {
             min_circularity: 0.55,
         });
         return self.detect_debug(frame, &scorer).0;
+    }
+
+    fn last_area(&self) -> Option<f64> {
+        return self.last_area;
     }
 }
 

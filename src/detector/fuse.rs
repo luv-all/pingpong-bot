@@ -91,6 +91,8 @@ pub struct FuseDetector {
     generators: Vec<Box<dyn CandidateGenerator>>,
     pub scorer: Scorer,
     motion: Option<MotionPrior>,
+    last_area: Option<f64>,
+    last_generator_idx: Option<usize>,
 }
 
 impl FuseDetector {
@@ -102,6 +104,8 @@ impl FuseDetector {
             generators: generators.into_candidate_generators(),
             scorer,
             motion: None,
+            last_area: None,
+            last_generator_idx: None,
         };
     }
 
@@ -124,6 +128,9 @@ impl FuseDetector {
 
     /// 검출 + (있으면) motion 마스크 BGR. 선택 컨투어 초록.
     pub fn detect_debug(&mut self, frame: &Frame) -> (Option<PixelPoint>, Option<Mat>) {
+        self.last_area = None;
+        self.last_generator_idx = None;
+
         let motion_mask = self.motion.as_mut().and_then(|m| m.update(frame));
         let overlap = |c: &Candidate| match &motion_mask {
             Some(mask) => MotionPrior::overlap(mask, c),
@@ -131,9 +138,11 @@ impl FuseDetector {
         };
 
         let mut best = None;
-        for generator in &mut self.generators {
+        for (idx, generator) in self.generators.iter_mut().enumerate() {
             let cands = generator.generate(frame);
             if let Some(c) = self.scorer.pick_best(&cands, &overlap) {
+                self.last_area = Some(c.area);
+                self.last_generator_idx = Some(idx);
                 best = Some(c.clone());
                 break;
             }
@@ -154,6 +163,14 @@ impl FuseDetector {
 impl BallDetector for FuseDetector {
     fn detect(&mut self, frame: &Frame) -> Option<PixelPoint> {
         return self.detect_debug(frame).0;
+    }
+
+    fn last_area(&self) -> Option<f64> {
+        return self.last_area;
+    }
+
+    fn last_generator_idx(&self) -> Option<usize> {
+        return self.last_generator_idx;
     }
 }
 
