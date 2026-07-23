@@ -157,7 +157,7 @@ impl SimWorld {
             (table::NET_HEIGHT * 0.5) as f32,
         )
         .collision_groups(super::arm_bodies::static_collision_groups())
-        .restitution(0.3)
+        .restitution(physics.net_restitution as f32)
         .build();
         collider_set.insert_with_parent(net_collider, net_handle, &mut rigid_body_set);
 
@@ -177,7 +177,8 @@ impl SimWorld {
             &arm,
             mount,
             robot.joints(),
-            physics.restitution as f32,
+            // 라켓 e ≠ 테이블 e. combine Min → 공–라켓 접촉이 e_eff.
+            crate::defaults::impact().racket_effective_restitution as f32,
         );
         let racket_handle = arm_bodies
             .racket_handle()
@@ -189,14 +190,19 @@ impl SimWorld {
             // 공기 토크로 스핀이 서서히 감쇠 — 바운스 마찰로 생긴 과한 ω가
             // Magnus로 탄도를 폭주시키지 않게 한다 (슈터 의도 스핀은 짧은
             // 비행에 충분히 남음).
-            .angular_damping(0.8)
+            .angular_damping(ball::ANGULAR_DAMPING as f32)
             .build();
         let ball_handle = rigid_body_set.insert(ball_body);
         let ball_collider = ColliderBuilder::ball(ball::RADIUS as f32)
             .collision_groups(super::arm_bodies::ball_collision_groups())
             .restitution(physics.restitution as f32)
-            .friction(0.2)
-            .density(0.25)
+            .friction(physics.ball_friction as f32)
+            // ITTF 질량 + 중공 셸 I=(2/3)mr² (Rapier 기본 솔리드 2/5 대신).
+            .mass_properties(MassProperties::new(
+                Vector::ZERO,
+                ball::MASS as f32,
+                Vector::splat(ball::SHELL_INERTIA as f32),
+            ))
             .build();
         collider_set.insert_with_parent(ball_collider, ball_handle, &mut rigid_body_set);
 
@@ -224,11 +230,7 @@ impl SimWorld {
             ball_state: BallState::Parked,
             last_shooter_settings: default_shooter.clone(),
             debug_prediction: None,
-            intercept: InterceptWindow {
-                y_min: 0.20,
-                y_max: 0.55,
-                sample_step: 0.05,
-            },
+            intercept: crate::defaults::intercept(),
             use_ground_truth: true,
             swing_committed: false,
             swing_abandoned: false,
@@ -795,6 +797,29 @@ mod tests {
     }
 
     #[test]
+    fn ball_mass_properties_match_ittf_thin_shell() {
+        let world = SimWorld::new(test_robot());
+        let body = world
+            .rigid_body_set
+            .get(world.ball_handle)
+            .expect("ball body");
+        let mass = f64::from(body.mass());
+        assert!(
+            (mass - ball::MASS).abs() < 1e-9,
+            "mass={mass} want {}",
+            ball::MASS
+        );
+        let inertia = body.mass_properties().local_mprops.principal_inertia();
+        for axis in [inertia.x, inertia.y, inertia.z] {
+            assert!(
+                (f64::from(axis) - ball::SHELL_INERTIA).abs() < 1e-12,
+                "I={axis} want {}",
+                ball::SHELL_INERTIA
+            );
+        }
+    }
+
+    #[test]
     fn ball_stays_parked_until_shoot() {
         let arm = test_robot();
         let mut world = SimWorld::new(arm);
@@ -1154,8 +1179,10 @@ mod tests {
         };
         let target_x = (table::WIDTH_X * 0.5) as f32;
         let target_y = (table::LENGTH_Y * 0.75) as f32;
+        // 탄도 목표는 스핀 무시. 중공 셸 I=(2/3)mr²이면 마찰→ω 결합이
+        // 솔리드(2/5)와 달라 착지 y가 수 cm 어긋날 수 있다.
         assert!(
-            (bounce.x - target_x).abs() <= 0.20 && (bounce.y - target_y).abs() <= 0.45,
+            (bounce.x - target_x).abs() <= 0.20 && (bounce.y - target_y).abs() <= 0.50,
             "bounce={bounce:?}, target=({target_x}, {target_y}), contact={contact_state:?}"
         );
     }
@@ -1678,6 +1705,13 @@ mod tests {
                     let center_joints = arm.arm.default_joints.clone();
                     let mut world = SimWorld::new(arm.clone());
                     world.set_use_ground_truth(true);
+                    // 격자 코너 샷은 mount 도달 구간(`defaults::intercept` y≤0.18)보다
+                    // 앞쪽 평면도 샘플해야 접수/포기가 갈린다.
+                    world.set_intercept_window(InterceptWindow {
+                        y_min: 0.20,
+                        y_max: 0.55,
+                        sample_step: 0.05,
+                    });
                     *world.robot_mut() = RobotState::new(center_joints, center_rail_x);
 
                     let collider_for_body = |world: &SimWorld, body_handle| {

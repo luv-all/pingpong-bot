@@ -37,7 +37,7 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 | A1 | 예전 `-0.35×v_in` 폐기 → 중앙 바운드 탄도 | `impact.rs` | ✅ |
 | A2 | 바운드 시간 0.55 s + 네트 clearance | 상수 `impact` | ✅ (실측 보정 여지) |
 | A3 | \(\|v_{out}\| ≤ 6\) m/s | `MAX_RETURN_SPEED` | 잠정 |
-| A4 | Rapier \(e=0.85\), 명령 역산용 \(e_{eff}=0.42\) | ball / impact | ✅ / 실측 후 갱신 |
+| A4 | Rapier 테이블·공 \(e≈0.88\) ITTF 테이블 바운스, 라켓 \(e_{eff}=0.55\)+Min · 공 질량 ITTF 2.7 g | physics / impact / ball | ✅ / 실측 후 갱신 |
 
 ---
 
@@ -128,7 +128,8 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 **지금:** TOML `[intercept]`의 `y_min..=y_max`를 `sample_step`마다 잘라  
 여러 평면에 대해 탄도 교차를 예측한 뒤, **하나**를 고른다.
 
-기본값 (entry `intercept`): `y = 0.20..0.55`, `step = 0.05`.
+기본값 (entry `intercept`): `y = 0.0..0.18`, `step = 0.03`
+(철제 프로파일 마운트 y≈−0.20 기준 도달 가능 구간).
 
 ### 고르는 순서 (`plan_best_swing`)
 
@@ -143,9 +144,9 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 |----|------|------|
 | E1 | 다중 y 샘플 `InterceptWindow` | ✅ |
 | E2 | 평면 지난 공 → 예측 안 함 | ✅ |
-| E3 | 테이블 바운스 \(e\) = 공 \(e\) (0.85) | ✅ |
+| E3 | 테이블 바운스 \(e\) = 공 \(e\) (≈0.88, ITTF 테이블) | ✅ |
 | E4 | lead `0.05..1.2` s | ✅ |
-| E5 | Rapier restitution = E3 | ✅ |
+| E5 | Rapier 테이블·공 restitution = E3; 라켓은 A4 \(e_{eff}\)+Min | ✅ |
 | E6 | 접촉→리턴→네트→중앙 바운스 통합 테스트 | ✅ |
 | E7 | 선택 기준 = 거리 정렬 + 접촉 5 mm (점수식 없음) | ✅ |
 

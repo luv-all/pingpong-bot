@@ -52,11 +52,7 @@ fn na_iso_to_rapier_pose(iso: &Isometry3<f64>) -> Pose {
 
 fn vec3_f32(v: Vector3<f64>) -> Vec3 {
     // IEEE -0.0 이 Rapier revolute 기저 방향을 뒤집어 q=0 자세가 거울상이 된다.
-    return Vec3::new(
-        (v.x + 0.0) as f32,
-        (v.y + 0.0) as f32,
-        (v.z + 0.0) as f32,
-    );
+    return Vec3::new((v.x + 0.0) as f32, (v.y + 0.0) as f32, (v.z + 0.0) as f32);
 }
 
 /// 다물체 암 핸들.
@@ -154,7 +150,9 @@ impl ArmMultibody {
             .position(na_iso_to_rapier_pose(&ee_from_link))
             .collision_groups(racket_collision_groups())
             .restitution(restitution)
-            .friction(0.5)
+            // 공 e(테이블용)보다 작을 때 Average면 중간값이 됨 → Min으로 e_eff 유지.
+            .restitution_combine_rule(CoefficientCombineRule::Min)
+            .friction(defaults::impact().racket_friction as f32)
             // density>0 이면 COM이 ee_from_link 쪽으로 밀려 body.position()≠링크원점 → FK 불일치.
             .mass(0.0)
             .build();
@@ -203,10 +201,7 @@ impl ArmMultibody {
                 pos.translation.z as f64,
             ),
             UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
-                r.w as f64,
-                r.x as f64,
-                r.y as f64,
-                r.z as f64,
+                r.w as f64, r.x as f64, r.y as f64, r.z as f64,
             )),
         );
         return Some(link_iso * self.ee_from_link);
@@ -352,7 +347,19 @@ mod tests {
         return (*primitive_4dof().expect("arm").arm).clone();
     }
 
-    fn spawn_test_arm(attach_check: bool) -> (Arm, RigidBodySet, ColliderSet, MultibodyJointSet, ArmMultibody) {
+    fn racket_e() -> f32 {
+        return defaults::impact().racket_effective_restitution as f32;
+    }
+
+    fn spawn_test_arm(
+        attach_check: bool,
+    ) -> (
+        Arm,
+        RigidBodySet,
+        ColliderSet,
+        MultibodyJointSet,
+        ArmMultibody,
+    ) {
         let arm = sample_arm();
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
@@ -364,7 +371,7 @@ mod tests {
             &arm,
             Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords,
             &arm.default_joints,
-            0.85,
+            racket_e(),
         );
         assert!(attach_check);
         return (arm, bodies, colliders, joints, mb);
@@ -419,7 +426,7 @@ mod tests {
             &arm,
             mount,
             &q,
-            0.85,
+            racket_e(),
         );
         let fk = arm
             .forward_kinematics_with_rail(mount.x, &q)
@@ -458,7 +465,7 @@ mod tests {
             &arm,
             mount,
             &arm.default_joints,
-            0.85,
+            racket_e(),
         );
         let start = arm.default_joints.clone();
         let mut impact = start.clone();
@@ -531,7 +538,7 @@ mod tests {
             &arm,
             mount,
             &arm.default_joints,
-            0.85,
+            racket_e(),
         );
         let mut target = arm.default_joints.clone();
         target.values[1] = 0.35;
@@ -601,10 +608,7 @@ mod tests {
             "EE +Z should match FK normal; face={face:?} fk_n={:?}",
             fk.normal
         );
-        assert!(
-            face.y > 0.5,
-            "면이 상대(+Y)를 봐야 함: face={face:?}"
-        );
+        assert!(face.y > 0.5, "면이 상대(+Y)를 봐야 함: face={face:?}");
     }
 
     fn read_yaw_max_force(joints: &MultibodyJointSet, handle: MultibodyJointHandle) -> f32 {
@@ -629,7 +633,7 @@ mod tests {
             arm,
             mount,
             &arm.default_joints,
-            0.85,
+            racket_e(),
         );
         let fk0 = arm
             .forward_kinematics_with_rail(mount.x, &arm.default_joints)

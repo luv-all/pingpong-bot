@@ -100,7 +100,6 @@ fn vector3_to_array(v: Vector3<f64>) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defaults::PhysicsParams;
 
     #[test]
     fn rally_return_clears_net_toward_far_half() {
@@ -132,7 +131,7 @@ mod tests {
         let v_in = Vector3::new(0.1, -5.0, -0.5);
         let v_out = rally_return_velocity(impact, v_in);
         let normal = (v_out - v_in).normalize();
-        let e = crate::defaults::physics().restitution;
+        let e = defaults::impact().racket_effective_restitution;
         let v_r = required_racket_velocity(v_in, v_out, normal, e).expect("v_r");
         assert!(verify_impact_model(v_in, v_out, v_r, normal, e));
     }
