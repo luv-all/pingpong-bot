@@ -27,8 +27,10 @@ pub fn ensure_korean_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "NanumGothic".to_owned(),
-        egui::FontData::from_static(include_bytes!("../../../assets/fonts/NanumGothic-Regular.ttf"))
-            .into(),
+        egui::FontData::from_static(include_bytes!(
+            "../../../assets/fonts/NanumGothic-Regular.ttf"
+        ))
+        .into(),
     );
     // Latin은 기본 폰트, 한글 글리프만 NanumGothic으로 폴백.
     fonts
@@ -212,10 +214,14 @@ pub fn draw(
             });
         });
 
-    // Status를 위에, View(체크박스 많음)를 아래에 — View가 Status를 가리지 않게.
-    egui::Window::new("Status")
+    // 초기만 우측 정렬. `.anchor`는 드래그를 막아 Status/View가 겹치면 못 피한다.
+    // View는 Status 아래 + 간격으로 두어, Status가 길어도 처음부터 겹치지 않게 한다.
+    const RIGHT_GUI_GAP: f32 = 20.0;
+    let screen_tr = ctx.content_rect().right_top();
+    let status_win = egui::Window::new("Status")
         .default_width(280.0)
-        .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
+        .pivot(egui::Align2::RIGHT_TOP)
+        .default_pos(screen_tr + egui::vec2(-12.0, 12.0))
         .resizable(true)
         .collapsible(true)
         .show(ctx, |ui| {
@@ -226,9 +232,14 @@ pub fn draw(
             draw_status_panel(ui, status, &ui_state.debug);
         });
 
+    let view_y = status_win
+        .as_ref()
+        .map(|r| r.response.rect.bottom() + RIGHT_GUI_GAP)
+        .unwrap_or(screen_tr.y + 520.0);
     egui::Window::new("View")
         .default_width(220.0)
-        .anchor(egui::Align2::RIGHT_TOP, [-12.0, 340.0])
+        .pivot(egui::Align2::RIGHT_TOP)
+        .default_pos(egui::pos2(screen_tr.x - 12.0, view_y))
         .resizable(true)
         .collapsible(true)
         .show(ctx, |ui| {
