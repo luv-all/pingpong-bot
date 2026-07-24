@@ -98,7 +98,8 @@ cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
 ```
 
 물리계수 측정 툴은 stdout에 `defaults::physics()` 붙여넣기용 스니펫을 낸다  
-([measure_restitution](tools/measure_restitution/README.md) · [measure_friction](tools/measure_friction/README.md)).
+([measure_restitution](tools/measure_restitution/README.md) · [measure_friction](tools/measure_friction/README.md)).  
+무엇을 재고 `e_eff`가 뭔지는 [docs/measure-physics.md](docs/measure-physics.md).
 
 ### Dynamixel · AXL (Windows)
 
