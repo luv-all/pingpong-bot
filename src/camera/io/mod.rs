@@ -5,9 +5,7 @@ pub mod preview;
 mod projection;
 mod sim;
 
-pub use capture::{
-    ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture,
-};
+pub use capture::{ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture};
 pub use preview::{
     PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
     draw_help_lines, draw_world_velocity, hstack_bgr, show_bgr,

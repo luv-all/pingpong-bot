@@ -1,4 +1,4 @@
-//! 라이브: Space 스냅 → 랜드마크 순서 클릭 → s 저장(PnP).
+//! 라이브: Space 스냅 → 8점 클릭 → 자동 PnP → 무지개 격자 확인 → s 저장.
 
 use std::sync::{Arc, Mutex};
 
@@ -8,13 +8,20 @@ use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CameraId, FrameSource, OpenCvCapture, PixelPoint, PreviewAction, TABLE_LANDMARK_COUNT,
-    TableLandmark, calibrate_table_pnp, destroy_window, draw_debug_lines, draw_help_lines, show_bgr,
-    table_landmark_mesh_edges, table_landmarks,
+    CameraId, CameraParams, FrameSource, OpenCvCapture, PixelPoint, PreviewAction,
+    TABLE_LANDMARK_COUNT, TableLandmark, calibrate_table_pnp, destroy_window, draw_debug_lines,
+    draw_help_lines, show_bgr, table_landmark_mesh_edges, table_landmarks,
 };
 
 use crate::args::Args;
 use crate::cli;
+use crate::world_grid::{WorldGridParams, apply_grid_key, draw_world_grid};
+
+struct Solved {
+    params: CameraParams,
+    rmse: f64,
+    candidates: usize,
+}
 
 pub fn run(args: &Args) -> Result<()> {
     if args.device.is_some() && args.path.is_some() {
@@ -58,22 +65,30 @@ pub fn run(args: &Args) -> Result<()> {
     let mut frozen = false;
     let mut freeze_img: Option<Mat> = None;
     let mut clicks: Vec<PixelPoint> = Vec::new();
+    let mut solved: Option<Solved> = None;
+    let mut grid = WorldGridParams::default();
+    let mut last_fail_rmse: Option<f64> = None;
 
     println!(
         "table-PnP — cam={} fov_y={} max_rmse={}",
         args.camera_id, args.fov_y, args.max_rmse
     );
-    println!("Space=freeze  LMB=click  z=undo  c=clear  s=solve+save  n=live  q=quit");
+    println!(
+        "Space=freeze  LMB=click  z=undo  c=clear  s=save  n=live  q=quit"
+    );
+    println!("(8 clicks → auto PnP + world grid; +/- [] ., adjust grid)");
     for (i, m) in marks.iter().enumerate() {
         println!("  {}: {}", i + 1, m.prompt);
     }
 
     loop {
+        let mut clicks_changed = false;
         if frozen {
             let mut q = pending.lock().expect("pending");
             for (x, y) in q.drain(..) {
                 if clicks.len() < TABLE_LANDMARK_COUNT {
                     clicks.push(PixelPoint::new(f64::from(x), f64::from(y)));
+                    clicks_changed = true;
                     println!(
                         "click {}/{} → ({x},{y})  {}",
                         clicks.len(),
@@ -84,6 +99,22 @@ pub fn run(args: &Args) -> Result<()> {
             }
         } else {
             pending.lock().expect("pending").clear();
+        }
+
+        if clicks_changed {
+            if clicks.len() < TABLE_LANDMARK_COUNT {
+                solved = None;
+                last_fail_rmse = None;
+            } else {
+                try_solve(
+                    args,
+                    cam_id,
+                    freeze_img.as_ref().expect("freeze_img"),
+                    &clicks,
+                    &mut solved,
+                    &mut last_fail_rmse,
+                )?;
+            }
         }
 
         let frame_img = if frozen {
@@ -111,23 +142,53 @@ pub fn run(args: &Args) -> Result<()> {
         let mut panel = frame_img
             .try_clone()
             .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
+
         if frozen {
+            if let Some(ref s) = solved {
+                draw_world_grid(&mut panel, &s.params, grid)?;
+            }
             draw_clicks(&mut panel, &clicks, &marks)?;
-            let next = if clicks.len() < TABLE_LANDMARK_COUNT {
-                marks[clicks.len()].prompt.to_string()
+
+            if let Some(ref s) = solved {
+                let lines = [
+                    format!(
+                        "SOLVED rmse={:.2}px — check grid, s=save",
+                        s.rmse
+                    ),
+                    format!(
+                        "xy={:.2} z={:.2} layers={}",
+                        grid.xy_step, grid.z_step, grid.z_layers
+                    ),
+                ];
+                draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 0.0, 0.0))?;
+                draw_help_lines(
+                    &mut panel,
+                    &[
+                        "+/- xy  [] layers  ., z",
+                        "z undo  c clear  s save",
+                        "n live  q quit",
+                    ],
+                    Scalar::new(0.0, 255.0, 80.0, 0.0),
+                )?;
             } else {
-                format!("all {TABLE_LANDMARK_COUNT} clicked - press s")
-            };
-            let lines = [
-                format!("REVIEW clicks={}/{}", clicks.len(), TABLE_LANDMARK_COUNT),
-                next,
-            ];
-            draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-            draw_help_lines(
-                &mut panel,
-                &["LMB click", "z undo", "c clear", "s solve", "n live", "q quit"],
-                Scalar::new(0.0, 255.0, 80.0, 0.0),
-            )?;
+                let next = if clicks.len() < TABLE_LANDMARK_COUNT {
+                    marks[clicks.len()].prompt.to_string()
+                } else if let Some(rmse) = last_fail_rmse {
+                    format!("FAIL rmse={rmse:.2} — z/c retry or --fov-y")
+                } else {
+                    format!("all {TABLE_LANDMARK_COUNT} — waiting PnP")
+                };
+                let lines = [
+                    format!("REVIEW clicks={}/{}", clicks.len(), TABLE_LANDMARK_COUNT),
+                    next,
+                ];
+                draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+                draw_help_lines(
+                    &mut panel,
+                    &["LMB click", "z undo", "c clear", "n live", "q quit"],
+                    Scalar::new(0.0, 255.0, 80.0, 0.0),
+                )?;
+            }
         } else {
             draw_debug_lines(
                 &mut panel,
@@ -152,43 +213,40 @@ pub fn run(args: &Args) -> Result<()> {
                     if freeze_img.is_some() {
                         frozen = true;
                         clicks.clear();
+                        solved = None;
+                        last_fail_rmse = None;
                         println!("frozen — click landmarks in order");
                     }
                 } else if key == i32::from(b'n') || key == i32::from(b'N') {
                     frozen = false;
                     clicks.clear();
+                    solved = None;
+                    last_fail_rmse = None;
                 } else if key == i32::from(b'z') || key == i32::from(b'Z') {
                     clicks.pop();
+                    solved = None;
+                    last_fail_rmse = None;
                 } else if key == i32::from(b'c') || key == i32::from(b'C') {
                     clicks.clear();
+                    solved = None;
+                    last_fail_rmse = None;
                 } else if (key == i32::from(b's') || key == i32::from(b'S')) && frozen {
-                    if clicks.len() != TABLE_LANDMARK_COUNT {
-                        println!(
-                            "클릭 {}/{} - 모두 찍으세요",
-                            clicks.len(),
-                            TABLE_LANDMARK_COUNT
-                        );
+                    let Some(ref s) = solved else {
+                        if clicks.len() != TABLE_LANDMARK_COUNT {
+                            println!(
+                                "클릭 {}/{} - 모두 찍으세요 (8점 후 자동 PnP)",
+                                clicks.len(),
+                                TABLE_LANDMARK_COUNT
+                            );
+                        } else {
+                            println!("PnP 미통과 — z/c로 다시 찍거나 --fov-y");
+                        }
                         continue;
-                    }
-                    let img = freeze_img.as_ref().expect("freeze_img");
-                    let w = img.cols().max(1) as u32;
-                    let h = img.rows().max(1) as u32;
-                    let result =
-                        calibrate_table_pnp(cam_id, None, w, h, args.fov_y, &clicks)
-                            .map_err(anyhow::Error::msg)?;
-                    println!(
-                        "PnP candidates={} rmse={:.2}px",
-                        result.candidates, result.reproj_rmse
-                    );
-                    if result.reproj_rmse > args.max_rmse {
-                        println!(
-                            "FAIL rmse {:.2} > {} — 다시 클릭 (z/c) 또는 --fov-y",
-                            result.reproj_rmse, args.max_rmse
-                        );
-                        continue;
-                    }
-                    cli::write_result(args, result.params, result.reproj_rmse, result.candidates)?;
+                    };
+                    cli::write_result(args, s.params.clone(), s.rmse, s.candidates)?;
                     break;
+                } else if solved.is_some() {
+                    apply_grid_key(&mut grid, key);
                 }
             }
         }
@@ -198,8 +256,45 @@ pub fn run(args: &Args) -> Result<()> {
     return Ok(());
 }
 
+fn try_solve(
+    args: &Args,
+    cam_id: CameraId,
+    img: &Mat,
+    clicks: &[PixelPoint],
+    solved: &mut Option<Solved>,
+    last_fail_rmse: &mut Option<f64>,
+) -> Result<()> {
+    *solved = None;
+    *last_fail_rmse = None;
+    if clicks.len() != TABLE_LANDMARK_COUNT {
+        return Ok(());
+    }
+    let w = img.cols().max(1) as u32;
+    let h = img.rows().max(1) as u32;
+    let result = calibrate_table_pnp(cam_id, None, w, h, args.fov_y, clicks)
+        .map_err(anyhow::Error::msg)?;
+    println!(
+        "PnP candidates={} rmse={:.2}px",
+        result.candidates, result.reproj_rmse
+    );
+    if result.reproj_rmse > args.max_rmse {
+        println!(
+            "FAIL rmse {:.2} > {} — 다시 클릭 (z/c) 또는 --fov-y",
+            result.reproj_rmse, args.max_rmse
+        );
+        *last_fail_rmse = Some(result.reproj_rmse);
+        return Ok(());
+    }
+    *solved = Some(Solved {
+        params: result.params,
+        rmse: result.reproj_rmse,
+        candidates: result.candidates,
+    });
+    println!("SOLVED — check rainbow grid, s=save, z/c=retry");
+    return Ok(());
+}
+
 fn draw_clicks(panel: &mut Mat, clicks: &[PixelPoint], marks: &[TableLandmark]) -> Result<()> {
-    // 탁구대 메시: 양 끝이 모두 찍힌 선분만 (클릭 순서 폴리라인 아님)
     let edge_color = Scalar::new(255.0, 128.0, 0.0, 0.0);
     for &(a_i, b_i) in table_landmark_mesh_edges() {
         if a_i >= clicks.len() || b_i >= clicks.len() {

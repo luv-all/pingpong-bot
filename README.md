@@ -262,7 +262,7 @@ cargo run -p pingpong-bot
 |-------|--------|
 | `cam-preview` | [cam_preview](tools/cam_preview/README.md) |
 | `calib-charuco` | [calib_charuco](tools/calib_charuco/README.md) |
-| `calib-table-pnp` | [calib_table_pnp](tools/calib_table_pnp/README.md) — 탁구대 8점 → solvePnP |
+| `calib-table-pnp` | [calib_table_pnp](tools/calib_table_pnp/README.md) — 8점 PnP + 월드 격자 검증 |
 | `detect-appearance` | [detect_appearance](tools/detect_appearance/README.md) |
 | `tune-colormask` | [tune_colormask](tools/tune_colormask/README.md) |
 | `detect-full` | [detect_full](tools/detect_full/README.md) — fuse + ROI |
@@ -277,16 +277,15 @@ cargo run -p pingpong-bot
 ```mermaid
 flowchart LR
   table["탁구대 8점"] --> pnp["calib-table-pnp"] --> json["Calibration JSON"]
-  boards["ChArUco"] --> charuco["calib-charuco"] --> json
+  json --> full["detect-full / DLT"]
   frames["폴더/영상"] --> appearance["detect-appearance"]
-  appearance --> full["detect-full"]
-  json --> full
+  appearance --> full
   full --> defaults["defaults::detector()"]
 ```
 
-- 외참(권장): [calib_table_pnp](tools/calib_table_pnp/README.md)
-- 인트린식(선택): [calib_charuco](tools/calib_charuco/README.md)
-- 설계: [비전 스펙](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md) · [decisions J](docs/decisions.md)
+- 외참(운영): [calib_table_pnp](tools/calib_table_pnp/README.md) (클릭 → 자동 PnP → 무지개 격자 → 저장) → DLT
+- Charuco 인트린식: [calib_charuco](tools/calib_charuco/README.md) (비운영·레거시)
+- 설계: [비전 스펙](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md) · [verify-proj 스펙(superseded)](docs/superpowers/specs/2026-07-24-verify-proj-design.md) · [decisions J](docs/decisions.md)
 
 ---
 
