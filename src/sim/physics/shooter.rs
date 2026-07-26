@@ -12,7 +12,7 @@ use rapier3d::prelude::{
     RigidBodyBuilder, RigidBodySet, Rotation, Vector,
 };
 
-use super::arm_bodies::{ball_collision_groups, static_collision_groups};
+use super::arm_bodies::{NET_HALF_THICKNESS_M, ball_collision_groups, static_collision_groups};
 
 /// GUI `randomized`가 네트 미달 샘플을 버리는 최대 재시도 횟수.
 const RANDOM_SHOT_NET_GATE_MAX_TRIES: usize = 48;
@@ -33,9 +33,9 @@ pub const RANDOM_SHOT_TARGET_PADDING_M: f64 = 0.25;
 /// `BallShooterSettings::randomized`가 뽑는 속도 범위 [m/s].
 ///
 /// `tools/shot_tune` — 실기 관절속도(~2.88 rad/s)에서 commit이 연속 유지되는
-/// 대역의 중앙 근처 (rough-to-fine 브랜치 검증값).
-pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 6.8;
-pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 7.4;
+/// Default/Eval 기본 6.0 m/s 근처. 시중 슈터 초보~중급 피딩 하단.
+pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 5.7;
+pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 6.3;
 
 /// 랜덤 발사구 높이 오프셋 [m] (`height_offset_m`, 슈터 로컬 up).
 ///
@@ -105,12 +105,14 @@ pub struct BallShooterSettings {
 
 impl Default for BallShooterSettings {
     fn default() -> Self {
-        // speed/pitch/height: shot_tune commit 대역(7.1 · −4°)을 유지하되,
-        // Rapier에서 네트에 안 맞게 height를 0.24로 올린다 (0.17은 네트 접촉).
+        // speed 6.0: 시중 탁구 슈터 초보~중급 피딩(대략 4~10 m/s)의 하단.
+        // 5.0은 낙하가 커서 가혹했고, 예전 7.1은 입사 에너지가 커서 블록
+        // 리턴이 과장되어 보였다.
+        // height 0.24 / pitch −1.0: Rapier·ballistics 네트 통과 최소값.
         return Self {
-            speed_mps: 7.1,
+            speed_mps: 6.0,
             yaw_deg: 0.0,
-            pitch_deg: -4.0,
+            pitch_deg: -1.0,
             roll_deg: 0.0,
             pos_offset_x_m: 0.0,
             pos_offset_y_m: 0.0,
@@ -312,6 +314,28 @@ impl BallShooterSettings {
     }
 }
 
+/// 공에 항력·Magnus 외력을 건다 (중력은 Rapier gravity).
+///
+/// `SimWorld::apply_ball_aero_forces`와 같은 식 — 게이트 미니월드와 본 시뮬의
+/// 탄도를 맞추기 위한 것이다.
+fn apply_aero_force(body: &mut rapier3d::prelude::RigidBody, physics: &crate::PhysicsParams) {
+    body.reset_forces(true);
+    let lin = body.linvel();
+    let ang = body.angvel();
+    let velocity = Vector3::new(f64::from(lin.x), f64::from(lin.y), f64::from(lin.z));
+    let omega = Vector3::new(f64::from(ang.x), f64::from(ang.y), f64::from(ang.z));
+    let mass = f64::from(body.mass());
+    if mass <= 1e-12 {
+        return;
+    }
+    let force =
+        crate::planner::physics::aero_accel(velocity, omega, physics.drag, physics.magnus) * mass;
+    body.add_force(
+        Vector::new(force.x as f32, force.y as f32, force.z as f32),
+        true,
+    );
+}
+
 /// 테이블+네트+공만으로 수신 탄도의 네트 접촉 여부 (팔/라켓 없음).
 fn contacts_incoming_rapier_net(settings: &BallShooterSettings) -> bool {
     let physics = defaults::physics();
@@ -398,6 +422,9 @@ fn contacts_incoming_rapier_net(settings: &BallShooterSettings) -> bool {
     let net_y = (table::LENGTH_Y * 0.5) as f32;
     let mut previous_y = muzzle.y;
     for _ in 0..4_000 {
+        // SimWorld::apply_ball_aero_forces와 동일 — 항력·Magnus 없이 적분하면
+        // 공이 덜 처져 "네트를 넘는다"고 오판한다.
+        apply_aero_force(&mut bodies[ball_handle], &physics);
         pipeline.step(
             gravity,
             &integration,
@@ -419,7 +446,11 @@ fn contacts_incoming_rapier_net(settings: &BallShooterSettings) -> bool {
             return true;
         }
         let y = bodies[ball_handle].translation().y;
-        if previous_y > net_y && y <= net_y {
+        // 공 중심이 네트 평면을 지나도 아직 접촉할 수 있다 — 네트 상단을
+        // 스치는 공은 중심 y가 평면보다 작아진 뒤에 접촉이 잡힌다(관측 y≈1.359,
+        // 평면 1.37). 네트 영향권을 완전히 벗어난 뒤에야 통과로 판정한다.
+        let net_clear_y = net_y - (NET_HALF_THICKNESS_M + ball::RADIUS as f32);
+        if previous_y > net_clear_y && y <= net_clear_y {
             return false;
         }
         let v = bodies[ball_handle].linvel();

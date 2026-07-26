@@ -12,8 +12,14 @@ use crate::defaults;
 use crate::robot::{Arm, Joints};
 
 /// 위치 추종 게인 — τ 여유 있을 때 명령각에 가깝게, 포화 시에만 지연.
-const MOTOR_STIFFNESS: f32 = 5_000.0;
-const MOTOR_DAMPING: f32 = 200.0;
+/// 값은 [`defaults::sim_motor`] SSOT (시뮬 전용 — 실물 서보에는 안 나감).
+fn motor_gains() -> (f32, f32) {
+    let motor = defaults::sim_motor();
+    return (
+        motor.position_stiffness as f32,
+        motor.position_damping as f32,
+    );
+}
 
 /// 라켓은 공만, 테이블/네트와는 비충돌 (관절 구속 깨짐 방지).
 fn racket_collision_groups() -> InteractionGroups {
@@ -34,6 +40,10 @@ pub fn static_collision_groups() -> InteractionGroups {
     return InteractionGroups::new(Group::GROUP_3, Group::GROUP_1, InteractionTestMode::And);
 }
 
+/// 네트 판의 y 반두께. 수신 네트 게이트가 "네트 영향권을 벗어났는가"를
+/// 판정할 때도 같은 값을 쓴다.
+pub const NET_HALF_THICKNESS_M: f32 = 0.005;
+
 /// soft-ish 네트 콜라이더 — 얇은 고정 판 + 낮은 e (`Min` combine).
 /// Rapier soft cloth는 없고, 뷰어 격자는 외관만.
 pub fn net_collider_builder(physics: &crate::PhysicsParams) -> ColliderBuilder {
@@ -41,7 +51,7 @@ pub fn net_collider_builder(physics: &crate::PhysicsParams) -> ColliderBuilder {
     const NET_FRICTION: f32 = 0.55;
     return ColliderBuilder::cuboid(
         (table::WIDTH_X * 0.5) as f32,
-        0.005,
+        NET_HALF_THICKNESS_M,
         (table::NET_HEIGHT * 0.5) as f32,
     )
     .collision_groups(static_collision_groups())
@@ -96,6 +106,7 @@ impl ArmMultibody {
         restitution: f32,
     ) -> Self {
         let torques = defaults::control().max_joint_torques;
+        let (stiffness, damping) = motor_gains();
         let n = arm.joint_count().min(initial.values.len());
         let mount_iso = arm.chain.mount_isometry(mount);
         let base = bodies.insert(
@@ -133,7 +144,7 @@ impl ArmMultibody {
             let mut revolute = RevoluteJointBuilder::new(vec3_f32(axis2))
                 .local_anchor1(vec3_f32(origin.translation.vector))
                 .local_anchor2(Vec3::ZERO)
-                .motor_position(initial.values[index] as f32, MOTOR_STIFFNESS, MOTOR_DAMPING)
+                .motor_position(initial.values[index] as f32, stiffness, damping)
                 .motor_max_force(tau)
                 .build();
             revolute.data.set_local_axis1(vec3_f32(axis1));
@@ -256,6 +267,7 @@ impl ArmMultibody {
     /// 목표 관절각으로 모터 위치 제어. effort 상한은 spawn 시 τ_max.
     pub fn set_motor_targets(&self, joints: &mut MultibodyJointSet, targets: &Joints) {
         let n = self.joint_handles.len().min(targets.values.len());
+        let (stiffness, damping) = motor_gains();
         for i in 0..n {
             let handle = self.joint_handles[i];
             let Some((mb, link_id)) = joints.get_mut(handle) else {
@@ -265,11 +277,7 @@ impl ArmMultibody {
                 continue;
             };
             if let Some(revolute) = link.joint.data.as_revolute_mut() {
-                revolute.set_motor_position(
-                    targets.values[i] as f32,
-                    MOTOR_STIFFNESS,
-                    MOTOR_DAMPING,
-                );
+                revolute.set_motor_position(targets.values[i] as f32, stiffness, damping);
             }
         }
     }

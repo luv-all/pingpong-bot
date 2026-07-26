@@ -60,6 +60,18 @@ v_{\mathrm{out}}\cdot n = (1+e)\,v_r\cdot n - e\,v_{\mathrm{in}}\cdot n
 | 네트 반발 | `physics().net_restitution` | 시뮬용 |
 | Magnus \(k_m\) | `physics().magnus` | 식 근사. 스핀 추정 넣을 때 재적합 |
 
+### 시뮬 전용 — 실물 서보와 대조 필요
+
+| 파라미터 | 필드 | 지금 값 | 비고 |
+|----------|------|---------|------|
+| 모터 위치 게인 \(k\) | `sim_motor().position_stiffness` | 5000 | **미실측.** MX-64 내부 위치 루프의 Rapier 모사 |
+| 모터 감쇠 \(d\) | `sim_motor().position_damping` | 10 | **미실측.** 임계감쇠 \(2\sqrt{kI}\) 기준으로 잡은 값 |
+
+물리 계수가 아니라 **제어 루프 모델**이다. 실물에는 이 값이 나가지 않는다
+(Goal Position + Goal Current만 나가고 위치 루프는 서보 펌웨어가 돈다).
+그래서 이 값이 틀려도 기기가 상하지는 않지만, 시뮬의 스윙 속도·성공률이
+실물과 어긋난다. 측정법은 아래 6번.
+
 ### 안 재도 됨 (규격·기하)
 
 공 질량·반지름·중공 셸 관성 (`constants/ball`), 테이블 치수 (`constants/table`), `ANGULAR_DAMPING`(시뮬 안정용).
@@ -118,6 +130,44 @@ cargo run -p measure-restitution -- --drag-csv traj.csv
 
 \(a \approx -k |v| v\) 적합 → `physics().drag`.
 
+### 6. 모터 위치 루프 \(k, d\) — 스텝 응답
+
+`sim_motor()`는 MX-64의 내부 위치 루프를 Rapier 위치 모터로 흉내 낸 것이다.
+Rapier는 매 스텝 이 토크를 내고 `motor_max_force`(= RNEA \(\tau\))로 클램프한다.
+
+\[
+\tau = k\,(q_{\mathrm{target}} - q) \;-\; d\,\dot q
+\]
+
+두 항이 **같은 토크 예산을 나눠 쓴다.** \(d\)가 크면 주어진 추종 오차로 낼 수
+있는 관절 속도가 낮아진다 — 미는 힘을 제동이 상쇄하기 때문이다. 반대로 너무
+작으면 목표를 지나쳐 진동한다.
+
+측정 절차:
+
+1. 팔을 정지시킨 뒤, 한 관절에 **계단형 Goal Position**(예: 10°)을 준다.
+   Goal Current는 평소 스윙과 같은 대역으로 둔다.
+2. `present_position`을 `stream_hz`(200 Hz)로 로깅한다.
+3. 응답에서 두 값을 읽는다.
+   - 상승시간 \(t_r\) (목표의 10 %→90 %)
+   - 오버슈트 \(M_p\) (최대 초과량 / 계단 크기)
+4. \(M_p\)에서 감쇠비를 얻는다. \(\zeta = \dfrac{-\ln M_p}{\sqrt{\pi^2 + \ln^2 M_p}}\)
+   (오버슈트가 없으면 \(\zeta \ge 1\) — 상승시간으로 맞춘다.)
+5. \(t_r\)에서 고유진동수 \(\omega_n \approx 1.8 / t_r\)를 얻는다.
+6. 관절 유효 관성 \(I\)(`control().joint_inertia` ≈ 0.015)로 환산한다.
+   \(k = I\,\omega_n^2\), \(d = 2\zeta\sqrt{kI}\).
+7. `defaults::sim_motor()`에 넣는다.
+
+교차 검증: 같은 계단 입력을 시뮬에 주고 \(t_r\)·\(M_p\)가 실물과 맞는지 본다.
+스윙 중 추종 오차는 `tests/diag_weak_return.rs`의 `diag_motor_tracking`으로
+관절별로 볼 수 있다.
+
+> 현재 값(k=5000, d=10)은 **실측이 아니다.** 이 팔의 관절 유효 관성
+> (링크 0.04~0.08 kg → \(I\approx\)5e-3~1.5e-2)에서 \(2\sqrt{kI}\)가 10~17이라
+> 임계감쇠 하단으로 잡았다. 이전 값 200은 \(\zeta\approx\)12~20의 과감쇠라
+> 라켓이 명령 속도의 28%밖에 못 따라갔다. 실측 전까지 **시뮬 성공률을
+> 하드웨어 준비도로 해석하면 안 된다.**
+
 ---
 
 ## 갱신 순서 제안
@@ -125,6 +175,7 @@ cargo run -p measure-restitution -- --drag-csv traj.csv
 1. 테이블 \(e\), \(\mu\) (툴 있음)  
 2. 라켓 \(e_{\mathrm{eff}}\) (스윙·장착 면)  
 3. 라켓 \(\mu_r\), drag  
-4. sim 회귀·실기 스윙을 보고 `e_eff` / 마찰만 미세 조정
+4. 모터 위치 루프 \(k, d\) — 실기로 스윙을 재현하려면 필수  
+5. sim 회귀·실기 스윙을 보고 `e_eff` / 마찰만 미세 조정
 
 측정 전에는 ITTF·문헌 근사로 시뮬을 돌리고, 보드 값이 나오면 **defaults만** 바꾼다 (상수 `ball`/`table`은 규격 SSOT).

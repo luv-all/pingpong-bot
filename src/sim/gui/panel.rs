@@ -12,8 +12,8 @@ use crate::constants::viewer::{CAMERA_DIST_DEFAULT, CAMERA_DIST_MAX, CAMERA_DIST
 use crate::defaults;
 use crate::robot::Robot;
 use crate::sim::eval_protocol::{
-    self, EvalMode, EvalProgress, EvalZone, LiveShotObserver, MAX_SCORE, PASS_SCORE_EXCLUSIVE,
-    TOTAL_SHOTS,
+    self, EvalLaunchParams, EvalMode, EvalProgress, EvalZone, LiveShotObserver, MAX_SCORE,
+    PASS_SCORE_EXCLUSIVE, TOTAL_SHOTS,
 };
 use crate::sim::physics::shooter::{BallShooterSettings, BallState};
 use crate::sim::physics::world::SimWorld;
@@ -65,6 +65,8 @@ pub struct PanelUiState {
     pub eval_running: Arc<AtomicBool>,
     /// Block vs Alternating.
     pub eval_mode: EvalMode,
+    /// Eval 전용 발사 속도·좌우 각도 (Shooter 패널과 분리).
+    pub eval_launch: EvalLaunchParams,
     /// Run 30 이후 선택한 시나리오를 시뮬에서 다시 실행 중일 때.
     pub eval_live: Option<EvalLiveRun>,
 }
@@ -93,6 +95,7 @@ impl PanelUiState {
             eval: Arc::new(Mutex::new(EvalProgress::default())),
             eval_running: Arc::new(AtomicBool::new(false)),
             eval_mode: EvalMode::Block,
+            eval_launch: EvalLaunchParams::default(),
             eval_live: None,
         };
     }
@@ -321,6 +324,16 @@ pub fn draw(
                     EvalMode::Block => "Left → Center → Right · 10 each",
                     EvalMode::Alternating => "L → C → R → C · … · 10 each",
                 });
+                ui.add_space(4.0);
+                ui.add(
+                    egui::Slider::new(&mut ui_state.eval_launch.speed_mps, 3.0..=15.0)
+                        .text("speed [m/s]"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut ui_state.eval_launch.side_yaw_deg, 0.0..=25.0)
+                        .text("side yaw [deg]"),
+                );
+                ui.weak("L/R = ±yaw · Center = 0 (Shooter와 별도)");
                 ui.add_space(4.0);
                 let run =
                     egui::Button::new("Run 30").min_size(egui::vec2(ui.available_width(), 22.0));
@@ -734,10 +747,10 @@ fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mo
 
     let progress = Arc::clone(&ui_state.eval);
     let running = Arc::clone(&ui_state.eval_running);
-    let base = ui_state.shooter.clone();
+    let launch = ui_state.eval_launch;
     std::thread::spawn(move || {
         let _report =
-            eval_protocol::run_eval_protocol(&robot, physics, &base, mode, Some(progress));
+            eval_protocol::run_eval_protocol(&robot, physics, &launch, mode, Some(progress));
         running.store(false, Ordering::Relaxed);
     });
 }

@@ -19,6 +19,7 @@
 //! | [`vision`] | [`detector`] / [`scorer`] / [`colormask`] / [`roi`] |
 //! | [`hardware`] | [`dynamixel`] / [`rail`] |
 //! | [`planner`] | [`intercept`] |
+//! | [`sim_motor`] | [`sim_motor`] (시뮬 전용 — 실물 서보 미반영) |
 //!
 //! 활성 로봇을 바꾸려면 [`robot`] 본문만 고친다.
 
@@ -29,6 +30,7 @@ mod impact;
 mod physics;
 mod planner;
 mod robot;
+mod sim_motor;
 mod vision;
 
 pub use control::{ControlParams, control};
@@ -41,6 +43,7 @@ pub use robot::{
     RAIL_MAX_SPEED, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount, rail_frame,
     robot, shared_robot, urdf_4dof, urdf_test,
 };
+pub use sim_motor::{SimMotorParams, sim_motor};
 pub use vision::{colormask, detector, roi, scorer};
 
 #[cfg(test)]

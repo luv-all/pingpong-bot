@@ -7,16 +7,14 @@ use rand::Rng;
 use crate::PhysicsParams;
 use crate::constants::{BALL_RADIUS, table};
 use crate::robot::Robot;
-use crate::sim::physics::shooter::{BallShooterSettings, BallState, ShooterLayout};
+use crate::sim::physics::shooter::{BallShooterSettings, BallState};
 use crate::sim::physics::world::SimWorld;
 use rapier3d::prelude::RigidBodyHandle;
 
-/// 존 안 lateral 지터 [m] — 현실의 미세 발사 위치 오차.
-const EVAL_LATERAL_JITTER_M: f64 = 0.04;
-/// 존 폭 대비 target_x 지터 비율 (클램프는 존 구간 안).
-const EVAL_TARGET_X_JITTER_FRAC: f64 = 0.10;
 /// 속도 지터 [m/s].
 const EVAL_SPEED_JITTER_MPS: f64 = 0.15;
+/// 좌·우 yaw 지터 [deg].
+const EVAL_YAW_JITTER_DEG: f64 = 0.5;
 /// pitch 지터 [deg] — 네트 lift 이후 적용.
 const EVAL_PITCH_JITTER_DEG: f64 = 0.5;
 /// 네트 CCD 투과(물리 버그) 시 다른 지터 상태로 재시도하는 상한.
@@ -88,12 +86,40 @@ impl EvalZone {
         };
     }
 
-    /// 슈터 `lateral_offset_m` [m].
+    /// 슈터 `lateral_offset_m` [m] — 존 표시·레거시용. 발사 yaw는 [`EvalLaunchParams`].
     pub fn lateral_m(self) -> f64 {
         return match self {
             Self::Right => 0.35,
             Self::Center => 0.0,
             Self::Left => -0.35,
+        };
+    }
+
+    /// 좌·우 대칭 yaw [deg]. Right=+, Left=−, Center=0.
+    pub fn yaw_deg(self, side_yaw_deg: f64) -> f64 {
+        return match self {
+            Self::Right => side_yaw_deg.abs(),
+            Self::Left => -side_yaw_deg.abs(),
+            Self::Center => 0.0,
+        };
+    }
+}
+
+/// Eval 전용 발사 설정 — Shooter 패널과 분리 (실기 리모컨 대응).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EvalLaunchParams {
+    /// 발사 속도 [m/s].
+    pub speed_mps: f64,
+    /// 좌·우 존 yaw 절대값 [deg] (중앙은 0).
+    pub side_yaw_deg: f64,
+}
+
+impl Default for EvalLaunchParams {
+    fn default() -> Self {
+        return Self {
+            speed_mps: 6.0,
+            // 테이블 1/3 바깥쪽을 겨냥하는 대략값 (±).
+            side_yaw_deg: 10.0,
         };
     }
 }
@@ -219,82 +245,60 @@ impl Default for EvalProgress {
     }
 }
 
-/// 패널 슈터 설정을 존 템플릿으로 바꾼다 (지터 없음).
+/// Eval 발사 파라미터를 존 템플릿으로 바꾼다 (지터 없음).
 ///
-/// 정면(yaw=0)은 Rapier에서 네트에 맞는 경우가 많아(shot_tune `--shots 0` 실측),
-/// 로봇쪽 테이블 가장자리의 존 목표 x를 겨냥하는 yaw를 넣는다. 스핀/롤은 0.
-pub fn settings_for_zone(base: &BallShooterSettings, zone: EvalZone) -> BallShooterSettings {
-    return settings_for_zone_shot(base, zone, 0);
+/// 스핀/롤=0. 좌·우는 `side_yaw_deg` 대칭, 중앙은 yaw=0.
+/// pitch/height는 슈터 기본값에서 시작해 네트 게이트만 맞춘다.
+pub fn settings_for_zone(launch: &EvalLaunchParams, zone: EvalZone) -> BallShooterSettings {
+    return settings_for_zone_shot(launch, zone, 0);
 }
 
-/// 존 안 n번째 샷 — 같은 존에서 목표 x를 조금씩 다르게 겨냥한다 (지터 없음).
+/// 존 안 n번째 샷 (지터 없음). `index_in_zone`은 스케줄 호환용으로 유지.
 pub fn settings_for_zone_shot(
-    base: &BallShooterSettings,
+    launch: &EvalLaunchParams,
     zone: EvalZone,
     index_in_zone: usize,
 ) -> BallShooterSettings {
-    return build_zone_shot::<rand::rngs::StdRng>(base, zone, index_in_zone, None);
+    let _ = index_in_zone;
+    return build_zone_shot::<rand::rngs::StdRng>(launch, zone, None);
 }
 
-/// 존 샷 + 미약 지터 (lateral / target_x→yaw / speed / pitch).
+/// 존 샷 + 미약 지터 (speed / yaw / pitch).
 pub fn settings_for_zone_shot_jittered<R: Rng + ?Sized>(
-    base: &BallShooterSettings,
+    launch: &EvalLaunchParams,
     zone: EvalZone,
     index_in_zone: usize,
     rng: &mut R,
 ) -> BallShooterSettings {
-    return build_zone_shot(base, zone, index_in_zone, Some(rng));
+    let _ = index_in_zone;
+    return build_zone_shot(launch, zone, Some(rng));
 }
 
 fn build_zone_shot<R: Rng + ?Sized>(
-    base: &BallShooterSettings,
+    launch: &EvalLaunchParams,
     zone: EvalZone,
-    index_in_zone: usize,
     mut rng: Option<&mut R>,
 ) -> BallShooterSettings {
-    use crate::sim::physics::shooter::RANDOM_SHOT_TARGET_PADDING_M;
-
-    let mut shot = base.clone();
+    let mut shot = BallShooterSettings::default();
     shot.roll_deg = 0.0;
     shot.topspin_rad_s = 0.0;
     shot.sidespin_rad_s = 0.0;
     shot.drill_spin_rad_s = 0.0;
+    shot.lateral_offset_m = 0.0;
 
-    let lateral = match rng.as_mut() {
-        Some(r) => zone.lateral_m() + r.gen_range(-EVAL_LATERAL_JITTER_M..=EVAL_LATERAL_JITTER_M),
-        None => zone.lateral_m(),
-    };
-    shot.lateral_offset_m = lateral;
-
-    let (x_lo, x_hi) = match zone {
-        EvalZone::Right => (
-            table::WIDTH_X * (2.0 / 3.0),
-            table::WIDTH_X - RANDOM_SHOT_TARGET_PADDING_M,
-        ),
-        EvalZone::Center => (table::WIDTH_X / 3.0, table::WIDTH_X * (2.0 / 3.0)),
-        EvalZone::Left => (RANDOM_SHOT_TARGET_PADDING_M, table::WIDTH_X / 3.0),
-    };
-    let t = if SHOTS_PER_ZONE <= 1 {
-        0.5
-    } else {
-        index_in_zone as f64 / (SHOTS_PER_ZONE - 1) as f64
-    };
-    let span = x_hi - x_lo;
-    let mut target_x = x_lo + span * t;
+    shot.speed_mps = launch.speed_mps.max(0.1);
     if let Some(r) = rng.as_mut() {
-        let j = r.gen_range(-EVAL_TARGET_X_JITTER_FRAC..=EVAL_TARGET_X_JITTER_FRAC) * span;
-        target_x = (target_x + j).clamp(x_lo, x_hi);
+        shot.speed_mps =
+            (shot.speed_mps + r.gen_range(-EVAL_SPEED_JITTER_MPS..=EVAL_SPEED_JITTER_MPS)).max(0.1);
     }
-    let mount_x = ShooterLayout::MOUNT_X + shot.pos_offset_x_m + shot.lateral_offset_m;
-    let mount_y = ShooterLayout::MOUNT_Y + shot.pos_offset_y_m;
-    let dx = target_x - mount_x;
-    let dy = 0.0 - mount_y;
-    shot.yaw_deg = dx.atan2(-dy).to_degrees();
 
-    if let Some(r) = rng.as_mut() {
-        shot.speed_mps += r.gen_range(-EVAL_SPEED_JITTER_MPS..=EVAL_SPEED_JITTER_MPS);
-        shot.speed_mps = shot.speed_mps.max(0.1);
+    let mut yaw = zone.yaw_deg(launch.side_yaw_deg);
+    if zone != EvalZone::Center
+        && let Some(r) = rng.as_mut()
+    {
+        yaw += r.gen_range(-EVAL_YAW_JITTER_DEG..=EVAL_YAW_JITTER_DEG);
     }
+    shot.yaw_deg = yaw;
 
     // ballistics + Rapier 네트 비접촉까지 pitch를 올린다.
     lift_pitch_for_net_gate(&mut shot);
@@ -303,7 +307,6 @@ fn build_zone_shot<R: Rng + ?Sized>(
         let pitch_before = shot.pitch_deg;
         shot.pitch_deg += r.gen_range(-EVAL_PITCH_JITTER_DEG..=EVAL_PITCH_JITTER_DEG);
         if !shot.clears_incoming_net_gate() || !shot.clears_incoming_rapier_net() {
-            // 지터로 네트 미달/접촉이면 지터 전 pitch로 되돌린다.
             shot.pitch_deg = pitch_before;
         }
     }
@@ -315,7 +318,10 @@ fn lift_pitch_for_net_gate(shot: &mut BallShooterSettings) {
         return;
     }
     let base_pitch = shot.pitch_deg;
-    for lift in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0] {
+    // 5 m/s 대역은 낙하가 커서 yaw가 있으면 +4° 근처까지 필요할 수 있다.
+    for lift in [
+        0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 7.0, 8.0, 9.0, 10.0,
+    ] {
         shot.pitch_deg = base_pitch + lift;
         if shot.clears_incoming_net_gate() && shot.clears_incoming_rapier_net() {
             return;
@@ -483,7 +489,7 @@ fn ball_contacts_table(world: &SimWorld) -> bool {
 pub fn run_eval_protocol(
     robot: &Robot,
     physics: PhysicsParams,
-    base: &BallShooterSettings,
+    launch: &EvalLaunchParams,
     mode: EvalMode,
     progress: Option<Arc<Mutex<EvalProgress>>>,
 ) -> EvalReport {
@@ -495,7 +501,7 @@ pub fn run_eval_protocol(
 
     let mut rng = rand::thread_rng();
     for (zone, index_in_zone) in shot_schedule(mode) {
-        let mut settings = settings_for_zone_shot_jittered(base, zone, index_in_zone, &mut rng);
+        let mut settings = settings_for_zone_shot_jittered(launch, zone, index_in_zone, &mut rng);
         let mut flags = ShotFlags::default();
         let mut accepted = false;
         for attempt in 0..=EVAL_NET_PASSTHROUGH_RETRIES {
@@ -512,7 +518,8 @@ pub fn run_eval_protocol(
                 "eval: 네트 투과(물리 이상) — 다른 상태로 재시도"
             );
             if attempt < EVAL_NET_PASSTHROUGH_RETRIES {
-                settings = settings_for_zone_shot_jittered(base, zone, index_in_zone, &mut rng);
+                settings =
+                    settings_for_zone_shot_jittered(launch, zone, index_in_zone, &mut rng);
             }
         }
         if !accepted {
@@ -664,30 +671,39 @@ mod tests {
     }
 
     #[test]
-    fn zone_shot_jitter_moves_aim_speed_pitch_but_keeps_zone_side() {
-        use crate::sim::BallShooterSettings;
+    fn zone_shot_jitter_moves_speed_yaw_pitch_but_keeps_zone_side() {
         use rand::SeedableRng;
 
-        let base = BallShooterSettings::default();
-        let clean = settings_for_zone_shot(&base, EvalZone::Left, 3);
+        let launch = EvalLaunchParams::default();
+        let clean = settings_for_zone_shot(&launch, EvalZone::Left, 3);
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
-        let jittered = settings_for_zone_shot_jittered(&base, EvalZone::Left, 3, &mut rng);
+        let jittered = settings_for_zone_shot_jittered(&launch, EvalZone::Left, 3, &mut rng);
 
-        assert!(
-            (jittered.lateral_offset_m - EvalZone::Left.lateral_m()).abs()
-                <= EVAL_LATERAL_JITTER_M + 1e-12
-        );
-        assert!(jittered.lateral_offset_m < 0.0, "left zone stays leftish");
+        assert!(clean.yaw_deg < 0.0, "left zone yaw negative");
+        assert!(jittered.yaw_deg < 0.0, "left zone stays leftish");
         assert!((jittered.speed_mps - clean.speed_mps).abs() <= EVAL_SPEED_JITTER_MPS + 1e-12);
         assert!((jittered.pitch_deg - clean.pitch_deg).abs() <= EVAL_PITCH_JITTER_DEG + 1e-12);
-        // seed 7이면 적어도 한 축은 달라야 한다.
+        assert!((jittered.yaw_deg - clean.yaw_deg).abs() <= EVAL_YAW_JITTER_DEG + 1e-12);
         assert!(
-            (jittered.lateral_offset_m - clean.lateral_offset_m).abs() > 1e-9
-                || (jittered.yaw_deg - clean.yaw_deg).abs() > 1e-9
+            (jittered.yaw_deg - clean.yaw_deg).abs() > 1e-9
                 || (jittered.speed_mps - clean.speed_mps).abs() > 1e-9
                 || (jittered.pitch_deg - clean.pitch_deg).abs() > 1e-9,
             "expected non-zero jitter"
         );
+    }
+
+    #[test]
+    fn side_yaw_is_symmetric() {
+        let launch = EvalLaunchParams {
+            speed_mps: 7.0,
+            side_yaw_deg: 12.0,
+        };
+        let left = settings_for_zone(&launch, EvalZone::Left);
+        let right = settings_for_zone(&launch, EvalZone::Right);
+        let center = settings_for_zone(&launch, EvalZone::Center);
+        assert!((left.yaw_deg + right.yaw_deg).abs() < 1e-12);
+        assert!((center.yaw_deg).abs() < 1e-12);
+        assert!((left.speed_mps - 7.0).abs() < 1e-12);
     }
 }
 
@@ -695,7 +711,6 @@ mod tests {
 mod smoke {
     use super::*;
     use crate::defaults;
-    use crate::sim::BallShooterSettings;
 
     #[test]
     fn protocol_runs_and_prints_score() {
@@ -703,7 +718,7 @@ mod smoke {
         let report = run_eval_protocol(
             &robot,
             defaults::physics(),
-            &BallShooterSettings::default(),
+            &EvalLaunchParams::default(),
             EvalMode::Block,
             None,
         );
