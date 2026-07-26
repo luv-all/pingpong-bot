@@ -518,8 +518,7 @@ pub fn run_eval_protocol(
                 "eval: 네트 투과(물리 이상) — 다른 상태로 재시도"
             );
             if attempt < EVAL_NET_PASSTHROUGH_RETRIES {
-                settings =
-                    settings_for_zone_shot_jittered(launch, zone, index_in_zone, &mut rng);
+                settings = settings_for_zone_shot_jittered(launch, zone, index_in_zone, &mut rng);
             }
         }
         if !accepted {

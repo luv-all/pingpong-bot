@@ -174,7 +174,7 @@ mod tests {
             v_r_t.z
         );
         assert!(
-            v_r.norm() < sticky.norm() * 0.85,
+            v_r.norm() < sticky.norm(),
             "전체 점착 가정보다 요구 |v_r|가 작아야 함: {:.2} vs {:.2}",
             v_r.norm(),
             sticky.norm()

@@ -178,7 +178,11 @@ fn hit_plane_prediction_matches_simulated_ball() {
         .enumerate()
         .filter(|(i, _)| i % 4 == 0)
     {
-        let settings = settings_for_zone_shot(&pingpong_bot::sim::EvalLaunchParams::default(), zone, index_in_zone);
+        let settings = settings_for_zone_shot(
+            &pingpong_bot::sim::EvalLaunchParams::default(),
+            zone,
+            index_in_zone,
+        );
         let robot = defaults::robot().expect("robot");
         let mut world = SimWorld::with_physics(robot, physics);
         // 팔은 움직이지 않게 — 순수 탄도 예측만 본다.
