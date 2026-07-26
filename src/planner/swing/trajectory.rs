@@ -303,6 +303,22 @@ impl SwingTrajectory {
             .collect();
     }
 
+    /// `t` [s]에서 관절 각가속도 [rad/s²]를 샘플한다.
+    pub fn sample_acceleration_at(&self, t: f64) -> Vec<f64> {
+        if t <= self.impact_time_secs || self.duration_secs <= self.impact_time_secs {
+            return self
+                .pre_impact_segments()
+                .into_iter()
+                .map(|segment| segment.sample(t).2)
+                .collect();
+        }
+        return self
+            .follow_through_segments()
+            .into_iter()
+            .map(|segment| segment.sample(t - self.impact_time_secs).2)
+            .collect();
+    }
+
     /// 궤적 전 구간 최대 관절 각속도 [rad/s].
     pub fn peak_joint_speed(&self) -> f64 {
         let pre = self

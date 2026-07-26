@@ -6,6 +6,7 @@
 //! 조립은 [`build`] (`ArmBuilder` / `RobotBuilder`), 런타임 추종은 `RobotState`.
 
 pub mod build;
+pub mod dynamics;
 pub mod rail;
 pub mod serial;
 pub mod state;
@@ -19,6 +20,7 @@ use nalgebra::{DMatrix, DVector, Isometry3, Matrix3, UnitQuaternion, Vector3};
 pub use build::{
     ArmBuildError, ArmBuilder, MountPreset, Robot, RobotBuildError, RobotBuilder,
 };
+pub use dynamics::{LinkInertia, is_feasible, required_torque};
 pub use rail::{LinearRail, RailFrame};
 pub use serial::{SerialChain, SerialChainError, SerialJoint};
 pub use state::RobotState;
@@ -96,6 +98,8 @@ pub struct Arm {
     pub max_joint_speed: f64,
     /// FK/IK 구현. URDF 로봇은 원본 고정 변환과 축을 보존한 직렬 체인을 쓴다.
     pub(crate) chain: SerialChain,
+    /// revolute 링크 합산 관성 (URDF). 없으면 RNEA 불가 → 플래너 대각 폴백.
+    pub inertias: Option<Vec<dynamics::LinkInertia>>,
 }
 
 /// 월드 좌표계 라켓 자세 - sim/real 동일 표현.
@@ -171,7 +175,21 @@ impl Arm {
             default_joints,
             max_joint_speed,
             chain,
+            inertias: None,
         });
+    }
+
+    /// URDF 등에서 로드한 링크 관성을 붙인다 (길이는 관절 수와 같아야 함).
+    pub fn with_inertias(mut self, inertias: Vec<dynamics::LinkInertia>) -> Result<Self, ArmBuildError> {
+        if inertias.len() != self.joint_count() {
+            return Err(ArmBuildError::KinematicsJointCountMismatch {
+                chain: self.joint_count(),
+                limits: inertias.len(),
+                defaults: self.default_joints.values.len(),
+            });
+        }
+        self.inertias = Some(inertias);
+        return Ok(self);
     }
 
     fn arm_length(&self) -> f64 {
@@ -252,6 +270,17 @@ impl Arm {
             points.push(ee_position);
         }
         return Some(points);
+    }
+
+    /// 각 revolute 관절 원점 (월드) — 앵커 HUD용.
+    pub fn joint_origins_world(
+        &self,
+        rail_x: f64,
+        joints: &Joints,
+    ) -> Option<Vec<Vector3<f64>>> {
+        let mount = self.mount_at_rail(rail_x).coords;
+        let (_, frames) = self.chain.forward_with_joint_frames(mount, &joints.values)?;
+        return Some(frames.into_iter().map(|(p, _)| p).collect());
     }
 
     /// 손목 open [rad]을 한계 안으로 넣어 새 `Joints`를 만든다.

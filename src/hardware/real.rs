@@ -7,39 +7,74 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, error};
 
-use super::rail::AxlRail;
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
+use super::rail::AxlRail;
 use super::rail::RailConfig;
-use crate::{Hardware, HwError, RobotPose, SwingTrajectory};
+use crate::{Arm, Hardware, HwError, RobotPose, SwingTrajectory, defaults};
 
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
     bus: Arc<Mutex<DynamixelBus>>,
+    arm: Arc<Arm>,
     /// `None`이면 `rail_x = 0` (레일 비활성). executor와 pose 읽기가 공유.
     rail: Arc<Mutex<Option<AxlRail>>>,
     busy: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     executor: Option<JoinHandle<()>>,
     stream_hz: f64,
+    torque_feedforward: bool,
 }
 
 impl RealHardware {
     /// 실제 시리얼 포트를 열고 motion profile과 torque를 설정한다.
-    pub fn new(config: DynamixelConfig, rail: Option<RailConfig>) -> Result<Self, HwError> {
+    pub fn new(
+        config: DynamixelConfig,
+        rail: Option<RailConfig>,
+        arm: Arc<Arm>,
+    ) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::open(config)?;
+        let ff = defaults::control().torque_feedforward;
+        if ff {
+            bus.set_current_based_position_mode()?;
+        }
         bus.enable_torque(true)?;
-        return Self::from_bus(bus, stream_hz, rail, false);
+        // 실포트: is_dry_run = false → AXL 실개방
+        return Self::from_bus(bus, stream_hz, rail, false, arm, ff);
     }
 
     /// 포트를 열지 않지만 실제 좌표 변환·리밋·executor 경로를 그대로 사용한다.
-    pub fn dry_run(config: DynamixelConfig, rail: Option<RailConfig>) -> Result<Self, HwError> {
+    pub fn dry_run(
+        config: DynamixelConfig,
+        rail: Option<RailConfig>,
+    ) -> Result<Self, HwError> {
+        return Self::dry_run_with_arm(
+            config,
+            rail,
+            Arc::new((*defaults::urdf_4dof().map_err(|e| HwError::InvalidConfig {
+                reason: e.to_string(),
+            })?
+            .arm)
+                .clone()),
+        );
+    }
+
+    /// dry-run + 명시적 Arm (RNEA FF 테스트용).
+    pub fn dry_run_with_arm(
+        config: DynamixelConfig,
+        rail: Option<RailConfig>,
+        arm: Arc<Arm>,
+    ) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::dry_run(config).map_err(|e| HwError::InvalidConfig {
             reason: e.to_string(),
         })?;
+        let ff = defaults::control().torque_feedforward;
+        if ff {
+            bus.set_current_based_position_mode()?;
+        }
         bus.enable_torque(true)?;
-        return Self::from_bus(bus, stream_hz, rail, true);
+        return Self::from_bus(bus, stream_hz, rail, true, arm, ff);
     }
 
     fn from_bus(
@@ -47,6 +82,8 @@ impl RealHardware {
         stream_hz: f64,
         rail: Option<RailConfig>,
         is_dry_run: bool,
+        arm: Arc<Arm>,
+        torque_feedforward: bool,
     ) -> Result<Self, HwError> {
         let rail = match rail.filter(|config| config.enabled) {
             None => None,
@@ -55,11 +92,13 @@ impl RealHardware {
         };
         return Ok(Self {
             bus: Arc::new(Mutex::new(bus)),
+            arm,
             rail: Arc::new(Mutex::new(rail)),
             busy: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
             executor: None,
             stream_hz,
+            torque_feedforward,
         });
     }
 
@@ -93,11 +132,13 @@ impl Hardware for RealHardware {
 
         let trajectory = trajectory.clone();
         let bus = Arc::clone(&self.bus);
+        let arm = Arc::clone(&self.arm);
         let rail = Arc::clone(&self.rail);
         let busy = Arc::clone(&self.busy);
         self.cancel.store(false, Ordering::Release);
         let cancel = Arc::clone(&self.cancel);
         let tick = Duration::from_secs_f64(1.0 / self.stream_hz);
+        let torque_ff = self.torque_feedforward;
         self.executor = Some(thread::spawn(move || {
             let started = Instant::now();
             loop {
@@ -117,6 +158,18 @@ impl Hardware for RealHardware {
                 if !joints_ok {
                     error!(sample_time, "Dynamixel goal position 전송 실패 — 스윙 중단");
                     break;
+                }
+
+                if torque_ff {
+                    let qd = trajectory.sample_velocity_at(sample_time);
+                    let qdd = trajectory.sample_acceleration_at(sample_time);
+                    if let Some(tau) =
+                        crate::robot::required_torque(&arm, &joints.values, &qd, &qdd)
+                    {
+                        let _ = bus.lock().map(|mut bus| {
+                            let _ = bus.write_goal_currents_from_torques(&tau);
+                        });
+                    }
                 }
 
                 if let Ok(mut guard) = rail.lock()
@@ -156,37 +209,22 @@ impl Hardware for RealHardware {
 impl Drop for RealHardware {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);
-        if let Some(handle) = self.executor.take() {
-            let _ = handle.join();
-        }
+        self.reap_executor();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::thread;
-    use std::time::Duration;
-
-    use crate::{Hardware, Joints, RailMotion, SwingTrajectory};
-
-    use super::RealHardware;
+    use super::*;
+    use crate::Joints;
+    use crate::RailMotion;
     use crate::defaults::dynamixel;
-    use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
 
     fn test_rail() -> RailConfig {
         return RailConfig {
             enabled: true,
-            dll_path: PathBuf::from("unused.dll"),
-            pulses_per_meter: 1000,
-            x_min_m: -1.0,
-            x_max_m: 1.0,
-            vel: 0.2,
-            accel: 1.0,
-            decel: 1.0,
-            min_vel: 0.001,
-            max_vel: 1.0,
+            dll_path: std::path::PathBuf::from("dummy.dll"),
             ..RailConfig::default()
         };
     }

@@ -56,8 +56,12 @@ impl Hardware for SimHardware {
                 debug!(ball_y, "상대 코트 — EKF control commit 대기");
                 return Ok(());
             }
+            let arm = Arc::clone(&world.arm);
             world.robot_mut().begin_swing(trajectory.clone());
             world.mark_swing_committed();
+            world
+                .debug_snap_mut()
+                .set_committed_path(&arm, &trajectory);
         }
         self.command_count += 1;
 

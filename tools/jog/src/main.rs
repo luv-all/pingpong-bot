@@ -57,14 +57,14 @@ fn run(args: Args) -> Result<()> {
         rail_cfg.dll_path = dll_path;
     }
 
+    let robot = robot().context("defaults::robot")?;
     let hardware = if args.dry_run {
-        RealHardware::dry_run(dxl, Some(rail_cfg))
+        RealHardware::dry_run_with_arm(dxl, Some(rail_cfg), Arc::clone(&robot.arm))
     } else {
-        RealHardware::new(dxl, Some(rail_cfg))
+        RealHardware::new(dxl, Some(rail_cfg), Arc::clone(&robot.arm))
     }
     .context("하드웨어 초기화 실패")?;
 
-    let robot = robot().context("defaults::robot")?;
     let mut session = Session {
         arm: robot.arm,
         hardware,

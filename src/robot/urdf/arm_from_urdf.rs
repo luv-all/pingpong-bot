@@ -52,6 +52,7 @@ pub fn to_arm(urdf: &UrdfModel, max_joint_speed: f64) -> Result<Arm, UrdfLoadErr
             reason: e.to_string(),
         }
     })?;
+    let inertias = super::inertial::link_inertias_for_chain(urdf)?;
     return Arm::from_serial_chain(
         crate::Point3::from(mount.translation.vector),
         Some(rail),
@@ -60,6 +61,7 @@ pub fn to_arm(urdf: &UrdfModel, max_joint_speed: f64) -> Result<Arm, UrdfLoadErr
         defaults,
         max_joint_speed,
     )
+    .and_then(|arm| arm.with_inertias(inertias))
     .map_err(|e| UrdfLoadError::ArmConversion {
         reason: format!("{e}"),
     });

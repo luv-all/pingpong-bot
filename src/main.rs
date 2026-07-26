@@ -109,7 +109,8 @@ fn run_real_entry(args: &Args) -> Result<()> {
         dxl.port = port.clone();
     }
     info!(port = %dxl.port, "defaults real Dynamixel (mirror ID1↔ID2)");
-    let mut hardware = RealHardware::new(dxl, Some(rail())).context("RealHardware")?;
+    let arm = robot().context("defaults::robot")?.arm;
+    let mut hardware = RealHardware::new(dxl, Some(rail()), arm).context("RealHardware")?;
     let pose = hardware.read_pose().context("read pose")?;
     info!(joints = ?pose.joints.values, "pose");
     let _ = detector();

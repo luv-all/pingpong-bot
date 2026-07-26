@@ -38,6 +38,12 @@ impl RobotState {
         };
     }
 
+    /// 스윙 재생 중이면 `(elapsed, trajectory)` — RNEA HUD용.
+    pub fn active_swing_sample(&self) -> Option<(f64, &crate::SwingTrajectory)> {
+        let playback = self.active_swing.as_ref()?;
+        return Some((playback.elapsed, &playback.trajectory));
+    }
+
     /// 리니어 레일 x [m].
     pub fn rail_x(&self) -> f64 {
         return self.rail_x;

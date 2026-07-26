@@ -14,6 +14,8 @@ pub struct ControlParams {
     pub max_joint_torques: [f64; 4],
     pub joint_inertia: f64,
     pub racket_open_pitch: f64,
+    /// Real: Goal Current FF (Current-based Position). 기본 off.
+    pub torque_feedforward: bool,
 }
 
 impl ControlParams {
@@ -51,5 +53,6 @@ pub fn control() -> ControlParams {
         max_joint_torques: [12.0, 6.0, 6.0, 6.0],
         joint_inertia: 0.015,
         racket_open_pitch: 0.45,
+        torque_feedforward: true,
     };
 }

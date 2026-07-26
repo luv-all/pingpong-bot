@@ -23,6 +23,12 @@ fn pack_u8(value: u8) -> Vec<u8> {
     vec![value]
 }
 
+/// Goal Current (signed 16-bit) 패킹.
+#[cfg(feature = "real")]
+fn pack_i16(value: i16) -> Vec<u8> {
+    value.to_le_bytes().to_vec()
+}
+
 /// 마스터 goal tick을 `2 * zero_tick - master`로 미러하는 슬레이브.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MirrorSlave {
@@ -44,6 +50,14 @@ pub struct DynamixelConfig {
     pub addr_present_position: u8,
     pub addr_profile_acceleration: u8,
     pub addr_profile_velocity: u8,
+    /// Protocol 2.0 Goal Current (MX-64 = 102).
+    pub addr_goal_current: u8,
+    /// Operating Mode 레지스터 (MX = 11).
+    pub addr_operating_mode: u8,
+    /// Current-based Position Control = 5.
+    pub operating_mode_current_position: u8,
+    /// Goal Current 1 unit → N·m (MX-64 ≈ 3.36 mA/unit, kt≈1.46 → ~0.0049).
+    pub nm_per_goal_current_unit: f64,
     pub profile_acceleration: u32,
     pub profile_velocity: u32,
     pub comm_retries: u32,
@@ -70,6 +84,10 @@ impl Default for DynamixelConfig {
             addr_present_position: 132,
             addr_profile_acceleration: 108,
             addr_profile_velocity: 112,
+            addr_goal_current: 102,
+            addr_operating_mode: 11,
+            operating_mode_current_position: 5,
+            nm_per_goal_current_unit: 0.0049,
             profile_acceleration: 20,
             profile_velocity: 80,
             comm_retries: 5,
@@ -245,6 +263,8 @@ enum BusBackend {
         ticks: Vec<i32>,
         /// 마지막 Goal SyncWrite 전체 (미러 슬레이브 포함).
         last_bus_goals: Vec<(u8, i32)>,
+        /// 마지막 Goal Current (논리 모터 순서, signed units).
+        last_goal_currents: Vec<i16>,
     },
     #[cfg(feature = "real")]
     Real(RealBackend),
@@ -268,6 +288,7 @@ impl DynamixelBus {
             backend: BusBackend::DryRun {
                 ticks,
                 last_bus_goals: Vec::new(),
+                last_goal_currents: Vec::new(),
             },
             torque_enabled: false,
         });
@@ -277,6 +298,17 @@ impl DynamixelBus {
     pub fn last_bus_goals(&self) -> Option<&[(u8, i32)]> {
         return match &self.backend {
             BusBackend::DryRun { last_bus_goals, .. } => Some(last_bus_goals.as_slice()),
+            #[cfg(feature = "real")]
+            BusBackend::Real(_) => None,
+        };
+    }
+
+    /// dry-run 전용: 마지막 Goal Current (논리 모터 순서).
+    pub fn last_goal_currents(&self) -> Option<&[i16]> {
+        return match &self.backend {
+            BusBackend::DryRun {
+                last_goal_currents, ..
+            } => Some(last_goal_currents.as_slice()),
             #[cfg(feature = "real")]
             BusBackend::Real(_) => None,
         };
@@ -363,6 +395,91 @@ impl DynamixelBus {
         self.write_raw_goal_ticks(&ticks, 0.0)
     }
 
+    /// RNEA \(\tau\) [N·m] → Goal Current SyncWrite (논리 모터 + 미러는 마스터와 동일 부호 전류).
+    pub fn write_goal_currents_from_torques(&mut self, torques_nm: &[f64]) -> Result<(), HwError> {
+        let joint_count = self.mapping.config.motor_ids.len();
+        if torques_nm.len() != joint_count {
+            return Err(command_transport_error(0.0, torques_nm.len()));
+        }
+        let unit = self.mapping.config.nm_per_goal_current_unit.max(1e-9);
+        let currents: Vec<i16> = torques_nm
+            .iter()
+            .map(|&tau| {
+                let raw = (tau / unit).round();
+                raw.clamp(i16::MIN as f64, i16::MAX as f64) as i16
+            })
+            .collect();
+        return self.write_raw_goal_currents(&currents);
+    }
+
+    fn write_raw_goal_currents(&mut self, currents: &[i16]) -> Result<(), HwError> {
+        let joint_count = self.mapping.config.motor_ids.len();
+        if currents.len() != joint_count {
+            return Err(command_transport_error(0.0, currents.len()));
+        }
+        // 미러 슬레이브: 마스터와 같은 Goal Current (반대 방향 기구는 위치 미러로 처리).
+        let mut bus: Vec<(u8, i16)> = self
+            .mapping
+            .config
+            .motor_ids
+            .iter()
+            .zip(currents.iter())
+            .map(|(&id, &c)| (id, c))
+            .collect();
+        for pair in &self.mapping.config.mirror_slaves {
+            let Some(master_index) = self
+                .mapping
+                .config
+                .motor_ids
+                .iter()
+                .position(|&id| id == pair.master_id)
+            else {
+                continue;
+            };
+            bus.push((pair.slave_id, currents[master_index]));
+        }
+        match &mut self.backend {
+            BusBackend::DryRun {
+                last_goal_currents, ..
+            } => {
+                *last_goal_currents = currents.to_vec();
+            }
+            #[cfg(feature = "real")]
+            BusBackend::Real(real) => {
+                let ids: Vec<u8> = bus.iter().map(|(id, _)| *id).collect();
+                let data: Vec<Vec<u8>> = bus.iter().map(|(_, c)| pack_i16(*c)).collect();
+                let address = self.mapping.config.addr_goal_current;
+                let retries = self.mapping.config.comm_retries;
+                let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
+                real.sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
+                    .map_err(|_| command_transport_error(0.0, joint_count))?;
+            }
+        }
+        return Ok(());
+    }
+
+    /// Torque OFF → Operating Mode = Current-based Position → (호출측에서 Torque ON).
+    pub fn set_current_based_position_mode(&mut self) -> Result<(), HwError> {
+        if self.torque_enabled {
+            self.enable_torque(false)?;
+        }
+        match &mut self.backend {
+            BusBackend::DryRun { .. } => {}
+            #[cfg(feature = "real")]
+            BusBackend::Real(real) => {
+                let mode = self.mapping.config.operating_mode_current_position;
+                let address = self.mapping.config.addr_operating_mode;
+                let ids = self.mapping.config.bus_ids();
+                let data: Vec<Vec<u8>> = ids.iter().map(|_| pack_u8(mode)).collect();
+                let retries = self.mapping.config.comm_retries;
+                let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
+                real.sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
+                    .map_err(|_| read_transport_error())?;
+            }
+        }
+        return Ok(());
+    }
+
     fn write_raw_goal_ticks(&mut self, ticks: &[i32], duration_secs: f64) -> Result<(), HwError> {
         let joint_count = self.mapping.config.motor_ids.len();
         if ticks.len() != joint_count {
@@ -373,6 +490,7 @@ impl DynamixelBus {
             BusBackend::DryRun {
                 ticks: stored,
                 last_bus_goals,
+                ..
             } => {
                 stored.clone_from_slice(ticks);
                 *last_bus_goals = bus_goals;
@@ -636,6 +754,16 @@ mod tests {
                 .any(|(id, tick)| *id == 2 && *tick == expected_slave),
             "goals={goals:?} expected slave {expected_slave}"
         );
+    }
+
+    #[test]
+    fn dry_run_goal_current_from_torque() {
+        let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
+        let unit = bus.mapping.config().nm_per_goal_current_unit;
+        bus.write_goal_currents_from_torques(&[unit * 10.0, 0.0, -unit * 3.0, unit])
+            .expect("currents");
+        let currents = bus.last_goal_currents().expect("dry-run currents");
+        assert_eq!(currents, &[10, 0, -3, 1]);
     }
 
     #[test]

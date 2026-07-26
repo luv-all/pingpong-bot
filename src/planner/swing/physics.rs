@@ -412,22 +412,64 @@ fn trajectory_collision_free(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
     return true;
 }
 
-fn torques_within_limits(trajectory: &SwingTrajectory) -> bool {
-    let control = defaults::control();
-    let inertia = control.joint_inertia;
-    let peaks = trajectory.peak_joint_accelerations();
-    return peaks.iter().enumerate().all(|(index, &alpha)| {
-        let limit = control
-            .max_joint_torques
-            .get(index)
-            .copied()
-            .unwrap_or(0.0);
-        return inertia * alpha <= limit;
-    });
+fn peak_abs_torques(arm: &Arm, trajectory: &SwingTrajectory) -> Option<Vec<f64>> {
+    let n = arm.joint_count();
+    if arm.inertias.is_none() {
+        return None;
+    }
+    let mut peaks = vec![0.0; n];
+    let duration = trajectory.duration_secs.max(f64::EPSILON);
+    let samples = ((duration / 0.005).ceil() as usize).max(24);
+    for k in 0..=samples {
+        let t = duration * k as f64 / samples as f64;
+        let q = trajectory.sample_at(t);
+        let qd = trajectory.sample_velocity_at(t);
+        let qdd = trajectory.sample_acceleration_at(t);
+        let tau = crate::robot::required_torque(arm, &q.values, &qd, &qdd)?;
+        for i in 0..n {
+            peaks[i] = f64::max(peaks[i], tau[i].abs());
+        }
+    }
+    return Some(peaks);
 }
 
-fn peak_torque_scale(trajectory: &SwingTrajectory) -> f64 {
+fn torques_within_limits(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
     let control = defaults::control();
+    if let Some(peaks) = peak_abs_torques(arm, trajectory) {
+        return crate::robot::is_feasible(&peaks, &control.max_joint_torques);
+    }
+    // URDF 관성 없는 primitive — 레거시 대각 I|α|
+    let inertia = control.joint_inertia;
+    return trajectory
+        .peak_joint_accelerations()
+        .iter()
+        .enumerate()
+        .all(|(index, &alpha)| {
+            let limit = control
+                .max_joint_torques
+                .get(index)
+                .copied()
+                .unwrap_or(0.0);
+            return inertia * alpha <= limit;
+        });
+}
+
+fn peak_torque_scale(arm: &Arm, trajectory: &SwingTrajectory) -> f64 {
+    let control = defaults::control();
+    if let Some(peaks) = peak_abs_torques(arm, trajectory) {
+        let mut scale = 1.0_f64;
+        for (index, &peak) in peaks.iter().enumerate() {
+            let limit = control
+                .max_joint_torques
+                .get(index)
+                .copied()
+                .unwrap_or(0.0);
+            if peak > limit && peak > f64::EPSILON {
+                scale = scale.min(limit / peak * 0.95);
+            }
+        }
+        return scale;
+    }
     let inertia = control.joint_inertia;
     let mut scale = 1.0_f64;
     for (index, &alpha) in trajectory.peak_joint_accelerations().iter().enumerate() {
@@ -445,9 +487,10 @@ fn peak_torque_scale(trajectory: &SwingTrajectory) -> f64 {
 }
 
 fn trajectory_within_limits(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
+    // 하드 게이트 = 속도·가속·RNEA τ·관절/레일. τ 초과 궤적은 커밋하지 않는다.
     let joints_ok = trajectory.peak_joint_speed() <= arm.max_joint_speed
         && trajectory.peak_joint_acceleration() <= defaults::control().max_joint_accel
-        && torques_within_limits(trajectory);
+        && torques_within_limits(arm, trajectory);
     let rail_ok = arm
         .rail
         .as_ref()
@@ -507,7 +550,7 @@ fn fit_end_velocity(
         } else {
             1.0
         };
-        let torque_scale = peak_torque_scale(&trajectory);
+        let torque_scale = peak_torque_scale(arm, &trajectory);
         let scale = speed_scale.min(accel_scale).min(torque_scale);
         if scale >= 0.99 {
             break;
@@ -519,6 +562,7 @@ fn fit_end_velocity(
     }
 
     // 한계를 완전히 못 맞춰도 끝속도를 0으로 버리지 않는다 (타격 의도 유지).
+    // 최종 검증은 build_feasible_trajectory의 trajectory_within_limits가 한다.
     return (end_velocity, rail);
 }
 
@@ -723,6 +767,36 @@ mod tests {
             arm.default_joints.values,
             "접수 방향으로 관절 목표가 달라져야 함"
         );
+    }
+
+    #[test]
+    fn urdf_arm_torque_gate_rejects_or_stays_feasible() {
+        // RNEA 하드 게이트: 성공하면 peak τ ≤ τ_max, 아니면 JointOrTorqueLimit.
+        let arm = (*crate::defaults::urdf_4dof().expect("urdf").arm).clone();
+        assert!(arm.inertias.is_some());
+        let rail_x = arm.rail.as_ref().map(|r| r.default_x()).unwrap_or(0.0);
+        let impact = arm
+            .forward_kinematics_with_rail(rail_x, &arm.default_joints)
+            .expect("FK")
+            .position;
+        let start = RobotPose::new(rail_x, arm.default_joints.clone());
+        let prediction = Prediction {
+            time_to_impact_secs: 0.22,
+            impact_position: impact,
+            incoming_velocity: Vector3::new(0.0, -7.5, -0.3),
+        };
+        let limits = defaults::control().max_joint_torques;
+        match plan_swing(&arm, prediction, &start) {
+            Ok(trajectory) => {
+                let peaks = peak_abs_torques(&arm, &trajectory).expect("RNEA peaks");
+                assert!(
+                    crate::robot::is_feasible(&peaks, &limits),
+                    "커밋된 궤적 peak τ가 한계 안이어야 함: {peaks:?} vs {limits:?}"
+                );
+            }
+            Err(DomainError::InfeasibleSwing(SwingPlanError::JointOrTorqueLimit { .. })) => {}
+            Err(other) => panic!("토크 게이트 또는 성공만 기대, got {other}"),
+        }
     }
 
     #[test]

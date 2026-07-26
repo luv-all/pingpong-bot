@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use crate::{
     Arm, DomainError, InterceptWindow, PhysicsParams, Prediction, RobotPose, RobotState,
-    SwingPlanError, ball_past_midcourt_for_commit, constants::{ball, table}, in_swing_commit_window,
-    plan_best_swing,
+    SwingPlanError, ball_past_midcourt_for_commit,
+    constants::{ball, table},
+    in_swing_commit_window, plan_best_swing,
 };
 use rapier3d::prelude::*;
 use tracing::{debug, warn};
@@ -139,6 +140,7 @@ impl SimWorld {
         )
         .collision_groups(super::arm_bodies::static_collision_groups())
         .restitution(physics.restitution as f32)
+        // 테이블 μ. 공과 Average → `rapier_table_ball_mu`≈0.3 (예측 커널 μ=friction=0.4와 갭).
         .friction(physics.friction as f32)
         .build();
         collider_set.insert_with_parent(table_collider, table_handle, &mut rigid_body_set);
@@ -196,6 +198,7 @@ impl SimWorld {
         let ball_collider = ColliderBuilder::ball(ball::RADIUS as f32)
             .collision_groups(super::arm_bodies::ball_collision_groups())
             .restitution(physics.restitution as f32)
+            // 라켓 Average에도 쓰임 — 테이블과 강제 동일시하지 않음.
             .friction(physics.ball_friction as f32)
             // ITTF 질량 + 중공 셸 I=(2/3)mr² (Rapier 기본 솔리드 2/5 대신).
             .mass_properties(MassProperties::new(
@@ -278,6 +281,10 @@ impl SimWorld {
         return &self.debug_snap;
     }
 
+    pub fn debug_snap_mut(&mut self) -> &mut SimDebugSnapshot {
+        return &mut self.debug_snap;
+    }
+
     /// control/ground truth 경로가 스윙을 commit했음을 표시한다.
     pub fn mark_swing_committed(&mut self) {
         self.swing_committed = true;
@@ -355,16 +362,20 @@ impl SimWorld {
         let joints = self.robot.joints().clone();
         let in_flight = self.ball_state == BallState::InFlight;
         let physics = self.physics;
+        let (q, qd, qdd) = if let Some((elapsed, traj)) = self.robot.active_swing_sample() {
+            let t = elapsed.min(traj.duration_secs);
+            (
+                traj.sample_at(t).values,
+                traj.sample_velocity_at(t),
+                traj.sample_acceleration_at(t),
+            )
+        } else {
+            let n = joints.values.len();
+            (joints.values.clone(), vec![0.0; n], vec![0.0; n])
+        };
+        self.debug_snap.set_torque_now(&self.arm, &q, &qd, &qdd);
         self.debug_snap.refresh_runtime(
-            &self.arm,
-            rail_x,
-            &joints,
-            ball_pos,
-            ball_vel,
-            omega,
-            in_flight,
-            &physics,
-            hit_y,
+            &self.arm, rail_x, &joints, ball_pos, ball_vel, omega, in_flight, &physics, hit_y,
         );
     }
 
@@ -527,8 +538,20 @@ impl SimWorld {
                 self.hard_fail_streak = 0;
                 planned
             }
+            Err(DomainError::InfeasibleSwing(
+                ref err @ SwingPlanError::JointOrTorqueLimit { .. },
+            )) => {
+                // τ 초과는 시간이 줄수록 더 나쁨 → 재시도 없이 이번 공 포기 (모터 보호).
+                self.debug_snap.record_fail(err);
+                self.debug_snap.commit_phase = CommitPhase::Abandoned;
+                self.abandon_swing("토크 한계 초과 — 이번 공 스윙 포기 (모터 보호)");
+                if let Some(prediction) = predictions.first() {
+                    self.set_debug_prediction(Some(prediction.clone()));
+                }
+                return;
+            }
             Err(DomainError::InfeasibleSwing(ref err)) if err.is_hard_unreachable() => {
-                // 이번 시도만 스킵. 비행 포기는 tti < min_swing에서만 —
+                // IK/테이블 등: 이번 시도만 스킵. 비행 포기는 tti < min_swing에서만 —
                 // 초반 hit-plane 오판으로 닿는 공을 버리지 않기 위함.
                 self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
                 self.debug_snap.record_fail(err);
@@ -543,7 +566,9 @@ impl SimWorld {
                 }
                 return;
             }
-            Err(DomainError::InfeasibleSwing(ref err @ SwingPlanError::InsufficientTime { .. })) => {
+            Err(DomainError::InfeasibleSwing(
+                ref err @ SwingPlanError::InsufficientTime { .. },
+            )) => {
                 self.debug_snap.record_fail(err);
                 debug!("plan_swing InsufficientTime — 재시도 대기");
                 if let Some(prediction) = predictions.first() {
@@ -564,8 +589,7 @@ impl SimWorld {
         self.debug_snap.clear_fail_on_success();
         self.set_debug_prediction(Some(planned.prediction));
         let trajectory = planned.trajectory;
-        self.debug_snap
-            .set_committed_path(&self.arm, &trajectory);
+        self.debug_snap.set_committed_path(&self.arm, &trajectory);
         debug!(
             duration_secs = trajectory.duration_secs,
             rail_end = trajectory.rail.end,
@@ -621,7 +645,11 @@ impl SimWorld {
                 true,
             );
             body.set_angvel(
-                Vector::new(angular_velocity[0], angular_velocity[1], angular_velocity[2]),
+                Vector::new(
+                    angular_velocity[0],
+                    angular_velocity[1],
+                    angular_velocity[2],
+                ),
                 true,
             );
             body.enable_ccd(true);
@@ -754,12 +782,16 @@ impl SimWorld {
             return urdf.mount;
         }
         return crate::robot::urdf::SimRobotMount {
-            position: [self.arm.base.coords.x, self.arm.base.coords.y, self.arm.base.coords.z],
+            position: [
+                self.arm.base.coords.x,
+                self.arm.base.coords.y,
+                self.arm.base.coords.z,
+            ],
             rpy: [0.0, 0.0, 0.0],
         };
     }
 
-    /// 레일 베이스 + τ_max 모터 목표 (다물체 추종). 목표는 명령 `targets`.
+    /// 레일 베이스 + 모터 목표 (다물체 추종). FF on이면 RNEA |τ|로 effort 상한도 맞춤.
     fn drive_arm_motors(&mut self) {
         let mount = self.effective_sim_mount();
         self.arm_bodies.set_base_xy(
@@ -772,6 +804,19 @@ impl SimWorld {
         let targets = self.robot.targets().clone();
         self.arm_bodies
             .set_motor_targets(&mut self.multibody_joint_set, &targets);
+        if crate::defaults::control().torque_feedforward {
+            let limits = crate::defaults::control().max_joint_torques;
+            let n = self.arm.joint_count().min(limits.len());
+            let mut forces = limits.to_vec();
+            let now = &self.debug_snap.torque_now_nm;
+            for i in 0..n {
+                let demand = now.get(i).copied().unwrap_or(0.0).abs() * 1.15;
+                // 천장 τ_max, 바닥 0.25·τ_max — 모델 오차로 스톨나지 않게
+                forces[i] = demand.clamp(limits[i] * 0.25, limits[i]);
+            }
+            self.arm_bodies
+                .set_motor_max_forces(&mut self.multibody_joint_set, &forces);
+        }
     }
 
     /// 테스트: yaw 모터 max_force를 덮어쓴다.
@@ -865,10 +910,7 @@ mod tests {
             world.step(1.0 / 1000.0, None);
             if world.swing_abandoned() {
                 saw_abandon = true;
-                assert!(
-                    !world.swing_committed(),
-                    "포기한 비행은 commit되면 안 됨"
-                );
+                assert!(!world.swing_committed(), "포기한 비행은 commit되면 안 됨");
                 assert!(
                     !world.robot().is_swinging(),
                     "포기 후 팔이 스윙 중이면 안 됨"
@@ -976,7 +1018,9 @@ mod tests {
                 &(),
                 &(),
             );
-            let read = world.arm_bodies.read_joint_angles(&world.multibody_joint_set);
+            let read = world
+                .arm_bodies
+                .read_joint_angles(&world.multibody_joint_set);
             let fk = arm
                 .arm
                 .forward_kinematics_with_rail(0.0, &read)
@@ -1050,10 +1094,7 @@ mod tests {
         // 라켓 중심에 공을 겹치게 둔다.
         if let Some(body) = world.rigid_body_set.get_mut(world.ball_handle) {
             body.set_body_type(RigidBodyType::Dynamic, true);
-            body.set_translation(
-                Vector::new(p.x as f32, p.y as f32, p.z as f32),
-                true,
-            );
+            body.set_translation(Vector::new(p.x as f32, p.y as f32, p.z as f32), true);
             body.set_linvel(Vector::new(0.0, 0.0, 0.0), true);
         }
         let ball_c = world
@@ -1363,7 +1404,12 @@ mod tests {
     #[test]
     fn robot_returns_to_center_after_swing_without_next_shot() {
         let arm = test_robot();
-        let center_rail_x = arm.arm.rail.as_ref().expect("테스트 arm은 리니어 포함").default_x();
+        let center_rail_x = arm
+            .arm
+            .rail
+            .as_ref()
+            .expect("테스트 arm은 리니어 포함")
+            .default_x();
         let center_joints = arm.arm.default_joints.clone();
 
         let mut world = SimWorld::new(arm);
@@ -1572,8 +1618,7 @@ mod tests {
                 .find_map(|(handle, collider)| {
                     let cuboid = collider.shape().as_cuboid()?;
                     ((f64::from(cuboid.half_extents.x) - table::WIDTH_X * 0.5).abs() < 1e-5
-                        && (f64::from(cuboid.half_extents.y) - table::LENGTH_Y * 0.5).abs()
-                            < 1e-5)
+                        && (f64::from(cuboid.half_extents.y) - table::LENGTH_Y * 0.5).abs() < 1e-5)
                         .then_some(handle)
                 })
                 .expect("table collider");
@@ -1841,7 +1886,6 @@ mod tests {
             );
         }
     }
-
 
     /// `random_shot_grid_clears_net_and_returns`는 yaw 코너만 본다. 같은
     /// `defaults::urdf_4dof` 로봇으로 좌우·yaw를 0/25/50/75/100% 촘촘히

@@ -58,9 +58,10 @@ pub use planner::{
     required_racket_velocity, robot_obbs, table_penetration, verify_impact_model,
 };
 pub use robot::{
-    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, MountPreset, RacketPose,
-    RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose, RobotState, SerialChain,
+    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, LinkInertia, MountPreset,
+    RacketPose, RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose, RobotState, SerialChain,
     SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfModel,
+    is_feasible, required_torque,
 };
 pub use sim::{
     BallShooterSettings, BallState, ShooterLayout, SimBallEstimator, SimRuntimeControls,
