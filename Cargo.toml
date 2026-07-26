@@ -21,7 +21,7 @@ required-features = ["gui"]
 
 [features]
 default = ["gui"]
-gui = ["dep:kiss3d", "dep:pollster", "dep:stl_io"]
+gui = ["dep:kiss3d", "dep:pollster", "dep:stl_io", "dep:winit"]
 real = ["dep:rustypot", "dep:serialport", "dep:libloading"]
 
 [dependencies]
@@ -52,6 +52,7 @@ thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 urdf-rs = "0.9.0"
+winit = { version = "0.30", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 libloading = { version = "0.8", optional = true }

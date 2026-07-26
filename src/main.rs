@@ -5,6 +5,8 @@
 //! ```bash
 //! cargo run -p pingpong-bot
 //! cargo run -p pingpong-bot -- --mode real --dxl-port COM8
+//! # 샷별 launch/commit/포기 로그 (기본 info). 더 자세히:
+//! RUST_LOG=pingpong_bot=debug cargo run -p pingpong-bot
 //! ```
 
 use std::sync::{Arc, Mutex};

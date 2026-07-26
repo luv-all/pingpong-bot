@@ -36,7 +36,7 @@ impl DebugOverlays {
             unreachable_x: true,
             joint_limits: true,
             torque_hud: true,
-            joint_anchors: true,
+            joint_anchors: false,
             table_obb: true,
             net_gate: true,
             predicted_arc: false,

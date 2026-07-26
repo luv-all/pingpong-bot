@@ -3345,6 +3345,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "urdf-rs",
+ "winit",
 ]
 
 [[package]]
