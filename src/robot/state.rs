@@ -418,7 +418,7 @@ mod tests {
         let dual_q0 = dual.joints().values[0].abs();
 
         let single_ctrl = ControlParams {
-            max_joint_torques: [6.0, 6.0, 6.0, 6.0],
+            max_joint_torques: [3.0, 3.0, 1.25, 1.25],
             ..control()
         };
         let mut single = start;
@@ -429,7 +429,7 @@ mod tests {
         let single_q0 = single.joints().values[0].abs();
         assert!(
             dual_q0 > single_q0 + 1e-4,
-            "τ0=12 should outpace τ0=6: dual={dual_q0} single={single_q0}"
+            "τ0=6 should outpace τ0=3: dual={dual_q0} single={single_q0}"
         );
     }
 }

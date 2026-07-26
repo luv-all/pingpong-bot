@@ -59,7 +59,10 @@ mod tests {
         roi().validate().unwrap();
         dynamixel().validate().unwrap();
         rail().validate().unwrap();
-        assert!((control().max_joint_torques[0] - 12.0).abs() < 1e-12);
+        assert!((control().max_joint_torques[0] - 6.0).abs() < 1e-12);
+        assert!((control().max_joint_torques[1] - 3.0).abs() < 1e-12);
+        assert!((control().max_joint_torques[2] - 1.25).abs() < 1e-12);
+        assert!((control().max_joint_torques[3] - 1.25).abs() < 1e-12);
         assert!((impact().max_return_speed - 6.0).abs() < 1e-12);
     }
 

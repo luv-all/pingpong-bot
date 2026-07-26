@@ -89,7 +89,12 @@ pub const CONTINUOUS_TORQUE_DERATE: f64 = 0.5;
 /// 축에 토크를 함께 낸다(2026-07-23, 하드웨어 담당자 확인). 운동학 모델은 이
 /// 축을 여전히 관절 1개로 다루지만 토크 예산은 2대분이어야 한다.
 pub fn joint_torque_limits_4dof() -> Vec<f64> {
-    return vec![
+    return joint_torque_limits_4dof_array().to_vec();
+}
+
+/// [`joint_torque_limits_4dof`]의 고정 길이 형태 — `ControlParams` 등 배열 SSOT.
+pub fn joint_torque_limits_4dof_array() -> [f64; 4] {
+    return [
         2.0 * MX64_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
         MX64_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
         MX28_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE,
@@ -851,7 +856,11 @@ mod tests {
         bus.write_joints(&Joints::from_slice(&[angle, 0.0, -0.26, 0.0]))
             .expect("write");
         let goals = bus.last_bus_goals().expect("dry-run goals");
-        assert!(goals.iter().any(|(id, tick)| *id == 1 && *tick == master_200));
+        assert!(
+            goals
+                .iter()
+                .any(|(id, tick)| *id == 1 && *tick == master_200)
+        );
         assert!(
             goals
                 .iter()
@@ -878,5 +887,4 @@ mod tests {
         let t160 = (160.0_f64 * 4096.0 / 360.0).round() as i32;
         assert_eq!(cfg.mirror_tick(t200), t160);
     }
-
 }
