@@ -32,8 +32,14 @@ pub fn rally_return_velocity(impact: Point3, _v_in: Vector3<f64>) -> Vector3<f64
 
 /// 면 법선 normal 기준으로 원하는 출사 속도를 만드는 라켓 속도를 역산한다.
 ///
-/// 법선: v_out.n = (1+e)*(v_r.n) - e*(v_in.n)
-/// 접선(스핀 무시): 라켓 접선 속도 ~= 출사 접선 속도.
+/// 법선: \(v_{\mathrm{out}}\cdot n = (1+e)\,(v_r\cdot n) - e\,(v_{\mathrm{in}}\cdot n)\)
+///
+/// 접선은 **월드 +Z 리프트만** 싣는다. 예전 점착 가정
+/// \(v_r = n\,v_{r,n} + v_{\mathrm{out},t}\) 는 출사 접선 전체(특히 횡방향)를
+/// 라켓이 통째로 나르라고 해서, 관절 예산의 ~90%를 효과 없는 축에 쓰고
+/// `fit_end_velocity` 균일 스케일로 법선까지 같이 깎였다. 횡방향 조준은
+/// 라켓 면 방향(IK)에 맡기고, 스윙 속도는 법선 + 네트 클리어용 올려치기만
+/// 책임진다.
 pub fn required_racket_velocity(
     v_in: Vector3<f64>,
     v_out: Vector3<f64>,
@@ -60,7 +66,10 @@ pub fn required_racket_velocity(
     }
 
     let v_out_t = v_out - n * v_out_n;
-    return Ok(n * v_r_n + v_out_t);
+    // 월드 수직 성분만 접선 요구에 남긴다 (올려치기). 수평 접선은 버린다.
+    let lift_t = Vector3::new(0.0, 0.0, v_out_t.z);
+    let lift_t = lift_t - n * lift_t.dot(&n);
+    return Ok(n * v_r_n + lift_t);
 }
 
 /// v_in, v_out, normal, e 가 임팩트 모델과 맞는지 본다.
@@ -133,5 +142,42 @@ mod tests {
         let e = defaults::impact().racket_effective_restitution;
         let v_r = required_racket_velocity(v_in, v_out, normal, e).expect("v_r");
         assert!(verify_impact_model(v_in, v_out, v_r, normal, e));
+    }
+
+    /// 관절 속도 예산은 유한하다. 횡방향 접선까지 실어 나르면
+    /// `fit_end_velocity` 균일 스케일이 법선·리프트까지 같이 죽인다.
+    #[test]
+    fn required_racket_velocity_drops_lateral_tangent() {
+        let impact = Point3::new(
+            table::WIDTH_X * 0.35,
+            table::DEFAULT_HIT_PLANE_Y,
+            table::SURFACE_Z + 0.24,
+        );
+        let v_in = Vector3::new(0.8, -5.5, 0.5);
+        let v_out = rally_return_velocity(impact, v_in);
+        let normal = (v_out - v_in).normalize();
+        let e = defaults::impact().racket_effective_restitution;
+        let v_r = required_racket_velocity(v_in, v_out, normal, e).expect("v_r");
+        let v_r_n = v_r.dot(&normal);
+        let v_r_t = v_r - normal * v_r_n;
+        let sticky_t = v_out - normal * v_out.dot(&normal);
+        let sticky = normal * v_r_n + sticky_t;
+        let sticky_horiz = (sticky_t.x * sticky_t.x + sticky_t.y * sticky_t.y).sqrt();
+        let vr_horiz = (v_r_t.x * v_r_t.x + v_r_t.y * v_r_t.y).sqrt();
+        assert!(
+            vr_horiz < sticky_horiz * 0.5,
+            "수평 접선 요구가 줄어야 함: vr_horiz={vr_horiz:.2} sticky_horiz={sticky_horiz:.2}"
+        );
+        assert!(
+            v_r_t.z > 0.05,
+            "네트 클리어용 올려치기(+Z)는 남겨야 함: v_r_t.z={}",
+            v_r_t.z
+        );
+        assert!(
+            v_r.norm() < sticky.norm() * 0.85,
+            "전체 점착 가정보다 요구 |v_r|가 작아야 함: {:.2} vs {:.2}",
+            v_r.norm(),
+            sticky.norm()
+        );
     }
 }
