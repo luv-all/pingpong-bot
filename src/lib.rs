@@ -52,15 +52,18 @@ pub use hardware::RealHardware;
 pub use hardware::{Hardware, SimHardware};
 pub use pipeline::{CameraFeed, PipelineConfig, PipelineError, PipelineThread, run};
 pub use planner::{
-    InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox, RailMotion, SwingTrajectory, accel,
-    aero_accel, ball_past_midcourt_for_commit, clamp_above_table, in_swing_commit_window,
-    plan_best_swing, plan_return_to_center, plan_swing, rally_return_velocity,
-    required_racket_velocity, robot_obbs, table_penetration, verify_impact_model,
+    BangBangTrajectory, InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox,
+    PlannedBangBangIntercept, RailMotion, SwingFeasibility, SwingTrajectory, accel, aero_accel,
+    ball_past_midcourt_for_commit, clamp_above_table, in_swing_commit_window, plan_bang_bang_swing,
+    plan_best_swing, plan_coarse_track, plan_return_to_center, plan_swing, rally_return_velocity,
+    required_racket_velocity, robot_obbs, swing_feasibility, table_penetration,
+    verify_impact_model,
 };
 pub use robot::{
-    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, MountPreset, RacketPose,
-    RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose, RobotState, SerialChain,
-    SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfModel,
+    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, LinkInertial, MountPreset,
+    RacketPose, RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose, RobotState,
+    SerialChain, SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual, UrdfLoadError,
+    UrdfModel,
 };
 pub use sim::{
     BallShooterSettings, BallState, ShooterLayout, SimBallEstimator, SimRuntimeControls,

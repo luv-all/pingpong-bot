@@ -79,6 +79,63 @@ impl JointLimit {
     }
 }
 
+/// 링크 관성 - URDF `<inertial>` 원본 (질량/질량중심/관성텐서).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinkInertial {
+    /// 질량 [kg]
+    pub mass: f64,
+    /// 질량중심 - 링크 로컬(URDF origin) 좌표계 [m]
+    pub com: Point3,
+    /// 질량중심 기준 관성 텐서 [kg*m^2]
+    pub inertia: Matrix3<f64>,
+}
+
+impl LinkInertial {
+    /// 공통 기준 프레임에 배치된 여러 강체를 하나의 등가 강체로 합성한다
+    /// (평행축 정리). `bodies`의 각 원소는 `(배치 변환, 로컬 관성)`으로,
+    /// 배치 변환은 그 강체의 로컬 프레임을 공통 기준 프레임에 놓는 `Isometry3`다.
+    ///
+    /// fixed joint로 붙은 하위 링크(모터 몸체 등)를 actuated child link와 합쳐
+    /// 관절이 실제로 움직이는 강체의 질량/질량중심/관성텐서를 구할 때 쓴다.
+    /// 반환 관성텐서는 합성 질량중심 기준, 공통 기준 프레임 축으로 표현된다.
+    pub fn combine(bodies: &[(Isometry3<f64>, LinkInertial)]) -> LinkInertial {
+        let total_mass: f64 = bodies.iter().map(|(_, body)| body.mass).sum();
+        if total_mass <= 0.0 {
+            return LinkInertial {
+                mass: 0.0,
+                com: Point3::new(0.0, 0.0, 0.0),
+                inertia: Matrix3::zeros(),
+            };
+        }
+        // 기준 프레임에서의 각 강체 질량중심 위치.
+        let placed_com = |placement: &Isometry3<f64>, body: &LinkInertial| {
+            placement.rotation * body.com.coords + placement.translation.vector
+        };
+        let mut com = Vector3::zeros();
+        for (placement, body) in bodies {
+            com += body.mass * placed_com(placement, body);
+        }
+        com /= total_mass;
+
+        let mut inertia = Matrix3::zeros();
+        for (placement, body) in bodies {
+            // 로컬 관성텐서를 기준 프레임 축으로 회전: R * I * Rᵀ.
+            let rotation = placement.rotation.to_rotation_matrix();
+            let rotated = rotation * body.inertia * rotation.transpose();
+            // 평행축 정리로 합성 질량중심 기준으로 이동.
+            let d = placed_com(placement, body) - com;
+            let translated =
+                body.mass * (Matrix3::identity() * d.dot(&d) - d * d.transpose());
+            inertia += rotated + translated;
+        }
+        return LinkInertial {
+            mass: total_mass,
+            com: Point3::from(com),
+            inertia,
+        };
+    }
+}
+
 /// 로봇 팔 불변 모델. sim/real/plan_swing이 같은 `Arm`을 참조한다.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Arm {
@@ -90,6 +147,17 @@ pub struct Arm {
     pub link_lengths: Vec<f64>,
     /// 축별 관절 한계. `None`은 URDF continuous 관절.
     pub limits: Vec<Option<JointLimit>>,
+    /// 축별 링크 관성 (질량/질량중심/텐서). `limits`/`link_lengths`와 같은 길이,
+    /// revolute 관절이 움직이는 child link 기준 (fixed 하위 링크 미포함, URDF 원본).
+    pub link_inertials: Vec<LinkInertial>,
+    /// 축별 "합성" 강체 관성 - actuated child link + 다음 revolute 관절까지의
+    /// fixed 하위 링크(모터 몸체 등)를 평행축 정리로 합친 값. Newton-Euler
+    /// 역동역학이 실제로 관절이 움직이는 강체 질량으로 쓴다. `link_inertials`와
+    /// 같은 길이, 각 관절 child link 로컬 프레임 기준.
+    pub aggregated_inertials: Vec<LinkInertial>,
+    /// 축별 관절 토크 한계 [N*m] - 모터 연속 토크 안전 한계.
+    /// `limits`/`link_inertials`와 같은 길이. `f64::INFINITY`는 무제한.
+    pub joint_torque_limits: Vec<f64>,
     /// 부팅 시 초기 관절각
     pub default_joints: Joints,
     /// 관절 추종 최대 각속도 [rad/s]
@@ -116,19 +184,29 @@ impl Arm {
     }
 
     /// URDF 등에서 보존한 일반 revolute 직렬 체인으로 팔을 만든다.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_serial_chain(
         base: Point3,
         rail: Option<LinearRail>,
         chain: SerialChain,
         limits: Vec<Option<JointLimit>>,
+        link_inertials: Vec<LinkInertial>,
+        aggregated_inertials: Vec<LinkInertial>,
+        joint_torque_limits: Vec<f64>,
         default_joints: Joints,
         max_joint_speed: f64,
     ) -> Result<Self, ArmBuildError> {
         let chain_count = chain.joints.len();
-        if chain_count != limits.len() || chain_count != default_joints.values.len() {
+        if chain_count != limits.len()
+            || chain_count != default_joints.values.len()
+            || chain_count != link_inertials.len()
+            || chain_count != aggregated_inertials.len()
+            || chain_count != joint_torque_limits.len()
+        {
             return Err(ArmBuildError::KinematicsJointCountMismatch {
                 chain: chain_count,
                 limits: limits.len(),
+                link_inertials: link_inertials.len(),
                 defaults: default_joints.values.len(),
             });
         }
@@ -168,6 +246,9 @@ impl Arm {
             rail,
             link_lengths,
             limits,
+            link_inertials,
+            aggregated_inertials,
+            joint_torque_limits,
             default_joints,
             max_joint_speed,
             chain,
@@ -731,6 +812,100 @@ impl Arm {
         } else {
             (0.0, 0)
         };
+        return Ok((
+            rail_velocity,
+            velocities.iter().skip(offset).copied().collect(),
+        ));
+    }
+
+    /// 라켓 위치(x,y,z) 3제약만의 수치미분 자코비안 - `(레일 유무 포함) x 관절수`.
+    /// [`linear_velocities_for_racket_velocity`]와 그 조작성 평가(특이값 등)가
+    /// 공유하는 빌더.
+    fn position_jacobian_fd(&self, pose: &RobotPose) -> Option<DMatrix<f64>> {
+        const STEP: f64 = 1e-6;
+        if pose.joints.values.len() != self.joint_count() {
+            return None;
+        }
+        let has_rail = self.rail.is_some();
+        let mut values = Vec::with_capacity(self.joint_count() + usize::from(has_rail));
+        if has_rail {
+            values.push(pose.rail_x);
+        }
+        values.extend_from_slice(&pose.joints.values);
+        let base = self.forward_kinematics_with_rail(pose.rail_x, &pose.joints)?;
+        let base_pos = DVector::from_vec(vec![
+            base.position.coords.x,
+            base.position.coords.y,
+            base.position.coords.z,
+        ]);
+        let mut jacobian = DMatrix::zeros(3, values.len());
+        for index in 0..values.len() {
+            let joint_offset = usize::from(has_rail);
+            let difference = if has_rail
+                && index == 0
+                && self.rail.is_some_and(|rail| values[0] + STEP > rail.x_max)
+            {
+                -STEP
+            } else if index >= joint_offset
+                && self
+                    .joint_limit(index - joint_offset)
+                    .is_some_and(|limit| values[index] + STEP > limit.max)
+            {
+                -STEP
+            } else {
+                STEP
+            };
+            let mut perturbed = values.clone();
+            perturbed[index] += difference;
+            let (rail_x, joint_values) = if has_rail {
+                (perturbed[0], perturbed[1..].to_vec())
+            } else {
+                (pose.rail_x, perturbed)
+            };
+            let perturbed_pose = self.forward_kinematics_with_rail(
+                rail_x,
+                &Joints {
+                    values: joint_values,
+                },
+            )?;
+            let perturbed_pos = DVector::from_vec(vec![
+                perturbed_pose.position.coords.x,
+                perturbed_pose.position.coords.y,
+                perturbed_pose.position.coords.z,
+            ]);
+            jacobian.set_column(index, &((perturbed_pos - &base_pos) / difference));
+        }
+        return Some(jacobian);
+    }
+
+    /// 목표 라켓 "선속도"만 내는 관절/레일 속도의 최소노름 해 - 순간 방향
+    /// (라켓 법선 회전)은 강제하지 않는다.
+    ///
+    /// [`velocities_for_racket_velocity`]는 위치 3 + 방향유지 2, 총 5제약을
+    /// 걸어 레일+4관절(5 미지수)이 완전결정계가 돼 부하 분산 여지가 없다.
+    /// 스윙 임팩트는 그 순간 라켓 자세를 절대 불변으로 유지할 필요는 없고
+    /// (실제 스윙도 접촉 순간 라켓이 계속 회전 중이다) 목표 선속도만 내면
+    /// 되므로, 위치 3제약만 걸어 남는 2자유도를 관절 부하 분산에 쓴다.
+    /// 근거: 2026-07-23 실측 - 방향유지 제거만으로 이 arm의 실측 피크
+    /// 관절속도가 17.55→11.25 rad/s로 줄었다(단독으로 한계를 만족시키진
+    /// 못했지만, IK 시드 선택과 결합하면 유의미하다).
+    pub fn linear_velocities_for_racket_velocity(
+        &self,
+        pose: &RobotPose,
+        racket_velocity: Vector3<f64>,
+    ) -> Result<(f64, Vec<f64>), SwingPlanError> {
+        let err = || SwingPlanError::InverseKinematicsNoSolution {
+            target_x: racket_velocity.x,
+            target_y: racket_velocity.y,
+            target_z: racket_velocity.z,
+        };
+        let jacobian = self.position_jacobian_fd(pose).ok_or_else(err)?;
+        let jjt = &jacobian * jacobian.transpose() + DMatrix::identity(3, 3) * 1e-9;
+        let inverse = jjt.try_inverse().ok_or_else(err)?;
+        let target = DVector::from_vec(vec![racket_velocity.x, racket_velocity.y, racket_velocity.z]);
+        let velocities = jacobian.transpose() * inverse * target;
+        let has_rail = self.rail.is_some();
+        let (rail_velocity, offset) = if has_rail { (velocities[0], 1) } else { (0.0, 0) };
         return Ok((
             rail_velocity,
             velocities.iter().skip(offset).copied().collect(),

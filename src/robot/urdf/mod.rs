@@ -321,6 +321,17 @@ mod tests {
 
         let arm = urdf.to_arm(2.5).expect("3축 URDF Arm 변환");
         assert_eq!(arm.joint_count(), urdf.joint_count());
+        assert_eq!(arm.link_inertials.len(), arm.joint_count());
+        // urdf-test.urdf에서 grep으로 확인한 실측 질량값 (Revolute 6/9/13 child link 순).
+        let masses: Vec<f64> = arm.link_inertials.iter().map(|li| li.mass).collect();
+        assert_eq!(
+            masses,
+            vec![
+                0.05198831685263556,
+                0.05198831685263556,
+                0.025998108201265576,
+            ]
+        );
         let joints = urdf.default_joints();
         let expected = urdf
             .end_effector_pose_in_sim(&joints.values)
@@ -370,6 +381,18 @@ mod tests {
             arm.joint_limit(0),
             None,
             "continuous 축은 가짜 한계가 없어야 함"
+        );
+        assert_eq!(arm.link_inertials.len(), arm.joint_count());
+        // all-4-export.urdf에서 grep으로 확인한 실측 질량값 (Revolute 6/9/13/18 child link 순).
+        let masses: Vec<f64> = arm.link_inertials.iter().map(|li| li.mass).collect();
+        assert_eq!(
+            masses,
+            vec![
+                0.05198831685263556,
+                0.05198831685263556,
+                0.025998108201265576,
+                0.025998108201265576,
+            ]
         );
         for values in [
             urdf.default_joints().values,
