@@ -145,6 +145,7 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 | E1 | 다중 y 샘플 `InterceptWindow` | ✅ |
 | E2 | 평면 지난 공 → 예측 안 함 | ✅ |
 | E3 | 테이블 바운스 \(e\) = 공 \(e\) (≈0.88, ITTF 테이블) | ✅ |
+| E3b | 테이블–공 바운스 커널 SSOT: `estimator::table_bounce` (`e`, μ=`friction`, ω 유지). Rapier Average μ≈0.3과의 갭은 `rapier_table_ball_mu`로 문서화 — 재료/combine 정렬은 시뮬 그리드 재튜닝 후속 ([스펙](superpowers/specs/2026-07-26-table-bounce-ssot-design.md)) | ✅ 커널 / ⏳ Rapier 정렬 |
 | E4 | lead `0.05..1.2` s | ✅ |
 | E5 | Rapier 테이블·공 restitution = E3; 라켓은 A4 \(e_{eff}\)+Min | ✅ |
 | E6 | 접촉→리턴→네트→중앙 바운스 통합 테스트 | ✅ |
@@ -228,12 +229,27 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 
 ## 열린 과제 (TODO와 맞출 것)
 
-- 시뮬 GUI 렉 원인
 - 구름 공 / 포기 조건 명문화 (위 I)
 - EKF 타격 스모크 → C2 승격
 - A4 \(e\)·마찰·drag 실측값으로 constants 갱신
+- real `torque_feedforward` Windows 벤치 (Goal Current·kt 튜닝) — 기본 on
 
 자세한 체크리스트: [`TODO.md`](../TODO.md).
+
+---
+
+## K. 매니퓰레이터 역동역학 (RNEA)
+
+**결정 (2026-07-26):**
+
+1. **플래너 토크 게이트** = URDF `<inertial>` + RNEA peak \(\lvert\tau_i\rvert \le \tau_{\max,i}\) **하드**.  
+   끝속도는 `peak_torque_scale`로 먼저 줄이고, 그래도 초과면 `JointOrTorqueLimit`.  
+   sim 자동 스윙은 이 에러 시 **이번 공 즉시 포기** (모터 보호; IK 실패와 달리 재시도하지 않음). Rapier 다물체 mass와 **다른 SSOT**.
+2. **sim HUD**에 peak/now \(\tau\) [N·m] 표시 (초과·포기 사유).
+3. **FF** = Current-based Position + Goal Current (real) / RNEA effort 상한 갱신 (sim).  
+   `defaults::control().torque_feedforward` 기본 **true**. 끄려면 `false`.
+
+스펙: [`superpowers/specs/2026-07-26-manipulator-dynamics-design.md`](superpowers/specs/2026-07-26-manipulator-dynamics-design.md).
 
 ---
 
@@ -287,9 +303,10 @@ let detect = detector(); // fuse(generators![…], scorer) + track
 - [x] G — 테이블 OBB
 - [x] H — 단일 크레이트 `src/`
 - [ ] I — 구름 공 포기 정책 확정
+- [x] K — RNEA 플래너 게이트 · τ HUD · FF 경로(기본 off)
 - [ ] C2 — EKF 기본 승격 (스모크)
 - [x] J1 — 검출 방법 / ROI=`track` 분리
 - [ ] J2 — 캐스케이드·`roi_half_px` 벤치
 - [x] J3 — 검출 조립 defaults SSOT
 
-작성: 2026-07-11. 갱신: 2026-07-15 (thin types) · **2026-07-17** (플랫 구조·인터셉트·geometry·포기 경로) · **2026-07-20** (검출 vs ROI) · **2026-07-22** (defaults SSOT · Dynamixel mirror · 다물체 τ).
+작성: 2026-07-11. 갱신: 2026-07-15 (thin types) · **2026-07-17** (플랫 구조·인터셉트·geometry·포기 경로) · **2026-07-20** (검출 vs ROI) · **2026-07-22** (defaults SSOT · Dynamixel mirror · 다물체 τ). · **2026-07-26** (RNEA · τ HUD · Goal Current FF 기본 off).
