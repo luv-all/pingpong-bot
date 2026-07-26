@@ -13,7 +13,8 @@ pub struct PhysicsParams {
     /// 라켓 접촉을 보존하려고 테이블 `friction`과 다를 수 있음.
     /// 테이블–공 Rapier 실효 μ는 `rapier_table_ball_mu` (현 Average≈0.3).
     pub ball_friction: f64,
-    /// 네트 반발 e.
+    /// 네트 반발 e — 실체 콜라이더(비-sensor). `Min` combine으로 공 e와 합쳐
+    /// soft/죽은 튕김. 0에 가까울수록 네트에 맞고 힘없이 떨어진다.
     pub net_restitution: f64,
     /// 이차 항력 k — `a -= k |v| v`. Rapier 기본에는 항력 없음 → 0.
     pub drag: f64,
@@ -54,7 +55,8 @@ pub fn physics() -> PhysicsParams {
         // 고정. 재료/Max combine 정렬은 시뮬 그리드 재튜닝과 함께 (스펙 E3b 후속).
         friction: 0.4,
         ball_friction: 0.2,
-        net_restitution: 0.3,
+        // soft 네트: 거의 죽어서 떨어지되 살짝 튕김 (sensor 관통 대신).
+        net_restitution: 0.05,
         drag: 0.0,
         // C_m ρ R³ / m ≈ 1.2 * (0.02)^3 / 0.0027
         magnus: 0.00356,

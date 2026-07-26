@@ -7,6 +7,7 @@ use nalgebra::{Isometry3, Translation3, Unit, UnitQuaternion, Vector3};
 use rapier3d::prelude::*;
 
 use crate::constants::geometry::{RACKET_HALF_X, RACKET_HALF_Y, RACKET_HALF_Z};
+use crate::constants::table;
 use crate::defaults;
 use crate::robot::{Arm, Joints};
 
@@ -31,6 +32,23 @@ pub fn ball_collision_groups() -> InteractionGroups {
 /// 테이블·네트·슈터.
 pub fn static_collision_groups() -> InteractionGroups {
     return InteractionGroups::new(Group::GROUP_3, Group::GROUP_1, InteractionTestMode::And);
+}
+
+/// soft-ish 네트 콜라이더 — 얇은 고정 판 + 낮은 e (`Min` combine).
+/// Rapier soft cloth는 없고, 뷰어 격자는 외관만.
+pub fn net_collider_builder(physics: &crate::PhysicsParams) -> ColliderBuilder {
+    // 천 느낌으로 접선 속도도 빨리 죽인다.
+    const NET_FRICTION: f32 = 0.55;
+    return ColliderBuilder::cuboid(
+        (table::WIDTH_X * 0.5) as f32,
+        0.005,
+        (table::NET_HEIGHT * 0.5) as f32,
+    )
+    .collision_groups(static_collision_groups())
+    .restitution(physics.net_restitution as f32)
+    .restitution_combine_rule(CoefficientCombineRule::Min)
+    .friction(NET_FRICTION)
+    .friction_combine_rule(CoefficientCombineRule::Max);
 }
 
 /// CAD 라켓 +Y 법선 → Rapier 큐브 +Z 법선 (`racket_pose_from_isometry`와 동일).
@@ -381,16 +399,18 @@ mod tests {
     fn spawns_four_joints_dual_yaw_torque_from_entry() {
         let (_arm, _b, _c, _j, mb) = spawn_test_arm(true);
         assert_eq!(mb.joint_count(), 4);
-        assert_eq!(defaults::control().max_joint_torques[0], 12.0);
-        assert_eq!(defaults::control().max_joint_torques[1], 6.0);
+        assert_eq!(defaults::control().max_joint_torques[0], 6.0);
+        assert_eq!(defaults::control().max_joint_torques[1], 3.0);
+        assert_eq!(defaults::control().max_joint_torques[2], 1.25);
+        assert_eq!(defaults::control().max_joint_torques[3], 1.25);
     }
 
     #[test]
     fn dual_yaw_motor_force_exceeds_single() {
         let (_arm, _b, _c, mut joints, mb) = spawn_test_arm(true);
-        mb.set_motor_max_forces(&mut joints, &[12.0, 6.0, 6.0, 6.0]);
+        mb.set_motor_max_forces(&mut joints, &[6.0, 3.0, 1.25, 1.25]);
         let dual = read_yaw_max_force(&joints, mb.joint_handles[0]);
-        mb.set_motor_max_forces(&mut joints, &[6.0, 6.0, 6.0, 6.0]);
+        mb.set_motor_max_forces(&mut joints, &[3.0, 3.0, 1.25, 1.25]);
         let single = read_yaw_max_force(&joints, mb.joint_handles[0]);
         assert!(dual > single + 1.0, "dual={dual} single={single}");
     }

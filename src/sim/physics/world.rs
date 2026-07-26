@@ -12,7 +12,7 @@ use crate::{
     in_swing_commit_window, plan_bang_bang_swing, plan_best_swing, plan_coarse_track,
 };
 use rapier3d::prelude::*;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use super::arm_bodies::ArmMultibody;
 use super::shooter::{BallShooterSettings, BallState};
@@ -55,6 +55,8 @@ pub struct SimWorld {
     pub gravity: Vector,
     /// 공 강체 핸들
     pub ball_handle: RigidBodyHandle,
+    /// 네트 soft 콜라이더 — 반력 있음 (`net_restitution`), 뷰어 cloth는 외관만.
+    pub net_collider: ColliderHandle,
     /// 라켓(EE 링크) 강체 핸들 — 다물체 EE
     pub racket_handle: RigidBodyHandle,
     /// 슈터 본체 (고정)
@@ -89,6 +91,8 @@ pub struct SimWorld {
     swing_committed: bool,
     /// 이번 비행에서 스윙을 포기했는지 (도달 불능·너무 늦음). commit 없이 손 뗌.
     swing_abandoned: bool,
+    /// 발사마다 증가 — 터미널 샷 로그 상관용.
+    shot_seq: u64,
     /// commit 창 안에서의 연속 하드 불능(IK/충돌/리턴) 횟수.
     /// 한 번 실패로 바로 포기하면 예측이 잠시 어긋난 공을 놓치므로,
     /// 연속 하드 계획 실패 횟수. 비행 포기는 `tti < min_swing`에서만 하며,
@@ -156,15 +160,12 @@ impl SimWorld {
             ))
             .build();
         let net_handle = rigid_body_set.insert(net_body);
-        let net_collider = ColliderBuilder::cuboid(
-            (table::WIDTH_X * 0.5) as f32,
-            0.005,
-            (table::NET_HEIGHT * 0.5) as f32,
-        )
-        .collision_groups(super::arm_bodies::static_collision_groups())
-        .restitution(physics.net_restitution as f32)
-        .build();
-        collider_set.insert_with_parent(net_collider, net_handle, &mut rigid_body_set);
+        // Rapier soft cloth 없음 — 얇은 실체 판 + 낮은 e. 외관은 viewer 격자.
+        let net_collider = collider_set.insert_with_parent(
+            super::arm_bodies::net_collider_builder(&physics).build(),
+            net_handle,
+            &mut rigid_body_set,
+        );
 
         // 슈터 본체 (+y) — 포즈만 유지, 충돌 없음 (뷰어 표시 전용).
         // 초기 위치는 아래에서 sync_shooter_pose로 발사구에 맞춘다.
@@ -225,6 +226,7 @@ impl SimWorld {
             ccd_solver: CCDSolver::new(),
             gravity: Vector::new(0.0, 0.0, -9.81),
             ball_handle,
+            net_collider,
             racket_handle,
             shooter_handle,
             arm_bodies,
@@ -241,6 +243,7 @@ impl SimWorld {
             use_bang_bang_swing: false,
             swing_committed: false,
             swing_abandoned: false,
+            shot_seq: 0,
             hard_fail_streak: 0,
             last_swing_attempt_at: f64::NEG_INFINITY,
             flight_started_at: 0.0,
@@ -572,18 +575,25 @@ impl SimWorld {
             let planned = match plan_bang_bang_swing(&self.arm, &predictions, &start) {
                 Ok(planned) => planned,
                 Err(DomainError::InfeasibleSwing(ref err)) => {
-                    debug!(%err, "plan_bang_bang_swing 불가 — 이번 시도 스킵, 다음 재시도 대기");
+                    warn!(
+                        shot = self.shot_seq,
+                        %err,
+                        "shot: bang-bang 계획 실패 — 재시도"
+                    );
                     return;
                 }
                 Err(other) => {
-                    warn!(%other, "sim bang-bang 자동 스윙 계획 실패 — 다음 재시도 대기");
+                    warn!(shot = self.shot_seq, %other, "shot: bang-bang 계획 예외 — 재시도");
                     return;
                 }
             };
             self.set_debug_prediction(Some(planned.prediction));
-            debug!(
+            info!(
+                shot = self.shot_seq,
                 duration_secs = planned.trajectory.duration_secs(),
-                "sim plan_bang_bang_swing commit"
+                impact = ?planned.prediction.impact_position.coords,
+                tti = planned.prediction.time_to_impact_secs,
+                "shot: bang-bang commit"
             );
             self.robot.replace_bang_bang_swing(planned.trajectory);
             self.swing_committed = true;
@@ -611,12 +621,22 @@ impl SimWorld {
                 // 초반 hit-plane 오판으로 닿는 공을 버리지 않기 위함.
                 self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
                 self.debug_snap.record_fail(err);
-                debug!(
-                    %err,
-                    streak = self.hard_fail_streak,
-                    soonest_tti,
-                    "plan_swing 하드 불능 — 재시도"
-                );
+                if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
+                    warn!(
+                        shot = self.shot_seq,
+                        %err,
+                        streak = self.hard_fail_streak,
+                        soonest_tti,
+                        "shot: 스윙 계획 하드 실패 — 재시도"
+                    );
+                } else {
+                    debug!(
+                        %err,
+                        streak = self.hard_fail_streak,
+                        soonest_tti,
+                        "plan_swing 하드 불능 — 재시도"
+                    );
+                }
                 if let Some(prediction) = predictions.first() {
                     self.set_debug_prediction(Some(prediction.clone()));
                 }
@@ -626,6 +646,14 @@ impl SimWorld {
                 ref err @ SwingPlanError::InsufficientTime { .. },
             )) => {
                 self.debug_snap.record_fail(err);
+                if self.hard_fail_streak == 0 {
+                    info!(
+                        shot = self.shot_seq,
+                        %err,
+                        soonest_tti,
+                        "shot: InsufficientTime — 창 재진입 대기"
+                    );
+                }
                 debug!("plan_swing InsufficientTime — 재시도 대기");
                 if let Some(prediction) = predictions.first() {
                     self.set_debug_prediction(Some(prediction.clone()));
@@ -635,7 +663,12 @@ impl SimWorld {
             Err(other) => {
                 self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
                 self.debug_snap.last_fail_text = Some(other.to_string());
-                warn!(%other, streak = self.hard_fail_streak, "sim 자동 스윙 계획 실패");
+                warn!(
+                    shot = self.shot_seq,
+                    %other,
+                    streak = self.hard_fail_streak,
+                    "shot: 스윙 계획 예외"
+                );
                 if let Some(prediction) = predictions.first() {
                     self.set_debug_prediction(Some(prediction.clone()));
                 }
@@ -646,11 +679,15 @@ impl SimWorld {
         self.set_debug_prediction(Some(planned.prediction));
         let trajectory = planned.trajectory;
         self.debug_snap.set_committed_path(&self.arm, &trajectory);
-        debug!(
+        let pred = self.debug_prediction.clone();
+        info!(
+            shot = self.shot_seq,
             duration_secs = trajectory.duration_secs,
             rail_end = trajectory.rail.end,
-            end_vel = ?trajectory.end_velocity,
-            "sim plan_swing commit"
+            impact = ?pred.as_ref().map(|p| p.impact_position.coords),
+            tti = pred.as_ref().map(|p| p.time_to_impact_secs),
+            peak_joint_speed = trajectory.peak_joint_speed(),
+            "shot: swing commit"
         );
         self.robot.replace_swing(trajectory);
         self.swing_committed = true;
@@ -659,7 +696,12 @@ impl SimWorld {
     fn abandon_swing(&mut self, reason: &str) {
         self.swing_abandoned = true;
         self.debug_snap.record_abandon_text(reason);
-        debug!(%reason, "이번 비행 스윙 포기 — 팔 고정");
+        warn!(
+            shot = self.shot_seq,
+            %reason,
+            last_fail = ?self.debug_snap.last_fail_text,
+            "shot: 스윙 포기 — 팔 고정"
+        );
     }
 
     /// 디버그용 hit plane 예측 (없으면 `None`).
@@ -679,6 +721,23 @@ impl SimWorld {
         let muzzle = settings.muzzle_position();
         let linvel = settings.launch_velocity();
         let angvel = settings.launch_angular_velocity();
+        self.shot_seq = self.shot_seq.saturating_add(1);
+        info!(
+            shot = self.shot_seq,
+            speed_mps = settings.speed_mps,
+            yaw_deg = settings.yaw_deg,
+            pitch_deg = settings.pitch_deg,
+            roll_deg = settings.roll_deg,
+            lateral_m = settings.lateral_offset_m,
+            height_m = settings.height_offset_m,
+            topspin = settings.topspin_rad_s,
+            sidespin = settings.sidespin_rad_s,
+            muzzle = ?(muzzle.x, muzzle.y, muzzle.z),
+            v = ?(linvel.x, linvel.y, linvel.z),
+            omega = ?(angvel.x, angvel.y, angvel.z),
+            bang_bang = self.use_bang_bang_swing,
+            "shot: launch"
+        );
         self.launch_ball_at(
             [muzzle.x, muzzle.y, muzzle.z],
             [linvel.x, linvel.y, linvel.z],
@@ -764,6 +823,20 @@ impl SimWorld {
 
         if out || resting || timed_out {
             let settings = self.last_shooter_settings.clone();
+            let flight_secs = self.sim_time - self.flight_started_at;
+            let ball = self.ball_position();
+            info!(
+                shot = self.shot_seq,
+                committed = self.swing_committed,
+                abandoned = self.swing_abandoned,
+                flight_secs,
+                out,
+                resting,
+                timed_out,
+                ball = ?(ball.x, ball.y, ball.z),
+                last_fail = ?self.debug_snap.last_fail_text,
+                "shot: end — park"
+            );
             self.park_ball(&settings);
         }
     }
@@ -781,6 +854,24 @@ impl SimWorld {
     /// 공 각속도 [rad/s].
     pub fn ball_angular_velocity(&self) -> Vector {
         return self.rigid_body_set[self.ball_handle].angvel();
+    }
+
+    /// 공이 네트와 활성 접촉 중인지 (soft 실체 콜라이더).
+    pub fn ball_intersects_net(&self) -> bool {
+        let Some(ball_collider) = self.collider_set.iter().find_map(|(handle, collider)| {
+            (collider.parent() == Some(self.ball_handle)).then_some(handle)
+        }) else {
+            return false;
+        };
+        return self
+            .narrow_phase
+            .contact_pair(ball_collider, self.net_collider)
+            .is_some_and(ContactPair::has_any_active_contact);
+    }
+
+    /// 네트 **실격** — 네트에 맞은 경우 (위로 클리어하면 접촉 없음).
+    pub fn ball_net_fault(&self) -> bool {
+        return self.ball_intersects_net();
     }
 
     /// 슈터 본체 위치·회전 (kiss3d 동기화용).
@@ -1310,22 +1401,6 @@ mod tests {
         let mut world = SimWorld::new(arm);
         world.set_use_ground_truth(false); // 스윙 없이 순수 탄도만 본다
 
-        let net_collider = world
-            .collider_set
-            .iter()
-            .find_map(|(handle, collider)| {
-                let cuboid = collider.shape().as_cuboid()?;
-                ((f64::from(cuboid.half_extents.y) - 0.005).abs() < 1e-6).then_some(handle)
-            })
-            .expect("net collider");
-        let ball_collider = world
-            .collider_set
-            .iter()
-            .find_map(|(handle, collider)| {
-                (collider.parent() == Some(world.ball_handle)).then_some(handle)
-            })
-            .expect("ball collider");
-
         let net_top_z = table::SURFACE_Z + crate::constants::table::NET_HEIGHT;
         world.shoot_ball(&BallShooterSettings::default());
 
@@ -1335,11 +1410,8 @@ mod tests {
             world.step(1.0 / 1000.0, None);
             let pos = world.ball_position();
             assert!(
-                !world
-                    .narrow_phase
-                    .contact_pair(ball_collider, net_collider)
-                    .is_some_and(ContactPair::has_any_active_contact),
-                "기본 샷이 네트에 맞음: y={:.4} z={:.4} (net_top={:.4})",
+                !world.ball_net_fault(),
+                "기본 샷이 네트 실격: y={:.4} z={:.4} (net_top={:.4})",
                 pos.y,
                 pos.z,
                 net_top_z
@@ -2269,15 +2341,6 @@ mod tests {
                     };
                     let ball_collider = collider_for_body(&world, world.ball_handle);
                     let racket_collider = collider_for_body(&world, world.racket_handle);
-                    let net_collider = world
-                        .collider_set
-                        .iter()
-                        .find_map(|(handle, collider)| {
-                            let cuboid = collider.shape().as_cuboid()?;
-                            ((f64::from(cuboid.half_extents.y) - 0.005).abs() < 1e-6)
-                                .then_some(handle)
-                        })
-                        .expect("net collider");
 
                     world.shoot_ball(&settings);
 
@@ -2287,12 +2350,9 @@ mod tests {
                         world.step(1.0 / 1000.0, None);
 
                         assert!(
-                            !world
-                                .narrow_phase
-                                .contact_pair(ball_collider, net_collider)
-                                .is_some_and(ContactPair::has_any_active_contact),
+                            !world.ball_net_fault(),
                             "lateral={lateral:+.2} yaw={yaw:+.2} speed={speed:.2} — \
-                             네트에 맞음"
+                             네트 실격"
                         );
 
                         if world

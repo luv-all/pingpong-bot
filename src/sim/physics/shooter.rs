@@ -1,11 +1,18 @@
 //! 반대편 볼 슈터(발사기) — 로봇(y≈0) 반대(+y)에서 공을 쏴 탁구로봇이 받는 구조.
 
-use crate::constants::table;
+use crate::constants::{ball, table};
 use crate::estimator::ballistics::predict_hit_plane;
 use crate::HitPlane;
+use crate::defaults;
 use nalgebra::Vector3;
 use rand::Rng;
-use rapier3d::prelude::{Rotation, Vector};
+use rapier3d::prelude::{
+    BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderSet, ImpulseJointSet,
+    IntegrationParameters, IslandManager, MassProperties, MultibodyJointSet, NarrowPhase,
+    PhysicsPipeline, RigidBodyBuilder, RigidBodySet, Rotation, Vector,
+};
+
+use super::arm_bodies::{ball_collision_groups, static_collision_groups};
 
 /// GUI `randomized`가 네트 미달 샘플을 버리는 최대 재시도 횟수.
 const RANDOM_SHOT_NET_GATE_MAX_TRIES: usize = 48;
@@ -24,12 +31,18 @@ pub const RANDOM_SHOT_LATERAL_MAX_M: f64 = 0.5;
 pub const RANDOM_SHOT_TARGET_PADDING_M: f64 = 0.25;
 
 /// `BallShooterSettings::randomized`가 뽑는 속도 범위 [m/s].
-pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 5.6;
-pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 5.9;
+///
+/// `tools/shot_tune` — 실기 관절속도(~2.88 rad/s)에서 commit이 연속 유지되는
+/// 대역의 중앙 근처 (rough-to-fine 브랜치 검증값).
+pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 6.8;
+pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 7.4;
 
 /// 랜덤 발사구 높이 오프셋 [m] (`height_offset_m`, 슈터 로컬 up).
-pub const RANDOM_SHOT_HEIGHT_MIN_M: f64 = 0.24;
-pub const RANDOM_SHOT_HEIGHT_MAX_M: f64 = 0.32;
+///
+/// pitch≈−4° 대역에서 Rapier 네트 비접촉에 필요한 대략적 하한은 ~0.24
+/// (`height=0.17`은 ballistics 게이트만 통과하고 실기 Rapier에서는 네트에 맞음).
+pub const RANDOM_SHOT_HEIGHT_MIN_M: f64 = 0.22;
+pub const RANDOM_SHOT_HEIGHT_MAX_M: f64 = 0.28;
 
 /// 랜덤 topspin [rad/s] (+=topspin).
 pub const RANDOM_SHOT_TOPSPIN_MIN: f64 = -20.0;
@@ -38,9 +51,9 @@ pub const RANDOM_SHOT_TOPSPIN_MAX: f64 = 20.0;
 pub const RANDOM_SHOT_SIDESPIN_MIN: f64 = -15.0;
 pub const RANDOM_SHOT_SIDESPIN_MAX: f64 = 15.0;
 
-/// 랜덤 pitch [deg] (+=위). 기본 −1° 근처 — 너무 올리면 네트, 너무 내리면 테이블.
-pub const RANDOM_SHOT_PITCH_MIN_DEG: f64 = -3.0;
-pub const RANDOM_SHOT_PITCH_MAX_DEG: f64 = 0.5;
+/// 랜덤 pitch [deg] (+=위). shot_tune −4° 근처이되, 네트 여유를 위해 −3°까지.
+pub const RANDOM_SHOT_PITCH_MIN_DEG: f64 = -4.0;
+pub const RANDOM_SHOT_PITCH_MAX_DEG: f64 = -2.0;
 /// 랜덤 roll [deg] (발사축 기준).
 pub const RANDOM_SHOT_ROLL_MIN_DEG: f64 = -15.0;
 pub const RANDOM_SHOT_ROLL_MAX_DEG: f64 = 15.0;
@@ -92,24 +105,18 @@ pub struct BallShooterSettings {
 
 impl Default for BallShooterSettings {
     fn default() -> Self {
-        // speed/pitch/height는 현재 슈터 기하(`ShooterLayout`, 끝선 뒤
-        // 0.22m 돌출)와 네트 클리어 기준으로 고른 값이다.
-        //
-        // ⚠️ 미해결: 관절속도를 실기 Dynamixel 스펙(~2.88 rad/s,
-        // `hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S`)으로
-        // 재보정한 뒤로 이 조성의 공은 팔이 요구 라켓속도를 못 내
-        // 리턴하지 못한다(`tools/shot_tune`으로 재튜닝 필요).
+        // speed/pitch/height: shot_tune commit 대역(7.1 · −4°)을 유지하되,
+        // Rapier에서 네트에 안 맞게 height를 0.24로 올린다 (0.17은 네트 접촉).
         return Self {
-            // 끝선 발사(비행거리↑) — 네트 클리어 기준
-            speed_mps: 5.6,
+            speed_mps: 7.1,
             yaw_deg: 0.0,
-            pitch_deg: -1.0,
+            pitch_deg: -4.0,
             roll_deg: 0.0,
             pos_offset_x_m: 0.0,
             pos_offset_y_m: 0.0,
             pos_offset_z_m: 0.0,
             lateral_offset_m: 0.0,
-            height_offset_m: 0.28,
+            height_offset_m: 0.24,
             topspin_rad_s: 0.0,
             sidespin_rad_s: 0.0,
             drill_spin_rad_s: 0.0,
@@ -242,7 +249,9 @@ impl BallShooterSettings {
 
     /// 발사 직후 탄도가 네트 게이트·hit-plane에 도달하는지 (ballistics + 스핀).
     ///
-    /// Rapier와 같은 `PhysicsParams`(drag/magnus)로 적분한다.
+    /// Rapier와 같은 `PhysicsParams`(drag/magnus)로 적분한다. 바운스 후 궤적은
+    /// Rapier와 어긋날 수 있으므로, 샘플 채택은 [`Self::clears_incoming_rapier_net`]도
+    /// 같이 본다.
     pub fn clears_incoming_net_gate(&self) -> bool {
         let muzzle = self.muzzle_position();
         let vel = self.launch_velocity();
@@ -258,9 +267,18 @@ impl BallShooterSettings {
             velocity,
             spin,
             plane,
-            &crate::defaults::physics(),
+            &defaults::physics(),
         )
         .is_some();
+    }
+
+    /// 테이블·네트·공만 있는 가벼운 Rapier로, 수신 탄도가 **네트 collider에
+    /// 닿지 않고** 네트 y를 넘어가는지 확인한다.
+    ///
+    /// ballistics 게이트만으로는 바운스 후 높이 오차로 “네트 위 튕김” 샘플이
+    /// 통과했다. GUI Random / Eval 샘플 SSOT.
+    pub fn clears_incoming_rapier_net(&self) -> bool {
+        return !contacts_incoming_rapier_net(self);
     }
 
     fn sample_randomized_params(&self, rng: &mut impl Rng) -> Self {
@@ -277,17 +295,16 @@ impl BallShooterSettings {
 
     /// 좌우·높이·yaw·pitch·roll·속도·스핀을 안전 범위 안에서 랜덤화한 새 설정.
     ///
-    /// 네트 미달(또는 hit-plane 미도달) 샘플은 ballistics로 버리고 다시 뽑는다.
+    /// ballistics 네트 게이트 **그리고** Rapier 네트 비접촉을 통과한 샘플만 반환.
     /// drill·마운트 `pos_offset_*`는 호출 시점 값 그대로 유지된다.
-    /// (GUI는 결과를 슬라이더에 되돌려 슈터 자세가 보이게 유지한다.)
     pub fn randomized(&self, rng: &mut impl Rng) -> Self {
         for _ in 0..RANDOM_SHOT_NET_GATE_MAX_TRIES {
             let shot = self.sample_randomized_params(rng);
-            if shot.clears_incoming_net_gate() {
+            if shot.clears_incoming_net_gate() && shot.clears_incoming_rapier_net() {
                 return shot;
             }
         }
-        // 최후: 조준만 랜덤, pitch/높이/스핀은 기본(검증된 네트 통과) 값.
+        // 최후: 조준만 랜덤, pitch/높이/스핀은 Rapier 통과가 확인된 기본값.
         let defaults = Self::default();
         let mut shot = self.randomized_aim(rng);
         shot.pitch_deg = defaults.pitch_deg;
@@ -295,8 +312,130 @@ impl BallShooterSettings {
         shot.height_offset_m = defaults.height_offset_m;
         shot.topspin_rad_s = defaults.topspin_rad_s;
         shot.sidespin_rad_s = defaults.sidespin_rad_s;
+        shot.speed_mps = defaults.speed_mps;
         return shot;
     }
+}
+
+/// 테이블+네트+공만으로 수신 탄도의 네트 접촉 여부 (팔/라켓 없음).
+fn contacts_incoming_rapier_net(settings: &BallShooterSettings) -> bool {
+    let physics = defaults::physics();
+    let mut bodies = RigidBodySet::new();
+    let mut colliders = ColliderSet::new();
+    let mut impulse_joints = ImpulseJointSet::new();
+    let mut multibody_joints = MultibodyJointSet::new();
+    let mut islands = IslandManager::new();
+    let mut broad = BroadPhaseBvh::new();
+    let mut narrow = NarrowPhase::new();
+    let mut ccd = CCDSolver::new();
+    let mut pipeline = PhysicsPipeline::new();
+    let mut integration = IntegrationParameters::default();
+    // SimWorld 회귀·GUI 스텝과 동일 — default dt(≈1/60)면 바운스 후 네트 판정이 어긋난다.
+    integration.dt = 1.0 / 1000.0;
+    integration.num_solver_iterations = 12;
+    let gravity = Vector::new(0.0, 0.0, -9.81);
+
+    let table_cx = (table::WIDTH_X * 0.5) as f32;
+    let table_cy = (table::LENGTH_Y * 0.5) as f32;
+    let table_body = RigidBodyBuilder::fixed()
+        .translation(Vector::new(
+            table_cx,
+            table_cy,
+            (table::SURFACE_Z - table::HALF_THICKNESS) as f32,
+        ))
+        .build();
+    let table_handle = bodies.insert(table_body);
+    colliders.insert_with_parent(
+        ColliderBuilder::cuboid(
+            (table::WIDTH_X * 0.5) as f32,
+            (table::LENGTH_Y * 0.5) as f32,
+            table::HALF_THICKNESS as f32,
+        )
+        .collision_groups(static_collision_groups())
+        .restitution(physics.restitution as f32)
+        .friction(physics.friction as f32)
+        .build(),
+        table_handle,
+        &mut bodies,
+    );
+
+    let net_body = RigidBodyBuilder::fixed()
+        .translation(Vector::new(
+            table_cx,
+            table_cy,
+            (table::SURFACE_Z + table::NET_HEIGHT * 0.5) as f32,
+        ))
+        .build();
+    let net_handle = bodies.insert(net_body);
+    let net_collider = colliders.insert_with_parent(
+        // 본 시뮬과 동일: soft 실체 네트 (관통 없음).
+        super::arm_bodies::net_collider_builder(&physics).build(),
+        net_handle,
+        &mut bodies,
+    );
+
+    let muzzle = settings.muzzle_position();
+    let linvel = settings.launch_velocity();
+    let angvel = settings.launch_angular_velocity();
+    let ball_body = RigidBodyBuilder::dynamic()
+        .translation(muzzle)
+        .linvel(linvel)
+        .angvel(angvel)
+        .ccd_enabled(true)
+        .angular_damping(ball::ANGULAR_DAMPING as f32)
+        .build();
+    let ball_handle = bodies.insert(ball_body);
+    let ball_collider = colliders.insert_with_parent(
+        ColliderBuilder::ball(ball::RADIUS as f32)
+            .collision_groups(ball_collision_groups())
+            .restitution(physics.restitution as f32)
+            .friction(physics.ball_friction as f32)
+            .mass_properties(MassProperties::new(
+                Vector::ZERO,
+                ball::MASS as f32,
+                Vector::splat(ball::SHELL_INERTIA as f32),
+            ))
+            .build(),
+        ball_handle,
+        &mut bodies,
+    );
+
+    let net_y = (table::LENGTH_Y * 0.5) as f32;
+    let mut previous_y = muzzle.y;
+    for _ in 0..4_000 {
+        pipeline.step(
+            gravity,
+            &integration,
+            &mut islands,
+            &mut broad,
+            &mut narrow,
+            &mut bodies,
+            &mut colliders,
+            &mut impulse_joints,
+            &mut multibody_joints,
+            &mut ccd,
+            &(),
+            &(),
+        );
+        if narrow
+            .contact_pair(ball_collider, net_collider)
+            .is_some_and(|pair| pair.has_any_active_contact())
+        {
+            return true;
+        }
+        let y = bodies[ball_handle].translation().y;
+        if previous_y > net_y && y <= net_y {
+            return false;
+        }
+        let v = bodies[ball_handle].linvel();
+        let speed = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
+        // 테이블에 붙어 멈춘 경우 등.
+        if speed < 0.05 && y > net_y {
+            return false;
+        }
+        previous_y = y;
+    }
+    return false;
 }
 
 /// 공 비행 상태.
@@ -448,6 +587,10 @@ mod tests {
                 shot.clears_incoming_net_gate(),
                 "randomized는 네트 게이트를 통과하는 샷만 반환해야 함: {shot:?}"
             );
+            assert!(
+                shot.clears_incoming_rapier_net(),
+                "randomized는 Rapier 네트 비접촉 샷만 반환해야 함: {shot:?}"
+            );
         }
     }
 
@@ -457,22 +600,35 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let mut raw_clips = 0;
         for _ in 0..80 {
-            if !base.sample_randomized_params(&mut rng).clears_incoming_net_gate() {
+            let raw = base.sample_randomized_params(&mut rng);
+            // 의도적으로 낮은 높이로 내려 미달을 만든다.
+            let mut low = raw;
+            low.height_offset_m = 0.15;
+            low.pitch_deg = -5.0;
+            if !low.clears_incoming_net_gate() || !low.clears_incoming_rapier_net() {
                 raw_clips += 1;
             }
         }
         assert!(
             raw_clips > 5,
-            "전제: 필터 없는 샘플 중 네트 미달이 있어야 함 (clips={raw_clips})"
+            "전제: 필터 없는 낮은 샘플 중 네트 미달이 있어야 함 (clips={raw_clips})"
         );
 
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        for _ in 0..80 {
+        for _ in 0..40 {
             let shot = base.randomized(&mut rng);
             assert!(
-                shot.clears_incoming_net_gate(),
-                "필터 후 샷이 네트 게이트 미달: {shot:?}"
+                shot.clears_incoming_net_gate() && shot.clears_incoming_rapier_net(),
+                "필터 후 샷이 네트 미달/접촉: {shot:?}"
             );
         }
     }
+
+    #[test]
+    fn default_shot_clears_rapier_net() {
+        let shot = BallShooterSettings::default();
+        assert!(shot.clears_incoming_net_gate(), "default ballistics");
+        assert!(shot.clears_incoming_rapier_net(), "default rapier net");
+    }
 }
+
