@@ -1,6 +1,4 @@
-//! egui 슈터·sim 제어 패널 (kiss3d `draw_ui` 오버레이).
-//!
-//! 역할별 작은 창으로 나눠 3D 시야를 덜 가린다.
+//! egui 패널 — Shooter / Eval / Status / View 역할별 창.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,6 +10,11 @@ use super::debug_snap::CommitPhase;
 use crate::Prediction;
 use crate::constants::viewer::{CAMERA_DIST_DEFAULT, CAMERA_DIST_MAX, CAMERA_DIST_MIN};
 use crate::defaults;
+use crate::robot::Robot;
+use crate::sim::eval_protocol::{
+    self, EvalMode, EvalProgress, EvalZone, LiveShotObserver, MAX_SCORE, PASS_SCORE_EXCLUSIVE,
+    TOTAL_SHOTS,
+};
 use crate::sim::physics::shooter::{BallShooterSettings, BallState};
 use crate::sim::physics::world::SimWorld;
 use crate::sim::session::controls::SimRuntimeControls;
@@ -56,6 +59,27 @@ pub struct PanelUiState {
     /// commit 시 quintic 대신 순수 토크 bang-bang을 쓸지 - 디버그 토글.
     pub use_bang_bang_swing: bool,
     pub debug: DebugOverlays,
+    /// 평가 프로토콜 백그라운드 진행.
+    pub eval: Arc<Mutex<EvalProgress>>,
+    /// 평가 스레드가 돌아가는 중이면 true.
+    pub eval_running: Arc<AtomicBool>,
+    /// Block vs Alternating.
+    pub eval_mode: EvalMode,
+    /// Run 30 이후 선택한 시나리오를 시뮬에서 다시 실행 중일 때.
+    pub eval_live: Option<EvalLiveRun>,
+}
+
+/// 합산 Run으로 저장된 시나리오를 라이브 월드에서 다시 실행·채점.
+#[derive(Debug, Clone)]
+pub struct EvalLiveRun {
+    /// 1..=30 표시용.
+    pub shot_number: usize,
+    pub zone: EvalZone,
+    pub observer: LiveShotObserver,
+    /// 종료 시 이 실행에서 받은 점수.
+    pub live_points: Option<u8>,
+    /// 네트 CCD 투과로 채점 무효.
+    pub net_passthrough: bool,
 }
 
 impl PanelUiState {
@@ -66,6 +90,10 @@ impl PanelUiState {
             camera_dist: CAMERA_DIST_DEFAULT,
             use_bang_bang_swing: controls.use_bang_bang_swing,
             debug: DebugOverlays::debug_defaults(),
+            eval: Arc::new(Mutex::new(EvalProgress::default())),
+            eval_running: Arc::new(AtomicBool::new(false)),
+            eval_mode: EvalMode::Block,
+            eval_live: None,
         };
     }
 }
@@ -167,6 +195,7 @@ pub fn draw(
     ctx: &egui::Context,
     ui_state: &mut PanelUiState,
     controls: &Arc<Mutex<SimRuntimeControls>>,
+    world: &Arc<Mutex<SimWorld>>,
     status: Option<&StatusSnapshot>,
     // 관절별 스크린 좌표 (egui, top-left). `None`이면 해당 관절 숨김.
     joint_screen: Option<&[Option<egui::Pos2>]>,
@@ -182,10 +211,17 @@ pub fn draw(
     let mut shoot = false;
     let mut random_shoot = false;
     let mut park = false;
+    let mut start_eval = false;
+    let mut start_eval_mode = EvalMode::Block;
+    let mut start_live_shot: Option<usize> = None;
 
-    egui::Window::new("Shooter")
+    // 레이아웃: 좌측 Shooter→Eval, 우측 Status→View.
+    const GUI_GAP: f32 = 12.0;
+    let screen = ctx.content_rect();
+
+    let shooter_win = egui::Window::new("Shooter")
         .default_width(260.0)
-        .default_pos([12.0, 12.0])
+        .default_pos(screen.left_top() + egui::vec2(12.0, 12.0))
         .resizable(true)
         .collapsible(true)
         .show(ctx, |ui| {
@@ -260,14 +296,46 @@ pub fn draw(
             });
         });
 
-    // 초기만 우측 정렬. `.anchor`는 드래그를 막아 Status/View가 겹치면 못 피한다.
-    // View는 Status 아래 + 간격으로 두어, Status가 길어도 처음부터 겹치지 않게 한다.
-    const RIGHT_GUI_GAP: f32 = 20.0;
-    let screen_tr = ctx.content_rect().right_top();
+    let eval_y = shooter_win
+        .as_ref()
+        .map(|r| r.response.rect.bottom() + GUI_GAP)
+        .unwrap_or(screen.top() + 320.0);
+    egui::Window::new("Eval")
+        .default_width(260.0)
+        .default_pos(egui::pos2(screen.left() + 12.0, eval_y))
+        .resizable(true)
+        .collapsible(true)
+        .show(ctx, |ui| {
+            let running = ui_state.eval_running.load(Ordering::Relaxed);
+            ui.add_enabled_ui(!running, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Mode");
+                    ui.selectable_value(&mut ui_state.eval_mode, EvalMode::Block, "Block");
+                    ui.selectable_value(
+                        &mut ui_state.eval_mode,
+                        EvalMode::Alternating,
+                        "Alternating",
+                    );
+                });
+                ui.weak(match ui_state.eval_mode {
+                    EvalMode::Block => "Left → Center → Right · 10 each",
+                    EvalMode::Alternating => "L → C → R → C · … · 10 each",
+                });
+                ui.add_space(4.0);
+                let run =
+                    egui::Button::new("Run 30").min_size(egui::vec2(ui.available_width(), 22.0));
+                if ui.add(run).clicked() {
+                    start_eval = true;
+                    start_eval_mode = ui_state.eval_mode;
+                }
+            });
+            draw_eval_status(ui, ui_state, &mut start_live_shot);
+        });
+
     let status_win = egui::Window::new("Status")
         .default_width(280.0)
         .pivot(egui::Align2::RIGHT_TOP)
-        .default_pos(screen_tr + egui::vec2(-12.0, 12.0))
+        .default_pos(screen.right_top() + egui::vec2(-12.0, 12.0))
         .resizable(true)
         .collapsible(true)
         .show(ctx, |ui| {
@@ -280,141 +348,16 @@ pub fn draw(
 
     let view_y = status_win
         .as_ref()
-        .map(|r| r.response.rect.bottom() + RIGHT_GUI_GAP)
-        .unwrap_or(screen_tr.y + 520.0);
+        .map(|r| r.response.rect.bottom() + GUI_GAP)
+        .unwrap_or(screen.top() + 420.0);
     egui::Window::new("View")
-        .default_width(220.0)
+        .default_width(240.0)
         .pivot(egui::Align2::RIGHT_TOP)
-        .default_pos(egui::pos2(screen_tr.x - 12.0, view_y))
+        .default_pos(egui::pos2(screen.right() - 12.0, view_y))
         .resizable(true)
         .collapsible(true)
         .show(ctx, |ui| {
-            ui.add(
-                egui::Slider::new(&mut ui_state.time_scale, 0.1..=20.0)
-                    .logarithmic(true)
-                    .text("배속 (1=실시간)"),
-            );
-            ui.add(
-                egui::Slider::new(&mut ui_state.camera_dist, CAMERA_DIST_MIN..=CAMERA_DIST_MAX)
-                    .text("zoom [m]"),
-            );
-            ui.small("drag=orbit · scroll=zoom");
-            ui.small("axes: R=X  G=Y  B=Z");
-            ui.separator();
-            ui.checkbox(
-                &mut ui_state.use_bang_bang_swing,
-                "Bang-bang swing (pure torque, debug)",
-            );
-            ui.small(
-                "켜면 commit 스윙을 quintic 대신 순수 토크(bang-bang)로 계획 — \
-                 궤적 '모양' 제약 없이 실기 토크 한계만으로 육안 비교용",
-            );
-            ui.separator();
-            ui.label("Debug overlays");
-            ui.small("항목에 마우스를 올리면 설명");
-            ui.horizontal(|ui| {
-                if ui.small_button("defaults").clicked() {
-                    ui_state.debug = DebugOverlays::debug_defaults();
-                }
-                if ui.small_button("all off").clicked() {
-                    ui_state.debug = DebugOverlays::all_off();
-                }
-            });
-            let d = &mut ui_state.debug;
-            debug_checkbox(ui, &mut d.impact_markers, "impact markers", |ui| {
-                ui.strong("예상 타격점");
-                ui.label("공이 라켓에 맞을 것으로 예측한 위치입니다.");
-                ui.add_space(4.0);
-                ui.label("· 반투명 벽 — 접수 평면");
-                ui.label("· 작은 구체 — 예상 타격점");
-                ui.label("· 노란 판 — 테이블 위 투영");
-                ui.add_space(4.0);
-                ui.strong("색 의미");
-                ui.label("분홍 — 아직 스윙 결정 전 (예측만)");
-                ui.label("초록 — 스윙 계획 확정");
-                ui.label("빨강 — 팔이 그 지점에 닿지 않음");
-                ui.label("주황 — 치기까지 시간이 너무 짧음");
-                ui.label("보라 — 원하는 리턴 속도를 만들 수 없음");
-                ui.label("청록 — 자세가 테이블을 뚫음");
-                ui.label("노랑 — 관절·토크·레일 한계 초과");
-            });
-            debug_checkbox(ui, &mut d.fail_status, "fail status", |ui| {
-                ui.strong("실패 사유 (Status)");
-                ui.label("마지막에 스윙을 포기하거나 건너뛴 이유를");
-                ui.label("Status 창에 한글로 보여 줍니다.");
-                ui.label("목표 좌표가 있으면 같이 표시됩니다.");
-            });
-            debug_checkbox(ui, &mut d.unreachable_x, "unreachable X", |ui| {
-                ui.strong("도달 불가 목표");
-                ui.label("팔이 닿지 않거나 한계에 걸린 목표점에");
-                ui.label("빨간 X를 그립니다.");
-            });
-            debug_checkbox(ui, &mut d.joint_limits, "joint limits", |ui| {
-                ui.strong("관절 한계");
-                ui.label("관절이 가동 범위 끝에 닿으면");
-                ui.label("해당 링크·조인트를 빨갛게 표시합니다.");
-            });
-            debug_checkbox(ui, &mut d.torque_hud, "torque HUD", |ui| {
-                ui.strong("토크·가속 경고 (Status)");
-                ui.label("Status에 다음을 표시합니다.");
-                ui.label("· 토크/가속 한계 초과");
-                ui.label("· 관절이 리밋에 닿음");
-                ui.label("· 테이블 침투 깊이");
-            });
-            debug_checkbox(ui, &mut d.joint_anchors, "joint anchors", |ui| {
-                ui.strong("관절 앵커 HUD");
-                ui.label("각 관절 위치에 반투명 창을 붙입니다.");
-                ui.label("각도·토크의 Min / 현재 / Max.");
-                ui.label("화면을 돌려도 관절을 따라갑니다.");
-            });
-            debug_checkbox(ui, &mut d.commit_bar, "commit bar", |ui| {
-                ui.strong("스윙 결정 타이밍");
-                ui.label("임팩트까지 남은 시간(tti)이");
-                ui.label("스윙을 확정해도 되는 구간인지");
-                ui.label("Status에 막대로 보여 줍니다.");
-                ui.label("(너무 이르면 대기, 너무 늦으면 포기)");
-            });
-            debug_checkbox(ui, &mut d.table_obb, "table OBB", |ui| {
-                ui.strong("테이블 침투 박스");
-                ui.label("팔이나 라켓이 테이블 안으로 들어가면");
-                ui.label("그 부분을 반투명 빨간 박스로 강조합니다.");
-            });
-            debug_checkbox(ui, &mut d.net_gate, "net gate tone", |ui| {
-                ui.strong("네트 미달");
-                ui.label("예측 탄도가 네트보다 낮게 지나가면");
-                ui.label("공을 회색으로 바꾸고 Status에 표시합니다.");
-            });
-            debug_checkbox(ui, &mut d.predicted_arc, "predicted arc", |ui| {
-                ui.strong("예측 탄도");
-                ui.label("물리 모델이 그린 공의 예상 경로입니다.");
-                ui.label("(하늘색 점)");
-            });
-            debug_checkbox(ui, &mut d.truth_arc, "truth arc", |ui| {
-                ui.strong("실제 탄도");
-                ui.label("시뮬레이터가 실제로 움직인 공의 경로입니다.");
-                ui.label("(주황 점) 예측과 비교해 보세요.");
-            });
-            debug_checkbox(ui, &mut d.swing_ghost, "swing ghost", |ui| {
-                ui.strong("스윙 경로");
-                ui.label("확정된 스윙에서 라켓 중심이 지나갈");
-                ui.label("경로를 회색 점으로 그립니다.");
-            });
-            debug_checkbox(ui, &mut d.rail_stroke, "rail stroke", |ui| {
-                ui.strong("레일 이동 범위");
-                ui.label("레일이 갈 수 있는 양쪽 끝과");
-                ui.label("지금 위치를 표시합니다.");
-            });
-            debug_checkbox(ui, &mut d.aim_band, "aim band", |ui| {
-                ui.strong("Random 조준 대역");
-                ui.label("Random Shoot이 겨냥하는");
-                ui.label("로봇 쪽 테이블 가장자리(y≈0) 구간입니다.");
-                ui.label("양끝 padding 안쪽만 조준합니다.");
-            });
-            debug_checkbox(ui, &mut d.omega_arrow, "ω arrow", |ui| {
-                ui.strong("스핀 방향");
-                ui.label("공의 각속도(스핀) 방향을 화살표로 그립니다.");
-                ui.label("탑스핀·사이드스핀이 어느 쪽인지 볼 수 있습니다.");
-            });
+            draw_view_panel(ui, ui_state);
         });
 
     if let Ok(mut ctrl) = controls.try_lock() {
@@ -434,6 +377,373 @@ pub fn draw(
             ctrl.request_park();
         }
     }
+
+    if start_eval {
+        ui_state.eval_live = None;
+        start_eval_protocol(ui_state, world, start_eval_mode);
+    }
+    if let Some(shot_number) = start_live_shot {
+        begin_eval_live_shot(ui_state, world, controls, shot_number);
+    }
+}
+
+/// 라이브 월드에서 시나리오 재실행 채점을 한 프레임 갱신한다.
+pub fn tick_eval_live(ui_state: &mut PanelUiState, world: &SimWorld) {
+    let Some(live) = ui_state.eval_live.as_mut() else {
+        return;
+    };
+    if live.live_points.is_some() || live.net_passthrough {
+        return;
+    }
+    if live.observer.observe(world) {
+        if live.observer.net_passthrough {
+            live.net_passthrough = true;
+            return;
+        }
+        live.live_points = Some(live.observer.points());
+    }
+}
+
+fn begin_eval_live_shot(
+    ui_state: &mut PanelUiState,
+    world: &Arc<Mutex<SimWorld>>,
+    controls: &Arc<Mutex<SimRuntimeControls>>,
+    shot_number: usize,
+) {
+    if !(1..=TOTAL_SHOTS).contains(&shot_number) {
+        return;
+    }
+    let settings = {
+        let progress = ui_state.eval.lock().expect("eval progress");
+        let Some(report) = progress.report.as_ref() else {
+            return;
+        };
+        let Some(shot) = report.shots.get(shot_number - 1) else {
+            return;
+        };
+        (shot.settings.clone(), shot.zone)
+    };
+
+    let Ok(world_guard) = world.lock() else {
+        return;
+    };
+    let observer = LiveShotObserver::new(&world_guard);
+    drop(world_guard);
+
+    ui_state.shooter = settings.0.clone();
+    ui_state.eval_live = Some(EvalLiveRun {
+        shot_number,
+        zone: settings.1,
+        observer,
+        live_points: None,
+        net_passthrough: false,
+    });
+
+    if let Ok(mut ctrl) = controls.lock() {
+        ctrl.shooter = settings.0;
+        ctrl.request_shoot();
+    }
+}
+
+fn draw_view_panel(ui: &mut egui::Ui, ui_state: &mut PanelUiState) {
+    egui::CollapsingHeader::new("Camera / time")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.add(
+                egui::Slider::new(&mut ui_state.time_scale, 0.1..=20.0)
+                    .logarithmic(true)
+                    .text("배속 (1=실시간)"),
+            );
+            ui.add(
+                egui::Slider::new(&mut ui_state.camera_dist, CAMERA_DIST_MIN..=CAMERA_DIST_MAX)
+                    .text("zoom [m]"),
+            );
+            ui.small("drag=orbit · scroll=zoom");
+            ui.small("axes: R=X  G=Y  B=Z");
+        });
+    ui.collapsing("Swing", |ui| {
+        ui.checkbox(
+            &mut ui_state.use_bang_bang_swing,
+            "Bang-bang (pure torque, debug)",
+        );
+        ui.small("commit을 quintic 대신 순수 토크 bang-bang으로 — 육안 비교용");
+    });
+    egui::CollapsingHeader::new("Debug overlays")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.small("항목에 마우스를 올리면 설명");
+            ui.horizontal(|ui| {
+                if ui.small_button("defaults").clicked() {
+                    ui_state.debug = DebugOverlays::debug_defaults();
+                }
+                if ui.small_button("all off").clicked() {
+                    ui_state.debug = DebugOverlays::all_off();
+                }
+            });
+            let d = &mut ui_state.debug;
+            debug_checkbox(ui, &mut d.impact_markers, "impact markers", |ui| {
+                ui.strong("예상 타격점");
+                ui.label("공이 라켓에 맞을 것으로 예측한 위치입니다.");
+                ui.add_space(4.0);
+                ui.label("· 반투명 벽 — 접수 평면");
+                ui.label("· 작은 구체 — 예상 타격점");
+                ui.label("· 노란 판 — 테이블 위 투영");
+            });
+            debug_checkbox(ui, &mut d.fail_status, "fail status", |ui| {
+                ui.strong("실패 사유 (Status)");
+                ui.label("스윙 포기·건너뛴 이유를 Status에 표시합니다.");
+            });
+            debug_checkbox(ui, &mut d.unreachable_x, "unreachable X", |ui| {
+                ui.strong("도달 불가 목표");
+                ui.label("한계에 걸린 목표점에 빨간 X를 그립니다.");
+            });
+            debug_checkbox(ui, &mut d.joint_limits, "joint limits", |ui| {
+                ui.strong("관절 한계");
+                ui.label("가동 범위 끝이면 링크를 빨갛게 표시합니다.");
+            });
+            debug_checkbox(ui, &mut d.torque_hud, "torque HUD", |ui| {
+                ui.strong("토크·가속 경고 (Status)");
+                ui.label("토크/가속 초과·관절 리밋·테이블 침투를 Status에 표시합니다.");
+            });
+            debug_checkbox(ui, &mut d.joint_anchors, "joint windows", |ui| {
+                ui.strong("관절 앵커 창");
+                ui.label("각 관절 옆에 각도·토크 HUD를 붙입니다.");
+                ui.add_space(4.0);
+                ui.strong("외곽선 색");
+                ui.label("노랑 — 정상 (한계 안)");
+                ui.label("주황 — 관절 가동범위 끝, 또는 토크 상한 초과");
+            });
+            debug_checkbox(ui, &mut d.commit_bar, "commit bar", |ui| {
+                ui.strong("스윙 결정 타이밍");
+                ui.label("tti가 commit 구간인지 Status 막대로 표시합니다.");
+            });
+            debug_checkbox(ui, &mut d.table_obb, "table OBB", |ui| {
+                ui.strong("테이블 침투 OBB");
+                ui.label("테이블을 뚫는 링크 box를 그립니다.");
+            });
+            debug_checkbox(ui, &mut d.net_gate, "net gate tone", |ui| {
+                ui.strong("네트 게이트");
+                ui.label("네트 미달 탄도면 공을 회색으로 바꿉니다.");
+            });
+            debug_checkbox(ui, &mut d.predicted_arc, "predicted arc", |ui| {
+                ui.strong("예측 탄도");
+                ui.label("예상 경로 (하늘색 점).");
+            });
+            debug_checkbox(ui, &mut d.truth_arc, "truth arc", |ui| {
+                ui.strong("실제 탄도");
+                ui.label("실제 경로 (주황 점).");
+            });
+            debug_checkbox(ui, &mut d.swing_ghost, "swing ghost", |ui| {
+                ui.strong("스윙 경로");
+                ui.label("확정 스윙의 라켓 중심 경로.");
+            });
+            debug_checkbox(ui, &mut d.rail_stroke, "rail stroke", |ui| {
+                ui.strong("레일 이동 범위");
+                ui.label("레일 양끝과 현재 위치.");
+            });
+            debug_checkbox(ui, &mut d.aim_band, "aim band", |ui| {
+                ui.strong("Random 조준 대역");
+                ui.label("Random이 겨냥하는 y≈0 구간.");
+            });
+            debug_checkbox(ui, &mut d.omega_arrow, "ω arrow", |ui| {
+                ui.strong("스핀 방향");
+                ui.label("공 각속도 화살표.");
+            });
+        });
+}
+
+fn draw_eval_status(
+    ui: &mut egui::Ui,
+    ui_state: &PanelUiState,
+    start_live_shot: &mut Option<usize>,
+) {
+    let running = ui_state.eval_running.load(Ordering::Relaxed);
+    let progress = ui_state.eval.lock().expect("eval progress").clone();
+
+    if running {
+        ui.ctx().request_repaint();
+        let frac = if progress.total == 0 {
+            0.0
+        } else {
+            progress.done as f32 / progress.total as f32
+        };
+        ui.add_space(6.0);
+        ui.add(
+            egui::ProgressBar::new(frac)
+                .text(format!("{}/{}", progress.done, progress.total))
+                .animate(true),
+        );
+        return;
+    }
+
+    if let Some(err) = progress.error.as_ref() {
+        ui.add_space(4.0);
+        ui.colored_label(egui::Color32::from_rgb(220, 80, 80), err);
+        return;
+    }
+
+    let Some(report) = progress.report.as_ref() else {
+        return;
+    };
+
+    ui.add_space(6.0);
+    let pass = report.passed();
+    let (verdict, color) = if pass {
+        ("Pass", egui::Color32::from_rgb(70, 190, 110))
+    } else {
+        ("Fail", egui::Color32::from_rgb(220, 110, 80))
+    };
+    ui.horizontal(|ui| {
+        ui.colored_label(color, egui::RichText::new(verdict).strong());
+        ui.monospace(format!("{}/{}", report.total, MAX_SCORE));
+        ui.weak(format!("need >{PASS_SCORE_EXCLUSIVE}"));
+    });
+
+    ui.add_space(2.0);
+    egui::Grid::new("eval_score_grid")
+        .num_columns(5)
+        .spacing([10.0, 2.0])
+        .show(ui, |ui| {
+            ui.weak("");
+            ui.weak("0");
+            ui.weak("1");
+            ui.weak("2");
+            ui.weak("3");
+            ui.end_row();
+
+            ui.label("All");
+            for c in report.counts {
+                ui.monospace(format!("{c}"));
+            }
+            ui.end_row();
+
+            for zone in EvalZone::ALL {
+                let z = report.zone_score(zone);
+                ui.label(zone.label());
+                for c in z.counts {
+                    ui.monospace(format!("{c}"));
+                }
+                ui.end_row();
+            }
+        });
+
+    ui.add_space(2.0);
+    ui.weak(format!(
+        "zone totals  R {} · C {} · L {}",
+        report.zone_score(EvalZone::Right).total,
+        report.zone_score(EvalZone::Center).total,
+        report.zone_score(EvalZone::Left).total,
+    ));
+
+    ui.add_space(6.0);
+    ui.label("Re-run shot");
+    ui.weak("1–30 · same scenario in the live sim");
+    let selected = ui_state.eval_live.as_ref().map(|l| l.shot_number);
+    egui::Grid::new("eval_shot_picker")
+        .num_columns(10)
+        .spacing([2.0, 2.0])
+        .show(ui, |ui| {
+            for n in 1..=TOTAL_SHOTS {
+                let shot = &report.shots[n - 1];
+                let fill = points_color(shot.points);
+                let mut button = egui::Button::new(format!("{n}")).fill(fill);
+                if selected == Some(n) {
+                    button = button.stroke(egui::Stroke::new(1.5, egui::Color32::WHITE));
+                }
+                if ui.add_sized([22.0, 20.0], button).clicked() {
+                    *start_live_shot = Some(n);
+                }
+                if n % 10 == 0 {
+                    ui.end_row();
+                }
+            }
+        });
+
+    if let Some(live) = ui_state.eval_live.as_ref() {
+        ui.add_space(4.0);
+        ui.ctx().request_repaint();
+        if live.net_passthrough {
+            ui.colored_label(
+                egui::Color32::from_rgb(220, 120, 80),
+                egui::RichText::new(format!(
+                    "shot {} ({}) · 네트 투과(무효)",
+                    live.shot_number,
+                    live.zone.label()
+                ))
+                .strong(),
+            );
+        } else {
+            match live.live_points {
+                Some(pts) => {
+                    ui.colored_label(
+                        points_color(pts),
+                        egui::RichText::new(format!(
+                            "shot {} ({}) · {} pt{}",
+                            live.shot_number,
+                            live.zone.label(),
+                            pts,
+                            if pts == 1 { "" } else { "s" }
+                        ))
+                        .strong(),
+                    );
+                }
+                None => {
+                    ui.weak(format!(
+                        "shot {} ({}) · running…",
+                        live.shot_number,
+                        live.zone.label()
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn points_color(points: u8) -> egui::Color32 {
+    return match points {
+        0 => egui::Color32::from_rgb(70, 70, 75),
+        1 => egui::Color32::from_rgb(90, 100, 140),
+        2 => egui::Color32::from_rgb(60, 130, 160),
+        _ => egui::Color32::from_rgb(50, 140, 90),
+    };
+}
+
+fn start_eval_protocol(
+    ui_state: &PanelUiState,
+    world: &Arc<Mutex<SimWorld>>,
+    mode: EvalMode,
+) {
+    if ui_state
+        .eval_running
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    let Ok(world_guard) = world.lock() else {
+        ui_state.eval_running.store(false, Ordering::Relaxed);
+        return;
+    };
+    let robot = Robot {
+        arm: Arc::clone(&world_guard.arm),
+        urdf: world_guard.urdf.clone(),
+    };
+    let physics = world_guard.physics;
+    drop(world_guard);
+
+    {
+        let mut p = ui_state.eval.lock().expect("eval progress");
+        *p = EvalProgress::default();
+    }
+
+    let progress = Arc::clone(&ui_state.eval);
+    let running = Arc::clone(&ui_state.eval_running);
+    let base = ui_state.shooter.clone();
+    std::thread::spawn(move || {
+        let _report =
+            eval_protocol::run_eval_protocol(&robot, physics, &base, mode, Some(progress));
+        running.store(false, Ordering::Relaxed);
+    });
 }
 
 fn debug_checkbox(
@@ -458,149 +768,150 @@ fn draw_status_panel(ui: &mut egui::Ui, status: &StatusSnapshot, debug: &DebugOv
         "대기"
     };
 
-    ui.strong("공");
-    ui.label(format!("상태  {ball_ko}"));
-    ui.label(format!("시뮬 시간  {:.2} s", status.sim_time));
-    ui.label(format!(
-        "위치 [m]  x {:.2}  y {:.2}  z {:.2}",
-        status.ball_pos.0, status.ball_pos.1, status.ball_pos.2
-    ));
-    ui.label(format!(
-        "속도 [m/s]  x {:.2}  y {:.2}  z {:.2}",
-        status.ball_vel.0, status.ball_vel.1, status.ball_vel.2
-    ));
-    if debug.omega_arrow || debug.fail_status {
-        let w = status.omega;
-        let mag = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt();
-        ui.label(format!(
-            "스핀 [rad/s]  크기 {mag:.1}  ({:.0}, {:.0}, {:.0})",
-            w[0], w[1], w[2]
-        ));
-    }
+    egui::CollapsingHeader::new("Sim")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(format!("시간  {:.2} s", status.sim_time));
+        });
 
-    ui.separator();
-    ui.strong("로봇");
-    ui.label(format!("관절각 [rad]  {}", status.joints.join("  ")));
-    ui.label(format!("스윙  {swing_ko}"));
-    ui.label(format!("단계  {}", status.commit_phase.label_ko()));
-
-    ui.separator();
-    ui.strong("예상 타격");
-    if let Some(pred) = &status.debug_prediction {
-        let p = pred.impact_position.coords;
-        ui.label(format!("임팩트까지  {:.3} s", pred.time_to_impact_secs));
-        ui.label(format!(
-            "예상 위치 [m]  x {:.2}  y {:.2}  z {:.2}",
-            p.x, p.y, p.z
-        ));
-    } else {
-        ui.small("아직 예측 없음 (공이 날아오면 표시)");
-    }
-
-    if debug.commit_bar {
-        draw_commit_bar(ui, status);
-    }
-    if debug.net_gate {
-        match status.net_gate_ok {
-            Some(true) => {
-                ui.label("네트  통과 가능");
+    egui::CollapsingHeader::new("Ball")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(format!("상태  {ball_ko}"));
+            ui.label(format!(
+                "위치 [m]  x {:.2}  y {:.2}  z {:.2}",
+                status.ball_pos.0, status.ball_pos.1, status.ball_pos.2
+            ));
+            ui.label(format!(
+                "속도 [m/s]  x {:.2}  y {:.2}  z {:.2}",
+                status.ball_vel.0, status.ball_vel.1, status.ball_vel.2
+            ));
+            if debug.omega_arrow || debug.fail_status {
+                let w = status.omega;
+                let mag = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt();
+                ui.label(format!(
+                    "스핀 [rad/s]  크기 {mag:.1}  ({:.0}, {:.0}, {:.0})",
+                    w[0], w[1], w[2]
+                ));
             }
-            Some(false) => {
-                ui.colored_label(egui::Color32::GRAY, "네트  높이 미달 — 접수 불가");
-            }
-            None => {}
-        }
-    }
+        });
 
-    if debug.fail_status {
-        if let Some(text) = &status.last_fail_text {
-            ui.separator();
-            ui.strong("최근 실패");
-            ui.colored_label(egui::Color32::from_rgb(255, 120, 90), text);
-        }
-        if let Some([x, y, z]) = status.unreachable_xyz {
-            ui.label(format!("목표점 [m]  x {x:.2}  y {y:.2}  z {z:.2}"));
-        }
+    egui::CollapsingHeader::new("Robot")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(format!("관절각 [rad]  {}", status.joints.join("  ")));
+            ui.label(format!("스윙  {swing_ko}"));
+            ui.label(format!("단계  {}", status.commit_phase.label_ko()));
+        });
+
+    egui::CollapsingHeader::new("Impact")
+        .default_open(true)
+        .show(ui, |ui| {
+            if let Some(pred) = &status.debug_prediction {
+                let p = pred.impact_position.coords;
+                ui.label(format!("임팩트까지  {:.3} s", pred.time_to_impact_secs));
+                ui.label(format!(
+                    "예상 위치 [m]  x {:.2}  y {:.2}  z {:.2}",
+                    p.x, p.y, p.z
+                ));
+            } else {
+                ui.small("아직 예측 없음");
+            }
+            if debug.commit_bar {
+                draw_commit_bar(ui, status);
+            }
+            if debug.net_gate {
+                match status.net_gate_ok {
+                    Some(true) => {
+                        ui.label("네트  통과 가능");
+                    }
+                    Some(false) => {
+                        ui.colored_label(egui::Color32::GRAY, "네트  높이 미달 — 접수 불가");
+                    }
+                    None => {}
+                }
+            }
+        });
+
+    if debug.fail_status
+        && (status.last_fail_text.is_some() || status.unreachable_xyz.is_some())
+    {
+        egui::CollapsingHeader::new("Fail")
+            .default_open(true)
+            .show(ui, |ui| {
+                if let Some(text) = &status.last_fail_text {
+                    ui.colored_label(egui::Color32::from_rgb(255, 120, 90), text);
+                }
+                if let Some([x, y, z]) = status.unreachable_xyz {
+                    ui.label(format!("목표점 [m]  x {x:.2}  y {y:.2}  z {z:.2}"));
+                }
+            });
     }
 
     if debug.torque_hud {
-        let mut any = false;
-        if !status.torque_peak_nm.is_empty() || !status.torque_now_nm.is_empty() {
-            ui.separator();
-            ui.strong("토크 RNEA [N·m]");
-            any = true;
-            if !status.torque_peak_nm.is_empty() {
-                let peaks: Vec<String> = status
-                    .torque_peak_nm
-                    .iter()
-                    .enumerate()
-                    .map(|(i, t)| format!("j{i}={t:.2}"))
-                    .collect();
-                ui.label(format!("peak  {}", peaks.join("  ")));
-            }
-            if !status.torque_now_nm.is_empty() {
-                let now: Vec<String> = status
-                    .torque_now_nm
-                    .iter()
-                    .enumerate()
-                    .map(|(i, t)| format!("j{i}={t:+.2}"))
-                    .collect();
-                ui.label(format!("now   {}", now.join("  ")));
-            }
-        }
-        if status.accel_over {
-            if !any {
-                ui.separator();
-                ui.strong("한계 경고");
-                any = true;
-            }
-            ui.colored_label(egui::Color32::YELLOW, "관절 가속이 허용 상한을 넘김");
-        }
-        if status.torque_over.iter().any(|&o| o) {
-            if !any {
-                ui.separator();
-                ui.strong("한계 경고");
-                any = true;
-            }
-            let axes: Vec<String> = status
-                .torque_over
-                .iter()
-                .enumerate()
-                .filter(|(_, o)| **o)
-                .map(|(i, _)| format!("관절 {i}"))
-                .collect();
-            ui.colored_label(
-                egui::Color32::YELLOW,
-                format!("토크 초과 — {}", axes.join(", ")),
-            );
-        }
-        if status.joint_at_limit.iter().any(|&o| o) {
-            if !any {
-                ui.separator();
-                ui.strong("한계 경고");
-                any = true;
-            }
-            let axes: Vec<String> = status
-                .joint_at_limit
-                .iter()
-                .enumerate()
-                .filter(|(_, o)| **o)
-                .map(|(i, _)| format!("관절 {i}"))
-                .collect();
-            ui.colored_label(
-                egui::Color32::from_rgb(255, 80, 80),
-                format!("관절 가동범위 끝 — {}", axes.join(", ")),
-            );
-        }
-        if status.table_pen_depth > 1e-4 {
-            if !any {
-                ui.separator();
-                ui.strong("한계 경고");
-            }
-            ui.colored_label(
-                egui::Color32::from_rgb(80, 220, 230),
-                format!("테이블 침투  {:.1} mm", status.table_pen_depth * 1000.0),
-            );
+        let has_torque = !status.torque_peak_nm.is_empty() || !status.torque_now_nm.is_empty();
+        let has_warn = status.accel_over
+            || status.torque_over.iter().any(|&o| o)
+            || status.joint_at_limit.iter().any(|&o| o)
+            || status.table_pen_depth > 1e-4;
+        if has_torque || has_warn {
+            egui::CollapsingHeader::new("Limits")
+                .default_open(true)
+                .show(ui, |ui| {
+                    if !status.torque_peak_nm.is_empty() {
+                        let peaks: Vec<String> = status
+                            .torque_peak_nm
+                            .iter()
+                            .enumerate()
+                            .map(|(i, t)| format!("j{i}={t:.2}"))
+                            .collect();
+                        ui.label(format!("토크 peak  {}", peaks.join("  ")));
+                    }
+                    if !status.torque_now_nm.is_empty() {
+                        let now: Vec<String> = status
+                            .torque_now_nm
+                            .iter()
+                            .enumerate()
+                            .map(|(i, t)| format!("j{i}={t:+.2}"))
+                            .collect();
+                        ui.label(format!("토크 now   {}", now.join("  ")));
+                    }
+                    if status.accel_over {
+                        ui.colored_label(egui::Color32::YELLOW, "관절 가속이 허용 상한을 넘김");
+                    }
+                    if status.torque_over.iter().any(|&o| o) {
+                        let axes: Vec<String> = status
+                            .torque_over
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, o)| **o)
+                            .map(|(i, _)| format!("관절 {i}"))
+                            .collect();
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            format!("토크 초과 — {}", axes.join(", ")),
+                        );
+                    }
+                    if status.joint_at_limit.iter().any(|&o| o) {
+                        let axes: Vec<String> = status
+                            .joint_at_limit
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, o)| **o)
+                            .map(|(i, _)| format!("관절 {i}"))
+                            .collect();
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 80, 80),
+                            format!("관절 가동범위 끝 — {}", axes.join(", ")),
+                        );
+                    }
+                    if status.table_pen_depth > 1e-4 {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(80, 220, 230),
+                            format!("테이블 침투  {:.1} mm", status.table_pen_depth * 1000.0),
+                        );
+                    }
+                });
         }
     }
 }
@@ -669,34 +980,30 @@ fn draw_joint_anchor_windows(
             egui::Color32::from_rgb(255, 220, 90)
         };
 
+        let area_id = egui::Id::new(("joint_anchor", i));
+
         // 관절 점 + 리더 라인 (실제 투영 위치 확인용)
         painter.circle_filled(joint_pos, 3.5, accent);
         painter.circle_stroke(
             joint_pos,
             5.0,
-            egui::Stroke::new(
-                1.0,
-                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 160),
-            ),
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180)),
         );
         painter.line_segment(
             [joint_pos, label],
-            egui::Stroke::new(
-                1.0,
-                egui::Color32::from_rgba_unmultiplied(220, 220, 230, 140),
-            ),
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(220, 220, 230, 180)),
         );
 
         let frame = egui::Frame::NONE
-            .fill(egui::Color32::from_rgba_unmultiplied(12, 14, 18, 185))
+            .fill(egui::Color32::from_rgba_unmultiplied(12, 14, 18, 200))
             .stroke(egui::Stroke::new(1.0, accent))
             .corner_radius(5.0)
             .inner_margin(egui::Margin::symmetric(6, 4));
 
-        egui::Area::new(egui::Id::new(("joint_anchor", i)))
+        egui::Area::new(area_id)
             .fixed_pos(label)
             .order(egui::Order::Foreground)
-            .interactable(false)
+            .sense(egui::Sense::hover())
             .show(ctx, |ui| {
                 frame.show(ui, |ui| {
                     ui.set_max_width(128.0);

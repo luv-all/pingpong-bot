@@ -4,10 +4,16 @@
 //! - [`session`]: 물리 스레드 + 공유 월드
 //! - [`gui`]: kiss3d 3D + egui 슈터 패널 (feature `gui`)
 
+pub mod eval_protocol;
 pub mod gui;
 pub mod physics;
 pub mod session;
 
+pub use eval_protocol::{
+    EvalMode, EvalProgress, EvalReport, EvalShot, EvalZone, LiveShotObserver, MAX_SCORE,
+    PASS_SCORE_EXCLUSIVE, SHOTS_PER_ZONE, TOTAL_SHOTS, run_eval_protocol, run_eval_shot,
+    settings_for_zone, settings_for_zone_shot, settings_for_zone_shot_jittered, shot_schedule,
+};
 pub use gui::{CommitPhase, DebugOverlays, SimDebugSnapshot};
 #[cfg(feature = "gui")]
 pub use gui::{SimViewerOptions, run_sim_viewer};
