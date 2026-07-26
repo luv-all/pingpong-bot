@@ -135,8 +135,46 @@ async fn viewer_main(options: SimViewerOptions) -> Result<(), String> {
         }
 
         let dist_before_ui = ui_state.camera_dist;
+        let joint_screen = status_cache.as_ref().map(|status| {
+            // OpenGL NDC(Y-up) → wgpu 프레임버퍼(top-left, Y-down) → egui logical.
+            // kiss3d `Camera::project`는 (1+ndc_y)라 세로가 뒤집히므로 직접 투영한다.
+            let size = window.size();
+            let scale = window.scale_factor().max(1e-6) as f32;
+            let pw = size.x as f32;
+            let ph = size.y as f32;
+            let logical_w = pw / scale;
+            let logical_h = ph / scale;
+            status
+                .joint_world
+                .iter()
+                .map(|&[x, y, z]| {
+                    let world = Vec3::new(x, y, z);
+                    let clip = camera.transformation() * world.extend(1.0);
+                    if clip.w <= 1e-4 {
+                        return None;
+                    }
+                    let ndc = Vec3::new(clip.x, clip.y, clip.z) / clip.w;
+                    if !(-1.05..=1.05).contains(&ndc.z) {
+                        return None;
+                    }
+                    let egui_x = (0.5 * (ndc.x + 1.0) * pw) / scale;
+                    let egui_y = (0.5 * (1.0 - ndc.y) * ph) / scale;
+                    if !(0.0..logical_w).contains(&egui_x) || !(0.0..logical_h).contains(&egui_y)
+                    {
+                        return None;
+                    }
+                    return Some(kiss3d::egui::pos2(egui_x, egui_y));
+                })
+                .collect::<Vec<_>>()
+        });
         window.draw_ui(|ctx| {
-            panel::draw(ctx, &mut ui_state, &controls, status_cache.as_ref());
+            panel::draw(
+                ctx,
+                &mut ui_state,
+                &controls,
+                status_cache.as_ref(),
+                joint_screen.as_deref(),
+            );
         });
         if (ui_state.camera_dist - dist_before_ui).abs() > f32::EPSILON {
             camera.set_dist(ui_state.camera_dist.clamp(CAMERA_DIST_MIN, CAMERA_DIST_MAX));

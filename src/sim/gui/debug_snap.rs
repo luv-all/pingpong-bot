@@ -64,6 +64,10 @@ pub struct SimDebugSnapshot {
     pub penetrating_obbs: Vec<DebugObb>,
     pub joint_at_limit: Vec<bool>,
     pub torque_over: Vec<bool>,
+    /// commit 궤적 관절별 peak |τ| [N·m]
+    pub torque_peak_nm: Vec<f64>,
+    /// 재생 중 현재 |τ| [N·m]
+    pub torque_now_nm: Vec<f64>,
     pub accel_over: bool,
     pub net_gate_ok: Option<bool>,
     pub commit_phase: CommitPhase,
@@ -118,6 +122,8 @@ impl SimDebugSnapshot {
         self.penetrating_obbs.clear();
         self.joint_at_limit.clear();
         self.torque_over.clear();
+        self.torque_peak_nm.clear();
+        self.torque_now_nm.clear();
         self.accel_over = false;
         self.net_gate_ok = None;
         self.commit_phase = CommitPhase::Idle;
@@ -145,16 +151,51 @@ impl SimDebugSnapshot {
     pub fn set_committed_path(&mut self, arm: &Arm, trajectory: &SwingTrajectory) {
         self.committed_racket_path = sample_racket_path(arm, trajectory, GHOST_SAMPLES);
         let control = defaults::control();
-        let peaks = trajectory.peak_joint_accelerations();
+        let duration = trajectory.duration_secs.max(f64::EPSILON);
+        let samples = ((duration / 0.005).ceil() as usize).max(24);
+        let n = arm.joint_count();
+        let mut peaks = vec![0.0_f64; n];
+        let mut have_rnea = arm.inertias.is_some();
+        if have_rnea {
+            for k in 0..=samples {
+                let t = duration * k as f64 / samples as f64;
+                let q = trajectory.sample_at(t);
+                let qd = trajectory.sample_velocity_at(t);
+                let qdd = trajectory.sample_acceleration_at(t);
+                if let Some(tau) = crate::robot::required_torque(arm, &q.values, &qd, &qdd) {
+                    for i in 0..n {
+                        peaks[i] = f64::max(peaks[i], tau[i].abs());
+                    }
+                } else {
+                    have_rnea = false;
+                    break;
+                }
+            }
+        }
+        if !have_rnea {
+            let alphas = trajectory.peak_joint_accelerations();
+            peaks = alphas
+                .iter()
+                .map(|&alpha| control.joint_inertia * alpha)
+                .collect();
+        }
+        self.torque_peak_nm = peaks.clone();
         self.torque_over = peaks
             .iter()
             .enumerate()
-            .map(|(i, &alpha)| {
+            .map(|(i, &peak)| {
                 let limit = control.max_joint_torques.get(i).copied().unwrap_or(0.0);
-                control.joint_inertia * alpha > limit + 1e-6
+                peak > limit + 1e-6
             })
             .collect();
         self.accel_over = trajectory.peak_joint_acceleration() > control.max_joint_accel + 1e-6;
+    }
+
+    /// 스윙 재생 중이면 궤적 샘플, 아니면 현재 자세(중력)로 τ를 채운다.
+    pub fn set_torque_now(&mut self, arm: &Arm, q: &[f64], qd: &[f64], qdd: &[f64]) {
+        if let Some(tau) = crate::robot::required_torque(arm, q, qd, qdd) {
+            self.torque_now_nm = tau;
+        }
     }
 
     /// 매 스텝: 관절·관통·ω·진실/예측 탄도.
@@ -240,7 +281,7 @@ fn sample_racket_path(arm: &Arm, trajectory: &SwingTrajectory, samples: usize) -
 fn sample_predicted_arc(
     mut pos: nalgebra::Vector3<f64>,
     mut vel: nalgebra::Vector3<f64>,
-    omega: nalgebra::Vector3<f64>,
+    mut omega: nalgebra::Vector3<f64>,
     physics: &defaults::PhysicsParams,
     plane_y: f64,
     max_samples: usize,
@@ -250,10 +291,11 @@ fn sample_predicted_arc(
     out.push([pos.x, pos.y, pos.z]);
     let mut t = 0.0;
     while out.len() < max_samples && t < est.max_lead {
-        let (next_pos, next_vel) =
+        let (next_pos, next_vel, next_omega) =
             ballistics::semi_implicit_euler(pos, vel, omega, est.integrate_dt, physics);
         pos = next_pos;
         vel = next_vel;
+        omega = next_omega;
         t += est.integrate_dt;
         out.push([pos.x, pos.y, pos.z]);
         if pos.y <= plane_y || pos.z < 0.2 {

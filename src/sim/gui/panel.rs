@@ -84,10 +84,18 @@ pub struct StatusSnapshot {
     pub commit_phase: CommitPhase,
     pub table_pen_depth: f64,
     pub torque_over: Vec<bool>,
+    pub torque_peak_nm: Vec<f64>,
+    pub torque_now_nm: Vec<f64>,
     pub accel_over: bool,
     pub joint_at_limit: Vec<bool>,
     pub omega: [f64; 3],
     pub net_gate_ok: Option<bool>,
+    /// 관절 월드 원점 [m] (앵커 HUD)
+    pub joint_world: Vec<[f32; 3]>,
+    pub joint_q: Vec<f64>,
+    pub joint_q_min: Vec<Option<f64>>,
+    pub joint_q_max: Vec<Option<f64>>,
+    pub torque_limit_nm: Vec<f64>,
 }
 
 impl StatusSnapshot {
@@ -96,6 +104,26 @@ impl StatusSnapshot {
         let bp = world.ball_position();
         let bv = world.ball_velocity();
         let snap = world.debug_snap();
+        let arm = world.arm();
+        let joints = world.robot().joints();
+        let rail_x = world.robot().rail_x();
+        let joint_world = arm
+            .joint_origins_world(rail_x, joints)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| [p.x as f32, p.y as f32, p.z as f32])
+            .collect();
+        let control = defaults::control();
+        let joint_q = joints.values.clone();
+        let joint_q_min: Vec<Option<f64>> = (0..arm.joint_count())
+            .map(|i| arm.joint_limit(i).map(|l| l.min))
+            .collect();
+        let joint_q_max: Vec<Option<f64>> = (0..arm.joint_count())
+            .map(|i| arm.joint_limit(i).map(|l| l.max))
+            .collect();
+        let torque_limit_nm: Vec<f64> = (0..arm.joint_count())
+            .map(|i| control.max_joint_torques.get(i).copied().unwrap_or(6.0))
+            .collect();
         return Self {
             ball_state: world.ball_state,
             sim_time: world.sim_time,
@@ -116,10 +144,17 @@ impl StatusSnapshot {
             commit_phase: snap.commit_phase,
             table_pen_depth: snap.table_pen_depth,
             torque_over: snap.torque_over.clone(),
+            torque_peak_nm: snap.torque_peak_nm.clone(),
+            torque_now_nm: snap.torque_now_nm.clone(),
             accel_over: snap.accel_over,
             joint_at_limit: snap.joint_at_limit.clone(),
             omega: snap.omega,
             net_gate_ok: snap.net_gate_ok,
+            joint_world,
+            joint_q,
+            joint_q_min,
+            joint_q_max,
+            torque_limit_nm,
         };
     }
 }
@@ -130,8 +165,16 @@ pub fn draw(
     ui_state: &mut PanelUiState,
     controls: &Arc<Mutex<SimRuntimeControls>>,
     status: Option<&StatusSnapshot>,
+    // 관절별 스크린 좌표 (egui, top-left). `None`이면 해당 관절 숨김.
+    joint_screen: Option<&[Option<egui::Pos2>]>,
 ) {
     ensure_korean_fonts(ctx);
+
+    if ui_state.debug.joint_anchors
+        && let (Some(status), Some(screens)) = (status, joint_screen)
+    {
+        draw_joint_anchor_windows(ctx, status, screens);
+    }
 
     let mut shoot = false;
     let mut random_shoot = false;
@@ -306,6 +349,12 @@ pub fn draw(
                 ui.label("· 관절이 리밋에 닿음");
                 ui.label("· 테이블 침투 깊이");
             });
+            debug_checkbox(ui, &mut d.joint_anchors, "joint anchors", |ui| {
+                ui.strong("관절 앵커 HUD");
+                ui.label("각 관절 위치에 반투명 창을 붙입니다.");
+                ui.label("각도·토크의 Min / 현재 / Max.");
+                ui.label("화면을 돌려도 관절을 따라갑니다.");
+            });
             debug_checkbox(ui, &mut d.commit_bar, "commit bar", |ui| {
                 ui.strong("스윙 결정 타이밍");
                 ui.label("임팩트까지 남은 시간(tti)이");
@@ -463,6 +512,29 @@ fn draw_status_panel(ui: &mut egui::Ui, status: &StatusSnapshot, debug: &DebugOv
 
     if debug.torque_hud {
         let mut any = false;
+        if !status.torque_peak_nm.is_empty() || !status.torque_now_nm.is_empty() {
+            ui.separator();
+            ui.strong("토크 RNEA [N·m]");
+            any = true;
+            if !status.torque_peak_nm.is_empty() {
+                let peaks: Vec<String> = status
+                    .torque_peak_nm
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| format!("j{i}={t:.2}"))
+                    .collect();
+                ui.label(format!("peak  {}", peaks.join("  ")));
+            }
+            if !status.torque_now_nm.is_empty() {
+                let now: Vec<String> = status
+                    .torque_now_nm
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| format!("j{i}={t:+.2}"))
+                    .collect();
+                ui.label(format!("now   {}", now.join("  ")));
+            }
+        }
         if status.accel_over {
             if !any {
                 ui.separator();
@@ -518,6 +590,198 @@ fn draw_status_panel(ui: &mut egui::Ui, status: &StatusSnapshot, debug: &DebugOv
             );
         }
     }
+}
+
+fn draw_joint_anchor_windows(
+    ctx: &egui::Context,
+    status: &StatusSnapshot,
+    screens: &[Option<egui::Pos2>],
+) {
+    let n = status
+        .joint_world
+        .len()
+        .min(status.joint_q.len())
+        .min(screens.len());
+
+    // 투영점 → 라벨 위치. 가까우면 화면에서 밀어 겹침을 줄인다.
+    const MIN_SEP: f32 = 78.0;
+    let mut anchors: Vec<(usize, egui::Pos2)> = Vec::with_capacity(n);
+    for i in 0..n {
+        if let Some(pos) = screens[i] {
+            anchors.push((i, pos));
+        }
+    }
+    let mut label_pos: Vec<egui::Pos2> = anchors
+        .iter()
+        .map(|&(_, p)| p + egui::vec2(14.0, -10.0))
+        .collect();
+    for _ in 0..8 {
+        for a in 0..label_pos.len() {
+            for b in (a + 1)..label_pos.len() {
+                let delta = label_pos[b] - label_pos[a];
+                let dist = delta.length();
+                if dist >= MIN_SEP || dist < 1e-3 {
+                    continue;
+                }
+                let push = (MIN_SEP - dist) * 0.5;
+                let dir = if dist < 1e-3 {
+                    egui::vec2(0.0, 1.0)
+                } else {
+                    delta / dist
+                };
+                label_pos[a] -= dir * push;
+                label_pos[b] += dir * push;
+            }
+        }
+    }
+
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("joint_anchor_guides"),
+    ));
+
+    for (slot, &(i, joint_pos)) in anchors.iter().enumerate() {
+        let label = label_pos[slot];
+        let q = status.joint_q[i];
+        let q_min = status.joint_q_min.get(i).copied().flatten();
+        let q_max = status.joint_q_max.get(i).copied().flatten();
+        let tau = status.torque_now_nm.get(i).copied().unwrap_or(0.0);
+        let tau_max = status.torque_limit_nm.get(i).copied().unwrap_or(6.0);
+        let at_limit = status.joint_at_limit.get(i).copied().unwrap_or(false);
+        let torque_hot =
+            status.torque_over.get(i).copied().unwrap_or(false) || tau.abs() > tau_max + 1e-6;
+        let accent = if at_limit || torque_hot {
+            egui::Color32::from_rgb(255, 120, 80)
+        } else {
+            egui::Color32::from_rgb(255, 220, 90)
+        };
+
+        // 관절 점 + 리더 라인 (실제 투영 위치 확인용)
+        painter.circle_filled(joint_pos, 3.5, accent);
+        painter.circle_stroke(
+            joint_pos,
+            5.0,
+            egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 160),
+            ),
+        );
+        painter.line_segment(
+            [joint_pos, label],
+            egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_unmultiplied(220, 220, 230, 140),
+            ),
+        );
+
+        let frame = egui::Frame::NONE
+            .fill(egui::Color32::from_rgba_unmultiplied(12, 14, 18, 185))
+            .stroke(egui::Stroke::new(1.0, accent))
+            .corner_radius(5.0)
+            .inner_margin(egui::Margin::symmetric(6, 4));
+
+        egui::Area::new(egui::Id::new(("joint_anchor", i)))
+            .fixed_pos(label)
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(ctx, |ui| {
+                frame.show(ui, |ui| {
+                    ui.set_max_width(128.0);
+                    ui.strong(format!("j{i}"));
+                    // 내부는 rad, HUD만 deg. 현재값 강조 + 범위는 … 로.
+                    let q_deg = q.to_degrees();
+                    ui.label(format!("q  {q_deg:.0}°"));
+                    draw_range_bar(ui, q_min, q, q_max, at_limit);
+                    ui.weak(match (q_min, q_max) {
+                        (Some(lo), Some(hi)) => {
+                            format!("{:.0}° … {:.0}°", lo.to_degrees(), hi.to_degrees())
+                        }
+                        (None, Some(hi)) => format!("−∞ … {:.0}°", hi.to_degrees()),
+                        (Some(lo), None) => format!("{:.0}° … +∞", lo.to_degrees()),
+                        (None, None) => "−∞ … +∞".into(),
+                    });
+                    ui.add_space(2.0);
+                    ui.label(format!("τ  {tau:+.2} N·m"));
+                    draw_signed_bar(ui, -tau_max, tau, tau_max, torque_hot);
+                    ui.weak(format!("{:+.1} … {:+.1}", -tau_max, tau_max));
+                });
+            });
+    }
+}
+
+fn draw_range_bar(ui: &mut egui::Ui, min: Option<f64>, cur: f64, max: Option<f64>, hot: bool) {
+    let (Some(lo), Some(hi)) = (min, max) else {
+        return;
+    };
+    if hi - lo < 1e-9 {
+        return;
+    }
+    let t = ((cur - lo) / (hi - lo)).clamp(0.0, 1.0) as f32;
+    let desired = egui::vec2(120.0, 6.0);
+    let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        2.0,
+        egui::Color32::from_rgba_unmultiplied(40, 44, 52, 200),
+    );
+    let fill = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() * t, rect.height()));
+    painter.rect_filled(
+        fill,
+        2.0,
+        if hot {
+            egui::Color32::from_rgb(240, 100, 70)
+        } else {
+            egui::Color32::from_rgb(90, 180, 255)
+        },
+    );
+    let x = rect.left() + rect.width() * t;
+    painter.line_segment(
+        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+        egui::Stroke::new(1.5, egui::Color32::WHITE),
+    );
+}
+
+fn draw_signed_bar(ui: &mut egui::Ui, min: f64, cur: f64, max: f64, hot: bool) {
+    if max - min < 1e-9 {
+        return;
+    }
+    let t = ((cur - min) / (max - min)).clamp(0.0, 1.0) as f32;
+    let mid = ((0.0 - min) / (max - min)).clamp(0.0, 1.0) as f32;
+    let desired = egui::vec2(120.0, 6.0);
+    let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        2.0,
+        egui::Color32::from_rgba_unmultiplied(40, 44, 52, 200),
+    );
+    let zero_x = rect.left() + rect.width() * mid;
+    let cur_x = rect.left() + rect.width() * t;
+    let (left, right) = if cur_x >= zero_x {
+        (zero_x, cur_x)
+    } else {
+        (cur_x, zero_x)
+    };
+    painter.rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(left, rect.top()),
+            egui::pos2(right, rect.bottom()),
+        ),
+        2.0,
+        if hot {
+            egui::Color32::from_rgb(240, 180, 60)
+        } else {
+            egui::Color32::from_rgb(120, 220, 140)
+        },
+    );
+    painter.line_segment(
+        [
+            egui::pos2(zero_x, rect.top() - 1.0),
+            egui::pos2(zero_x, rect.bottom() + 1.0),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+    );
 }
 
 fn draw_commit_bar(ui: &mut egui::Ui, status: &StatusSnapshot) {
