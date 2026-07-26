@@ -562,11 +562,14 @@ fn impact_marker_color(world: &SimWorld) -> Color {
     }
     if let Some(err) = &snap.last_fail {
         return match err {
-            SwingPlanError::InverseKinematicsNoSolution { .. } => rgba(colors::IK),
+            SwingPlanError::InverseKinematicsNoSolution { .. }
+            | SwingPlanError::NearSingularity { .. } => rgba(colors::IK),
             SwingPlanError::InsufficientTime { .. } => rgba(colors::TIME),
             SwingPlanError::ReturnVelocityUnreachable { .. } => rgba(colors::RETURN),
             SwingPlanError::TablePenetration { .. } => rgba(colors::PENETRATION),
-            SwingPlanError::JointOrTorqueLimit { .. } => rgba(colors::LIMIT),
+            SwingPlanError::JointOrTorqueLimit { .. }
+            | SwingPlanError::TrajectoryExceedsLimits { .. }
+            | SwingPlanError::TrajectoryExceedsTorque { .. } => rgba(colors::LIMIT),
         };
     }
     if world.swing_abandoned() {

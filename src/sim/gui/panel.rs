@@ -53,6 +53,8 @@ pub struct PanelUiState {
     pub time_scale: f64,
     /// OrbitCamera3d 거리 [m]
     pub camera_dist: f32,
+    /// commit 시 quintic 대신 순수 토크 bang-bang을 쓸지 - 디버그 토글.
+    pub use_bang_bang_swing: bool,
     pub debug: DebugOverlays,
 }
 
@@ -62,6 +64,7 @@ impl PanelUiState {
             shooter: controls.shooter.clone(),
             time_scale: controls.time_scale,
             camera_dist: CAMERA_DIST_DEFAULT,
+            use_bang_bang_swing: controls.use_bang_bang_swing,
             debug: DebugOverlays::debug_defaults(),
         };
     }
@@ -298,6 +301,15 @@ pub fn draw(
             ui.small("drag=orbit · scroll=zoom");
             ui.small("axes: R=X  G=Y  B=Z");
             ui.separator();
+            ui.checkbox(
+                &mut ui_state.use_bang_bang_swing,
+                "Bang-bang swing (pure torque, debug)",
+            );
+            ui.small(
+                "켜면 commit 스윙을 quintic 대신 순수 토크(bang-bang)로 계획 — \
+                 궤적 '모양' 제약 없이 실기 토크 한계만으로 육안 비교용",
+            );
+            ui.separator();
             ui.label("Debug overlays");
             ui.small("항목에 마우스를 올리면 설명");
             ui.horizontal(|ui| {
@@ -414,6 +426,7 @@ pub fn draw(
         }
         ctrl.shooter = ui_state.shooter.clone();
         ctrl.time_scale = ui_state.time_scale;
+        ctrl.use_bang_bang_swing = ui_state.use_bang_bang_swing;
         if shoot {
             ctrl.request_shoot();
         }

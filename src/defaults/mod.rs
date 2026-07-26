@@ -37,7 +37,10 @@ pub use hardware::{dynamixel, rail};
 pub use impact::{ImpactParams, impact};
 pub use physics::{PhysicsParams, physics};
 pub use planner::intercept;
-pub use robot::{primitive_4dof, rail_frame, robot, shared_robot, urdf_4dof, urdf_test};
+pub use robot::{
+    RAIL_MAX_SPEED, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount, rail_frame, robot,
+    shared_robot, urdf_4dof, urdf_test,
+};
 pub use vision::{colormask, detector, roi, scorer};
 
 #[cfg(test)]

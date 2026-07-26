@@ -34,6 +34,31 @@ pub enum SwingPlanError {
         incoming_velocity: [f64; 3],
         outgoing_velocity: [f64; 3],
     },
+    /// 목표 라켓속도를 관절속도로 역산한 결과가 특이점 근처처럼 관절
+    /// 속도 한계를 크게 벗어남 - 이 IK 해로 스윙을 시도하면 quintic
+    /// 균일 스케일다운(`fit_end_velocity`)이 다른 모든 관절까지
+    /// 저속으로 뭉개버려 사실상 "임팩트"가 사라진다.
+    NearSingularity {
+        joint_index: usize,
+        required_speed: f64,
+        speed_limit: f64,
+    },
+    /// 임팩트 자세·목표속도 자체는 도달 가능한데, 거기까지 잇는 quintic
+    /// 궤적(+ 팔로스루)이 중간에 관절 각도/속도 한계를 벗어남.
+    ///
+    /// 이전에는 이 실패가 `InverseKinematicsNoSolution`으로 보고돼
+    /// "목표가 팔 도달 범위 밖"이라는 **사실과 다른** 메시지가 나갔다
+    /// (2026-07-23). 실제로는 목표에 IK 해가 멀쩡히 있고 필요 관절속도도
+    /// 한계의 60% 수준인데도 같은 메시지가 떠, 조사 방향이 리치/속도
+    /// 재보정 쪽으로 잘못 유도됐다.
+    TrajectoryExceedsLimits {
+        rail_end_x: f64,
+        /// 실제로 위반한 한계 이름 (관절 속도/각가속도/각도 범위, 레일 속도/범위).
+        violated: &'static str,
+    },
+    /// 궤적이 관절 각도/속도 한계는 지키지만 **토크** 한계를 넘음.
+    /// `utilization`은 최악 관절의 `|토크|/한계` 비율(>1이면 초과).
+    TrajectoryExceedsTorque { rail_end_x: f64, utilization: f64 },
     /// 임팩트/궤적 자세가 테이블을 관통
     TablePenetration {
         target_x: f64,
@@ -76,7 +101,11 @@ impl SwingPlanError {
                 target_y,
                 target_z,
             } => Some([*target_x, *target_y, *target_z]),
-            Self::InsufficientTime { .. } | Self::ReturnVelocityUnreachable { .. } => None,
+            Self::InsufficientTime { .. }
+            | Self::ReturnVelocityUnreachable { .. }
+            | Self::NearSingularity { .. }
+            | Self::TrajectoryExceedsLimits { .. }
+            | Self::TrajectoryExceedsTorque { .. } => None,
         };
     }
 }
@@ -152,6 +181,32 @@ impl fmt::Display for SwingPlanError {
                 outgoing_velocity[0],
                 outgoing_velocity[1],
                 outgoing_velocity[2]
+            ),
+            Self::NearSingularity {
+                joint_index,
+                required_speed,
+                speed_limit,
+            } => write!(
+                f,
+                "특이점 근처 IK 해 - 관절 {joint_index} 필요속도 {required_speed:.2} rad/s \
+                 가 한계 {speed_limit:.2} rad/s를 크게 초과"
+            ),
+            Self::TrajectoryExceedsLimits {
+                rail_end_x,
+                violated,
+            } => write!(
+                f,
+                "임팩트 자세는 도달 가능하나 quintic 궤적이 중간에 [{violated}] \
+                 한계를 벗어남 (레일 끝 x={rail_end_x:.3} m)"
+            ),
+            Self::TrajectoryExceedsTorque {
+                rail_end_x,
+                utilization,
+            } => write!(
+                f,
+                "임팩트 자세는 도달 가능하나 궤적이 토크 한계를 초과 \
+                 (최악 관절 이용률 {:.0}%, 레일 끝 x={rail_end_x:.3} m)",
+                utilization * 100.0
             ),
             Self::TablePenetration {
                 target_x,

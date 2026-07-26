@@ -1,7 +1,7 @@
 //! 런타임 관절 상태 - sim/real encoder 읽기가 같은 타입을 채운다.
 
 use super::{Arm, RacketPose};
-use crate::Joints;
+use crate::{BangBangTrajectory, Joints};
 
 /// 런타임 관절 상태 - sim `RobotState`/real encoder 읽기가 같은 타입을 채운다.
 #[derive(Debug, Clone, PartialEq)]
@@ -14,13 +14,60 @@ pub struct RobotState {
     angles: Joints,
     /// 추종 목표 관절각 (궤적 없을 때)
     targets: Joints,
-    /// quintic 스윙 재생
+    /// 스윙 재생(quintic 또는 순수 토크 bang-bang)
     active_swing: Option<SwingPlayback>,
+}
+
+/// 재생 중인 스윙 궤적 - quintic(`plan_swing`)과 순수 토크 bang-bang
+/// (`plan_bang_bang_swing`)을 같은 재생 루프(`advance_swing`)로 다루기 위한
+/// 얇은 래퍼. GUI 토글로 어느 쪽을 커밋할지 고르지만, 재생 쪽 코드는
+/// 궤적 "모양"을 몰라도 되게 한다.
+#[derive(Debug, Clone, PartialEq)]
+enum PlaybackTrajectory {
+    Quintic(crate::SwingTrajectory),
+    BangBang(BangBangTrajectory),
+}
+
+impl PlaybackTrajectory {
+    fn duration_secs(&self) -> f64 {
+        return match self {
+            Self::Quintic(trajectory) => trajectory.duration_secs,
+            Self::BangBang(trajectory) => trajectory.duration_secs(),
+        };
+    }
+
+    fn sample_at(&self, t: f64) -> Joints {
+        return match self {
+            Self::Quintic(trajectory) => trajectory.sample_at(t),
+            Self::BangBang(trajectory) => trajectory.sample_at(t),
+        };
+    }
+
+    fn sample_rail_at(&self, t: f64) -> f64 {
+        return match self {
+            Self::Quintic(trajectory) => trajectory.sample_rail_at(t),
+            Self::BangBang(trajectory) => trajectory.sample_rail_at(t),
+        };
+    }
+
+    fn sample_velocity_at(&self, t: f64) -> Vec<f64> {
+        return match self {
+            Self::Quintic(trajectory) => trajectory.sample_velocity_at(t),
+            Self::BangBang(trajectory) => trajectory.sample_velocity_at(t),
+        };
+    }
+
+    fn follow_through_rail_x(&self) -> f64 {
+        return match self {
+            Self::Quintic(trajectory) => trajectory.follow_through_rail_x,
+            Self::BangBang(trajectory) => trajectory.follow_through_rail_x(),
+        };
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct SwingPlayback {
-    trajectory: crate::SwingTrajectory,
+    trajectory: PlaybackTrajectory,
     elapsed: f64,
     /// `advance_swing_torque_limited`용 관절 각속도 [rad/s].
     joint_vel: Vec<f64>,
@@ -38,10 +85,20 @@ impl RobotState {
         };
     }
 
-    /// 스윙 재생 중이면 `(elapsed, trajectory)` — RNEA HUD용.
-    pub fn active_swing_sample(&self) -> Option<(f64, &crate::SwingTrajectory)> {
+    /// 스윙 재생 중이면 `(elapsed, q, qd, qdd)` — RNEA HUD용.
+    ///
+    /// bang-bang은 각가속도를 직접 노출하지 않아 `qdd=0`으로 둔다
+    /// (중력·코리올리스만 보이는 근사).
+    pub fn active_swing_sample(&self) -> Option<(f64, Vec<f64>, Vec<f64>, Vec<f64>)> {
         let playback = self.active_swing.as_ref()?;
-        return Some((playback.elapsed, &playback.trajectory));
+        let t = playback.elapsed.min(playback.trajectory.duration_secs());
+        let q = playback.trajectory.sample_at(t).values;
+        let qd = playback.trajectory.sample_velocity_at(t);
+        let qdd = match &playback.trajectory {
+            PlaybackTrajectory::Quintic(trajectory) => trajectory.sample_acceleration_at(t),
+            PlaybackTrajectory::BangBang(_) => vec![0.0; q.len()],
+        };
+        return Some((playback.elapsed, q, qd, qdd));
     }
 
     /// 리니어 레일 x [m].
@@ -69,6 +126,14 @@ impl RobotState {
         self.targets = targets;
     }
 
+    /// 리니어 레일 목표 x [m]를 직접 설정한다.
+    ///
+    /// `set_targets`의 레일 짝. 보간은 하지 않는다 — `step_toward_targets`의
+    /// rate-limited 추종 루프가 설정된 목표를 향해 `rail.max_speed`로 접근한다.
+    pub fn set_rail_target(&mut self, rail_x: f64) {
+        self.rail_target = rail_x;
+    }
+
     /// quintic 스윙 궤적을 시작한다 (이미 스윙 중이면 무시).
     pub fn begin_swing(&mut self, trajectory: crate::SwingTrajectory) {
         if self.active_swing.is_some() {
@@ -77,10 +142,21 @@ impl RobotState {
         self.replace_swing(trajectory);
     }
 
-    /// 스윙을 현재 포즈 기준 새 궤적으로 교체한다 (elapsed=0).
+    /// 스윙을 현재 포즈 기준 새 quintic 궤적으로 교체한다 (elapsed=0).
     pub fn replace_swing(&mut self, trajectory: crate::SwingTrajectory) {
+        self.replace_playback(PlaybackTrajectory::Quintic(trajectory));
+    }
+
+    /// 스윙을 현재 포즈 기준 새 순수 토크 bang-bang 궤적으로 교체한다
+    /// (elapsed=0) - GUI "bang-bang swing" 토글이 켜졌을 때 `replace_swing`
+    /// 대신 쓴다.
+    pub fn replace_bang_bang_swing(&mut self, trajectory: BangBangTrajectory) {
+        self.replace_playback(PlaybackTrajectory::BangBang(trajectory));
+    }
+
+    fn replace_playback(&mut self, trajectory: PlaybackTrajectory) {
         self.targets = trajectory.sample_at(0.0);
-        self.rail_target = trajectory.follow_through_rail_x;
+        self.rail_target = trajectory.follow_through_rail_x();
         self.rail_x = trajectory.sample_rail_at(0.0);
         self.active_swing = Some(SwingPlayback {
             trajectory,
@@ -89,9 +165,12 @@ impl RobotState {
         });
     }
 
-    /// 재생 중인 스윙 궤적 (없으면 `None`).
+    /// 재생 중인 quintic 스윙 궤적 (없거나 bang-bang이면 `None`).
     pub fn active_trajectory(&self) -> Option<&crate::SwingTrajectory> {
-        return self.active_swing.as_ref().map(|s| &s.trajectory);
+        return match self.active_swing.as_ref().map(|s| &s.trajectory) {
+            Some(PlaybackTrajectory::Quintic(trajectory)) => Some(trajectory),
+            _ => None,
+        };
     }
 
     /// 진행 중 스윙을 취소한다 (다음 공 발사 전).
@@ -124,10 +203,11 @@ impl RobotState {
             return false;
         };
         playback.elapsed += dt;
-        let t = playback.elapsed.min(playback.trajectory.duration_secs);
+        let duration = playback.trajectory.duration_secs();
+        let t = playback.elapsed.min(duration);
         self.targets = playback.trajectory.sample_at(t);
         self.rail_x = playback.trajectory.sample_rail_at(t);
-        if playback.elapsed >= playback.trajectory.duration_secs {
+        if playback.elapsed >= duration {
             self.active_swing = None;
             return true;
         }
@@ -139,9 +219,9 @@ impl RobotState {
         self.angles = joints;
     }
 
-    /// quintic 궤적을 `dt`만큼 진행한다. 완료 시 `true`.
+    /// 재생 중인 스윙(quintic 또는 bang-bang)을 `dt`만큼 진행한다. 완료 시 `true`.
     ///
-    /// 계획된 임팩트·팔로스루 knot를 사후 clamp 없이 그대로 재생한다.
+    /// 계획된 궤적을 사후 clamp 없이 그대로 재생한다.
     /// 시뮬 폐루프는 [`Self::step_commands`] + 다물체 측정을 쓴다.
     /// 토크 포화 추종은 [`Self::advance_swing_torque_limited`] / Rapier [`crate::sim::ArmMultibody`].
     pub fn advance_swing(&mut self, _arm: &Arm, dt: f64) -> bool {
@@ -149,11 +229,12 @@ impl RobotState {
             return false;
         };
         playback.elapsed += dt;
-        let t = playback.elapsed.min(playback.trajectory.duration_secs);
+        let duration = playback.trajectory.duration_secs();
+        let t = playback.elapsed.min(duration);
         let sampled = playback.trajectory.sample_at(t);
         self.rail_x = playback.trajectory.sample_rail_at(t);
         self.angles = sampled;
-        if playback.elapsed >= playback.trajectory.duration_secs {
+        if playback.elapsed >= duration {
             self.active_swing = None;
             return true;
         }
@@ -177,7 +258,8 @@ impl RobotState {
             playback.joint_vel = vec![0.0; self.angles.values.len()];
         }
         playback.elapsed += dt;
-        let t = playback.elapsed.min(playback.trajectory.duration_secs);
+        let duration = playback.trajectory.duration_secs();
+        let t = playback.elapsed.min(duration);
         let desired = playback.trajectory.sample_at(t);
         let desired_vel = playback.trajectory.sample_velocity_at(t);
         self.rail_x = playback.trajectory.sample_rail_at(t);
@@ -197,7 +279,7 @@ impl RobotState {
             playback.joint_vel[i] = omega_next;
         }
 
-        if playback.elapsed >= playback.trajectory.duration_secs {
+        if playback.elapsed >= duration {
             self.angles = desired;
             self.active_swing = None;
             return true;
@@ -272,7 +354,6 @@ impl RobotState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::defaults::{ControlParams, control};
     use crate::{RailMotion, SwingTrajectory};
 

@@ -92,6 +92,13 @@ pub struct BallShooterSettings {
 
 impl Default for BallShooterSettings {
     fn default() -> Self {
+        // speed/pitch/height는 현재 슈터 기하(`ShooterLayout`, 끝선 뒤
+        // 0.22m 돌출)와 네트 클리어 기준으로 고른 값이다.
+        //
+        // ⚠️ 미해결: 관절속도를 실기 Dynamixel 스펙(~2.88 rad/s,
+        // `hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S`)으로
+        // 재보정한 뒤로 이 조성의 공은 팔이 요구 라켓속도를 못 내
+        // 리턴하지 못한다(`tools/shot_tune`으로 재튜닝 필요).
         return Self {
             // 끝선 발사(비행거리↑) — 네트 클리어 기준
             speed_mps: 5.6,

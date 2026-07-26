@@ -1,15 +1,18 @@
 //! 스윙/충돌/임팩트/관절 궤적 계획.
 
+pub mod bang_bang;
 pub mod collision;
+pub mod dynamics;
 pub mod impact;
 pub mod swing;
 
+pub use bang_bang::{BangBangTrajectory, PlannedBangBangIntercept, plan_bang_bang_swing};
 pub use collision::{OrientedBox, clamp_above_table, robot_obbs, table_penetration};
 pub use impact::{rally_return_velocity, required_racket_velocity, verify_impact_model};
 pub use swing::{
-    PlannedIntercept, RailMotion, SwingTrajectory, accel, aero_accel,
-    ball_past_midcourt_for_commit, in_swing_commit_window, plan_best_swing, plan_return_to_center,
-    plan_swing,
+    PlannedIntercept, RailMotion, SwingFeasibility, SwingTrajectory, accel, aero_accel,
+    ball_past_midcourt_for_commit, in_swing_commit_window, plan_best_swing, plan_coarse_track,
+    plan_return_to_center, plan_swing, swing_feasibility,
 };
 /// 하위 호환: `planner::physics::…`
 pub use swing::physics;
