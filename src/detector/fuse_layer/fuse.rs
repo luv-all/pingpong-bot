@@ -96,10 +96,7 @@ pub struct FuseDetector {
 }
 
 impl FuseDetector {
-    pub fn new(
-        generators: impl IntoCandidateGenerators,
-        scorer: Scorer,
-    ) -> Self {
+    pub fn new(generators: impl IntoCandidateGenerators, scorer: Scorer) -> Self {
         return Self {
             generators: generators.into_candidate_generators(),
             scorer,
@@ -189,7 +186,9 @@ pub fn fuse(generators: impl IntoCandidateGenerators, scorer: Scorer) -> FuseDet
 mod tests {
     use super::*;
     use crate::CameraId;
-    use crate::detector::{ColorSpace, ColormaskParams, ColormaskDetector, ContourDetector, ScorerParams};
+    use crate::detector::{
+        ColorSpace, ColormaskDetector, ColormaskParams, ContourDetector, ScorerParams,
+    };
     use opencv::core::{CV_8UC3, Mat, Point, Scalar, Size};
     use opencv::imgproc;
     use std::time::Instant;

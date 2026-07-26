@@ -5,8 +5,8 @@
 
 pub mod camera;
 pub mod constants;
-pub mod detector;
 pub mod defaults;
+pub mod detector;
 pub mod error;
 pub mod estimator;
 pub mod hardware;
@@ -35,17 +35,17 @@ pub use defaults::{
     scorer, shared_robot, urdf_4dof, urdf_test,
 };
 pub use detector::{
-    BallDetector, Candidate, CandidateGenerator, ColorContourCascade, ColorSpace, ColormaskDetector,
-    ColormaskParams, ContourDetector, FuseDetector, IntoCandidateGenerators, MotionPrior,
-    ParseColorSpaceError, RoiParams, RoiTrack, Scorer, ScorerParams, fuse, passthrough_detect,
-    track, undistort_frame,
+    BallDetector, Candidate, CandidateGenerator, ColorContourCascade, ColorSpace,
+    ColormaskDetector, ColormaskParams, ContourDetector, FuseDetector, IntoCandidateGenerators,
+    MotionPrior, ParseColorSpaceError, RoiParams, RoiTrack, Scorer, ScorerParams, fuse,
+    passthrough_detect, track, undistort_frame,
 };
 pub use error::{DomainError, HwError, ObservationError, SwingPlanError};
 pub use estimator::{
     BallEkf, BounceEvent, Estimator, HitPlane, Prediction, RollEvent, TrajPoint, detect_bounces,
-    detect_rolls, drag_from_trajectory, format_physics_for_defaults, friction_from_tangential_speeds,
-    mean_bounce_e, mean_roll_mu, predict_hit_plane, restitution_from_bounce_heights,
-    restitution_from_normal_speeds,
+    detect_rolls, drag_from_trajectory, format_physics_for_defaults,
+    friction_from_tangential_speeds, mean_bounce_e, mean_roll_mu, predict_hit_plane,
+    restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
 #[cfg(feature = "real")]
 pub use hardware::RealHardware;
@@ -61,9 +61,9 @@ pub use planner::{
 };
 pub use robot::{
     Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, LinkInertia, LinkInertial,
-    MountPreset, RacketPose, RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose, RobotState,
-    SerialChain, SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual, UrdfLoadError,
-    UrdfModel, is_feasible, required_torque,
+    MountPreset, RacketPose, RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose,
+    RobotState, SerialChain, SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual,
+    UrdfLoadError, UrdfModel, is_feasible, required_torque,
 };
 pub use sim::{
     BallShooterSettings, BallState, ShooterLayout, SimBallEstimator, SimRuntimeControls,

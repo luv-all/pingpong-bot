@@ -5,8 +5,8 @@ use nalgebra::Vector3;
 use crate::Point3;
 use crate::constants::physics::G_Z;
 use crate::constants::table;
-use crate::error::SwingPlanError;
 use crate::defaults;
+use crate::error::SwingPlanError;
 
 /// 네트를 넘고 상대 코트 중앙에 바운드하는 출사 속도.
 ///
@@ -80,8 +80,7 @@ pub fn verify_impact_model(
 /// 무저항 탄도로 네트 통과 높이를 검사한다.
 pub fn clears_net_ballistic(impact: Point3, v_out: Vector3<f64>) -> bool {
     let y_net = table::LENGTH_Y * 0.5;
-    let z_min =
-        table::SURFACE_Z + table::NET_HEIGHT + defaults::impact().net_clearance * 0.5;
+    let z_min = table::SURFACE_Z + table::NET_HEIGHT + defaults::impact().net_clearance * 0.5;
     if v_out.y <= 1e-6 {
         return false;
     }

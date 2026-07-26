@@ -5,13 +5,11 @@ use opencv::calib3d::{self, SolvePnPMethod};
 use opencv::core::{CV_64F, Mat, MatTraitConst, Point2d, Point3d, Vector};
 use opencv::prelude::*;
 
-use super::table_landmarks::{
-    MAX_REPROJ_RMSE_PX, TABLE_LANDMARK_COUNT, table_landmarks,
-};
+use super::table_landmarks::{MAX_REPROJ_RMSE_PX, TABLE_LANDMARK_COUNT, table_landmarks};
 use super::{Calibration, CameraParams};
+use crate::Point3;
 use crate::camera::{CameraId, PixelPoint};
 use crate::constants::table;
-use crate::Point3;
 
 /// PnP 결과 (+ 재투영 RMSE).
 #[derive(Debug, Clone)]
@@ -236,7 +234,9 @@ fn rodrigues_to_matrix(rvec: &Mat) -> Result<Matrix3<f64>, String> {
 fn tvec_to_vector3(tvec: &Mat) -> Result<Vector3<f64>, String> {
     let read = |i: i32| -> Result<f64, String> {
         if tvec.rows() >= 3 && tvec.cols() >= 1 {
-            return Ok(*tvec.at_2d::<f64>(i, 0).map_err(|e| format!("t[{i}]: {e}"))?);
+            return Ok(*tvec
+                .at_2d::<f64>(i, 0)
+                .map_err(|e| format!("t[{i}]: {e}"))?);
         }
         return Ok(*tvec.at::<f64>(i).map_err(|e| format!("t[{i}]: {e}"))?);
     };
@@ -294,7 +294,11 @@ mod tests {
     use nalgebra::Vector3;
 
     fn overhead_cam() -> CameraParams {
-        let target = Vector3::new(table::WIDTH_X * 0.5, table::LENGTH_Y * 0.5, table::SURFACE_Z);
+        let target = Vector3::new(
+            table::WIDTH_X * 0.5,
+            table::LENGTH_Y * 0.5,
+            table::SURFACE_Z,
+        );
         let eye = target + Vector3::new(0.0, -0.4, 2.4);
         return CameraParams::look_at(
             CameraId::new(0),
@@ -319,7 +323,10 @@ mod tests {
                 .unwrap_or_else(|| panic!("landmark {} out of FOV", m.id));
             pixels.push(px);
         }
-        let fov_y = 2.0 * ((f64::from(truth.height) * 0.5) / truth.fy).atan().to_degrees();
+        let fov_y = 2.0
+            * ((f64::from(truth.height) * 0.5) / truth.fy)
+                .atan()
+                .to_degrees();
         let result = calibrate_table_pnp(
             CameraId::new(0),
             None,
@@ -330,16 +337,15 @@ mod tests {
         )
         .expect("pnp");
         ensure_reproj_ok(&result).expect("rmse");
-        assert!(
-            result.reproj_rmse < 0.5,
-            "rmse {}",
-            result.reproj_rmse
-        );
+        assert!(result.reproj_rmse < 0.5, "rmse {}", result.reproj_rmse);
 
         let eye_t = -truth.rotation.transpose() * truth.translation;
         let eye_e = -result.params.rotation.transpose() * result.params.translation;
         let err = (eye_t - eye_e).norm();
-        assert!(err < 0.05, "eye error {err} m (truth={eye_t:?} got={eye_e:?})");
+        assert!(
+            err < 0.05,
+            "eye error {err} m (truth={eye_t:?} got={eye_e:?})"
+        );
     }
 
     #[test]
@@ -350,7 +356,10 @@ mod tests {
             .iter()
             .map(|m| truth.project_world(m.world).expect("in FOV"))
             .collect();
-        let fov_y = 2.0 * ((f64::from(truth.height) * 0.5) / truth.fy).atan().to_degrees();
+        let fov_y = 2.0
+            * ((f64::from(truth.height) * 0.5) / truth.fy)
+                .atan()
+                .to_degrees();
         let result = calibrate_table_pnp(
             CameraId::new(0),
             None,
@@ -363,7 +372,11 @@ mod tests {
         ensure_reproj_ok(&result).expect("rmse");
 
         // 두 번째 카메라: 반대쪽에서 같은 점 투영 → PnP → 삼각측량
-        let target = Vector3::new(table::WIDTH_X * 0.5, table::LENGTH_Y * 0.5, table::SURFACE_Z);
+        let target = Vector3::new(
+            table::WIDTH_X * 0.5,
+            table::LENGTH_Y * 0.5,
+            table::SURFACE_Z,
+        );
         let eye2 = target + Vector3::new(0.0, 0.4, 2.4);
         let truth2 = CameraParams::look_at(
             CameraId::new(1),
@@ -400,12 +413,9 @@ mod tests {
         assert_eq!(back.camera_count(), 2);
 
         let center = marks[4].world;
-        let recovered = triangulate_projections(
-            &back,
-            &[CameraId::new(0), CameraId::new(1)],
-            center,
-        )
-        .expect("tri");
+        let recovered =
+            triangulate_projections(&back, &[CameraId::new(0), CameraId::new(1)], center)
+                .expect("tri");
         let err = (recovered.coords - center.coords).norm();
         assert!(err < 0.02, "triangulation error {err} m");
     }

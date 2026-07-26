@@ -10,12 +10,12 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use nalgebra::Vector3;
+use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{
     drag_from_trajectory, format_physics_for_defaults, restitution_from_bounce_heights,
     restitution_from_normal_speeds,
 };
-use pingpong_bot::SimWorld;
 
 #[derive(Parser, Debug)]
 #[command(

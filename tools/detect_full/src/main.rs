@@ -284,14 +284,26 @@ fn main() -> Result<()> {
             "3 roi-off"
         };
 
-        draw_cam_label(&mut original, "0 original", Scalar::new(255.0, 255.0, 255.0, 0.0))?;
-        draw_cam_label(&mut cm_panel, "1 colormask", Scalar::new(0.0, 255.0, 0.0, 0.0))?;
+        draw_cam_label(
+            &mut original,
+            "0 original",
+            Scalar::new(255.0, 255.0, 255.0, 0.0),
+        )?;
+        draw_cam_label(
+            &mut cm_panel,
+            "1 colormask",
+            Scalar::new(0.0, 255.0, 0.0, 0.0),
+        )?;
         draw_cam_label(
             &mut ct_panel,
             "2 +contour",
             Scalar::new(255.0, 128.0, 0.0, 0.0),
         )?;
-        draw_cam_label(&mut roi_panel, roi_label, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        draw_cam_label(
+            &mut roi_panel,
+            roi_label,
+            Scalar::new(0.0, 255.0, 255.0, 0.0),
+        )?;
 
         let hit_rate = if n == 0 {
             0.0
@@ -343,10 +355,7 @@ fn main() -> Result<()> {
                 PreviewAction::Quit => break,
                 PreviewAction::Key(key) if key == i32::from(b'r') || key == i32::from(b'R') => {
                     detector.set_roi_enabled(!detector.roi_enabled);
-                    println!(
-                        "roi → {}",
-                        if detector.roi_enabled { "on" } else { "off" }
-                    );
+                    println!("roi → {}", if detector.roi_enabled { "on" } else { "off" });
                 }
                 PreviewAction::Key(key) => {
                     handle_tune_key(&mut detector, key);

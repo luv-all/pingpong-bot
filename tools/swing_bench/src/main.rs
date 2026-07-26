@@ -46,9 +46,7 @@ const RACKET_SPEED_RATIO_TOLERANCE: f64 = 0.15;
 const RACKET_DIRECTION_TOLERANCE_DEG: f64 = 15.0;
 
 #[derive(Parser, Debug)]
-#[command(
-    about = "quintic 스윙 모양 제약 없이 순수 토크 한계로 임팩트 도달 시간을 측정한다"
-)]
+#[command(about = "quintic 스윙 모양 제약 없이 순수 토크 한계로 임팩트 도달 시간을 측정한다")]
 struct Args {
     /// TOML 시나리오 파일. 여기 값들을 아래 CLI 플래그가 덮어쓴다.
     #[arg(long)]
@@ -189,10 +187,9 @@ fn main() -> Result<()> {
     let start_rail_x_override = args.start_rail_x.or(scenario.start_rail_x);
 
     let arm = resolve_arm(&robot_id)?;
-    let rail = arm
-        .rail
-        .as_ref()
-        .ok_or_else(|| anyhow!("robot `{robot_id}`에 레일이 없음 — swing-bench는 레일 있는 로봇 전용"))?;
+    let rail = arm.rail.as_ref().ok_or_else(|| {
+        anyhow!("robot `{robot_id}`에 레일이 없음 — swing-bench는 레일 있는 로봇 전용")
+    })?;
     let start_rail_x = start_rail_x_override.unwrap_or_else(|| rail.default_x());
 
     let start = RobotPose::new(start_rail_x, arm.default_joints.clone());
@@ -206,7 +203,14 @@ fn main() -> Result<()> {
     let mut target = target;
     let target_speed_clamped = clamp_target_to_speed_caps(&arm, &mut target);
 
-    let mut report = simulate(&arm, &start, &target, args.dt, args.max_time_secs, time_budget_secs);
+    let mut report = simulate(
+        &arm,
+        &start,
+        &target,
+        args.dt,
+        args.max_time_secs,
+        time_budget_secs,
+    );
     report.robot = robot_id.clone();
     report.target_speed_clamped = target_speed_clamped;
 
@@ -419,8 +423,8 @@ fn simulate(
             let x = q[i] - target.joints.values[i];
             let v = qdot[i] - target.joint_velocities[i];
             let a_cmd = bang_bang_accel(x, v, a_max);
-            torque_cmd[i] =
-                (a_cmd * effective_inertia).clamp(-arm.joint_torque_limits[i], arm.joint_torque_limits[i]);
+            torque_cmd[i] = (a_cmd * effective_inertia)
+                .clamp(-arm.joint_torque_limits[i], arm.joint_torque_limits[i]);
         }
 
         let Some(accel) = forward_dynamics(arm, &Joints::from_slice(&q), &qdot, &torque_cmd) else {
@@ -492,8 +496,8 @@ fn simulate(
     let within_time_budget = time_budget_secs.map(|budget| feasible && t <= budget);
 
     return Report {
-        robot: String::new(),               // main()에서 채움
-        target_speed_clamped: false,        // main()에서 채움
+        robot: String::new(),        // main()에서 채움
+        target_speed_clamped: false, // main()에서 채움
         feasible,
         achieved_time_secs: t,
         position_reached_time_secs,
@@ -506,10 +510,7 @@ fn simulate(
         racket_direction_error_deg: direction_error_deg,
         peak_joint_torque_utilization: peak_util,
         peak_joint_speed_rad_s: peak_speed.clone(),
-        peak_joint_speed_ratio_to_cap: peak_speed
-            .iter()
-            .map(|s| s / arm.max_joint_speed)
-            .collect(),
+        peak_joint_speed_ratio_to_cap: peak_speed.iter().map(|s| s / arm.max_joint_speed).collect(),
         peak_rail_speed_m_s: peak_rail_speed,
         peak_rail_speed_ratio_to_cap: peak_rail_speed / rail_max_speed,
     };
@@ -528,9 +529,9 @@ fn print_human(robot_id: &str, report: &Report) {
         report.feasible, report.achieved_time_secs, report.max_time_secs
     );
     match report.position_reached_time_secs {
-        Some(t) => println!(
-            "  position-only reached at: {t:.4}s (목표 라켓 속도까지는 못 맞췄을 수 있음)"
-        ),
+        Some(t) => {
+            println!("  position-only reached at: {t:.4}s (목표 라켓 속도까지는 못 맞췄을 수 있음)")
+        }
         None => println!("  position-only reached at: 도달 못 함 (cutoff까지 못 감)"),
     }
     if let (Some(budget), Some(within)) = (report.time_budget_secs, report.within_time_budget) {
@@ -562,7 +563,10 @@ fn print_human(robot_id: &str, report: &Report) {
         .zip(&report.peak_joint_speed_ratio_to_cap)
         .enumerate()
     {
-        println!("    joint {i}: {speed:.3} rad/s ({:.1}% of cap)", ratio * 100.0);
+        println!(
+            "    joint {i}: {speed:.3} rad/s ({:.1}% of cap)",
+            ratio * 100.0
+        );
     }
     println!(
         "  rail peak speed: {:.3} m/s ({:.1}% of cap)",

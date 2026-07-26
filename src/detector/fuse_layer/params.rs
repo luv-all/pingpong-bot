@@ -47,10 +47,7 @@ impl RoiParams {
         ensure!(self.m >= 0.0, "roi.m >= 0");
         ensure!(self.pad >= 0, "roi.pad >= 0");
         ensure!(self.half_min >= 1, "roi.half_min >= 1");
-        ensure!(
-            self.half_max >= self.half_min,
-            "roi.half_max >= half_min"
-        );
+        ensure!(self.half_max >= self.half_min, "roi.half_max >= half_min");
         return Ok(());
     }
 

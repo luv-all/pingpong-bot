@@ -20,7 +20,10 @@ impl EstimatorParams {
         ensure!(self.max_lead >= self.min_lead, "max_lead >= min_lead");
         ensure!(self.integrate_dt > 0.0, "integrate_dt > 0");
         ensure!(self.min_approach_speed_y > 0.0, "min_approach_speed_y > 0");
-        ensure!(self.min_strike_clearance >= 0.0, "min_strike_clearance >= 0");
+        ensure!(
+            self.min_strike_clearance >= 0.0,
+            "min_strike_clearance >= 0"
+        );
         ensure!(self.q_pos >= 0.0, "q_pos >= 0");
         ensure!(self.q_vel >= 0.0, "q_vel >= 0");
         ensure!(self.r_meas > 0.0, "r_meas > 0");

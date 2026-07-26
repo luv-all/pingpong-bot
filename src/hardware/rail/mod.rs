@@ -1,10 +1,10 @@
 //! 리니어 레일 — 설정 + AXL 드라이버.
 
-mod config;
+mod axl;
 #[cfg(all(windows, feature = "real"))]
 #[allow(dead_code)]
 mod axl_ffi;
-mod axl;
+mod config;
 
 pub use axl::AxlRail;
 pub use config::{RailConfig, RailConfigError, SoftLimitArgs};

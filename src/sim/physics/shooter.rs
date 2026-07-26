@@ -1,15 +1,15 @@
 //! 반대편 볼 슈터(발사기) — 로봇(y≈0) 반대(+y)에서 공을 쏴 탁구로봇이 받는 구조.
 
-use crate::constants::{ball, table};
-use crate::estimator::ballistics::predict_hit_plane;
 use crate::HitPlane;
+use crate::constants::{ball, table};
 use crate::defaults;
+use crate::estimator::ballistics::predict_hit_plane;
 use nalgebra::Vector3;
 use rand::Rng;
 use rapier3d::prelude::{
-    BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderSet, ImpulseJointSet,
-    IntegrationParameters, IslandManager, MassProperties, MultibodyJointSet, NarrowPhase,
-    PhysicsPipeline, RigidBodyBuilder, RigidBodySet, Rotation, Vector,
+    BroadPhaseBvh, CCDSolver, ColliderBuilder, ColliderSet, ImpulseJointSet, IntegrationParameters,
+    IslandManager, MassProperties, MultibodyJointSet, NarrowPhase, PhysicsPipeline,
+    RigidBodyBuilder, RigidBodySet, Rotation, Vector,
 };
 
 use super::arm_bodies::{ball_collision_groups, static_collision_groups};
@@ -256,20 +256,17 @@ impl BallShooterSettings {
         let muzzle = self.muzzle_position();
         let vel = self.launch_velocity();
         let omega = self.launch_angular_velocity();
-        let position = Vector3::new(f64::from(muzzle.x), f64::from(muzzle.y), f64::from(muzzle.z));
+        let position = Vector3::new(
+            f64::from(muzzle.x),
+            f64::from(muzzle.y),
+            f64::from(muzzle.z),
+        );
         let velocity = Vector3::new(f64::from(vel.x), f64::from(vel.y), f64::from(vel.z));
         let spin = Vector3::new(f64::from(omega.x), f64::from(omega.y), f64::from(omega.z));
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        return predict_hit_plane(
-            position,
-            velocity,
-            spin,
-            plane,
-            &defaults::physics(),
-        )
-        .is_some();
+        return predict_hit_plane(position, velocity, spin, plane, &defaults::physics()).is_some();
     }
 
     /// 테이블·네트·공만 있는 가벼운 Rapier로, 수신 탄도가 **네트 collider에
@@ -283,11 +280,9 @@ impl BallShooterSettings {
 
     fn sample_randomized_params(&self, rng: &mut impl Rng) -> Self {
         let mut shot = self.randomized_aim(rng);
-        shot.height_offset_m =
-            rng.gen_range(RANDOM_SHOT_HEIGHT_MIN_M..=RANDOM_SHOT_HEIGHT_MAX_M);
+        shot.height_offset_m = rng.gen_range(RANDOM_SHOT_HEIGHT_MIN_M..=RANDOM_SHOT_HEIGHT_MAX_M);
         shot.topspin_rad_s = rng.gen_range(RANDOM_SHOT_TOPSPIN_MIN..=RANDOM_SHOT_TOPSPIN_MAX);
-        shot.sidespin_rad_s =
-            rng.gen_range(RANDOM_SHOT_SIDESPIN_MIN..=RANDOM_SHOT_SIDESPIN_MAX);
+        shot.sidespin_rad_s = rng.gen_range(RANDOM_SHOT_SIDESPIN_MIN..=RANDOM_SHOT_SIDESPIN_MAX);
         shot.pitch_deg = rng.gen_range(RANDOM_SHOT_PITCH_MIN_DEG..=RANDOM_SHOT_PITCH_MAX_DEG);
         shot.roll_deg = rng.gen_range(RANDOM_SHOT_ROLL_MIN_DEG..=RANDOM_SHOT_ROLL_MAX_DEG);
         return shot;
@@ -561,20 +556,28 @@ mod tests {
         let mut rng = rand::thread_rng();
         for _ in 0..50 {
             let shot = base.randomized(&mut rng);
-            assert!((RANDOM_SHOT_LATERAL_MIN_M..=RANDOM_SHOT_LATERAL_MAX_M)
-                .contains(&shot.lateral_offset_m));
-            assert!((RANDOM_SHOT_SPEED_MIN_MPS..=RANDOM_SHOT_SPEED_MAX_MPS)
-                .contains(&shot.speed_mps));
-            assert!((RANDOM_SHOT_HEIGHT_MIN_M..=RANDOM_SHOT_HEIGHT_MAX_M)
-                .contains(&shot.height_offset_m));
-            assert!((RANDOM_SHOT_TOPSPIN_MIN..=RANDOM_SHOT_TOPSPIN_MAX)
-                .contains(&shot.topspin_rad_s));
-            assert!((RANDOM_SHOT_SIDESPIN_MIN..=RANDOM_SHOT_SIDESPIN_MAX)
-                .contains(&shot.sidespin_rad_s));
-            assert!((RANDOM_SHOT_PITCH_MIN_DEG..=RANDOM_SHOT_PITCH_MAX_DEG)
-                .contains(&shot.pitch_deg));
-            assert!((RANDOM_SHOT_ROLL_MIN_DEG..=RANDOM_SHOT_ROLL_MAX_DEG)
-                .contains(&shot.roll_deg));
+            assert!(
+                (RANDOM_SHOT_LATERAL_MIN_M..=RANDOM_SHOT_LATERAL_MAX_M)
+                    .contains(&shot.lateral_offset_m)
+            );
+            assert!(
+                (RANDOM_SHOT_SPEED_MIN_MPS..=RANDOM_SHOT_SPEED_MAX_MPS).contains(&shot.speed_mps)
+            );
+            assert!(
+                (RANDOM_SHOT_HEIGHT_MIN_M..=RANDOM_SHOT_HEIGHT_MAX_M)
+                    .contains(&shot.height_offset_m)
+            );
+            assert!(
+                (RANDOM_SHOT_TOPSPIN_MIN..=RANDOM_SHOT_TOPSPIN_MAX).contains(&shot.topspin_rad_s)
+            );
+            assert!(
+                (RANDOM_SHOT_SIDESPIN_MIN..=RANDOM_SHOT_SIDESPIN_MAX)
+                    .contains(&shot.sidespin_rad_s)
+            );
+            assert!(
+                (RANDOM_SHOT_PITCH_MIN_DEG..=RANDOM_SHOT_PITCH_MAX_DEG).contains(&shot.pitch_deg)
+            );
+            assert!((RANDOM_SHOT_ROLL_MIN_DEG..=RANDOM_SHOT_ROLL_MAX_DEG).contains(&shot.roll_deg));
             let (yaw_min, yaw_max) =
                 BallShooterSettings::yaw_range_for_lateral_deg(shot.lateral_offset_m);
             assert!(shot.yaw_deg >= yaw_min - 1e-9 && shot.yaw_deg <= yaw_max + 1e-9);
@@ -631,4 +634,3 @@ mod tests {
         assert!(shot.clears_incoming_rapier_net(), "default rapier net");
     }
 }
-

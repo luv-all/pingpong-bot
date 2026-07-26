@@ -708,11 +708,7 @@ fn points_color(points: u8) -> egui::Color32 {
     };
 }
 
-fn start_eval_protocol(
-    ui_state: &PanelUiState,
-    world: &Arc<Mutex<SimWorld>>,
-    mode: EvalMode,
-) {
+fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mode: EvalMode) {
     if ui_state
         .eval_running
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
@@ -833,9 +829,7 @@ fn draw_status_panel(ui: &mut egui::Ui, status: &StatusSnapshot, debug: &DebugOv
             }
         });
 
-    if debug.fail_status
-        && (status.last_fail_text.is_some() || status.unreachable_xyz.is_some())
-    {
+    if debug.fail_status && (status.last_fail_text.is_some() || status.unreachable_xyz.is_some()) {
         egui::CollapsingHeader::new("Fail")
             .default_open(true)
             .show(ui, |ui| {
@@ -987,11 +981,17 @@ fn draw_joint_anchor_windows(
         painter.circle_stroke(
             joint_pos,
             5.0,
-            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180)),
+            egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180),
+            ),
         );
         painter.line_segment(
             [joint_pos, label],
-            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(220, 220, 230, 180)),
+            egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_unmultiplied(220, 220, 230, 180),
+            ),
         );
 
         let frame = egui::Frame::NONE

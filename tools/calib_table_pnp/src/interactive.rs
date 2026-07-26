@@ -73,9 +73,7 @@ pub fn run(args: &Args) -> Result<()> {
         "table-PnP — cam={} fov_y={} max_rmse={}",
         args.camera_id, args.fov_y, args.max_rmse
     );
-    println!(
-        "Space=freeze  LMB=click  z=undo  c=clear  s=save  n=live  q=quit"
-    );
+    println!("Space=freeze  LMB=click  z=undo  c=clear  s=save  n=live  q=quit");
     println!("(8 clicks → auto PnP + world grid; +/- [] ., adjust grid)");
     for (i, m) in marks.iter().enumerate() {
         println!("  {}: {}", i + 1, m.prompt);
@@ -132,10 +130,7 @@ pub fn run(args: &Args) -> Result<()> {
                 .image
                 .try_clone()
                 .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
-            freeze_img = Some(
-                img.try_clone()
-                    .map_err(|e| anyhow::anyhow!("clone: {e}"))?,
-            );
+            freeze_img = Some(img.try_clone().map_err(|e| anyhow::anyhow!("clone: {e}"))?);
             img
         };
 
@@ -151,10 +146,7 @@ pub fn run(args: &Args) -> Result<()> {
 
             if let Some(ref s) = solved {
                 let lines = [
-                    format!(
-                        "SOLVED rmse={:.2}px — check grid, s=save",
-                        s.rmse
-                    ),
+                    format!("SOLVED rmse={:.2}px — check grid, s=save", s.rmse),
                     format!(
                         "xy={:.2} z={:.2} layers={}",
                         grid.xy_step, grid.z_step, grid.z_layers
@@ -271,8 +263,8 @@ fn try_solve(
     }
     let w = img.cols().max(1) as u32;
     let h = img.rows().max(1) as u32;
-    let result = calibrate_table_pnp(cam_id, None, w, h, args.fov_y, clicks)
-        .map_err(anyhow::Error::msg)?;
+    let result =
+        calibrate_table_pnp(cam_id, None, w, h, args.fov_y, clicks).map_err(anyhow::Error::msg)?;
     println!(
         "PnP candidates={} rmse={:.2}px",
         result.candidates, result.reproj_rmse

@@ -8,7 +8,8 @@ pub const MASS: f64 = 0.0027;
 
 /// 체적평균 밀도 [kg/m³] = `MASS / (4/3 π R³)` ≈ 80.6.
 /// 실제 공은 중공 셸(재질 밀도 ~1400 kg/m³, 벽 ~0.4 mm).
-pub const BULK_DENSITY: f64 = MASS / ((4.0 / 3.0) * std::f64::consts::PI * RADIUS * RADIUS * RADIUS);
+pub const BULK_DENSITY: f64 =
+    MASS / ((4.0 / 3.0) * std::f64::consts::PI * RADIUS * RADIUS * RADIUS);
 
 /// 얇은 중공 구 셸 관성모멘트 [kg·m²] — `I = (2/3) m R²` (직경축).
 ///

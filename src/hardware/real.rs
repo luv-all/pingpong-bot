@@ -44,18 +44,18 @@ impl RealHardware {
     }
 
     /// 포트를 열지 않지만 실제 좌표 변환·리밋·executor 경로를 그대로 사용한다.
-    pub fn dry_run(
-        config: DynamixelConfig,
-        rail: Option<RailConfig>,
-    ) -> Result<Self, HwError> {
+    pub fn dry_run(config: DynamixelConfig, rail: Option<RailConfig>) -> Result<Self, HwError> {
         return Self::dry_run_with_arm(
             config,
             rail,
-            Arc::new((*defaults::urdf_4dof().map_err(|e| HwError::InvalidConfig {
-                reason: e.to_string(),
-            })?
-            .arm)
-                .clone()),
+            Arc::new(
+                (*defaults::urdf_4dof()
+                    .map_err(|e| HwError::InvalidConfig {
+                        reason: e.to_string(),
+                    })?
+                    .arm)
+                    .clone(),
+            ),
         );
     }
 

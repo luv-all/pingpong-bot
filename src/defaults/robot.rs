@@ -156,7 +156,11 @@ fn primitive_4dof_inertials() -> (Vec<LinkInertial>, Vec<LinkInertial>) {
         // yaw: FR05-H101_v1__1__1
         LinkInertial {
             mass: 0.05198831685263556,
-            com: Point3::new(0.02550000000002023, -1.1796119636642288e-16, 0.0256313146478562),
+            com: Point3::new(
+                0.02550000000002023,
+                -1.1796119636642288e-16,
+                0.0256313146478562,
+            ),
             inertia: Matrix3::new(
                 1.3e-05, 0.0, -0.0, //
                 0.0, 2.7e-05, 0.0, //

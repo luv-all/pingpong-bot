@@ -331,7 +331,10 @@ impl RobotState {
         const RAIL_EPSILON_M: f64 = 1e-3;
         const JOINT_EPSILON_RAD: f64 = 1e-3;
 
-        let rail_center = arm.rail.as_ref().map_or(self.rail_x, |rail| rail.default_x());
+        let rail_center = arm
+            .rail
+            .as_ref()
+            .map_or(self.rail_x, |rail| rail.default_x());
         if (self.rail_x - rail_center).abs() > RAIL_EPSILON_M {
             return false;
         }

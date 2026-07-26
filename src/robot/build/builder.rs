@@ -2,8 +2,8 @@
 
 use std::fmt;
 
-use crate::robot::{Arm, JointLimit, LinkInertial, SerialChain};
 use crate::robot::rail::LinearRail;
+use crate::robot::{Arm, JointLimit, LinkInertial, SerialChain};
 use crate::{Joints, Point3};
 
 /// [`Arm`] 조립용 빌더 - base 설정 후 `.serial_chain`으로 기구학을 채운다.
@@ -16,7 +16,12 @@ pub struct ArmBuilder {
     /// 최대 관절 속도 (미설정 시 2.5 rad/s)
     max_joint_speed: Option<f64>,
     /// arbitrary-axis 직렬 체인 (미설정 시 build 실패)
-    serial_model: Option<(SerialChain, Vec<Option<JointLimit>>, Vec<LinkInertial>, Joints)>,
+    serial_model: Option<(
+        SerialChain,
+        Vec<Option<JointLimit>>,
+        Vec<LinkInertial>,
+        Joints,
+    )>,
     /// 합성 강체 관성 (미설정 시 `link_inertials` 그대로 사용 - fixed 하위 링크 미합성)
     aggregated_inertials: Option<Vec<LinkInertial>>,
     /// per-joint 토크 한계 [N*m] (미설정 시 무제한 = `f64::INFINITY`)
@@ -183,9 +188,8 @@ impl ArmBuilder {
                 value: max_joint_speed,
             });
         }
-        let (chain, limits, link_inertials, default_joints) = self
-            .serial_model
-            .ok_or(ArmBuildError::MissingSerialChain)?;
+        let (chain, limits, link_inertials, default_joints) =
+            self.serial_model.ok_or(ArmBuildError::MissingSerialChain)?;
         // 미설정이면 합성 관성은 원본 child link, 토크 한계는 무제한으로 둔다
         // (동역학을 안 쓰는 빌더 기반 테스트 arm이 그대로 동작하도록).
         let joint_count = chain.joints.len();

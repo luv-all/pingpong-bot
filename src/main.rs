@@ -13,13 +13,13 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
+#[cfg(feature = "real")]
+use pingpong_bot::{Hardware, RealHardware, detector, dynamixel, rail};
 use pingpong_bot::{
     SimRuntimeControls, SimSession, SimSessionConfig, intercept, new_shutdown_flag, physics, robot,
 };
 #[cfg(feature = "gui")]
 use pingpong_bot::{SimViewerOptions, run_sim_viewer};
-#[cfg(feature = "real")]
-use pingpong_bot::{Hardware, RealHardware, detector, dynamixel, rail};
 use tracing::info;
 #[cfg(not(feature = "gui"))]
 use tracing::warn;

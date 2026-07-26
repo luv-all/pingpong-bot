@@ -9,15 +9,15 @@ pub mod swing;
 pub use bang_bang::{BangBangTrajectory, PlannedBangBangIntercept, plan_bang_bang_swing};
 pub use collision::{OrientedBox, clamp_above_table, robot_obbs, table_penetration};
 pub use impact::{rally_return_velocity, required_racket_velocity, verify_impact_model};
+/// 하위 호환: `planner::physics::…`
+pub use swing::physics;
+/// 하위 호환: `planner::trajectory::…`
+pub use swing::trajectory;
 pub use swing::{
     PlannedIntercept, RailMotion, SwingFeasibility, SwingTrajectory, accel, aero_accel,
     ball_past_midcourt_for_commit, in_swing_commit_window, plan_best_swing, plan_coarse_track,
     plan_return_to_center, plan_swing, swing_feasibility,
 };
-/// 하위 호환: `planner::physics::…`
-pub use swing::physics;
-/// 하위 호환: `planner::trajectory::…`
-pub use swing::trajectory;
 
 use anyhow::{Result, ensure};
 

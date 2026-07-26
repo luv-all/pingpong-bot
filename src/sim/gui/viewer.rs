@@ -17,9 +17,9 @@ use super::debug_snap::CommitPhase;
 use super::mesh_loader;
 use super::panel;
 use crate::robot::urdf::{UrdfLinkVisual, UrdfModel};
-use crate::sim::session::controls::SimRuntimeControls;
 use crate::sim::physics::shooter::{RANDOM_SHOT_TARGET_PADDING_M, ShooterLayout};
 use crate::sim::physics::world::SimWorld;
+use crate::sim::session::controls::SimRuntimeControls;
 
 const HIDDEN: Vec3 = Vec3::new(0.0, 0.0, -10.0);
 const ARC_NODE_COUNT: usize = 48;
@@ -167,8 +167,7 @@ async fn viewer_main(options: SimViewerOptions) -> Result<(), String> {
                     }
                     let egui_x = (0.5 * (ndc.x + 1.0) * pw) / scale;
                     let egui_y = (0.5 * (1.0 - ndc.y) * ph) / scale;
-                    if !(0.0..logical_w).contains(&egui_x) || !(0.0..logical_h).contains(&egui_y)
-                    {
+                    if !(0.0..logical_w).contains(&egui_x) || !(0.0..logical_h).contains(&egui_y) {
                         return None;
                     }
                     return Some(kiss3d::egui::pos2(egui_x, egui_y));

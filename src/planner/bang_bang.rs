@@ -187,8 +187,7 @@ fn plan_bang_bang_for(
             torque_cmd[i] = (a_cmd * effective_inertia)
                 .clamp(-arm.joint_torque_limits[i], arm.joint_torque_limits[i]);
         }
-        let Some(accel) = forward_dynamics(arm, &Joints::from_slice(&q), &qdot, &torque_cmd)
-        else {
+        let Some(accel) = forward_dynamics(arm, &Joints::from_slice(&q), &qdot, &torque_cmd) else {
             break;
         };
         for i in 0..n {
@@ -277,8 +276,8 @@ fn racket_velocity_ok(
     if achieved_speed <= f64::EPSILON {
         return false;
     }
-    let cos_angle = (achieved.dot(&target_racket_velocity) / (achieved_speed * target_speed))
-        .clamp(-1.0, 1.0);
+    let cos_angle =
+        (achieved.dot(&target_racket_velocity) / (achieved_speed * target_speed)).clamp(-1.0, 1.0);
     return cos_angle.acos().to_degrees() <= RACKET_DIRECTION_TOLERANCE_DEG;
 }
 
@@ -319,8 +318,8 @@ fn bang_bang_accel(x: f64, v: f64, a_max: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::estimator::Prediction;
     use crate::constants::table;
+    use crate::estimator::Prediction;
     use crate::robot::Arm;
 
     /// 피처 브랜치가 실기 관절속도(~2.88 rad/s)로 검증한 마운트.

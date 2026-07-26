@@ -30,12 +30,7 @@ pub fn dynamixel() -> DynamixelConfig {
         stream_hz: 200.0,
         joint_signs: vec![-1, 1, 1, 1],
         joint_offsets_rad: vec![0.0; 4],
-        motor_angle_limits_deg: vec![
-            [90.0, 220.0],
-            [135.0, 225.0],
-            [92.0, 230.0],
-            [120.0, 220.0],
-        ],
+        motor_angle_limits_deg: vec![[90.0, 220.0], [135.0, 225.0], [92.0, 230.0], [120.0, 220.0]],
         mirror_slaves: vec![MirrorSlave {
             master_id: 1,
             slave_id: 2,

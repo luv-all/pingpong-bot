@@ -8,9 +8,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{format_physics_for_defaults, friction_from_tangential_speeds};
-use pingpong_bot::SimWorld;
 
 #[derive(Parser, Debug)]
 #[command(

@@ -446,9 +446,11 @@ fn ball_contacts_parent(world: &SimWorld, parent: RigidBodyHandle) -> bool {
     }) else {
         return false;
     };
-    let Some(other) = world.collider_set.iter().find_map(|(handle, collider)| {
-        (collider.parent() == Some(parent)).then_some(handle)
-    }) else {
+    let Some(other) = world
+        .collider_set
+        .iter()
+        .find_map(|(handle, collider)| (collider.parent() == Some(parent)).then_some(handle))
+    else {
         return false;
     };
     return world
@@ -643,10 +645,7 @@ mod tests {
     fn alternating_starts_left_center_right_center() {
         let sched = shot_schedule(EvalMode::Alternating);
         assert_eq!(
-            sched[..4]
-                .iter()
-                .map(|(z, _)| *z)
-                .collect::<Vec<_>>(),
+            sched[..4].iter().map(|(z, _)| *z).collect::<Vec<_>>(),
             vec![
                 EvalZone::Left,
                 EvalZone::Center,
@@ -674,7 +673,10 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
         let jittered = settings_for_zone_shot_jittered(&base, EvalZone::Left, 3, &mut rng);
 
-        assert!((jittered.lateral_offset_m - EvalZone::Left.lateral_m()).abs() <= EVAL_LATERAL_JITTER_M + 1e-12);
+        assert!(
+            (jittered.lateral_offset_m - EvalZone::Left.lateral_m()).abs()
+                <= EVAL_LATERAL_JITTER_M + 1e-12
+        );
         assert!(jittered.lateral_offset_m < 0.0, "left zone stays leftish");
         assert!((jittered.speed_mps - clean.speed_mps).abs() <= EVAL_SPEED_JITTER_MPS + 1e-12);
         assert!((jittered.pitch_deg - clean.pitch_deg).abs() <= EVAL_PITCH_JITTER_DEG + 1e-12);

@@ -199,8 +199,7 @@ mod tests {
 
     #[test]
     fn empty_color_skips_without_panic() {
-        let img =
-            Mat::new_size_with_default(Size::new(64, 64), CV_8UC3, Scalar::all(0.0)).unwrap();
+        let img = Mat::new_size_with_default(Size::new(64, 64), CV_8UC3, Scalar::all(0.0)).unwrap();
         let frame = Frame::new(CameraId(0), img, Instant::now());
         let color = ColormaskParams {
             space: ColorSpace::Ycrcb,

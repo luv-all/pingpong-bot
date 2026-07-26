@@ -104,10 +104,7 @@ impl RailConfig {
         if self.pulses_per_meter == 0 {
             return Err(RailConfigError::PulsesPerMeter);
         }
-        if !self.x_min_m.is_finite()
-            || !self.x_max_m.is_finite()
-            || self.x_min_m >= self.x_max_m
-        {
+        if !self.x_min_m.is_finite() || !self.x_max_m.is_finite() || self.x_min_m >= self.x_max_m {
             return Err(RailConfigError::InvalidRange);
         }
         for value in [self.vel, self.accel, self.decel, self.max_vel] {

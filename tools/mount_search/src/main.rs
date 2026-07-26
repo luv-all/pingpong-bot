@@ -79,8 +79,7 @@ fn build_scenarios() -> Vec<Scenario> {
             let impact_z = table::SURFACE_Z + z_offset;
             for &speed in &[7.0, 8.5, 10.0] {
                 for &descend_frac in &[0.10, 0.30] {
-                    let incoming_velocity =
-                        Vector3::new(0.0, -speed, -speed * descend_frac);
+                    let incoming_velocity = Vector3::new(0.0, -speed, -speed * descend_frac);
                     scenarios.push(Scenario {
                         impact: Point3::new(impact_x, table::DEFAULT_HIT_PLANE_Y, impact_z),
                         incoming_velocity,
@@ -111,7 +110,11 @@ fn linspace(min: f64, max: f64, steps: usize) -> Vec<f64> {
         .collect();
 }
 
-fn evaluate_mount(base_y: f64, height_offset_m: f64, scenarios: &[Scenario]) -> Option<MountResult> {
+fn evaluate_mount(
+    base_y: f64,
+    height_offset_m: f64,
+    scenarios: &[Scenario],
+) -> Option<MountResult> {
     // `height_offset_m`은 테이블 면 기준 오프셋, 빌더는 월드 z를 받는다.
     let robot =
         defaults::primitive_4dof_with_mount(base_y, table::SURFACE_Z + height_offset_m).ok()?;
@@ -136,7 +139,10 @@ fn evaluate_mount(base_y: f64, height_offset_m: f64, scenarios: &[Scenario]) -> 
     }
 
     let total = ratios.len();
-    let feasible_count = ratios.iter().filter(|r| **r <= FEASIBLE_RATIO_THRESHOLD).count();
+    let feasible_count = ratios
+        .iter()
+        .filter(|r| **r <= FEASIBLE_RATIO_THRESHOLD)
+        .count();
     let finite: Vec<f64> = ratios.iter().copied().filter(|r| r.is_finite()).collect();
     let mean_peak_ratio = if finite.is_empty() {
         f64::INFINITY
@@ -169,13 +175,18 @@ fn main() -> Result<()> {
     }
 
     results.sort_by(|a, b| {
-        b.feasible_count
-            .cmp(&a.feasible_count)
-            .then_with(|| a.mean_peak_ratio.partial_cmp(&b.mean_peak_ratio).unwrap_or(std::cmp::Ordering::Equal))
+        b.feasible_count.cmp(&a.feasible_count).then_with(|| {
+            a.mean_peak_ratio
+                .partial_cmp(&b.mean_peak_ratio)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
     });
 
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&results[..results.len().min(args.top_n)])?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&results[..results.len().min(args.top_n)])?
+        );
     } else {
         println!(
             "mount-search — {} 마운트 후보 x {} 시나리오 스윕 (실현가능 기준: peak_joint_speed_ratio <= {FEASIBLE_RATIO_THRESHOLD})",

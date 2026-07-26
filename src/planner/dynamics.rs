@@ -242,8 +242,7 @@ mod tests {
         let chain = SerialChain::new(
             UnitQuaternion::identity(),
             vec![
-                SerialJoint::new(Isometry3::identity(), Vector3::new(1.0, 0.0, 0.0))
-                    .expect("axis"),
+                SerialJoint::new(Isometry3::identity(), Vector3::new(1.0, 0.0, 0.0)).expect("axis"),
             ],
             Isometry3::identity(),
         )
@@ -255,12 +254,7 @@ mod tests {
         };
         return Arm::builder()
             .base_xyz(0.0, 0.0, 0.0)
-            .serial_chain(
-                chain,
-                vec![None],
-                vec![body],
-                Joints::from_slice(&[0.0]),
-            )
+            .serial_chain(chain, vec![None], vec![body], Joints::from_slice(&[0.0]))
             .aggregated_inertials(vec![body])
             .joint_torque_limits(vec![f64::INFINITY])
             .max_joint_speed(10.0)
@@ -273,12 +267,7 @@ mod tests {
         let mass = 0.2;
         let d = 0.15;
         let arm = single_link_arm(mass, d);
-        let tau = required_joint_torques(
-            &arm,
-            &Joints::from_slice(&[0.0]),
-            &[0.0],
-            &[0.0],
-        );
+        let tau = required_joint_torques(&arm, &Joints::from_slice(&[0.0]), &[0.0], &[0.0]);
         // 축(x)에 대한 중력 모멘트 크기 = m * g * d.
         let expected = mass * G_MAG * d;
         assert!(
@@ -359,7 +348,12 @@ mod tests {
         };
         let arm = Arm::builder()
             .base_xyz(0.0, 0.0, 0.0)
-            .serial_chain(chain, vec![Some(JointLimit::new(-3.0, 3.0))], vec![body], Joints::from_slice(&[0.0]))
+            .serial_chain(
+                chain,
+                vec![Some(JointLimit::new(-3.0, 3.0))],
+                vec![body],
+                Joints::from_slice(&[0.0]),
+            )
             .aggregated_inertials(vec![body])
             .joint_torque_limits(vec![f64::INFINITY])
             .max_joint_speed(10.0)

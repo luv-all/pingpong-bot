@@ -233,7 +233,9 @@ pub fn draw_debug_lines(img: &mut Mat, lines: &[impl AsRef<str>], color: Scalar)
     )?;
     for (i, line) in lines.iter().enumerate() {
         let y = layout.pad + layout.line_h * (i as i32 + 1);
-        let y = y.min(img.rows() - layout.max_baseline - layout.outline).max(layout.pad + 8);
+        let y = y
+            .min(img.rows() - layout.max_baseline - layout.outline)
+            .max(layout.pad + 8);
         put_outlined_text(
             img,
             line.as_ref(),

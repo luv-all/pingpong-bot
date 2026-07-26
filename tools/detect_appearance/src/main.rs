@@ -78,21 +78,13 @@ fn main() -> Result<()> {
             draw_circle_px(&mut ct_mask, p, 10, Scalar::new(255.0, 128.0, 0.0, 0.0), 2)?;
         }
 
-        draw_cam_label(
-            &mut cm_mask,
-            "colormask",
-            Scalar::new(0.0, 255.0, 0.0, 0.0),
-        )?;
+        draw_cam_label(&mut cm_mask, "colormask", Scalar::new(0.0, 255.0, 0.0, 0.0))?;
         draw_cam_label(&mut ct_mask, "contour", Scalar::new(255.0, 128.0, 0.0, 0.0))?;
 
         let mut mosaic = hstack_bgr(&[cm_mask, ct_mask])?;
         let lines = [
             format!("appearance frame={n}"),
-            format!(
-                "colormask={}  contour={}",
-                fmt_px(cm_px),
-                fmt_px(ct_px)
-            ),
+            format!("colormask={}  contour={}", fmt_px(cm_px), fmt_px(ct_px)),
             format!("hits {}/{}", hits[0], hits[1]),
         ];
         draw_debug_lines(&mut mosaic, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;

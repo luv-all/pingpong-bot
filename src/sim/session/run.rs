@@ -143,7 +143,10 @@ impl SimSession {
 
                 let now = Instant::now();
                 // 디버거 정지 등으로 wall이 커지면 한 번에 폭주하지 않게 캡.
-                let wall_dt = now.saturating_duration_since(last_wall).as_secs_f64().min(0.05);
+                let wall_dt = now
+                    .saturating_duration_since(last_wall)
+                    .as_secs_f64()
+                    .min(0.05);
                 last_wall = now;
                 sim_debt += wall_dt * time_scale;
 

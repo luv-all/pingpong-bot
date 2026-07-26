@@ -17,9 +17,7 @@ mod tests;
 
 use nalgebra::{DMatrix, DVector, Isometry3, Matrix3, UnitQuaternion, Vector3};
 
-pub use build::{
-    ArmBuildError, ArmBuilder, MountPreset, Robot, RobotBuildError, RobotBuilder,
-};
+pub use build::{ArmBuildError, ArmBuilder, MountPreset, Robot, RobotBuildError, RobotBuilder};
 pub use dynamics::{LinkInertia, is_feasible, required_torque};
 pub use rail::{LinearRail, RailFrame};
 pub use serial::{SerialChain, SerialChainError, SerialJoint};
@@ -30,8 +28,8 @@ pub use urdf::{UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfModel};
 pub use build::builder;
 pub use build::loader;
 
-use crate::error::SwingPlanError;
 use crate::Point3;
+use crate::error::SwingPlanError;
 
 /// revolute 관절각 [rad].
 #[derive(Debug, Clone, PartialEq)]
@@ -126,8 +124,7 @@ impl LinkInertial {
             let rotated = rotation * body.inertia * rotation.transpose();
             // 평행축 정리로 합성 질량중심 기준으로 이동.
             let d = placed_com(placement, body) - com;
-            let translated =
-                body.mass * (Matrix3::identity() * d.dot(&d) - d * d.transpose());
+            let translated = body.mass * (Matrix3::identity() * d.dot(&d) - d * d.transpose());
             inertia += rotated + translated;
         }
         return LinkInertial {
@@ -261,7 +258,10 @@ impl Arm {
     }
 
     /// URDF 등에서 로드한 링크 관성을 붙인다 (길이는 관절 수와 같아야 함).
-    pub fn with_inertias(mut self, inertias: Vec<dynamics::LinkInertia>) -> Result<Self, ArmBuildError> {
+    pub fn with_inertias(
+        mut self,
+        inertias: Vec<dynamics::LinkInertia>,
+    ) -> Result<Self, ArmBuildError> {
         if inertias.len() != self.joint_count() {
             return Err(ArmBuildError::KinematicsJointCountMismatch {
                 chain: self.joint_count(),
@@ -332,14 +332,18 @@ impl Arm {
 
     /// 주어진 마운트 원점에서 FK.
     pub fn forward_kinematics_at(&self, mount: Point3, joints: &Joints) -> Option<RacketPose> {
-        let (ee, _) = self.chain.forward_with_joint_frames(mount.coords, &joints.values)?;
+        let (ee, _) = self
+            .chain
+            .forward_with_joint_frames(mount.coords, &joints.values)?;
         return Some(racket_pose_from_isometry(ee));
     }
 
     /// 마운트부터 EE까지의 체인 점 - OBB/뷰어 공용.
     pub fn chain_points(&self, rail_x: f64, joints: &Joints) -> Option<Vec<Vector3<f64>>> {
         let mount = self.mount_at_rail(rail_x).coords;
-        let (ee, frames) = self.chain.forward_with_joint_frames(mount, &joints.values)?;
+        let (ee, frames) = self
+            .chain
+            .forward_with_joint_frames(mount, &joints.values)?;
         let mut points = Vec::with_capacity(frames.len() + 2);
         points.push(mount);
         for (position, _) in frames {
@@ -355,13 +359,11 @@ impl Arm {
     }
 
     /// 각 revolute 관절 원점 (월드) — 앵커 HUD용.
-    pub fn joint_origins_world(
-        &self,
-        rail_x: f64,
-        joints: &Joints,
-    ) -> Option<Vec<Vector3<f64>>> {
+    pub fn joint_origins_world(&self, rail_x: f64, joints: &Joints) -> Option<Vec<Vector3<f64>>> {
         let mount = self.mount_at_rail(rail_x).coords;
-        let (_, frames) = self.chain.forward_with_joint_frames(mount, &joints.values)?;
+        let (_, frames) = self
+            .chain
+            .forward_with_joint_frames(mount, &joints.values)?;
         return Some(frames.into_iter().map(|(p, _)| p).collect());
     }
 
@@ -484,7 +486,10 @@ impl Arm {
 
         let mut seeds = vec![make_values(hint.rail_x, &hint.joints)];
         if let Some(rail) = &self.rail {
-            seeds.push(make_values(rail.clamp_x(target.coords.x), &self.default_joints));
+            seeds.push(make_values(
+                rail.clamp_x(target.coords.x),
+                &self.default_joints,
+            ));
             seeds.push(make_values(rail.default_x(), &self.default_joints));
         }
         let mut best: Option<(f64, RobotPose)> = None;
@@ -723,7 +728,9 @@ impl Arm {
 
     /// 라켓 위치에 대한 3xN 자코비안 `dp/dq` (마운트 기준).
     fn position_jacobian_at(&self, mount: Point3, joints: &Joints) -> Option<DMatrix<f64>> {
-        let (ee, frames) = self.chain.forward_with_joint_frames(mount.coords, &joints.values)?;
+        let (ee, frames) = self
+            .chain
+            .forward_with_joint_frames(mount.coords, &joints.values)?;
         let ee_position = ee.translation.vector;
         let mut jacobian = DMatrix::zeros(3, frames.len());
         for (index, (joint_position, joint_axis)) in frames.iter().enumerate() {
@@ -932,10 +939,18 @@ impl Arm {
         let jacobian = self.position_jacobian_fd(pose).ok_or_else(err)?;
         let jjt = &jacobian * jacobian.transpose() + DMatrix::identity(3, 3) * 1e-9;
         let inverse = jjt.try_inverse().ok_or_else(err)?;
-        let target = DVector::from_vec(vec![racket_velocity.x, racket_velocity.y, racket_velocity.z]);
+        let target = DVector::from_vec(vec![
+            racket_velocity.x,
+            racket_velocity.y,
+            racket_velocity.z,
+        ]);
         let velocities = jacobian.transpose() * inverse * target;
         let has_rail = self.rail.is_some();
-        let (rail_velocity, offset) = if has_rail { (velocities[0], 1) } else { (0.0, 0) };
+        let (rail_velocity, offset) = if has_rail {
+            (velocities[0], 1)
+        } else {
+            (0.0, 0)
+        };
         return Ok((
             rail_velocity,
             velocities.iter().skip(offset).copied().collect(),

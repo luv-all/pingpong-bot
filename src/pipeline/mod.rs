@@ -76,52 +76,49 @@ pub fn run(
         let sender = observation_tx.clone();
         handles.push((
             PipelineThread::Camera,
-            thread::spawn(move || {
-
-                match feed {
-                    CameraFeed::Hint(mut camera) => {
-                        while let Some((camera_id, hint, timestamp)) = camera.next_hint() {
-                            let _span = info_span!("detect", ?camera_id).entered();
-                            if let Some(pixel) = passthrough_detect(hint) {
-                                if sender
-                                    .send(BallObservation {
-                                        pixel,
-                                        camera_id,
-                                        timestamp,
-                                    })
-                                    .is_err()
-                                {
-                                    break;
-                                }
+            thread::spawn(move || match feed {
+                CameraFeed::Hint(mut camera) => {
+                    while let Some((camera_id, hint, timestamp)) = camera.next_hint() {
+                        let _span = info_span!("detect", ?camera_id).entered();
+                        if let Some(pixel) = passthrough_detect(hint) {
+                            if sender
+                                .send(BallObservation {
+                                    pixel,
+                                    camera_id,
+                                    timestamp,
+                                })
+                                .is_err()
+                            {
+                                break;
                             }
                         }
                     }
-                    CameraFeed::Detect {
-                        mut source,
-                        mut detector,
-                        params,
-                    } => {
-                        while let Some(frame) = source.next_frame() {
-                            let camera_id = frame.camera_id;
-                            let _span = info_span!("detect", ?camera_id).entered();
-                            let frame = match undistort_frame(&frame, &params) {
-                                Ok(f) => f,
-                                Err(err) => {
-                                    warn!(%err, "undistort 실패 — 프레임 스킵");
-                                    continue;
-                                }
-                            };
-                            if let Some(pixel) = detector.detect(&frame) {
-                                if sender
-                                    .send(BallObservation {
-                                        pixel,
-                                        camera_id,
-                                        timestamp: frame.timestamp,
-                                    })
-                                    .is_err()
-                                {
-                                    break;
-                                }
+                }
+                CameraFeed::Detect {
+                    mut source,
+                    mut detector,
+                    params,
+                } => {
+                    while let Some(frame) = source.next_frame() {
+                        let camera_id = frame.camera_id;
+                        let _span = info_span!("detect", ?camera_id).entered();
+                        let frame = match undistort_frame(&frame, &params) {
+                            Ok(f) => f,
+                            Err(err) => {
+                                warn!(%err, "undistort 실패 — 프레임 스킵");
+                                continue;
+                            }
+                        };
+                        if let Some(pixel) = detector.detect(&frame) {
+                            if sender
+                                .send(BallObservation {
+                                    pixel,
+                                    camera_id,
+                                    timestamp: frame.timestamp,
+                                })
+                                .is_err()
+                            {
+                                break;
                             }
                         }
                     }

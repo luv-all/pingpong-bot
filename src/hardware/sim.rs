@@ -59,9 +59,7 @@ impl Hardware for SimHardware {
             let arm = Arc::clone(&world.arm);
             world.robot_mut().begin_swing(trajectory.clone());
             world.mark_swing_committed();
-            world
-                .debug_snap_mut()
-                .set_committed_path(&arm, &trajectory);
+            world.debug_snap_mut().set_committed_path(&arm, &trajectory);
         }
         self.command_count += 1;
 

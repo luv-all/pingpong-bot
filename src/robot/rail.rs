@@ -1,7 +1,7 @@
 //! 탁구대 옆 리니어 모터 (X축 슬라이드) · 철제 프로파일 프레임.
 
-use crate::constants::table;
 use crate::Point3;
+use crate::constants::table;
 
 /// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·윗면 기준 설치 치수).
 ///

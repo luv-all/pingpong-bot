@@ -4,8 +4,8 @@ use nalgebra::Vector3;
 
 use crate::constants::{G, table};
 use crate::defaults;
-use crate::planner::impact::{rally_return_velocity, required_racket_velocity};
 use crate::error::{DomainError, SwingPlanError};
+use crate::planner::impact::{rally_return_velocity, required_racket_velocity};
 use crate::robot::Arm;
 use crate::{Joints, Prediction, RailMotion, RobotPose, SwingTrajectory};
 
@@ -56,7 +56,8 @@ pub fn accel(
 ///
 /// 창보다 이르면 대기(발사 직후 긴 궤적 금지), 짧으면 `InsufficientTime`.
 pub fn in_swing_commit_window(time_to_impact_secs: f64) -> bool {
-    return (defaults::control().min_swing_secs..=defaults::control().swing_commit_max_secs).contains(&time_to_impact_secs);
+    return (defaults::control().min_swing_secs..=defaults::control().swing_commit_max_secs)
+        .contains(&time_to_impact_secs);
 }
 
 /// 네트 통과 후인지 - ground truth/EKF control 공통 commit 게이트.
@@ -104,7 +105,8 @@ fn candidate_ik_hints(arm: &Arm, hint: &Joints) -> Vec<Joints> {
         let limit = arm.joint_limit(joint_index)?;
         let mid = (limit.min + limit.max) * 0.5;
         let mut reflected = joints.clone();
-        reflected.values[joint_index] = (2.0 * mid - joints.values[joint_index]).clamp(limit.min, limit.max);
+        reflected.values[joint_index] =
+            (2.0 * mid - joints.values[joint_index]).clamp(limit.min, limit.max);
         return Some(reflected);
     };
     if let Some(shoulder_reflected) = reflect(1, hint) {
@@ -172,7 +174,12 @@ fn best_impact_candidate(
         let Some(pose) = arm.forward_kinematics_with_rail(solved.rail_x, &solved.joints) else {
             continue;
         };
-        let v_r = match required_racket_velocity(v_in, v_out, pose.normal, defaults::impact().racket_effective_restitution) {
+        let v_r = match required_racket_velocity(
+            v_in,
+            v_out,
+            pose.normal,
+            defaults::impact().racket_effective_restitution,
+        ) {
             Ok(v_r) => v_r,
             Err(error) => {
                 last_error = Some(error);
@@ -182,13 +189,14 @@ fn best_impact_candidate(
         // 위치 3제약만의 최소노름 해 - 순간 라켓 방향 고정은 강제하지
         // 않는다(실제 스윙도 접촉 순간 라켓이 계속 회전 중이라 물리적으로
         // 과잉제약이었다, 2026-07-23 실측).
-        let (rail_velocity, joint_velocities) = match arm.linear_velocities_for_racket_velocity(&solved, v_r) {
-            Ok(result) => result,
-            Err(error) => {
-                last_error = Some(error);
-                continue;
-            }
-        };
+        let (rail_velocity, joint_velocities) =
+            match arm.linear_velocities_for_racket_velocity(&solved, v_r) {
+                Ok(result) => result,
+                Err(error) => {
+                    last_error = Some(error);
+                    continue;
+                }
+            };
         let peak_joint_speed_ratio = joint_velocities
             .iter()
             .map(|v| v.abs())
@@ -231,7 +239,10 @@ pub(crate) fn solve_impact_target(
             .iter()
             .enumerate()
             .map(|(i, v)| (i, v.abs()))
-            .fold((0, 0.0_f64), |acc, cur| if cur.1 > acc.1 { cur } else { acc });
+            .fold(
+                (0, 0.0_f64),
+                |acc, cur| if cur.1 > acc.1 { cur } else { acc },
+            );
         // 예전엔 여기서 NearSingularity로 하드 거절했다. 실기 관절속도(~2.88)
         // + 현재 마운트/슈터에서는 거의 모든 샷이 걸려 **스윙이 한 번도
         // commit되지 않았다**(시뮬 로그: streak→tti 포기). 목표 관절속도만
@@ -674,7 +685,11 @@ fn trajectory_collision_free(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
 /// 관절이 토크 한계 안. 한계가 무한(`f64::INFINITY`)인 관절은 무시한다.
 fn peak_torque_utilization(arm: &Arm, trajectory: &SwingTrajectory) -> f64 {
     // 토크 한계가 전부 무한(무제한)이면 동역학을 돌릴 필요가 없다.
-    if arm.joint_torque_limits.iter().all(|limit| !limit.is_finite()) {
+    if arm
+        .joint_torque_limits
+        .iter()
+        .all(|limit| !limit.is_finite())
+    {
         return 0.0;
     }
     // 10ms 간격. quintic 가속 곡선은 매끄러워 이 간격이면 첨두 토크를 <1%
@@ -694,12 +709,13 @@ fn peak_torque_utilization(arm: &Arm, trajectory: &SwingTrajectory) -> f64 {
     let mut worst = 0.0_f64;
     for index in 0..=samples {
         let time = trajectory.duration_secs * index as f64 / samples as f64;
-        let (segments, local_t) =
-            if time <= trajectory.impact_time_secs || trajectory.duration_secs <= trajectory.impact_time_secs {
-                (&pre, time)
-            } else {
-                (&post, time - trajectory.impact_time_secs)
-            };
+        let (segments, local_t) = if time <= trajectory.impact_time_secs
+            || trajectory.duration_secs <= trajectory.impact_time_secs
+        {
+            (&pre, time)
+        } else {
+            (&post, time - trajectory.impact_time_secs)
+        };
         for i in 0..n {
             let (q, qd, qdd) = segments[i].sample(local_t);
             joints.values[i] = q;
@@ -736,10 +752,7 @@ fn kinematic_limits_ok(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
 /// 튜닝으로 고칠 수 있는 문제인지(관절 각도·레일 범위) 아니면 시간
 /// 예산 문제인지(속도·가속) 구분이 안 된다. 실제로 이 구분이 없어서
 /// 2026-07-23 조사가 한동안 엉뚱한 축(리치/관절속도 재보정)을 팠다.
-fn kinematic_limit_violation(
-    arm: &Arm,
-    trajectory: &SwingTrajectory,
-) -> Option<&'static str> {
+fn kinematic_limit_violation(arm: &Arm, trajectory: &SwingTrajectory) -> Option<&'static str> {
     if trajectory.peak_joint_speed() > arm.max_joint_speed {
         return Some("관절 속도");
     }
@@ -886,8 +899,12 @@ mod tests {
     fn in_swing_commit_window_bounds() {
         assert!(!in_swing_commit_window(0.05));
         assert!(in_swing_commit_window(0.12));
-        assert!(in_swing_commit_window(defaults::control().swing_commit_max_secs));
-        assert!(!in_swing_commit_window(defaults::control().swing_commit_max_secs + 0.01));
+        assert!(in_swing_commit_window(
+            defaults::control().swing_commit_max_secs
+        ));
+        assert!(!in_swing_commit_window(
+            defaults::control().swing_commit_max_secs + 0.01
+        ));
     }
 
     #[test]
@@ -1066,7 +1083,9 @@ mod tests {
 
     #[test]
     fn competition_geometry_reachable_with_rail() {
-        let arm = crate::defaults::primitive_4dof().expect("competition arm").arm;
+        let arm = crate::defaults::primitive_4dof()
+            .expect("competition arm")
+            .arm;
 
         let rail_x = arm.rail.as_ref().map(|r| r.default_x()).unwrap_or(0.0);
         let far_impact = arm
@@ -1120,7 +1139,9 @@ mod tests {
                 );
             }
             Err(DomainError::InfeasibleSwing(SwingPlanError::JointOrTorqueLimit { .. }))
-            | Err(DomainError::InfeasibleSwing(SwingPlanError::TrajectoryExceedsTorque { .. }))
+            | Err(DomainError::InfeasibleSwing(SwingPlanError::TrajectoryExceedsTorque {
+                ..
+            }))
             | Err(DomainError::InfeasibleSwing(SwingPlanError::NearSingularity { .. }))
             | Err(DomainError::InfeasibleSwing(SwingPlanError::TrajectoryExceedsLimits {
                 ..

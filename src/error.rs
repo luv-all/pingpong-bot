@@ -277,34 +277,44 @@ mod tests {
 
     #[test]
     fn hard_unreachable_skips_only_insufficient_time() {
-        assert!(SwingPlanError::InverseKinematicsNoSolution {
-            target_x: 0.0,
-            target_y: 0.0,
-            target_z: 0.0,
-        }
-        .is_hard_unreachable());
-        assert!(SwingPlanError::ReturnVelocityUnreachable {
-            incoming_velocity: [0.0; 3],
-            outgoing_velocity: [0.0; 3],
-        }
-        .is_hard_unreachable());
-        assert!(!SwingPlanError::InsufficientTime {
-            time_to_impact_secs: 0.05,
-            min_swing_secs: 0.1,
-        }
-        .is_hard_unreachable());
-        assert!(SwingPlanError::TablePenetration {
-            target_x: 0.0,
-            target_y: 0.0,
-            target_z: 0.0,
-            depth: 0.01,
-        }
-        .is_hard_unreachable());
-        assert!(SwingPlanError::JointOrTorqueLimit {
-            target_x: 0.0,
-            target_y: 0.0,
-            target_z: 0.0,
-        }
-        .is_hard_unreachable());
+        assert!(
+            SwingPlanError::InverseKinematicsNoSolution {
+                target_x: 0.0,
+                target_y: 0.0,
+                target_z: 0.0,
+            }
+            .is_hard_unreachable()
+        );
+        assert!(
+            SwingPlanError::ReturnVelocityUnreachable {
+                incoming_velocity: [0.0; 3],
+                outgoing_velocity: [0.0; 3],
+            }
+            .is_hard_unreachable()
+        );
+        assert!(
+            !SwingPlanError::InsufficientTime {
+                time_to_impact_secs: 0.05,
+                min_swing_secs: 0.1,
+            }
+            .is_hard_unreachable()
+        );
+        assert!(
+            SwingPlanError::TablePenetration {
+                target_x: 0.0,
+                target_y: 0.0,
+                target_z: 0.0,
+                depth: 0.01,
+            }
+            .is_hard_unreachable()
+        );
+        assert!(
+            SwingPlanError::JointOrTorqueLimit {
+                target_x: 0.0,
+                target_y: 0.0,
+                target_z: 0.0,
+            }
+            .is_hard_unreachable()
+        );
     }
 }

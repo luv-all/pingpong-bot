@@ -203,14 +203,9 @@ mod tests {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
         let snap = launch_snapshot();
-        let at_launch = predict_hit_plane(
-            snap.position,
-            snap.velocity,
-            snap.omega,
-            plane,
-            &physics,
-        )
-        .expect("발사 직후 예측");
+        let at_launch =
+            predict_hit_plane(snap.position, snap.velocity, snap.omega, plane, &physics)
+                .expect("발사 직후 예측");
 
         // (1) ballistics 자기정합: 커널로 바운스까지 적분 후 재예측 ≈ 발사 예측
         let est = crate::defaults::estimator();
@@ -221,8 +216,13 @@ mod tests {
         let mut bounced = false;
         while t < est.max_lead {
             let prev_vz = vel.z;
-            let (np, nv, nw) =
-                crate::estimator::ballistics::semi_implicit_euler(pos, vel, omega, est.integrate_dt, &physics);
+            let (np, nv, nw) = crate::estimator::ballistics::semi_implicit_euler(
+                pos,
+                vel,
+                omega,
+                est.integrate_dt,
+                &physics,
+            );
             pos = np;
             vel = nv;
             omega = nw;
@@ -233,12 +233,11 @@ mod tests {
             }
         }
         assert!(bounced, "ballistics가 테이블 바운스에 도달해야 함");
-        let after_bal = predict_hit_plane(pos, vel, omega, plane, &physics).expect("바운스 후 ballistics 예측");
-        let dz_bal = (after_bal.impact_position.coords.z - at_launch.impact_position.coords.z).abs();
-        assert!(
-            dz_bal <= 0.01,
-            "ballistics 자기정합 dz={dz_bal:.4} (>1cm)"
-        );
+        let after_bal =
+            predict_hit_plane(pos, vel, omega, plane, &physics).expect("바운스 후 ballistics 예측");
+        let dz_bal =
+            (after_bal.impact_position.coords.z - at_launch.impact_position.coords.z).abs();
+        assert!(dz_bal <= 0.01, "ballistics 자기정합 dz={dz_bal:.4} (>1cm)");
 
         // (2) Rapier 잔차: GT 상태로 발사 예측 vs 실제 Rapier 바운스 직후 재예측
         let mut world = SimWorld::new(crate::defaults::primitive_4dof().expect("4dof"));

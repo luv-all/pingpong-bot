@@ -32,10 +32,7 @@ pub fn link_inertias_for_chain(urdf: &UrdfModel) -> Result<Vec<LinkInertia>, Urd
         let mut j = i + 1;
         while j < full.len() {
             let next = &urdf.robot.joints[full[j]];
-            if matches!(
-                next.joint_type,
-                JointType::Revolute | JointType::Continuous
-            ) {
+            if matches!(next.joint_type, JointType::Revolute | JointType::Continuous) {
                 break;
             }
             // fixed (또는 기타 비구동) — child를 first-child 프레임으로 합산
@@ -61,13 +58,11 @@ pub fn link_inertias_for_chain(urdf: &UrdfModel) -> Result<Vec<LinkInertia>, Urd
 }
 
 fn link_inertia(robot: &Robot, name: &str) -> Result<LinkInertia, UrdfLoadError> {
-    let link = robot
-        .links
-        .iter()
-        .find(|l| l.name == name)
-        .ok_or_else(|| UrdfLoadError::ArmConversion {
+    let link = robot.links.iter().find(|l| l.name == name).ok_or_else(|| {
+        UrdfLoadError::ArmConversion {
             reason: format!("link `{name}` 없음"),
-        })?;
+        }
+    })?;
     let inertial = &link.inertial;
     let mass = inertial.mass.value;
     let com = Vector3::new(

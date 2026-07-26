@@ -135,10 +135,9 @@ fn resolve_robot(robot_id: &str, mount: Option<(f64, f64)>) -> Result<Robot> {
         // primitive는 URDF 없이 `defaults`가 직접 만든다.
         "4-dof" | "primitive" | "competition" => {
             return match mount {
-                Some((base_y, height_offset_m)) => defaults::primitive_4dof_with_mount(
-                    base_y,
-                    table::SURFACE_Z + height_offset_m,
-                ),
+                Some((base_y, height_offset_m)) => {
+                    defaults::primitive_4dof_with_mount(base_y, table::SURFACE_Z + height_offset_m)
+                }
                 None => defaults::primitive_4dof(),
             }
             .map_err(|e| anyhow!("primitive 4-dof 빌드 실패: {e}"));
@@ -232,7 +231,9 @@ fn run_shot(
     let ball_collider = world
         .collider_set
         .iter()
-        .find_map(|(handle, collider)| (collider.parent() == Some(world.ball_handle)).then_some(handle))
+        .find_map(|(handle, collider)| {
+            (collider.parent() == Some(world.ball_handle)).then_some(handle)
+        })
         .expect("ball collider");
     let racket_collider = world
         .collider_set
@@ -408,7 +409,8 @@ fn rest_pose_search(arm: &Arm, iterations: usize) {
         let mut hi = vec![f64::NEG_INFINITY; n];
         let mut solved = 0usize;
         for prediction in &scenarios {
-            let Some(pose) = pingpong_bot::plan_coarse_track(&arm, std::slice::from_ref(prediction))
+            let Some(pose) =
+                pingpong_bot::plan_coarse_track(&arm, std::slice::from_ref(prediction))
             else {
                 continue;
             };
@@ -640,8 +642,11 @@ fn main() -> Result<()> {
 
     let mut grid = Vec::new();
     for base_y in linspace(args.base_y_min, args.base_y_max, args.base_y_steps) {
-        for mount_h in linspace(args.mount_height_min, args.mount_height_max, args.mount_height_steps)
-        {
+        for mount_h in linspace(
+            args.mount_height_min,
+            args.mount_height_max,
+            args.mount_height_steps,
+        ) {
             for speed_mps in linspace(args.speed_min, args.speed_max, args.speed_steps) {
                 for pitch_deg in linspace(args.pitch_min, args.pitch_max, args.pitch_steps) {
                     for height_offset_m in
@@ -676,8 +681,8 @@ fn main() -> Result<()> {
                             .as_ref()
                             .is_some_and(|(y, h, _)| *y == base_y && *h == mount_h)
                         {
-                            let robot =
-                                resolve_robot(robot_id, Some((base_y, mount_h))).expect("로봇 빌드");
+                            let robot = resolve_robot(robot_id, Some((base_y, mount_h)))
+                                .expect("로봇 빌드");
                             cached = Some((base_y, mount_h, robot));
                         }
                         let (_, _, robot) = cached.as_ref().expect("캐시된 로봇");
@@ -701,7 +706,11 @@ fn main() -> Result<()> {
                         let mut ratios = Vec::with_capacity(battery.len());
                         for shot in battery {
                             let settings = BallShooterSettings {
-                                speed_mps: if random_speed { shot.speed_mps } else { speed_mps },
+                                speed_mps: if random_speed {
+                                    shot.speed_mps
+                                } else {
+                                    speed_mps
+                                },
                                 pitch_deg,
                                 height_offset_m,
                                 ..shot.clone()
@@ -718,10 +727,13 @@ fn main() -> Result<()> {
                             );
                             ratios.push(outcome.best_peak_ratio);
                         }
-                        ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                        ratios
+                            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                         result.best_peak_ratio = ratios.first().copied().unwrap_or(f64::INFINITY);
-                        result.median_peak_ratio =
-                            ratios.get(ratios.len() / 2).copied().unwrap_or(f64::INFINITY);
+                        result.median_peak_ratio = ratios
+                            .get(ratios.len() / 2)
+                            .copied()
+                            .unwrap_or(f64::INFINITY);
                         out.push(result);
                     }
                     return out;
@@ -741,9 +753,10 @@ fn main() -> Result<()> {
     // `success`(적법한 샷을 커밋된 스윙으로 네트 너머로 리턴)가 최종 기준.
     results.sort_by(|a, b| {
         if args.sort_by_legal {
-            return b.incoming_valid.cmp(&a.incoming_valid).then_with(|| {
-                b.success.cmp(&a.success)
-            });
+            return b
+                .incoming_valid
+                .cmp(&a.incoming_valid)
+                .then_with(|| b.success.cmp(&a.success));
         }
         return b
             .success
@@ -773,8 +786,17 @@ fn main() -> Result<()> {
         );
         println!(
             "{:>7} {:>7} {:>7} {:>7} {:>8} {:>6} {:>7} {:>7} {:>6} {:>7} {:>7}",
-            "base_y", "mnt_h", "speed", "pitch", "height", "legal", "commit", "cleared",
-            "IN", "SUCCESS", "med_r"
+            "base_y",
+            "mnt_h",
+            "speed",
+            "pitch",
+            "height",
+            "legal",
+            "commit",
+            "cleared",
+            "IN",
+            "SUCCESS",
+            "med_r"
         );
         for r in results.iter().take(args.top_n) {
             println!(

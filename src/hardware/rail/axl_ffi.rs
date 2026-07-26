@@ -69,9 +69,7 @@ impl AxlFfi {
 
         unsafe {
             return Ok(Self {
-                axl_open_no_reset: *library
-                    .get(b"AxlOpenNoReset\0")
-                    .map_err(symbol_error)?,
+                axl_open_no_reset: *library.get(b"AxlOpenNoReset\0").map_err(symbol_error)?,
                 axl_close: *library.get(b"AxlClose\0").map_err(symbol_error)?,
                 axm_info_is_motion_module: *library
                     .get(b"AxmInfoIsMotionModule\0")

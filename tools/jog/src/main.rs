@@ -222,7 +222,10 @@ fn run_swing(session: &mut Session, args: &[&str]) -> Result<()> {
     } else {
         (None, &args[3..])
     };
-    ensure!(speed_tok.len() == 2 && speed_tok[0].eq_ignore_ascii_case("speed"), "need speed <v>");
+    ensure!(
+        speed_tok.len() == 2 && speed_tok[0].eq_ignore_ascii_case("speed"),
+        "need speed <v>"
+    );
     let speed: f64 = speed_tok[1].parse().context("speed")?;
     ensure!(speed.is_finite() && speed > 0.0, "speed > 0");
 

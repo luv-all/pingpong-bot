@@ -48,8 +48,8 @@ pub fn validate(path: &PathBuf) -> Result<()> {
 pub fn from_pixels(path: &PathBuf, args: &Args) -> Result<()> {
     let text =
         fs::read_to_string(path).with_context(|| format!("읽기 실패: {}", path.display()))?;
-    let file: PixelsFile = serde_json::from_str(&text)
-        .with_context(|| format!("pixels JSON: {}", path.display()))?;
+    let file: PixelsFile =
+        serde_json::from_str(&text).with_context(|| format!("pixels JSON: {}", path.display()))?;
     let pixels: Vec<PixelPoint> = file
         .pixels
         .iter()
@@ -90,9 +90,11 @@ pub fn write_result(
     } else if output.exists() && args.merge.is_none() {
         // -o 파일이 이미 있으면 upsert (멀티캠 반복 실행)
         match fs::read_to_string(&output) {
-            Ok(text) => serde_json::from_str::<Calibration>(&text).unwrap_or_else(|_| Calibration {
-                cameras: Vec::new(),
-            }),
+            Ok(text) => {
+                serde_json::from_str::<Calibration>(&text).unwrap_or_else(|_| Calibration {
+                    cameras: Vec::new(),
+                })
+            }
             Err(_) => Calibration {
                 cameras: Vec::new(),
             },

@@ -448,7 +448,9 @@ mod tests {
     fn competition_primitive_handle_lies_in_blade_plane() {
         use crate::constants::geometry::{RACKET_HALF_Z, RACKET_HANDLE_LENGTH};
 
-        let primitive = crate::defaults::primitive_4dof().expect("competition primitive").arm;
+        let primitive = crate::defaults::primitive_4dof()
+            .expect("competition primitive")
+            .arm;
         let joints = primitive.default_joints.clone();
         let rail_x = primitive
             .rail

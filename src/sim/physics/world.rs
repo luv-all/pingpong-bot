@@ -1907,12 +1907,14 @@ mod tests {
             world.step(1.0 / 1000.0, None);
             stepped_precommit = true;
             assert!(!world.robot().is_swinging(), "commit 전엔 스윙 시작 금지");
-            assert!(!world.swing_committed, "pre-commit 단계에서 commit되면 안 됨");
+            assert!(
+                !world.swing_committed,
+                "pre-commit 단계에서 commit되면 안 됨"
+            );
         }
 
         assert!(stepped_precommit, "pre-commit 스텝이 실행돼야 함");
-        let target_rail_x =
-            target_rail_x.expect("pre-commit 중 coarse 목표(예측)가 나와야 함");
+        let target_rail_x = target_rail_x.expect("pre-commit 중 coarse 목표(예측)가 나와야 함");
         let rail_after = world.robot().rail_x();
         let target_offset = target_rail_x - center_rail_x;
         let moved = rail_after - center_rail_x;

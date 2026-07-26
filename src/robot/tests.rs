@@ -6,7 +6,10 @@ use crate::error::SwingPlanError;
 use crate::{Joints, Point3};
 
 fn sample_arm() -> Arm {
-    return (*crate::defaults::primitive_4dof().expect("테스트용 4DOF arm").arm).clone();
+    return (*crate::defaults::primitive_4dof()
+        .expect("테스트용 4DOF arm")
+        .arm)
+        .clone();
 }
 
 #[test]

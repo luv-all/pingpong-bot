@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use clap::Parser;
 use opencv::core::{Rect, Scalar, Vec3b, Vector};
+use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
-use opencv::highgui;
 use pingpong_bot::{
     CameraId, ColorSpace, ColormaskParams, FrameSource, ImageDirSource, OpenCvCapture, PixelPoint,
     PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
@@ -132,12 +132,7 @@ fn bgr_to_space(bgr: [u8; 3], space: ColorSpace) -> Result<[u8; 3]> {
         1,
         1,
         opencv::core::CV_8UC3,
-        Scalar::new(
-            f64::from(bgr[0]),
-            f64::from(bgr[1]),
-            f64::from(bgr[2]),
-            0.0,
-        ),
+        Scalar::new(f64::from(bgr[0]), f64::from(bgr[1]), f64::from(bgr[2]), 0.0),
     )?;
     let mut out = Mat::default();
     let code = match space {
@@ -155,7 +150,10 @@ fn bgr_to_space(bgr: [u8; 3], space: ColorSpace) -> Result<[u8; 3]> {
     return Ok([v[0], v[1], v[2]]);
 }
 
-fn ranges_from_samples(samples: &[Sample], margin: u8) -> Result<(Option<ChannelRange>, Option<ChannelRange>)> {
+fn ranges_from_samples(
+    samples: &[Sample],
+    margin: u8,
+) -> Result<(Option<ChannelRange>, Option<ChannelRange>)> {
     if samples.is_empty() {
         return Ok((None, None));
     }
@@ -183,15 +181,30 @@ fn print_params(space: ColorSpace, range: ChannelRange) {
     let axes = space_label(space);
     println!("// paste into defaults::colormask() — space={space} ({axes})");
     println!("ColormaskParams {{");
-    println!("    space: ColorSpace::{},", match space {
-        ColorSpace::Ycrcb => "Ycrcb",
-        ColorSpace::Hsv => "Hsv",
-    });
-    println!("    c0_min: {}, // {}", p.c0_min, axes.split('/').next().unwrap_or("c0"));
+    println!(
+        "    space: ColorSpace::{},",
+        match space {
+            ColorSpace::Ycrcb => "Ycrcb",
+            ColorSpace::Hsv => "Hsv",
+        }
+    );
+    println!(
+        "    c0_min: {}, // {}",
+        p.c0_min,
+        axes.split('/').next().unwrap_or("c0")
+    );
     println!("    c0_max: {},", p.c0_max);
-    println!("    c1_min: {}, // {}", p.c1_min, axes.split('/').nth(1).unwrap_or("c1"));
+    println!(
+        "    c1_min: {}, // {}",
+        p.c1_min,
+        axes.split('/').nth(1).unwrap_or("c1")
+    );
     println!("    c1_max: {},", p.c1_max);
-    println!("    c2_min: {}, // {}", p.c2_min, axes.split('/').nth(2).unwrap_or("c2"));
+    println!(
+        "    c2_min: {}, // {}",
+        p.c2_min,
+        axes.split('/').nth(2).unwrap_or("c2")
+    );
     println!("    c2_max: {},", p.c2_max);
     println!("}}");
 }
@@ -253,12 +266,12 @@ fn empty_bgr_like(bgr: &Mat) -> Result<Mat> {
 }
 
 fn space_to_bgr_pixel(c0: u8, c1: u8, c2: u8, space: ColorSpace) -> Result<[u8; 3]> {
-    let pixel = Mat::new_rows_cols_with_default(1, 1, opencv::core::CV_8UC3, Scalar::new(
-        f64::from(c0),
-        f64::from(c1),
-        f64::from(c2),
-        0.0,
-    ))?;
+    let pixel = Mat::new_rows_cols_with_default(
+        1,
+        1,
+        opencv::core::CV_8UC3,
+        Scalar::new(f64::from(c0), f64::from(c1), f64::from(c2), 0.0),
+    )?;
     let mut out = Mat::default();
     let code = match space {
         ColorSpace::Ycrcb => imgproc::COLOR_YCrCb2BGR,
@@ -275,7 +288,12 @@ fn space_to_bgr_pixel(c0: u8, c1: u8, c2: u8, space: ColorSpace) -> Result<[u8; 
     return Ok([v[0], v[1], v[2]]);
 }
 
-fn build_strip(width: i32, samples: &[Sample], space: ColorSpace, range: Option<ChannelRange>) -> Result<Mat> {
+fn build_strip(
+    width: i32,
+    samples: &[Sample],
+    space: ColorSpace,
+    range: Option<ChannelRange>,
+) -> Result<Mat> {
     let w = width.max(1);
     let mut strip = Mat::zeros(STRIP_H, w, opencv::core::CV_8UC3)?.to_mat()?;
 
@@ -358,11 +376,13 @@ fn main() -> Result<()> {
     let margin = args.margin.min(32);
     let mut source = open_source(&args)?;
     let mut space = args.space;
-    let wait_ms = args.wait_ms.unwrap_or(if args.path.is_some() || args.images.is_some() {
-        33
-    } else {
-        1
-    });
+    let wait_ms = args
+        .wait_ms
+        .unwrap_or(if args.path.is_some() || args.images.is_some() {
+            33
+        } else {
+            1
+        });
 
     let window = "tune:colormask";
     highgui::named_window(window, highgui::WINDOW_AUTOSIZE)?;
@@ -413,10 +433,7 @@ fn main() -> Result<()> {
                 .image
                 .try_clone()
                 .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
-            freeze_img = Some(
-                img.try_clone()
-                    .map_err(|e| anyhow::anyhow!("clone: {e}"))?,
-            );
+            freeze_img = Some(img.try_clone().map_err(|e| anyhow::anyhow!("clone: {e}"))?);
             img
         };
 
@@ -435,11 +452,7 @@ fn main() -> Result<()> {
                 continue;
             }
             if let Some(bgr) = read_bgr_avg(&frame_img, mx, my, SAMPLE_RADIUS) {
-                samples.push(Sample {
-                    x: mx,
-                    y: my,
-                    bgr,
-                });
+                samples.push(Sample { x: mx, y: my, bgr });
                 println!(
                     "sample #{} px=({mx},{my}) BGR=[{},{},{}]",
                     samples.len(),
@@ -532,7 +545,9 @@ fn main() -> Result<()> {
                 };
                 println!("space={space}");
             }
-            PreviewAction::Key(key) if key == i32::from(b'z') || key == i32::from(b'Z') || key == 8 => {
+            PreviewAction::Key(key)
+                if key == i32::from(b'z') || key == i32::from(b'Z') || key == 8 =>
+            {
                 if samples.pop().is_some() {
                     println!("undo → {} samples", samples.len());
                 }

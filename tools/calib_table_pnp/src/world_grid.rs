@@ -1,8 +1,8 @@
 //! 탁구대 XY×Z 월드 격자 오버레이 (이 툴 전용).
 
+use opencv::Result as CvResult;
 use opencv::core::{Mat, Scalar};
 use opencv::prelude::*;
-use opencv::Result as CvResult;
 use pingpong_bot::constants::table;
 use pingpong_bot::{CameraParams, Point3, draw_circle_px, draw_debug_lines};
 

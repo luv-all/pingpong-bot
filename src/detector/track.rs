@@ -90,9 +90,7 @@ impl RoiTrack {
 
     /// 파라미터 변경 후, 직전 hit 기준으로 half를 다시 계산.
     pub fn recompute_half(&mut self) {
-        self.half_px = self
-            .params
-            .compute_half(self.last_area, self.last_delta_px);
+        self.half_px = self.params.compute_half(self.last_area, self.last_delta_px);
     }
 
     fn roi_rect(prev: PixelPoint, half: i32, frame: &Frame) -> Option<Rect> {
@@ -139,9 +137,7 @@ impl RoiTrack {
         self.last_area = self.inner.last_area();
         self.last_generator_idx = self.inner.last_generator_idx();
         self.last = Some(p);
-        self.half_px = self
-            .params
-            .compute_half(self.last_area, self.last_delta_px);
+        self.half_px = self.params.compute_half(self.last_area, self.last_delta_px);
     }
 
     fn clear_track(&mut self) {
@@ -203,7 +199,7 @@ impl BallDetector for RoiTrack {
 mod tests {
     use super::*;
     use crate::CameraId;
-    use crate::detector::{ColorSpace, ColormaskParams, ColormaskDetector};
+    use crate::detector::{ColorSpace, ColormaskDetector, ColormaskParams};
     use opencv::core::{CV_8UC3, Point, Scalar, Size};
     use opencv::imgproc;
     use std::time::Instant;

@@ -85,8 +85,7 @@ pub fn required_torque(arm: &Arm, q: &[f64], qd: &[f64], qdd: &[f64]) -> Option<
         let a_joint =
             a_prev + alpha_prev.cross(&r_joint) + omega_prev.cross(&omega_prev.cross(&r_joint));
         let r_lo = link_origin - joint_pos;
-        a_origin[i] =
-            a_joint + alpha[i].cross(&r_lo) + omega[i].cross(&omega[i].cross(&r_lo));
+        a_origin[i] = a_joint + alpha[i].cross(&r_lo) + omega[i].cross(&omega[i].cross(&r_lo));
         let c = link_poses[i] * inertias[i].com - link_origin;
         a_com[i] = a_origin[i] + alpha[i].cross(&c) + omega[i].cross(&omega[i].cross(&c));
     }
