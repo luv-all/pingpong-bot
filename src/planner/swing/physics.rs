@@ -232,11 +232,30 @@ pub(crate) fn solve_impact_target(
             .enumerate()
             .map(|(i, v)| (i, v.abs()))
             .fold((0, 0.0_f64), |acc, cur| if cur.1 > acc.1 { cur } else { acc });
-        return Err(DomainError::InfeasibleSwing(SwingPlanError::NearSingularity {
+        // 예전엔 여기서 NearSingularity로 하드 거절했다. 실기 관절속도(~2.88)
+        // + 현재 마운트/슈터에서는 거의 모든 샷이 걸려 **스윙이 한 번도
+        // commit되지 않았다**(시뮬 로그: streak→tti 포기). 목표 관절속도만
+        // 한계로 스케일해 약한 스윙이라도 나가게 한다 — fit_end_velocity가
+        // quintic peak도 추가로 깎는다.
+        let scale = 1.0 / candidate.peak_joint_speed_ratio;
+        tracing::warn!(
             joint_index,
             required_speed,
-            speed_limit: arm.max_joint_speed * NEAR_SINGULARITY_SPEED_RATIO,
-        }));
+            speed_limit = arm.max_joint_speed,
+            scale,
+            "impact 관절속도가 한계 초과 — 끝속도를 {scale:.2}×로 스케일 (약한 스윙)"
+        );
+        let joint_velocities: Vec<f64> = candidate
+            .joint_velocities
+            .iter()
+            .map(|v| v * scale)
+            .collect();
+        return Ok(ImpactTarget {
+            pose: candidate.pose,
+            joint_velocities,
+            rail_velocity: candidate.rail_velocity * scale,
+            racket_velocity: candidate.racket_velocity * scale,
+        });
     }
 
     return Ok(ImpactTarget {

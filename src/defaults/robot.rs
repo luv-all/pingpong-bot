@@ -53,11 +53,15 @@ pub const READY_JOINTS_4DOF: [f64; 4] = [0.1207, 0.0, 0.1719, -0.6756];
 
 /// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·윗면 기준).
 ///
-/// 실측: 끝면 뒤 20 cm, 윗면 위 20 cm.
+/// `mount_search`(2026-07-26): 현 `behind=0.02`는 ratio≤1이 **0/150**, mean≈3.79.
+/// `behind=0.10`(height=0.05)는 **10/150**, mean≈2.48 — 임팩트 끝속도 스케일
+/// (`NEAR_SINGULARITY` 2.5) 직전에 들어와 약한 스윙을 줄인다. 더 뒤(0.12)도
+/// 비슷하나, 예전 고원(`base_y` −0.10..−0.02)의 바깥쪽 끝을 고름.
+/// height 0.05는 실기 브래킷(~면 위 3~5cm)과 맞춤. 슈터는 `shot_tune`으로 재확인.
 pub fn rail_frame() -> RailFrame {
     return RailFrame {
-        behind_table_end: 0.20,
-        above_table: 0.20,
+        behind_table_end: 0.10,
+        above_table: 0.05,
     };
 }
 
@@ -425,9 +429,9 @@ mod tests {
     #[test]
     fn rail_frame_mounts_behind_and_above_table() {
         let frame = rail_frame();
-        assert!((frame.mount_y() - (-0.20)).abs() < 1e-12);
-        assert!((frame.mount_z() - (table::SURFACE_Z + 0.20)).abs() < 1e-12);
-        assert_eq!(frame.mount_xyz0(), [0.0, -0.20, table::SURFACE_Z + 0.20]);
+        assert!((frame.mount_y() - (-0.10)).abs() < 1e-12);
+        assert!((frame.mount_z() - (table::SURFACE_Z + 0.05)).abs() < 1e-12);
+        assert_eq!(frame.mount_xyz0(), [0.0, -0.10, table::SURFACE_Z + 0.05]);
     }
 
     #[test]

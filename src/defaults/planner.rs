@@ -3,10 +3,11 @@
 use crate::planner::InterceptWindow;
 
 pub fn intercept() -> InterceptWindow {
-    // 철제 프로파일 마운트(y≈−0.20) 기준 도달 가능한 접수 구간.
+    // rail_frame behind≈0.10 기준 접수 창.
+    // (더 뒤 behind≈0.20일 때는 앞쪽만 닿아 0.0..0.18로 좁혔었음.)
     return InterceptWindow {
-        y_min: 0.0,
-        y_max: 0.18,
+        y_min: 0.08,
+        y_max: 0.35,
         sample_step: 0.03,
     };
 }

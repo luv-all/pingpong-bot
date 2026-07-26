@@ -64,9 +64,9 @@ struct Args {
     /// rep103_z_up_at_table_end_with_mount`). 기본값은 코드의 현재 마운트
     /// (`REP103_BASE_Y`/`REP103_HEIGHT_OFFSET_M`)와 같게 맞춰 둔다 — 플래그
     /// 없이 돌리면 "지금 코드가 실제로 하는 동작"이 그대로 측정된다.
-    #[arg(long, allow_hyphen_values = true, default_value_t = -0.02)]
+    #[arg(long, allow_hyphen_values = true, default_value_t = -0.10)]
     base_y_min: f64,
-    #[arg(long, allow_hyphen_values = true, default_value_t = -0.02)]
+    #[arg(long, allow_hyphen_values = true, default_value_t = -0.10)]
     base_y_max: f64,
     #[arg(long, default_value_t = 1)]
     base_y_steps: usize,
