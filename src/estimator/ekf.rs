@@ -169,7 +169,7 @@ impl BallEkf {
 
     fn predict_step(&mut self, dt: f64) {
         // ω 추정 전 — 각속도 0으로 전파.
-        let (pos, vel) = semi_implicit_euler(
+        let (pos, vel, _) = semi_implicit_euler(
             self.position,
             self.velocity,
             Vector3::zeros(),
@@ -316,7 +316,7 @@ mod tests {
                     best_err = best_err.min(err);
                 }
             }
-            let (np, nv) = semi_implicit_euler(pos, vel, Vector3::zeros(), 0.008, &physics);
+            let (np, nv, _) = semi_implicit_euler(pos, vel, Vector3::zeros(), 0.008, &physics);
             pos = np;
             vel = nv;
             t += 0.008;

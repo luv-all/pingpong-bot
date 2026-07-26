@@ -7,9 +7,11 @@ use anyhow::{Result, ensure};
 pub struct PhysicsParams {
     /// 테이블·공 반발 e (공–테이블 접촉).
     pub restitution: f64,
-    /// 테이블 접선 마찰 mu.
+    /// 테이블 접선 마찰 — 예측기 바운스 커널 μ (`table_ball_mu`).
     pub friction: f64,
-    /// 공 collider 접선 마찰 (테이블 `friction`과 Average combine).
+    /// 공 collider 접선 마찰 (라켓·테이블과 Rapier Average).
+    /// 라켓 접촉을 보존하려고 테이블 `friction`과 다를 수 있음.
+    /// 테이블–공 Rapier 실효 μ는 `rapier_table_ball_mu` (현 Average≈0.3).
     pub ball_friction: f64,
     /// 네트 반발 e.
     pub net_restitution: f64,
@@ -47,8 +49,9 @@ pub fn physics() -> PhysicsParams {
         // ITTF 테이블: 30 cm 낙하 → ~23 cm 반발 → e≈√(23/30)≈0.88.
         // (강판 규격 305→240–260 mm면 0.89–0.92. 목재 테이블은 약간 낮다.)
         restitution: 0.88,
-        // Rapier 테이블과 동일 SSOT. 예전 하드코딩 0.4를 유지해 바운스
-        // 접선 감쇠·랠리 회귀를 보존한다 (0.15면 랜덤 샷 그리드가 깨짐).
+        // 예측기 바운스 μ = friction (0.4). Rapier 테이블–공은
+        // Average(friction, ball_friction)≈0.3 — 갭은 `rapier_table_ball_mu` 테스트로
+        // 고정. 재료/Max combine 정렬은 시뮬 그리드 재튜닝과 함께 (스펙 E3b 후속).
         friction: 0.4,
         ball_friction: 0.2,
         net_restitution: 0.3,

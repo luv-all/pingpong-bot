@@ -186,7 +186,7 @@ fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
     let mut prev_vz: f64 = 0.0;
 
     for _ in 0..10_000 {
-        let (np, nv) = semi_implicit_euler(pos, vel, Vector3::zeros(), dt, &physics);
+        let (np, nv, _) = semi_implicit_euler(pos, vel, Vector3::zeros(), dt, &physics);
         if vin.is_none() && prev_vz < -0.5 && nv.z >= 0.0 {
             vin = Some((-prev_vz).max(1e-6_f64));
             vout = Some(nv.z.max(0.0_f64));

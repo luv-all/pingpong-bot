@@ -192,6 +192,83 @@ mod tests {
         panic!("공이 hit-plane y를 지나가지 않음");
     }
 
+    /// 발사 직후 예측 vs 첫 테이블 바운스 직후 재예측.
+    ///
+    /// ballistics만으로 적분하면 커널 SSOT라 점프≈0. Rapier 바운스 후 재예측은
+    /// 솔버·Coulomb 잔차로 Z가 남을 수 있어 상한을 문서화한다.
+    #[test]
+    fn post_bounce_hit_plane_jump_bounded() {
+        let physics = crate::defaults::physics();
+        let plane = HitPlane {
+            y: table::DEFAULT_HIT_PLANE_Y,
+        };
+        let snap = launch_snapshot();
+        let at_launch = predict_hit_plane(
+            snap.position,
+            snap.velocity,
+            snap.omega,
+            plane,
+            &physics,
+        )
+        .expect("발사 직후 예측");
+
+        // (1) ballistics 자기정합: 커널로 바운스까지 적분 후 재예측 ≈ 발사 예측
+        let est = crate::defaults::estimator();
+        let mut pos = snap.position;
+        let mut vel = snap.velocity;
+        let mut omega = snap.omega;
+        let mut t = 0.0;
+        let mut bounced = false;
+        while t < est.max_lead {
+            let prev_vz = vel.z;
+            let (np, nv, nw) =
+                crate::estimator::ballistics::semi_implicit_euler(pos, vel, omega, est.integrate_dt, &physics);
+            pos = np;
+            vel = nv;
+            omega = nw;
+            t += est.integrate_dt;
+            if prev_vz < 0.0 && vel.z > 0.0 {
+                bounced = true;
+                break;
+            }
+        }
+        assert!(bounced, "ballistics가 테이블 바운스에 도달해야 함");
+        let after_bal = predict_hit_plane(pos, vel, omega, plane, &physics).expect("바운스 후 ballistics 예측");
+        let dz_bal = (after_bal.impact_position.coords.z - at_launch.impact_position.coords.z).abs();
+        assert!(
+            dz_bal <= 0.01,
+            "ballistics 자기정합 dz={dz_bal:.4} (>1cm)"
+        );
+
+        // (2) Rapier 잔차: GT 상태로 발사 예측 vs 실제 Rapier 바운스 직후 재예측
+        let mut world = SimWorld::new(crate::defaults::primitive_4dof().expect("4dof"));
+        world.set_use_ground_truth(true);
+        world.shoot_ball(&BallShooterSettings::default());
+        let at_launch_gt = predict_impact(&world, plane).expect("GT 발사 예측");
+        let mut prev_vz = world.ball_velocity().z;
+        let mut after_bounce = None;
+        for _ in 0..5_000 {
+            world.step(1.0 / 1000.0, None);
+            let vz = world.ball_velocity().z;
+            if prev_vz < -0.3 && vz > 0.05 {
+                after_bounce = predict_impact(&world, plane);
+                break;
+            }
+            prev_vz = vz;
+            if world.ball_state != BallState::InFlight {
+                break;
+            }
+        }
+        let after = after_bounce.expect("Rapier 바운스 직후 예측");
+        let dz = (after.impact_position.coords.z - at_launch_gt.impact_position.coords.z).abs();
+        assert!(
+            dz <= 0.15,
+            "Rapier 바운스 잔차 dz={dz:.4} (>15cm) launch_z={} after_z={}",
+            at_launch_gt.impact_position.coords.z,
+            after.impact_position.coords.z
+        );
+    }
+
     #[test]
     fn low_pitch_shot_rejected_by_net_gate() {
         let mut settings = BallShooterSettings::default();

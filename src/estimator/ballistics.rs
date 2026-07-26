@@ -32,13 +32,16 @@ pub fn clears_net_gate(
 
     let mut pos = position;
     let mut vel = velocity;
+    let mut omega = omega;
     let mut t = 0.0;
     while t < est.max_lead {
         let prev_y = pos.y;
         let prev_z = pos.z;
-        let (next_pos, next_vel) = semi_implicit_euler(pos, vel, omega, est.integrate_dt, physics);
+        let (next_pos, next_vel, next_omega) =
+            semi_implicit_euler(pos, vel, omega, est.integrate_dt, physics);
         pos = next_pos;
         vel = next_vel;
+        omega = next_omega;
         t += est.integrate_dt;
         if prev_y > net_y && pos.y <= net_y {
             let denom = pos.y - prev_y;
@@ -82,19 +85,20 @@ pub fn predict_hit_plane(
     let net_clear_z = table::SURFACE_Z + table::NET_HEIGHT + ball::RADIUS;
     let mut pos = position;
     let mut vel = velocity;
+    let mut omega = omega;
     let mut t = 0.0;
 
     while t < est.max_lead {
         let prev_y = pos.y;
         let prev_z = pos.z;
-        let (next_pos, next_vel) = semi_implicit_euler(pos, vel, omega, est.integrate_dt, physics);
+        let (next_pos, next_vel, next_omega) =
+            semi_implicit_euler(pos, vel, omega, est.integrate_dt, physics);
         pos = next_pos;
         vel = next_vel;
+        omega = next_omega;
         t += est.integrate_dt;
 
         // 네트 라인 교차: 높이 미달이면 이 탄도는 접수 불가로 본다.
-        // 기하 클리어는 SURFACE+NET+R. ballistics 바운스가 Rapier보다 ~1cm
-        // 낮게 나와 기본 샷이 오탐지되므로 슬랙을 둔다.
         if prev_y > net_y && pos.y <= net_y {
             let denom = pos.y - prev_y;
             let frac = if denom.abs() < 1e-12 {
@@ -150,31 +154,29 @@ fn is_table_rolling(position: Vector3<f64>, velocity: Vector3<f64>) -> bool {
     return on_table && flat;
 }
 
-/// 반암시적 오일러: `v += a dt`, 그다음 `p += v_new dt` (+ 테이블 바운스).
+/// 반암시적 오일러: `v += a dt`, 그다음 `p += v_new dt` (+ 테이블 바운스 SSOT).
+///
+/// 바운스 시 \(v\)는 커널 SSOT; \(\omega\)는 유지(스핀 확장 후속).
 pub fn semi_implicit_euler(
     pos: Vector3<f64>,
     vel: Vector3<f64>,
     omega: Vector3<f64>,
     dt: f64,
     physics: &PhysicsParams,
-) -> (Vector3<f64>, Vector3<f64>) {
+) -> (Vector3<f64>, Vector3<f64>, Vector3<f64>) {
     let a = accel(vel, omega, physics.drag, physics.magnus);
     let next_vel = vel + a * dt;
     let next_pos = pos + next_vel * dt;
     let floor_z = table::SURFACE_Z + ball::RADIUS;
     if next_pos.z <= floor_z && next_vel.z < 0.0 {
-        let mu = physics.friction.clamp(0.0, 1.0);
-        let tang_scale = 1.0 - mu;
+        let (bounced_v, bounced_w) = super::bounce::table_bounce(next_vel, omega, physics);
         return (
             Vector3::new(next_pos.x, next_pos.y, floor_z),
-            Vector3::new(
-                next_vel.x * tang_scale,
-                next_vel.y * tang_scale,
-                -next_vel.z * physics.restitution,
-            ),
+            bounced_v,
+            bounced_w,
         );
     }
-    return (next_pos, next_vel);
+    return (next_pos, next_vel, omega);
 }
 
 #[cfg(test)]
@@ -262,8 +264,8 @@ mod tests {
         let topspin = Vector3::new(40.0, 0.0, 0.0);
         let backspin = Vector3::new(-40.0, 0.0, 0.0);
         let dt = 0.05;
-        let (_, v_top) = semi_implicit_euler(position, velocity, topspin, dt, &physics);
-        let (_, v_back) = semi_implicit_euler(position, velocity, backspin, dt, &physics);
+        let (_, v_top, _) = semi_implicit_euler(position, velocity, topspin, dt, &physics);
+        let (_, v_back, _) = semi_implicit_euler(position, velocity, backspin, dt, &physics);
         assert!(
             v_top.z < v_back.z,
             "topspin vz={} should be below backspin vz={}",

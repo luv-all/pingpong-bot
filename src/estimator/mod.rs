@@ -7,10 +7,12 @@ use nalgebra::Vector3;
 use crate::Point3;
 
 pub mod ballistics;
+pub mod bounce;
 pub mod ekf;
 pub mod measure;
 
 pub use ballistics::{clears_net_gate, predict_hit_plane, semi_implicit_euler};
+pub use bounce::{rapier_table_ball_mu, table_ball_mu, table_bounce};
 pub use ekf::BallEkf;
 pub use measure::{
     BounceEvent, RollEvent, TrajPoint, detect_bounces, detect_rolls, drag_from_trajectory,
