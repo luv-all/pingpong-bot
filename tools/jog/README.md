@@ -15,9 +15,16 @@ cargo run -p jog -- --dry-run
 # 실기 (Windows 벤치)
 cargo run -p jog -- --port COM8
 cargo run -p jog -- --port COM8 --dll-path "C:/path/to/AXL.dll"
+
+# 디버그: Dynamixel 재시도·AXL API code·초기 배선 덤프
+cargo run -p jog -- --port COM8 --debug
 ```
 
 시작 후 `jog>` 프롬프트에서 명령을 반복 입력한다. `help` / `q`.
+
+`error: read_pose: …` 같은 메시지는 이제 **어느 계층이 실패했는지** reason에 붙는다
+(예: Present Position sync_read / AXL `AxmMovePos code=…`).
+`--debug`면 재시도 과정과 AXL 실패 code가 tracing으로도 나온다.
 
 ## 명령
 

@@ -2106,7 +2106,7 @@ dependencies = [
  "clap",
  "nalgebra",
  "pingpong-bot",
- "tracing-subscriber",
+ "tracing",
 ]
 
 [[package]]

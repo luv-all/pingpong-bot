@@ -86,9 +86,30 @@ impl RealHardware {
         torque_feedforward: bool,
     ) -> Result<Self, HwError> {
         let rail = match rail.filter(|config| config.enabled) {
-            None => None,
-            Some(config) if is_dry_run => Some(AxlRail::dry_run(config)?),
-            Some(config) => Some(AxlRail::open(config)?),
+            None => {
+                debug!("레일 비활성 — rail_x=0 고정");
+                None
+            }
+            Some(config) if is_dry_run => {
+                debug!(
+                    dll = %config.dll_path.display(),
+                    axis = config.axis,
+                    "레일 dry-run"
+                );
+                Some(AxlRail::dry_run(config)?)
+            }
+            Some(config) => {
+                debug!(
+                    dll = %config.dll_path.display(),
+                    axis = config.axis,
+                    irq_no = config.irq_no,
+                    reverse = config.reverse,
+                    x_min_m = config.x_min_m,
+                    x_max_m = config.x_max_m,
+                    "레일 Live 개방"
+                );
+                Some(AxlRail::open(config)?)
+            }
         };
         return Ok(Self {
             bus: Arc::new(Mutex::new(bus)),
@@ -103,7 +124,9 @@ impl RealHardware {
     }
 
     fn read_rail_x_m(&mut self) -> Result<f64, HwError> {
-        let mut guard = self.rail.lock().map_err(|_| HwError::ReadFailed)?;
+        let mut guard = self.rail.lock().map_err(|_| HwError::ReadFailed {
+            reason: "레일 mutex poisoned".into(),
+        })?;
         return match guard.as_mut() {
             None => Ok(0.0),
             Some(rail) => rail.read_x_m(),
@@ -150,13 +173,24 @@ impl Hardware for RealHardware {
                 let joints = trajectory.sample_at(sample_time);
                 let rail_x = trajectory.sample_rail_at(sample_time);
 
-                let joints_ok = bus
-                    .lock()
-                    .map_err(|_| ())
-                    .and_then(|mut bus| bus.write_joints(&joints).map_err(|_| ()))
-                    .is_ok();
+                let joints_ok = match bus.lock() {
+                    Ok(mut bus) => match bus.write_joints(&joints) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            error!(
+                                sample_time,
+                                error = %error,
+                                "Dynamixel goal position 전송 실패 — 스윙 중단"
+                            );
+                            false
+                        }
+                    },
+                    Err(_) => {
+                        error!(sample_time, "Dynamixel bus mutex poisoned — 스윙 중단");
+                        false
+                    }
+                };
                 if !joints_ok {
-                    error!(sample_time, "Dynamixel goal position 전송 실패 — 스윙 중단");
                     break;
                 }
 
@@ -174,9 +208,14 @@ impl Hardware for RealHardware {
 
                 if let Ok(mut guard) = rail.lock()
                     && let Some(rail_hw) = guard.as_mut()
-                    && rail_hw.command_abs_m(rail_x).is_err()
+                    && let Err(error) = rail_hw.command_abs_m(rail_x)
                 {
-                    error!(sample_time, rail_x, "AXL 레일 목표 전송 실패 — 스윙 중단");
+                    error!(
+                        sample_time,
+                        rail_x,
+                        error = %error,
+                        "AXL 레일 목표 전송 실패 — 스윙 중단"
+                    );
                     break;
                 }
 
@@ -195,7 +234,9 @@ impl Hardware for RealHardware {
         let joints = self
             .bus
             .lock()
-            .map_err(|_| HwError::ReadFailed)?
+            .map_err(|_| HwError::ReadFailed {
+                reason: "Dynamixel bus mutex poisoned".into(),
+            })?
             .read_joints()?;
         return Ok(RobotPose::new(self.read_rail_x_m()?, joints));
     }

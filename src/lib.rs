@@ -10,6 +10,7 @@ pub mod detector;
 pub mod error;
 pub mod estimator;
 pub mod hardware;
+pub mod logging;
 pub mod pipeline;
 pub mod planner;
 pub mod robot;
@@ -50,6 +51,7 @@ pub use estimator::{
 #[cfg(feature = "real")]
 pub use hardware::RealHardware;
 pub use hardware::{Hardware, SimHardware};
+pub use logging::init_tracing;
 pub use pipeline::{CameraFeed, PipelineConfig, PipelineError, PipelineThread, run};
 pub use planner::{
     BangBangTrajectory, InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox,

@@ -432,7 +432,12 @@ impl DynamixelBus {
         let port = serialport::new(&mapping.config.port, mapping.config.baudrate)
             .timeout(timeout)
             .open()
-            .map_err(|_| read_transport_error())?;
+            .map_err(|error| {
+                read_transport_error(format!(
+                    "시리얼 포트 열기 실패 ({} @ {} baud): {error}",
+                    mapping.config.port, mapping.config.baudrate
+                ))
+            })?;
         let mut bus = Self {
             mapping,
             backend: BusBackend::Real(RealBackend {
@@ -464,7 +469,11 @@ impl DynamixelBus {
                 let retries = self.mapping.config.comm_retries;
                 let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
                 real.sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
-                    .map_err(|_| read_transport_error())?;
+                    .map_err(|error| {
+                        read_transport_error(format!(
+                            "Torque Enable sync_write 실패 (addr={address}): {error}"
+                        ))
+                    })?;
             }
         }
         self.torque_enabled = enabled;
@@ -475,7 +484,11 @@ impl DynamixelBus {
     pub fn write_joints(&mut self, joints: &Joints) -> Result<(), HwError> {
         let joint_count = self.mapping.config.motor_ids.len();
         if joints.values.len() != joint_count {
-            return Err(command_transport_error(0.0, joints.values.len()));
+            return Err(command_transport_error(
+                0.0,
+                joints.values.len(),
+                format!("관절 수 불일치: got {} want {joint_count}", joints.values.len()),
+            ));
         }
         let ticks: Vec<i32> = joints
             .values
@@ -490,7 +503,14 @@ impl DynamixelBus {
     pub fn write_goal_currents_from_torques(&mut self, torques_nm: &[f64]) -> Result<(), HwError> {
         let joint_count = self.mapping.config.motor_ids.len();
         if torques_nm.len() != joint_count {
-            return Err(command_transport_error(0.0, torques_nm.len()));
+            return Err(command_transport_error(
+                0.0,
+                torques_nm.len(),
+                format!(
+                    "토크 벡터 길이 불일치: got {} want {joint_count}",
+                    torques_nm.len()
+                ),
+            ));
         }
         let unit = self.mapping.config.nm_per_goal_current_unit.max(1e-9);
         let currents: Vec<i16> = torques_nm
@@ -506,7 +526,14 @@ impl DynamixelBus {
     fn write_raw_goal_currents(&mut self, currents: &[i16]) -> Result<(), HwError> {
         let joint_count = self.mapping.config.motor_ids.len();
         if currents.len() != joint_count {
-            return Err(command_transport_error(0.0, currents.len()));
+            return Err(command_transport_error(
+                0.0,
+                currents.len(),
+                format!(
+                    "Goal Current 길이 불일치: got {} want {joint_count}",
+                    currents.len()
+                ),
+            ));
         }
         // 미러 슬레이브: 마스터와 같은 Goal Current (반대 방향 기구는 위치 미러로 처리).
         let mut bus: Vec<(u8, i16)> = self
@@ -543,7 +570,13 @@ impl DynamixelBus {
                 let retries = self.mapping.config.comm_retries;
                 let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
                 real.sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
-                    .map_err(|_| command_transport_error(0.0, joint_count))?;
+                    .map_err(|error| {
+                        command_transport_error(
+                            0.0,
+                            joint_count,
+                            format!("Goal Current sync_write 실패 (addr={address}): {error}"),
+                        )
+                    })?;
             }
         }
         return Ok(());
@@ -565,7 +598,11 @@ impl DynamixelBus {
                 let retries = self.mapping.config.comm_retries;
                 let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
                 real.sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
-                    .map_err(|_| read_transport_error())?;
+                    .map_err(|error| {
+                        read_transport_error(format!(
+                            "Operating Mode sync_write 실패 (addr={address}, mode={mode}): {error}"
+                        ))
+                    })?;
             }
         }
         return Ok(());
@@ -574,7 +611,11 @@ impl DynamixelBus {
     fn write_raw_goal_ticks(&mut self, ticks: &[i32], duration_secs: f64) -> Result<(), HwError> {
         let joint_count = self.mapping.config.motor_ids.len();
         if ticks.len() != joint_count {
-            return Err(command_transport_error(duration_secs, ticks.len()));
+            return Err(command_transport_error(
+                duration_secs,
+                ticks.len(),
+                format!("Goal tick 길이 불일치: got {} want {joint_count}", ticks.len()),
+            ));
         }
         let bus_goals = self.expand_goal_ticks(ticks);
         match &mut self.backend {
@@ -597,7 +638,13 @@ impl DynamixelBus {
                 let retries = self.mapping.config.comm_retries;
                 let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
                 real.sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
-                    .map_err(|_| command_transport_error(duration_secs, joint_count))?;
+                    .map_err(|error| {
+                        command_transport_error(
+                            duration_secs,
+                            joint_count,
+                            format!("Goal Position sync_write 실패 (addr={address}): {error}"),
+                        )
+                    })?;
             }
         }
         Ok(())
@@ -629,13 +676,20 @@ impl DynamixelBus {
                     self.mapping.config.comm_retries,
                     self.mapping.config.comm_retry_delay_ms,
                 )
-                .map_err(|_| read_transport_error())?
+                .map_err(|error| {
+                    read_transport_error(format!(
+                        "Present Position sync_read 실패 (addr={}, ids={ids:?}): {error}",
+                        self.mapping.config.addr_present_position
+                    ))
+                })?
                 .into_iter()
                 .map(|bytes| {
-                    let raw: [u8; 4] = bytes
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| read_transport_error())?;
+                    let raw: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
+                        read_transport_error(format!(
+                            "Present Position 응답 길이 오류: got {} bytes, want 4",
+                            bytes.len()
+                        ))
+                    })?;
                     // Python SDK getData(4) → unsigned 해석 후 int. joint mode 0..=4095.
                     Ok(u32::from_le_bytes(raw) as i32)
                 })
@@ -643,7 +697,10 @@ impl DynamixelBus {
             }
         };
         if ticks.len() != joint_count {
-            return Err(read_transport_error());
+            return Err(read_transport_error(format!(
+                "Present Position 개수 불일치: got {} want {joint_count}",
+                ticks.len()
+            )));
         }
         Ok(ticks)
     }
@@ -670,7 +727,11 @@ impl DynamixelBus {
                 for (address, value) in values {
                     let data = vec![pack_u32(value); ids.len()];
                     real.sync_write_with_retry(&ids, address, &data, retries, delay)
-                        .map_err(|_| read_transport_error())?;
+                        .map_err(|error| {
+                            read_transport_error(format!(
+                                "Motion Profile sync_write 실패 (addr={address}, value={value}): {error}"
+                            ))
+                        })?;
                 }
             }
         }
@@ -702,8 +763,8 @@ impl RealBackend {
         data: &[Vec<u8>],
         retries: u32,
         retry_delay_ms: u64,
-    ) -> Result<(), ()> {
-        self.run_with_retry(retries, retry_delay_ms, |protocol, port| {
+    ) -> Result<(), String> {
+        self.run_with_retry(retries, retry_delay_ms, "sync_write", |protocol, port| {
             protocol.sync_write(port, ids, address, data)
         })
     }
@@ -715,8 +776,8 @@ impl RealBackend {
         length: u8,
         retries: u32,
         retry_delay_ms: u64,
-    ) -> Result<Vec<Vec<u8>>, ()> {
-        self.run_with_retry(retries, retry_delay_ms, |protocol, port| {
+    ) -> Result<Vec<Vec<u8>>, String> {
+        self.run_with_retry(retries, retry_delay_ms, "sync_read", |protocol, port| {
             protocol.sync_read(port, ids, address, length)
         })
     }
@@ -725,35 +786,61 @@ impl RealBackend {
         &mut self,
         retries: u32,
         retry_delay_ms: u64,
+        op: &str,
         mut operation: impl FnMut(
             &rustypot::DynamixelProtocolHandler,
             &mut dyn serialport::SerialPort,
         ) -> Result<T, Box<dyn std::error::Error>>,
-    ) -> Result<T, ()> {
+    ) -> Result<T, String> {
         let attempts = retries.max(1);
+        let mut last_error = format!("{op}: no attempts");
         for attempt in 0..attempts {
             match operation(&self.protocol, self.port.as_mut()) {
                 Ok(value) => return Ok(value),
-                Err(_) if attempt + 1 < attempts => {
+                Err(error) if attempt + 1 < attempts => {
+                    tracing::debug!(
+                        op,
+                        attempt = attempt + 1,
+                        attempts,
+                        error = %error,
+                        "Dynamixel 통신 재시도"
+                    );
+                    last_error = error.to_string();
                     let _ = self.port.clear(serialport::ClearBuffer::All);
                     std::thread::sleep(std::time::Duration::from_millis(retry_delay_ms));
                 }
-                Err(_) => return Err(()),
+                Err(error) => {
+                    tracing::debug!(
+                        op,
+                        attempt = attempt + 1,
+                        attempts,
+                        error = %error,
+                        "Dynamixel 통신 최종 실패"
+                    );
+                    return Err(error.to_string());
+                }
             }
         }
-        return Err(());
+        return Err(last_error);
     }
 }
 
-fn command_transport_error(duration_secs: f64, joint_count: usize) -> HwError {
+fn command_transport_error(
+    duration_secs: f64,
+    joint_count: usize,
+    reason: impl Into<String>,
+) -> HwError {
     return HwError::CommandFailed {
         duration_secs,
         joint_count,
+        reason: reason.into(),
     };
 }
 
-fn read_transport_error() -> HwError {
-    return HwError::ReadFailed;
+fn read_transport_error(reason: impl Into<String>) -> HwError {
+    return HwError::ReadFailed {
+        reason: reason.into(),
+    };
 }
 
 #[cfg(test)]
