@@ -72,6 +72,9 @@ pub struct SimDebugSnapshot {
     pub net_gate_ok: Option<bool>,
     pub commit_phase: CommitPhase,
     pub omega: [f64; 3],
+    /// `set_torque_now`용 RNEA 스크래치 — 매 틱(최대 1kHz) 재할당을 피하려고
+    /// 재사용한다 (`src/planner/swing/physics.rs`의 스크래치 재사용 패턴과 동일).
+    torque_scratch: crate::robot::dynamics::RneaScratch,
 }
 
 /// 뷰어용 OBB (중심·half extents·축).
@@ -182,10 +185,24 @@ impl SimDebugSnapshot {
     }
 
     /// 스윙 재생 중이면 궤적 샘플, 아니면 현재 자세(중력)로 τ를 채운다.
+    ///
+    /// 매 물리 틱(최대 1kHz) 호출되므로 스크래치·출력 버퍼를 재사용해
+    /// (`required_joint_torques_into`) 힙 할당을 피한다 — 길이가 안 맞으면
+    /// `required_torque`처럼 조용히 스킵(기존 값 유지).
     pub fn set_torque_now(&mut self, arm: &Arm, q: &[f64], qd: &[f64], qdd: &[f64]) {
-        if let Some(tau) = crate::robot::required_torque(arm, q, qd, qdd) {
-            self.torque_now_nm = tau;
+        let n = arm.joint_count();
+        if q.len() != n || qd.len() != n || qdd.len() != n {
+            return;
         }
+        let joints = Joints::from_slice(q);
+        crate::robot::dynamics::required_joint_torques_into(
+            arm,
+            &joints,
+            qd,
+            qdd,
+            &mut self.torque_scratch,
+            &mut self.torque_now_nm,
+        );
     }
 
     /// 매 스텝: 관절·관통·ω·진실/예측 탄도.

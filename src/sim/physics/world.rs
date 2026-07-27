@@ -108,6 +108,16 @@ pub struct SimWorld {
     flight_started_at: f64,
     /// 뷰어·Status용 디버그 스냅샷 (실패 사유·궤적·한계).
     debug_snap: SimDebugSnapshot,
+    /// [임시 진단] 마지막 틱의 `try_auto_swing` marker 스캔 소요 [s].
+    pub diag_marker_secs: f64,
+    /// [임시 진단] 마지막 틱의 `try_auto_swing` predictions 스캔 소요 [s].
+    pub diag_predictions_secs: f64,
+    /// [임시 진단] 마지막 틱의 `try_auto_swing` 전체 소요 [s] (스캔 + 스윙 계획).
+    pub diag_auto_swing_secs: f64,
+    /// [임시 진단] 마지막 틱의 Rapier `physics_pipeline.step` 소요 [s].
+    pub diag_rapier_secs: f64,
+    /// [임시 진단] 마지막 틱의 `refresh_debug_snap` 소요 [s].
+    pub diag_debug_snap_secs: f64,
 }
 
 impl SimWorld {
@@ -248,6 +258,11 @@ impl SimWorld {
             last_swing_attempt_at: f64::NEG_INFINITY,
             flight_started_at: 0.0,
             debug_snap: SimDebugSnapshot::default(),
+            diag_marker_secs: 0.0,
+            diag_predictions_secs: 0.0,
+            diag_auto_swing_secs: 0.0,
+            diag_rapier_secs: 0.0,
+            diag_debug_snap_secs: 0.0,
         };
         world.sync_shooter_pose(&default_shooter);
         return world;
@@ -326,10 +341,13 @@ impl SimWorld {
 
         // B: 명령(궤적→모터 목표) → 물리 → 측정 관절각을 RobotState에 반영.
         self.robot.step_commands(&self.arm, dt);
+        let t_swing = std::time::Instant::now();
         self.try_auto_swing();
+        self.diag_auto_swing_secs = t_swing.elapsed().as_secs_f64();
         self.drive_arm_motors();
         self.apply_ball_aero_forces();
 
+        let t_rapier = std::time::Instant::now();
         self.physics_pipeline.step(
             self.gravity,
             &self.integration_parameters,
@@ -344,6 +362,7 @@ impl SimWorld {
             &(),
             &(),
         );
+        self.diag_rapier_secs = t_rapier.elapsed().as_secs_f64();
 
         if let Some(&first) = self.arm_bodies.joint_handles.first()
             && let Some((mb, _)) = self.multibody_joint_set.get_mut(first)
@@ -356,7 +375,9 @@ impl SimWorld {
         self.robot.set_measured_joints(measured);
 
         self.sim_time += dt;
+        let t_snap = std::time::Instant::now();
         self.refresh_debug_snap();
+        self.diag_debug_snap_secs = t_snap.elapsed().as_secs_f64();
 
         if self.ball_state == BallState::InFlight {
             self.park_if_out_of_play();
@@ -457,15 +478,20 @@ impl SimWorld {
         const SWING_RETRY_THROTTLE_SECS: f64 = 0.02;
 
         if self.ball_state != BallState::InFlight {
+            self.diag_marker_secs = 0.0;
+            self.diag_predictions_secs = 0.0;
             return;
         }
 
         // 비행 중에는 항상 디버그 마커를 최신 탄도로 갱신 (커밋 후에도 스윙 재계획 없음).
+        let t0 = std::time::Instant::now();
         let marker = self
             .intercept
             .hit_planes()
             .into_iter()
             .find_map(|plane| predict_impact(self, plane));
+        self.diag_marker_secs = t0.elapsed().as_secs_f64();
+        self.diag_predictions_secs = 0.0;
 
         if !self.use_ground_truth {
             if let Some(prediction) = marker {
@@ -481,12 +507,20 @@ impl SimWorld {
             return;
         }
 
+        let t1 = std::time::Instant::now();
         let predictions: Vec<Prediction> = self
             .intercept
             .hit_planes()
             .into_iter()
             .filter_map(|plane| predict_impact(self, plane))
             .collect();
+        self.diag_predictions_secs = t1.elapsed().as_secs_f64();
+        debug!(
+            marker_us = self.diag_marker_secs * 1e6,
+            predictions_us = self.diag_predictions_secs * 1e6,
+            planes = self.intercept.hit_planes().len(),
+            "diag: try_auto_swing 탄도 스캔 소요"
+        );
         if predictions.is_empty() {
             return;
         }

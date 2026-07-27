@@ -1,7 +1,8 @@
 //! kiss3d 3D + egui — Rapier sim 월드와 슈터 패널 (macOS: 메인 스레드 단일 창).
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 use crate::SwingPlanError;
 use crate::constants::viewer::{
@@ -20,6 +21,50 @@ use crate::robot::urdf::{UrdfLinkVisual, UrdfModel};
 use crate::sim::physics::shooter::{RANDOM_SHOT_TARGET_PADDING_M, ShooterLayout};
 use crate::sim::physics::world::SimWorld;
 use crate::sim::session::controls::SimRuntimeControls;
+
+/// 한 렌더 프레임이 월드 스냅샷을 기다려 주는 상한 (프레임 예산 16.67ms의 ~12%).
+///
+/// 물리 스레드(`sim::session::run`)는 1kHz로 스텝마다 월드 락을 ~100us 짧게
+/// 잡았다 놓는다(점유율 실측 ~30%). 여기서 `try_lock`을 한 번만 시도하고 바로
+/// 포기하면 프레임의 40~50%가 **직전 프레임의 공 위치를 그대로 다시 그리게**
+/// 되고, 그 정체가 연속으로 몰릴 때(실측 최대 11프레임 = 183ms) 그 뒤에 공이
+/// 1.4m를 한 프레임에 순간이동한다. 공이 멈춰 있을 땐 안 보이지만 비행 중에는
+/// 이게 그대로 "shoot하면 렉 걸린다"는 체감이 된다.
+///
+/// 락 보유 시간 자체는 스텝당 ~100us뿐이라 잠깐만 기다려도 거의 항상 최신
+/// 상태를 잡을 수 있다 (실측: 정체 프레임 비율 47.5% → 0%, 상한 도달은 드묾).
+pub const WORLD_LOCK_WAIT: Duration = Duration::from_millis(2);
+
+/// 재시도 간격 — 물리 스레드의 락 보유 시간(~100us)보다 충분히 짧게.
+///
+/// `yield_now()`로 돌면 물리 스레드가 다른 코어에 있을 때 사실상 busy-spin이라
+/// 시스템 부하가 높을 때 CPU를 낭비한다. 짧게 재우면 재획득 지연은 최대
+/// 한 슬롯(수십 us)만 늘고 — 2ms 상한·16.67ms 프레임 예산에 견주면 무시할
+/// 수준 — 대기 중 CPU는 놓아 준다.
+const WORLD_LOCK_RETRY: Duration = Duration::from_micros(50);
+
+/// 프레임 예산 안에서 짧게 기다렸다가 월드 락을 잡는다 (못 잡으면 `None`).
+///
+/// 렌더 스레드가 물리 스레드에 무한정 막히면 안 되므로 상한을 두되,
+/// `try_lock` 1회처럼 즉시 포기하지도 않는다 — 위 상수 설명 참고.
+pub fn lock_world_for_frame(world: &Mutex<SimWorld>) -> Option<MutexGuard<'_, SimWorld>> {
+    let deadline = Instant::now() + WORLD_LOCK_WAIT;
+    loop {
+        match world.try_lock() {
+            Ok(guard) => return Some(guard),
+            // 물리 스레드가 패닉해 락이 오염된 경우: 기다려도 소용없다.
+            Err(TryLockError::Poisoned(_)) => return None,
+            Err(TryLockError::WouldBlock) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return None;
+                }
+                // 남은 예산보다 더 자지 않는다 (상한을 넘겨 프레임을 밀지 않도록).
+                std::thread::sleep(WORLD_LOCK_RETRY.min(deadline - now));
+            }
+        }
+    }
+}
 
 const HIDDEN: Vec3 = Vec3::new(0.0, 0.0, -10.0);
 const ARC_NODE_COUNT: usize = 48;
@@ -131,7 +176,7 @@ async fn viewer_main(options: SimViewerOptions) -> Result<(), String> {
         if options.shutdown.load(Ordering::Acquire) {
             break;
         }
-        if let Ok(snapshot) = options.world.try_lock() {
+        if let Some(snapshot) = lock_world_for_frame(&options.world) {
             sync_scene_dynamics(
                 &mut dynamic,
                 &snapshot,

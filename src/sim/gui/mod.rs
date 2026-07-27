@@ -14,4 +14,4 @@ pub use debug_overlays::DebugOverlays;
 pub use debug_snap::{CommitPhase, SimDebugSnapshot};
 
 #[cfg(feature = "gui")]
-pub use viewer::{SimViewerOptions, run as run_sim_viewer};
+pub use viewer::{SimViewerOptions, WORLD_LOCK_WAIT, lock_world_for_frame, run as run_sim_viewer};
