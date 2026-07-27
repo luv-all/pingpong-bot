@@ -83,11 +83,25 @@ const NEAR_SINGULARITY_SPEED_RATIO: f64 = 2.5;
 /// 임팩트 IK·목표 속도 역산 결과. `plan_swing`(quintic)과 `plan_bang_bang_swing`
 /// (순수 토크 적분, `planner::bang_bang`)이 같은 임팩트 설정을 공유한다 —
 /// 갈라지는 지점은 이 목표를 어떤 궤적 "모양"에 넣느냐뿐이다.
-pub(crate) struct ImpactTarget {
-    pub(crate) pose: RobotPose,
-    pub(crate) joint_velocities: Vec<f64>,
-    pub(crate) rail_velocity: f64,
-    pub(crate) racket_velocity: Vector3<f64>,
+///
+/// `tools/swing_bench`(궤적 모양 없는 순수 토크 천장 측정)도 이 구조를 그대로
+/// 쓴다 — 예전엔 자기만의 단일 IK 시드 + 면고정 5제약 역산을 따로 갖고 있어
+/// 프로덕션 경로와 다른 임팩트 자세를 재고 있었다(2026-07-27 확인). 다른
+/// 자세를 재면 "quintic이 병목인가 팔이 병목인가"를 가릴 수 없다.
+#[derive(Debug, Clone)]
+pub struct ImpactTarget {
+    pub pose: RobotPose,
+    pub joint_velocities: Vec<f64>,
+    pub rail_velocity: f64,
+    pub racket_velocity: Vector3<f64>,
+    /// 균일 스케일을 걸기 **전** 필요 라켓 속도 — 임팩트 모델이 요구한 이상값.
+    /// 스케일이 안 걸렸으면 `racket_velocity`와 같다.
+    pub unscaled_racket_velocity: Vector3<f64>,
+    /// 스케일 전 피크 관절속도 / 관절속도 한계. `NEAR_SINGULARITY_SPEED_RATIO`
+    /// 초과면 균일 스케일이 걸린다.
+    pub peak_joint_speed_ratio: f64,
+    /// 실제로 적용된 균일 스케일 (`1.0`이면 미적용).
+    pub speed_scale: f64,
 }
 
 /// `hint`를 pan/팔꿈치 한계 구간 중점 기준으로 반사한 대안 시드들을
@@ -225,7 +239,10 @@ fn best_impact_candidate(
     });
 }
 
-pub(crate) fn solve_impact_target(
+/// 임팩트 자세·목표 속도를 푼다 — `plan_swing`/`plan_bang_bang_swing`이
+/// 공유하는 프로덕션 경로. `tools/swing_bench`도 이 함수를 쓴다(같은 자세를
+/// 재야 궤적 모양과 팔 능력을 분리할 수 있다).
+pub fn solve_impact_target(
     arm: &Arm,
     prediction: &Prediction,
     start: &RobotPose,
@@ -266,6 +283,9 @@ pub(crate) fn solve_impact_target(
             joint_velocities,
             rail_velocity: candidate.rail_velocity * scale,
             racket_velocity: candidate.racket_velocity * scale,
+            unscaled_racket_velocity: candidate.racket_velocity,
+            peak_joint_speed_ratio: candidate.peak_joint_speed_ratio,
+            speed_scale: scale,
         });
     }
 
@@ -274,6 +294,9 @@ pub(crate) fn solve_impact_target(
         joint_velocities: candidate.joint_velocities,
         rail_velocity: candidate.rail_velocity,
         racket_velocity: candidate.racket_velocity,
+        unscaled_racket_velocity: candidate.racket_velocity,
+        peak_joint_speed_ratio: candidate.peak_joint_speed_ratio,
+        speed_scale: 1.0,
     });
 }
 

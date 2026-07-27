@@ -94,6 +94,10 @@ struct ShotDiag {
     impact: Vector3<f64>,
     /// 플래너 궤적이 임팩트 시점에 명령한 관절속도로부터의 라켓 속도.
     v_racket_commanded: Option<Vector3<f64>>,
+    /// 임팩트 시점에 플래너가 명령한 관절각·레일 위치 — 천장 진단
+    /// (`diag_swing_ceiling`)이 **실제로 친 그 자세**에서 상한을 재려고 쓴다.
+    q_at_impact: Option<Vec<f64>>,
+    rail_x_at_impact: f64,
     normal_commanded: Option<Vector3<f64>>,
     normal_desired: Option<Vector3<f64>>,
     z_at_net: Option<f64>,
@@ -120,6 +124,8 @@ fn run_shot(index: usize, settings: &BallShooterSettings) -> ShotDiag {
         normal: Vector3::zeros(),
         impact: Vector3::zeros(),
         v_racket_commanded: None,
+        q_at_impact: None,
+        rail_x_at_impact: 0.0,
         normal_commanded: None,
         normal_desired: None,
         z_at_net: None,
@@ -155,13 +161,15 @@ fn run_shot(index: usize, settings: &BallShooterSettings) -> ShotDiag {
             diag.v_out_desired = rally_return_velocity(pingpong_bot::Point3::from(p), prev_v);
             if let Some((_, q, qd, _)) = commanded {
                 diag.v_racket_commanded = commanded_racket_velocity(&world, &q, &qd);
+                diag.rail_x_at_impact = world.robot().rail_x();
                 diag.normal_commanded = world
                     .arm()
                     .forward_kinematics_with_rail(
                         world.robot().rail_x(),
-                        &pingpong_bot::Joints { values: q },
+                        &pingpong_bot::Joints { values: q.clone() },
                     )
                     .map(|p| p.normal);
+                diag.q_at_impact = Some(q);
             }
             diag.normal_desired = Some((diag.v_out_desired - prev_v).normalize());
         }
@@ -634,4 +642,142 @@ fn diag_weak_return() {
         );
     }
     println!("\ncontacted={contacted}/30 cleared_net={cleared} net_top={net_top:.4}");
+}
+
+/// **천장 진단** — 임팩트 자세에서 이 팔이 낼 수 있는 `v_r·n`의 상한을
+/// 궤적 "모양" 없이 해석적으로 구해, quintic 경로가 실제로 낸 값과 비교한다.
+///
+/// 묻는 것: *"궤적 모양이 병목인가, 팔이 병목인가"* (플랜 §4-G).
+///
+/// 방법 — 임팩트 자세 `q*`에서 라켓 속도는 `v_r = J(q*) q̇`이고 관절속도는
+/// 박스 제약 `|q̇_i| ≤ q̇_max`를 받는다. 법선 성분의 최대값은 닫힌 형태다:
+///
+/// ```text
+/// max v_r·n = Σ_i |(Jᵀn)_i| · q̇_max      (+ 레일 항)
+/// ```
+///
+/// 부호를 관절마다 자유롭게 고를 수 있으니 절대값 합이 그대로 최대다.
+/// `tools/swing_bench`의 bang-bang 적분과 달리 컨트롤러 수렴에 의존하지
+/// 않는다 (그 도구는 이 시나리오에서 2초를 돌려도 임팩트 자세에 수렴하지
+/// 못한다 — 2026-07-27 확인, 이 진단 이전부터).
+///
+/// 시간 실현성은 따로 본다: 정지에서 `q̇_max`까지 걸리는 시간을
+/// `q̇_max / (τ_max/M_ii)`로 근사해 commit 창(~0.175 s)과 비교한다.
+#[test]
+#[ignore = "진단 전용"]
+fn diag_swing_ceiling() {
+    use pingpong_bot::planner::dynamics::mass_matrix;
+    use pingpong_bot::{Joints, Point3};
+
+    const H: f64 = 1e-6;
+    /// 참고용 commit 창 상한 [s] — `defaults::control()`의 min_swing 대역 중간값.
+    const COMMIT_WINDOW_SECS: f64 = 0.175;
+
+    let launch = pingpong_bot::sim::EvalLaunchParams::default();
+    let robot = defaults::robot().expect("robot");
+    let arm = robot.arm.clone();
+    let rail_max_speed = arm.rail.as_ref().map_or(0.0, |rail| rail.max_speed);
+
+    println!(
+        "{:>6} {:>9} {:>9} {:>9} {:>9} {:>9}",
+        "zone", "vr_n(실측)", "천장(팔)", "천장(+레일)", "천장/실측", "t_spinup"
+    );
+
+    // 존마다 첫 발만 — eval은 존 안에서 같은 조준을 반복한다.
+    let mut seen = std::collections::HashSet::new();
+    for (i, (zone, index_in_zone)) in shot_schedule(EvalMode::Block).into_iter().enumerate() {
+        if !seen.insert(zone.label()) {
+            continue;
+        }
+        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+        let d = run_shot(i + 1, &settings);
+        let (Some(q), true) = (d.q_at_impact.clone(), d.contact) else {
+            println!(
+                "{:>6}  자세를 못 잡음 (contact={})",
+                zone.label(),
+                d.contact
+            );
+            continue;
+        };
+        let joints = Joints { values: q.clone() };
+        let rail_x = d.rail_x_at_impact;
+        let Some(pose) = arm.forward_kinematics_with_rail(rail_x, &joints) else {
+            println!("{:>6}  FK 실패", zone.label());
+            continue;
+        };
+        let n = pose.normal;
+        let base = pose.position.coords;
+
+        // Jᵀn — 관절 i를 단위 속도로 돌렸을 때 라켓 끝점 속도의 법선 성분.
+        let mut g = vec![0.0; q.len()];
+        for (i, gi) in g.iter_mut().enumerate() {
+            let mut perturbed = q.clone();
+            perturbed[i] += H;
+            let Some(p) = arm.forward_kinematics_with_rail(rail_x, &Joints { values: perturbed })
+            else {
+                continue;
+            };
+            *gi = ((p.position.coords - base) / H).dot(&n);
+        }
+        let rail_g = arm
+            .forward_kinematics_with_rail(rail_x + H, &joints)
+            .map_or(0.0, |p| ((p.position.coords - base) / H).dot(&n));
+
+        let ceiling_arm: f64 = g.iter().map(|gi| gi.abs()).sum::<f64>() * arm.max_joint_speed;
+        let ceiling_all = ceiling_arm + rail_g.abs() * rail_max_speed;
+        let achieved = d.v_racket.dot(&d.normal);
+
+        // 정지 → q̇_max 램프업 시간 (관절별 최악).
+        let m = mass_matrix(&arm, &joints);
+        let t_spinup = (0..q.len())
+            .map(|i| {
+                let accel = arm.joint_torque_limits[i] / m[(i, i)].max(1e-9);
+                arm.max_joint_speed / accel
+            })
+            .fold(0.0_f64, f64::max);
+
+        println!(
+            "{:>6} {:>9.3} {:>9.3} {:>9.3} {:>9.1}x {:>8.3}s",
+            zone.label(),
+            achieved,
+            ceiling_arm,
+            ceiling_all,
+            ceiling_all / achieved.abs().max(1e-9),
+            t_spinup
+        );
+        println!(
+            "       Jᵀn = {:?}  rail={:.4}   q̇_max={:.3} rad/s",
+            g.iter()
+                .map(|v| (v * 1000.0).round() / 1000.0)
+                .collect::<Vec<_>>(),
+            rail_g,
+            arm.max_joint_speed
+        );
+
+        // 프로덕션이 이 예측에 대해 실제로 세운 목표 (균일 스케일 포함).
+        let prediction = pingpong_bot::Prediction {
+            time_to_impact_secs: COMMIT_WINDOW_SECS,
+            impact_position: Point3::from(d.impact),
+            incoming_velocity: d.v_in,
+        };
+        let start = pingpong_bot::RobotPose::new(rail_x, arm.default_joints.clone());
+        match pingpong_bot::solve_impact_target(&arm, &prediction, &start) {
+            Ok(target) => println!(
+                "       target v_r·n = {:.3} (스케일 {:.3}× 적용 전 {:.3}), ratio={:.2}",
+                target.racket_velocity.dot(&n),
+                target.speed_scale,
+                target.unscaled_racket_velocity.dot(&n),
+                target.peak_joint_speed_ratio
+            ),
+            Err(e) => println!("       solve_impact_target 실패: {e}"),
+        }
+        println!(
+            "       램프업 {t_spinup:.3}s vs commit 창 {COMMIT_WINDOW_SECS:.3}s → {}",
+            if t_spinup <= COMMIT_WINDOW_SECS {
+                "시간은 충분"
+            } else {
+                "시간이 부족"
+            }
+        );
+    }
 }

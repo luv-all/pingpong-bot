@@ -23,8 +23,8 @@ use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::planner::dynamics::{forward_dynamics, mass_matrix};
 use pingpong_bot::{
-    Arm, Joints, MountPreset, Point3, RobotBuilder, RobotPose, defaults, rally_return_velocity,
-    required_racket_velocity,
+    Arm, ImpactTarget, Joints, MountPreset, Point3, Prediction, RobotBuilder, RobotPose, defaults,
+    solve_impact_target,
 };
 use serde::{Deserialize, Serialize};
 
@@ -90,6 +90,13 @@ struct Args {
     /// 사람이 읽는 표 대신 JSON으로 출력.
     #[arg(long)]
     json: bool,
+
+    /// 천장 측정 모드 — 프로덕션의 균일 스케일(`1/ratio`)을 되돌린 "임팩트
+    /// 모델이 원래 요구한" 목표를 향해 최대 토크로 민다. 목표 자체가 관절
+    /// 한계 밖이라 `feasible`은 대개 false가 되지만, 알고 싶은 건 수렴
+    /// 여부가 아니라 임팩트 자세를 지나는 순간의 라켓 속도다.
+    #[arg(long)]
+    ceiling: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -125,6 +132,26 @@ struct Report {
     target_racket_speed_m_s: f64,
     /// 종료 시점 라켓 속도 방향과 목표 방향의 각도차 [deg].
     racket_direction_error_deg: f64,
+    /// 프로덕션 균일 스케일 전 필요 라켓 속도 크기 [m/s] — 임팩트 모델이
+    /// 원래 요구한 값. `speed_scale`이 1.0이면 목표와 같다.
+    ideal_racket_speed_m_s: f64,
+    /// `solve_impact_target`이 적용한 균일 스케일 (1.0이면 미적용).
+    speed_scale: f64,
+    /// 스케일 전 피크 관절속도 / 한계.
+    peak_joint_speed_ratio: f64,
+    /// **천장 지표** — 임팩트 자세에 가장 가까이 갔던 순간의 라켓 속도 크기
+    /// [m/s]. 궤적 "모양" 제약 없이 순수 토크로 밀었을 때 이 팔이 그 자세를
+    /// 지나며 실제로 갖는 속도. `--ceiling`은 목표 속도가 한계 밖이라 허용
+    /// 오차 안에 못 들어올 수 있어서, 도달 여부가 아니라 최근접 시점을 본다.
+    racket_speed_at_closest_approach_m_s: f64,
+    /// 같은 순간의 라켓 **법선** 속도 `v_r·n` [m/s] — `v_out·n` 식에서
+    /// 스윙이 기여하는 항 그 자체(§2). quintic 경로 실측 0.18과 직접 비교.
+    racket_normal_speed_at_closest_approach_m_s: f64,
+    /// 그 최근접 시점의 위치 오차 [rad 또는 m] · 시각 [s].
+    closest_approach_position_error: f64,
+    closest_approach_time_secs: f64,
+    /// 전 구간 최대 라켓 속도 크기 [m/s] — 자세와 무관한 상한 감각용.
+    peak_racket_speed_m_s: f64,
     peak_joint_torque_utilization: Vec<f64>,
     peak_joint_speed_rad_s: Vec<f64>,
     peak_joint_speed_ratio_to_cap: Vec<f64>,
@@ -193,14 +220,18 @@ fn main() -> Result<()> {
     let start_rail_x = start_rail_x_override.unwrap_or_else(|| rail.default_x());
 
     let start = RobotPose::new(start_rail_x, arm.default_joints.clone());
-    let target = compute_target(
+    let mut target = compute_target(
         &arm,
         &start,
         Point3::new(impact[0], impact[1], impact[2]),
         Vector3::new(incoming[0], incoming[1], incoming[2]),
+        // `solve_impact_target`은 time_to_impact를 쓰지 않는다 — commit 창
+        // 판정은 `plan_swing` 쪽이다. 리포트 비교용 값을 그대로 넘긴다.
+        time_budget_secs.unwrap_or(0.0),
     )?;
-
-    let mut target = target;
+    if args.ceiling {
+        unscale_target(&mut target);
+    }
     let target_speed_clamped = clamp_target_to_speed_caps(&arm, &mut target);
 
     let mut report = simulate(
@@ -251,19 +282,6 @@ fn resolve_arm(robot_id: &str) -> Result<std::sync::Arc<Arm>> {
     return Ok(built.arm);
 }
 
-struct Target {
-    rail_x: f64,
-    joints: Joints,
-    rail_velocity: f64,
-    joint_velocities: Vec<f64>,
-    /// 임팩트 순간 라켓이 실제로 내야 하는 속도(월드) — `required_racket_velocity`
-    /// 원본. 수렴 판정은 이걸 기준으로 한다(관절 공간 속도 벡터를 칼같이
-    /// 맞추면 불필요한 백스윙성 왕복이 "최적해"로 나올 수 있어서 — 관절
-    /// 속도는 여러 조합이 같은 라켓 속도를 낼 수 있는데 그중 하나만 목표로
-    /// 못박으면 과잉제약이다).
-    racket_velocity: Vector3<f64>,
-}
-
 /// 목표 속도가 실제 관절/레일 속도 한계를 넘으면 그 한계로 자른다.
 ///
 /// bang-bang 스위칭 곡선은 목표 (위치,속도)를 상대좌표 원점으로 모는데,
@@ -274,7 +292,11 @@ struct Target {
 /// 잘라 스위칭 곡선이 실제로 수렴 가능한 목표를 보게 한다. 잘랐다는
 /// 사실 자체가 "이상적인 라켓 속도는 이 로봇 한계 밖"이라는 유의미한
 /// 정보라 `Report`에 남겨 조용히 숨기지 않는다.
-fn clamp_target_to_speed_caps(arm: &Arm, target: &mut Target) -> bool {
+///
+/// 프로덕션 목표(`--ceiling` 없이)는 `solve_impact_target`이 이미 균일
+/// 스케일로 한계 안에 넣어 두므로 여기서는 보통 아무 일도 하지 않는다.
+/// `--ceiling` 모드에서 스케일 전 이상값을 쓸 때만 실제로 자른다.
+fn clamp_target_to_speed_caps(arm: &Arm, target: &mut ImpactTarget) -> bool {
     let mut clamped = false;
     for v in target.joint_velocities.iter_mut() {
         let capped = v.clamp(-arm.max_joint_speed, arm.max_joint_speed);
@@ -293,58 +315,48 @@ fn clamp_target_to_speed_caps(arm: &Arm, target: &mut Target) -> bool {
     return clamped;
 }
 
-/// `plan_swing`과 같은 임팩트 설정(목표 라켓 자세/속도 → 관절각·관절속도
-/// 역산)을 재사용한다. 여기서 갈라지는 지점은 이다음이다 — `plan_swing`은
-/// 이 목표를 quintic에 넣지만, 여기서는 `simulate`가 순수 토크 적분으로
-/// 도달 시간 자체를 구한다.
+/// 프로덕션 임팩트 목표를 **그대로** 가져온다 — `plan_swing`/`plan_bang_bang_swing`이
+/// 부르는 [`solve_impact_target`] 그 자체다. 갈라지는 지점은 이다음이다:
+/// `plan_swing`은 이 목표를 quintic에 넣지만, 여기서는 `simulate`가 순수
+/// 토크 적분으로 도달 시간 자체를 구한다.
+///
+/// 예전에는 이 함수가 자기만의 단일 IK 시드 + 면고정 5제약
+/// `velocities_for_racket_velocity`를 썼다. 프로덕션은 다중 IK 시드 중
+/// 조작성 최선을 고르고(`best_impact_candidate`) 위치 3제약 최소노름을
+/// 쓰므로 **다른 임팩트 자세**를 재고 있었고, 그러면 "quintic이 병목인가
+/// 팔이 병목인가"를 가릴 수 없다 (2026-07-27).
 fn compute_target(
     arm: &Arm,
     start: &RobotPose,
     impact: Point3,
     incoming_velocity: Vector3<f64>,
-) -> Result<Target> {
-    let v_in = incoming_velocity;
-    let v_out = rally_return_velocity(impact, v_in);
-    let desired_normal = (v_out - v_in).normalize();
+    time_to_impact_secs: f64,
+) -> Result<ImpactTarget> {
+    let prediction = Prediction {
+        time_to_impact_secs,
+        impact_position: impact,
+        incoming_velocity,
+    };
+    return solve_impact_target(arm, &prediction, start)
+        .map_err(|e| anyhow!("임팩트 목표 계산 실패: {e}"));
+}
 
-    let ik_hint = arm
-        .with_wrist_open(&start.joints, Arm::wrist_open_for_return(v_out - v_in))
-        .map_err(|e| anyhow!("wrist-open IK 힌트 실패: {e}"))?;
-    let racket_center = Point3::from(
-        impact.coords
-            - desired_normal
-                * (pingpong_bot::constants::BALL_RADIUS
-                    + pingpong_bot::constants::geometry::RACKET_HALF_Z),
-    );
-    let solved = arm
-        .inverse_pose_with_rail(
-            racket_center,
-            desired_normal,
-            &RobotPose::new(start.rail_x, ik_hint),
-        )
-        .map_err(|e| anyhow!("임팩트 IK 실패: {e}"))?;
-    let pose = arm
-        .forward_kinematics_with_rail(solved.rail_x, &solved.joints)
-        .ok_or_else(|| anyhow!("IK 해에서 FK 실패"))?;
-
-    let v_r = required_racket_velocity(
-        v_in,
-        v_out,
-        pose.normal,
-        defaults::impact().racket_effective_restitution,
-    )
-    .map_err(|e| anyhow!("목표 라켓 속도 계산 실패: {e}"))?;
-    let (rail_velocity, joint_velocities) = arm
-        .velocities_for_racket_velocity(&solved, v_r)
-        .map_err(|e| anyhow!("목표 관절속도 역산 실패: {e}"))?;
-
-    return Ok(Target {
-        rail_x: solved.rail_x,
-        joints: solved.joints,
-        rail_velocity,
-        joint_velocities,
-        racket_velocity: v_r,
-    });
+/// 균일 스케일을 되돌려 "임팩트 모델이 원래 요구한" 목표로 바꾼다 —
+/// `--ceiling` 모드용.
+///
+/// 프로덕션 경로는 피크 관절속도가 한계를 넘으면 `1/ratio`로 전 관절을
+/// 균일 축소한다(§3.2의 진범). 천장 측정은 그 축소 **전** 목표를 향해
+/// 최대 토크로 밀었을 때 이 팔이 실제로 어디까지 가는지를 봐야 한다.
+fn unscale_target(target: &mut ImpactTarget) {
+    let scale = target.speed_scale;
+    if scale >= 1.0 || scale <= f64::EPSILON {
+        return;
+    }
+    for v in target.joint_velocities.iter_mut() {
+        *v /= scale;
+    }
+    target.rail_velocity /= scale;
+    target.racket_velocity = target.unscaled_racket_velocity;
 }
 
 /// 현재 관절/레일 위치·속도에서 실제로 나오는 라켓(월드) 속도 추정.
@@ -389,7 +401,7 @@ fn bang_bang_accel(x: f64, v: f64, a_max: f64) -> f64 {
 fn simulate(
     arm: &Arm,
     start: &RobotPose,
-    target: &Target,
+    target: &ImpactTarget,
     dt: f64,
     max_time_secs: f64,
     time_budget_secs: Option<f64>,
@@ -414,13 +426,25 @@ fn simulate(
     let mut racket_velocity_ok = false;
     let mut position_reached_time_secs: Option<f64> = None;
 
+    // 천장 지표 — 임팩트 자세 최근접 시점의 라켓 속도. 임팩트 면 법선은
+    // 자세가 고정이라 루프 밖에서 한 번만 구한다.
+    let impact_normal = arm
+        .forward_kinematics_with_rail(target.pose.rail_x, &target.pose.joints)
+        .map(|pose| pose.normal)
+        .unwrap_or_else(Vector3::zeros);
+    let mut closest_pos_err = f64::INFINITY;
+    let mut closest_time = 0.0;
+    let mut closest_racket_speed = 0.0;
+    let mut closest_racket_normal_speed = 0.0;
+    let mut peak_racket_speed = 0.0f64;
+
     while t < max_time_secs {
         let m = mass_matrix(arm, &Joints::from_slice(&q));
         let mut torque_cmd = vec![0.0; n];
         for i in 0..n {
             let effective_inertia = m[(i, i)].max(1e-9);
             let a_max = (arm.joint_torque_limits[i] / effective_inertia).max(1e-6);
-            let x = q[i] - target.joints.values[i];
+            let x = q[i] - target.pose.joints.values[i];
             let v = qdot[i] - target.joint_velocities[i];
             let a_cmd = bang_bang_accel(x, v, a_max);
             torque_cmd[i] = (a_cmd * effective_inertia)
@@ -440,12 +464,12 @@ fn simulate(
         if std::env::var("SWING_BENCH_DEBUG").is_ok() && (t % 0.05) < dt {
             eprintln!(
                 "t={t:.3} q={q:?} qdot={qdot:?} target_q={:?} target_qdot={:?}",
-                target.joints.values, target.joint_velocities
+                target.pose.joints.values, target.joint_velocities
             );
         }
 
         {
-            let x = rail_x - target.rail_x;
+            let x = rail_x - target.pose.rail_x;
             let v = rail_v - target.rail_velocity;
             let a_cmd = bang_bang_accel(x, v, RAIL_ACCEL_M_S2);
             rail_v += a_cmd * dt;
@@ -458,10 +482,10 @@ fn simulate(
 
         pos_err = q
             .iter()
-            .zip(&target.joints.values)
+            .zip(&target.pose.joints.values)
             .map(|(a, b)| (a - b).abs())
             .fold(0.0_f64, f64::max)
-            .max((rail_x - target.rail_x).abs());
+            .max((rail_x - target.pose.rail_x).abs());
 
         let achieved_racket_velocity =
             racket_velocity_estimate(arm, rail_x, rail_v, &q, &qdot).unwrap_or(Vector3::zeros());
@@ -483,6 +507,14 @@ fn simulate(
             ..=1.0 + RACKET_SPEED_RATIO_TOLERANCE)
             .contains(&speed_ratio)
             && direction_error_deg <= RACKET_DIRECTION_TOLERANCE_DEG;
+
+        peak_racket_speed = peak_racket_speed.max(achieved_speed);
+        if pos_err < closest_pos_err {
+            closest_pos_err = pos_err;
+            closest_time = t;
+            closest_racket_speed = achieved_speed;
+            closest_racket_normal_speed = achieved_racket_velocity.dot(&impact_normal);
+        }
 
         if position_reached_time_secs.is_none() && pos_err < POSITION_TOLERANCE_RAD_OR_M {
             position_reached_time_secs = Some(t);
@@ -508,6 +540,14 @@ fn simulate(
         achieved_racket_speed_m_s: achieved_speed,
         target_racket_speed_m_s: target_speed,
         racket_direction_error_deg: direction_error_deg,
+        ideal_racket_speed_m_s: target.unscaled_racket_velocity.norm(),
+        speed_scale: target.speed_scale,
+        peak_joint_speed_ratio: target.peak_joint_speed_ratio,
+        racket_speed_at_closest_approach_m_s: closest_racket_speed,
+        racket_normal_speed_at_closest_approach_m_s: closest_racket_normal_speed,
+        closest_approach_position_error: closest_pos_err,
+        closest_approach_time_secs: closest_time,
+        peak_racket_speed_m_s: peak_racket_speed,
         peak_joint_torque_utilization: peak_util,
         peak_joint_speed_rad_s: peak_speed.clone(),
         peak_joint_speed_ratio_to_cap: peak_speed.iter().map(|s| s / arm.max_joint_speed).collect(),
@@ -551,6 +591,23 @@ fn print_human(robot_id: &str, report: &Report) {
             100.0
         },
         report.racket_direction_error_deg
+    );
+    println!(
+        "  ideal (스케일 전) racket speed: {:.3} m/s — 균일 스케일 {:.3}× \
+         (스케일 전 피크 관절속도 비율 {:.2})",
+        report.ideal_racket_speed_m_s, report.speed_scale, report.peak_joint_speed_ratio
+    );
+    println!(
+        "  [천장] 임팩트 자세 최근접({:.4}s, 위치오차 {:.4}) 시점 라켓 속도: \
+         {:.3} m/s, 법선성분 v_r·n = {:.3} m/s",
+        report.closest_approach_time_secs,
+        report.closest_approach_position_error,
+        report.racket_speed_at_closest_approach_m_s,
+        report.racket_normal_speed_at_closest_approach_m_s
+    );
+    println!(
+        "  전 구간 최대 라켓 속도: {:.3} m/s",
+        report.peak_racket_speed_m_s
     );
     println!("  per-joint peak torque utilization (|τ|/limit):");
     for (i, u) in report.peak_joint_torque_utilization.iter().enumerate() {

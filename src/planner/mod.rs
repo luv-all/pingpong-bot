@@ -14,9 +14,9 @@ pub use swing::physics;
 /// 하위 호환: `planner::trajectory::…`
 pub use swing::trajectory;
 pub use swing::{
-    PlannedIntercept, RailMotion, SwingFeasibility, SwingTrajectory, accel, aero_accel,
-    ball_past_midcourt_for_commit, in_swing_commit_window, plan_best_swing, plan_coarse_track,
-    plan_return_to_center, plan_swing, swing_feasibility,
+    ImpactTarget, PlannedIntercept, RailMotion, SwingFeasibility, SwingTrajectory, accel,
+    aero_accel, ball_past_midcourt_for_commit, in_swing_commit_window, plan_best_swing,
+    plan_coarse_track, plan_return_to_center, plan_swing, solve_impact_target, swing_feasibility,
 };
 
 use anyhow::{Result, ensure};
