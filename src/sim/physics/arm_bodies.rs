@@ -404,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn spawns_four_joints_dual_yaw_torque_from_entry() {
+    fn spawns_four_joints_dual_base_pitch_torque_from_entry() {
         let (_arm, _b, _c, _j, mb) = spawn_test_arm(true);
         assert_eq!(mb.joint_count(), 4);
         assert_eq!(defaults::control().max_joint_torques[0], 6.0);
@@ -414,12 +414,12 @@ mod tests {
     }
 
     #[test]
-    fn dual_yaw_motor_force_exceeds_single() {
+    fn dual_base_pitch_motor_force_exceeds_single() {
         let (_arm, _b, _c, mut joints, mb) = spawn_test_arm(true);
         mb.set_motor_max_forces(&mut joints, &[6.0, 3.0, 1.25, 1.25]);
-        let dual = read_yaw_max_force(&joints, mb.joint_handles[0]);
+        let dual = read_base_pitch_max_force(&joints, mb.joint_handles[0]);
         mb.set_motor_max_forces(&mut joints, &[3.0, 3.0, 1.25, 1.25]);
-        let single = read_yaw_max_force(&joints, mb.joint_handles[0]);
+        let single = read_base_pitch_max_force(&joints, mb.joint_handles[0]);
         assert!(dual > single + 1.0, "dual={dual} single={single}");
     }
 
@@ -639,7 +639,7 @@ mod tests {
         assert!(face.y > 0.5, "면이 상대(+Y)를 봐야 함: face={face:?}");
     }
 
-    fn read_yaw_max_force(joints: &MultibodyJointSet, handle: MultibodyJointHandle) -> f32 {
+    fn read_base_pitch_max_force(joints: &MultibodyJointSet, handle: MultibodyJointHandle) -> f32 {
         let (mb, link_id) = joints.get(handle).expect("joint");
         let link = mb.link(link_id).expect("link");
         let revolute = link.joint.data.as_revolute().expect("revolute");

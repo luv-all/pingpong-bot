@@ -319,7 +319,7 @@ impl Arm {
 
     /// 순기구학 - 관절각 -> 라켓 끝점/면 방향.
     ///
-    /// 4축: yaw + 2R(어깨/팔꿈치 접힘) + 손목 open.
+    /// 4축: base_pitch + pan + 팔꿈치 접힘 + 손목 open.
     pub fn forward_kinematics(&self, joints: &Joints) -> Option<RacketPose> {
         return self.forward_kinematics_at(self.base, joints);
     }

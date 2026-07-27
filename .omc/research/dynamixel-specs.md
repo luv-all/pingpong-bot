@@ -1,5 +1,10 @@
 # Dynamixel/Robotis Motor Specs + Motor-Joint Mapping
 
+> **용어(2026-07-27 정정)**: j0 `base_pitch`·j1 `pan`은 조사 당시 `yaw`·`shoulder`로
+> 불리던 관절이다. j0의 축은 수평(−X)이라 yaw가 아니고, 실제 수직축 선회는 j1이다.
+> 원문의 이름을 새 이름으로 치환해 두었다.
+
+
 Research task for `feat/rough-to-fine-hitting-dynamics`. All numbers below are
 sourced from Robotis's official e-Manual pages (Protocol 2.0 variants,
 `*-2` URL suffix). Retrieved 2026-07-23. No numbers were taken from memory —
@@ -99,9 +104,9 @@ tracing `<joint>` parent/child links from `base_link` to the end effector:
 
 ```
 Rigid 4  (fixed):    base_link            -> MX-64R_v1__2__1   (mass 0.126 kg)
-Revolute 6 (yaw):     MX-64R_v1__2__1      -> FR05-H101_v1__1__1   <- actuator link = MX-64R
+Revolute 6 (base_pitch): MX-64R_v1__2__1      -> FR05-H101_v1__1__1   <- actuator link = MX-64R
 Rigid 8  (fixed):    ... -> MX-64R_v1_1    (mass 0.126 kg)
-Revolute 9 (shoulder): MX-64R_v1_1          -> FR05-H101_v1_1        <- actuator link = MX-64R
+Revolute 9 (pan):        MX-64R_v1_1          -> FR05-H101_v1_1        <- actuator link = MX-64R
 Rigid 12 (fixed):    ... -> MX-28T_R_v1__1__1 (mass 0.072 kg)
 Revolute 13 (elbow):  MX-28T_R_v1__1__1     -> FR07-H101_v1_1        <- actuator link = MX-28T
 Rigid 17 (fixed):    ... -> MX-28T_R_v1_1   (mass 0.072 kg)
@@ -113,7 +118,7 @@ Reasoning: for a serial-chain revolute joint, the URDF's parent link of that
 motor casing is rigidly mounted to the upstream structure and its output
 shaft drives the downstream link). So the mass-tagged link immediately
 preceding each `Revolute` joint identifies which motor drives that joint.
-This gives 0.126 kg (MX-64R) driving yaw and shoulder, and 0.072 kg (MX-28T)
+This gives 0.126 kg (MX-64R) driving base_pitch and pan, and 0.072 kg (MX-28T)
 driving elbow and wrist — matching the task description's hint about the
 `0.126 kg x3` / `0.072 kg` link masses (there is a 3rd 0.126 kg link,
 `MX-64R_v1__1__1`, fixed directly to `base_link` via `Rigid 5` with no
@@ -127,13 +132,13 @@ mapping as the source of truth:
 
 | URDF joint | role (README) | Dynamixel ID | sign (`config/real-hardware.toml`) |
 |---|---|---|---|
-| Revolute 6  | yaw      | 1 | -1 |
-| Revolute 9  | shoulder | 3 | +1 |
-| Revolute 13 | elbow    | 4 | +1 |
-| Revolute 18 | wrist    | 5 | +1 |
+| Revolute 6  | base_pitch | 1 | -1 |
+| Revolute 9  | pan        | 3 | +1 |
+| Revolute 13 | elbow      | 4 | +1 |
+| Revolute 18 | wrist      | 5 | +1 |
 
 This matches `config/real-hardware.toml`'s `motor_ids = [1, 3, 4, 5]` and
-`joint_signs = [-1, 1, 1, 1]` positionally (array index 0..3 = yaw, shoulder,
+`joint_signs = [-1, 1, 1, 1]` positionally (array index 0..3 = base_pitch, pan,
 elbow, wrist — same order as `Arm::competition()`'s `joints` vec in
 `src/robot/mod.rs:187-207`, which builds q0..q3 in that same order).
 
@@ -141,10 +146,10 @@ elbow, wrist — same order as `Arm::competition()`'s `joints` vec in
 
 | Joint index (`Arm` chain / `Joints` vector) | Role | Dynamixel ID | sign | Motor model | Link mass (URDF) |
 |---|---|---|---|---|---|
-| 0 | yaw      | 1 | -1 | **MX-64R** (902-0065-000) | 0.126 kg |
-| 1 | shoulder | 3 | +1 | **MX-64R** (902-0065-000) | 0.126 kg |
-| 2 | elbow    | 4 | +1 | **MX-28T** (902-0066-000 per Robotis' own table; repo URDF names it ambiguously as `MX-28T_R`) | 0.072 kg |
-| 3 | wrist    | 5 | +1 | **MX-28T** (902-0066-000, same note) | 0.072 kg |
+| 0 | base_pitch | 1 | -1 | **MX-64R** (902-0065-000) | 0.126 kg |
+| 1 | pan        | 3 | +1 | **MX-64R** (902-0065-000) | 0.126 kg |
+| 2 | elbow      | 4 | +1 | **MX-28T** (902-0066-000 per Robotis' own table; repo URDF names it ambiguously as `MX-28T_R`) | 0.072 kg |
+| 3 | wrist      | 5 | +1 | **MX-28T** (902-0066-000, same note) | 0.072 kg |
 
 ## 4. Rust constants reference (for downstream tasks, e.g. #2 and #4)
 

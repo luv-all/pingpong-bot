@@ -80,17 +80,17 @@ pub fn to_arm(urdf: &UrdfModel, max_joint_speed: f64) -> Result<Arm, UrdfLoadErr
                     aggregated_inertials.push(LinkInertial::combine(&bodies));
                 }
                 current_agg = Some(vec![(Isometry3::identity(), child_inertial)]);
-                // 4-DOF 로봇의 알려진 관절 인덱스→모터 매핑(joint0=yaw,
-                // joint1=shoulder=MX-64R / joint2=elbow, joint3=wrist=MX-28T,
+                // 4-DOF 로봇의 알려진 관절 인덱스→모터 매핑(joint0=base_pitch,
+                // joint1=pan=MX-64R / joint2=elbow, joint3=wrist=MX-28T,
                 // 근거: `.omc/research/dynamixel-specs.md`)을 실제 모터 스펙
                 // 기반 토크 한계로 쓴다 — `Arm::competition()`과 동일 SSOT.
                 // URDF의 `<limit effort>`(예: "100")는 CAD 익스포터 기본값이라
-                // 실제 모터 정격과 무관해 쓰지 않는다. yaw(continuous)는 URDF에
+                // 실제 모터 정격과 무관해 쓰지 않는다. base_pitch(continuous)는 URDF에
                 // `<limit>` 태그 자체가 없어 effort가 0(→ 이전엔 무한대 폴백)
                 // 이었는데, 이 역시 실제로는 같은 MX-64R이라 무한대가 아니다.
-                // joint0(yaw)은 모터 2배 — URDF의 `Rigid 4`/`Rigid 5`가
+                // joint0(base_pitch)은 모터 2배 — URDF의 `Rigid 4`/`Rigid 5`가
                 // `base_link`에 MX-64R 두 대를 대칭 고정하는데, `Revolute 6`
-                // (yaw)은 그중 하나만 부모로 삼아 운동학적으로는 관절 1개지만
+                // (base_pitch)은 그중 하나만 부모로 삼아 운동학적으로는 관절 1개지만
                 // 실기에서 두 모터가 기계적으로 결합돼 같은 축에 토크를 함께
                 // 낸다(2026-07-23, 하드웨어 담당자 확인, `Arm::competition()`과
                 // 동일 근거). 4관절을 벗어나는(향후) URDF만 옛

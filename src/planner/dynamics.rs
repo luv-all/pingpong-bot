@@ -278,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregated_shoulder_body_includes_fixed_motor_mass() {
+    fn aggregated_pan_body_includes_fixed_motor_mass() {
         // 합성 강체 질량이 원본 child link(브래킷)만의 질량보다 유의미하게 커야
         // 한다 — fixed joint로 붙은 모터 몸체 질량이 포함됐는지 확인.
         let arm = competition_arm();
@@ -291,18 +291,18 @@ mod tests {
         // §URDF 하드 계산과 일치: 0.052 + 0.027 + 0.0114 + 0.072 ≈ 0.1624 kg.
         assert!(
             (aggregated - 0.162435).abs() < 1e-4,
-            "shoulder 합성 질량 {aggregated} ≈ 0.162435 기대"
+            "pan 합성 질량 {aggregated} ≈ 0.162435 기대"
         );
     }
 
     #[test]
     fn two_link_static_sanity_gravity_only() {
-        // 정적(속도·가속 0) competition arm: 수직 축(shoulder)은 중력 토크 0,
-        // 수평 축(yaw/elbow/wrist)은 유한한 중력 토크를 낸다.
+        // 정적(속도·가속 0) competition arm: 수직 축(pan)은 중력 토크 0,
+        // 수평 축(base_pitch/elbow/wrist)은 유한한 중력 토크를 낸다.
         let arm = competition_arm();
         let n = arm.joint_count();
-        // yaw=0에서 평가한다. shoulder 축이 정확히 월드 z(수직)가 되는 것은
-        // yaw가 0일 때뿐이라, 휴지 자세(`READY_JOINTS_4DOF`, yaw≈0.12 rad)를
+        // base_pitch=0에서 평가한다. pan 축이 정확히 월드 z(수직)가 되는 것은
+        // base_pitch가 0일 때뿐이라, 휴지 자세(`READY_JOINTS_4DOF`, base_pitch≈0.12 rad)를
         // 그대로 쓰면 축이 살짝 기울어 중력 모멘트가 정확히 0이 아니다
         // (실측 9.1e-6 N*m — stall 토크의 3e-6 수준으로 물리적으로는 무시할
         // 값이지만, 이 테스트가 검증하려는 명제는 "수직 축에는 중력
@@ -310,10 +310,10 @@ mod tests {
         let mut joints = arm.default_joints.clone();
         joints.values[0] = 0.0;
         let tau = required_joint_torques(&arm, &joints, &vec![0.0; n], &vec![0.0; n]);
-        // shoulder 축은 월드 z(수직)라 중력 모멘트가 0에 가깝다.
+        // pan 축은 월드 z(수직)라 중력 모멘트가 0에 가깝다.
         assert!(
             tau[1].abs() < 1e-6,
-            "수직 shoulder 축은 정적 중력 토크 ~0 이어야: {}",
+            "수직 pan 축은 정적 중력 토크 ~0 이어야: {}",
             tau[1]
         );
         // 나머지 수평 축은 유한한 정적 토크, 그러나 모터 stall 한참 아래.

@@ -90,7 +90,7 @@ pub(crate) struct ImpactTarget {
     pub(crate) racket_velocity: Vector3<f64>,
 }
 
-/// `hint`를 어깨/팔꿈치 한계 구간 중점 기준으로 반사한 대안 시드들을
+/// `hint`를 pan/팔꿈치 한계 구간 중점 기준으로 반사한 대안 시드들을
 /// 만든다 — 수치 IK가 같은 목표 자세에 도달하는 다른 관절 조합(다른
 /// elbow-up/down류 basin)으로 수렴하도록 시드를 다양화한다. 이 배열의
 /// 첫 항목은 항상 원본 `hint` 그대로.
@@ -109,9 +109,9 @@ fn candidate_ik_hints(arm: &Arm, hint: &Joints) -> Vec<Joints> {
             (2.0 * mid - joints.values[joint_index]).clamp(limit.min, limit.max);
         return Some(reflected);
     };
-    if let Some(shoulder_reflected) = reflect(1, hint) {
-        hints.push(shoulder_reflected.clone());
-        if let Some(both_reflected) = reflect(2, &shoulder_reflected) {
+    if let Some(pan_reflected) = reflect(1, hint) {
+        hints.push(pan_reflected.clone());
+        if let Some(both_reflected) = reflect(2, &pan_reflected) {
             hints.push(both_reflected);
         }
     }
@@ -1154,7 +1154,7 @@ mod tests {
     fn trajectory_limits_reject_internal_joint_overshoot() {
         let arm = sample_three_dof_arm();
         let start = sample_start(&arm);
-        let limit = arm.joint_limit(1).expect("bounded shoulder");
+        let limit = arm.joint_limit(1).expect("bounded pan");
         let mut impact = start.joints.clone();
         impact.values[1] = limit.max;
         let mut impact_velocity = vec![0.0; impact.values.len()];

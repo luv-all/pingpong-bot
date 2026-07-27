@@ -1,12 +1,17 @@
-# Torque Derate Analysis — Dual-Motor Yaw Fix + Minimum Safe Derate Fraction
+# Torque Derate Analysis — Dual-Motor Base-Pitch Fix + Minimum Safe Derate Fraction
+
+> **용어(2026-07-27 정정)**: 이 문서의 `base_pitch`(j0)·`pan`(j1)은 조사 당시
+> `yaw`·`shoulder`로 불리던 관절이다. j0의 축은 수평(−X)이라 yaw가 아니고,
+> 실제 수직축 선회는 j1이다. 원문의 이름을 새 이름으로 치환해 두었다.
+
 
 Investigation date: 2026-07-23, on branch `feat/rough-to-fine-hitting-dynamics`.
 Follow-up to `.omc/research/dynamixel-specs.md` (motor spec sourcing) and the
 rough-to-fine dynamics work. Triggered by a hardware-owner report: the base
-link carries **two** MX-64R motors sharing the yaw axis, which the software
+link carries **two** MX-64R motors sharing the base_pitch axis, which the software
 model did not account for.
 
-## 1. Dual-motor yaw axis — confirmed from the URDF
+## 1. Dual-motor base_pitch axis — confirmed from the URDF
 
 `assets/robots/4-dof/urdf/all-4-export.urdf`:
 
@@ -21,7 +26,7 @@ model did not account for.
   <parent link="base_link"/>
   <child link="MX-64R_v1__1__1"/>
 </joint>
-<joint name="Revolute 6" type="continuous">   <!-- yaw -->
+<joint name="Revolute 6" type="continuous">   <!-- base_pitch -->
   <parent link="MX-64R_v1__2__1"/>
   <child link="FR05-H101_v1__1__1"/>
 </joint>
@@ -29,7 +34,7 @@ model did not account for.
 
 Two MX-64R motor bodies (`MX-64R_v1__2__1`, `MX-64R_v1__1__1`) are both fixed
 directly to `base_link`, mounted symmetrically at ±6.625 cm — a side-by-side
-dual-motor layout. `Revolute 6` (yaw) uses only ONE of them
+dual-motor layout. `Revolute 6` (base_pitch) uses only ONE of them
 (`MX-64R_v1__2__1`) as its kinematic parent; the other (`MX-64R_v1__1__1`)
 has no downstream `Revolute` joint in the URDF at all. This was already
 flagged as an oddity in `.omc/research/dynamixel-specs.md` §3 ("a 3rd 0.126 kg
@@ -37,10 +42,10 @@ link... does not drive any modeled joint — not counted in the mapping") but
 at the time was treated as inert CAD clutter, not a second actuator.
 
 **Confirmed by the hardware owner (2026-07-23): both motors are mechanically
-coupled to the same yaw shaft and contribute torque together.** The
+coupled to the same base_pitch shaft and contribute torque together.** The
 kinematic model is still correct as a single revolute DOF (two motors geared
 to one shaft don't add a degree of freedom), but the **torque budget** for
-joint 0 (yaw) must reflect two motors, not one.
+joint 0 (base_pitch) must reflect two motors, not one.
 
 ### Fix applied
 
@@ -49,7 +54,7 @@ joint 0 (yaw) must reflect two motors, not one.
   `2.0 * MX64_STALL_TORQUE_NM * CONTINUOUS_TORQUE_DERATE`.
 - `src/robot/urdf/arm_from_urdf.rs`: same doubling applied to the
   URDF-loading path's `motor_derived_limit` for joint index 0.
-- Only **joint 0 (yaw)** is affected — shoulder/elbow/wrist show no evidence
+- Only **joint 0 (base_pitch)** is affected — pan/elbow/wrist show no evidence
   of a second motor (single motor ID each in `config/real-hardware.toml`'s
   `motor_ids = [1, 3, 4, 5]`, and no extra unmatched link in the URDF near
   those joints).
@@ -81,14 +86,14 @@ still undocumented, see `.omc/research/dynamixel-specs.md` §1) are:
 
 | Joint | Motor(s) | Stall torque used |
 |---|---|---|
-| 0 (yaw) | 2x MX-64R (dual-motor, this fix) | 12.0 N·m |
-| 1 (shoulder) | 1x MX-64R | 6.0 N·m |
+| 0 (base_pitch) | 2x MX-64R (dual-motor, this fix) | 12.0 N·m |
+| 1 (pan) | 1x MX-64R | 6.0 N·m |
 | 2 (elbow) | 1x MX-28T | 2.5 N·m |
 | 3 (wrist) | 1x MX-28T | 2.5 N·m |
 
 Resulting `joint_torque_limits` (N·m) at each derate fraction:
 
-| Fraction | yaw | shoulder | elbow | wrist |
+| Fraction | base_pitch | pan | elbow | wrist |
 |---|---|---|---|---|
 | 0.10 | 1.20 | 0.60 | 0.25 | 0.25 |
 | 0.15 | 1.80 | 0.90 | 0.38 | 0.38 |
@@ -120,23 +125,23 @@ IK/reachability question. Then compared against `stall * fraction` per joint
 across a fraction sweep.
 
 **Required torque for this representative swing**: `[3.556, 2.174, -0.153,
--0.154] N·m` (yaw, shoulder, elbow, wrist).
+-0.154] N·m` (base_pitch, pan, elbow, wrist).
 
-| Fraction | yaw util | shoulder util | elbow util | wrist util | Feasible? |
+| Fraction | base_pitch util | pan util | elbow util | wrist util | Feasible? |
 |---|---|---|---|---|---|
 | 0.10 | 2.96 | 3.62 | 0.61 | 0.62 | ❌ |
 | 0.20 | 1.48 | 1.81 | 0.31 | 0.31 | ❌ |
 | 0.30 | 0.99 | 1.21 | 0.20 | 0.21 | ❌ |
-| 0.35 | 0.85 | **1.04** | 0.17 | 0.18 | ❌ (shoulder just over) |
+| 0.35 | 0.85 | **1.04** | 0.17 | 0.18 | ❌ (pan just over) |
 | **0.40** | **0.74** | **0.91** | 0.15 | 0.15 | **✅ first feasible fraction** |
 | 0.50 (current) | 0.59 | 0.72 | 0.12 | 0.12 | ✅ (comfortable margin) |
 | 1.00 (stall) | 0.30 | 0.36 | 0.06 | 0.06 | ✅ |
 
 **Minimum feasible fraction for this representative swing: 0.40 (40%).**
-The binding joint is the **shoulder** (single MX-64R, no dual-motor benefit),
-not yaw or the elbow/wrist (MX-28T) — elbow/wrist have large margin at every
+The binding joint is the **pan** (single MX-64R, no dual-motor benefit),
+not base_pitch or the elbow/wrist (MX-28T) — elbow/wrist have large margin at every
 fraction tested here because this particular swing's angular
-acceleration/velocity combination happens to load the shoulder joint most
+acceleration/velocity combination happens to load the pan joint most
 heavily (largest moved mass at largest lever arm). A different swing
 (different direction/speed) could load a different joint hardest; this
 number is representative, not a universal guarantee for every possible
@@ -144,12 +149,12 @@ swing — the per-sample Newton-Euler check in `trajectory_within_limits`
 (already in the codebase) is what enforces this per-trajectory at runtime,
 not a single derate number.
 
-**Why the dual-motor yaw fix matters even though yaw isn't this scenario's
-bottleneck**: at fraction 0.40, if yaw were still single-motor (stall 6.0
-instead of 12.0), yaw's utilization would be `3.556 / (6.0*0.40) = 1.48` —
-**infeasible on yaw too**. The fix changes whether this exact scenario is
-even torque-feasible on yaw at the current 50% derate, independent of the
-shoulder finding above.
+**Why the dual-motor base_pitch fix matters even though base_pitch isn't this scenario's
+bottleneck**: at fraction 0.40, if base_pitch were still single-motor (stall 6.0
+instead of 12.0), base_pitch's utilization would be `3.556 / (6.0*0.40) = 1.48` —
+**infeasible on base_pitch too**. The fix changes whether this exact scenario is
+even torque-feasible on base_pitch at the current 50% derate, independent of the
+pan finding above.
 
 ## 4. Recommendation
 
@@ -178,9 +183,9 @@ shoulder finding above.
 
 ## Sources
 
-- `assets/robots/4-dof/urdf/all-4-export.urdf` (dual-motor yaw evidence)
+- `assets/robots/4-dof/urdf/all-4-export.urdf` (dual-motor base_pitch evidence)
 - `.omc/research/dynamixel-specs.md` (stall torque values, Robotis continuous-torque
   guidance, motor-joint mapping)
 - `src/planner/dynamics.rs` (`required_joint_torques`, recursive Newton-Euler)
 - `src/robot/mod.rs`, `src/robot/urdf/arm_from_urdf.rs` (the applied fix)
-- Hardware owner report (2026-07-23, this conversation): dual-motor yaw axis confirmation
+- Hardware owner report (2026-07-23, this conversation): dual-motor base_pitch axis confirmation

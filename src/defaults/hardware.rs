@@ -3,7 +3,7 @@
 use crate::hardware::dynamixel::{DynamixelConfig, MirrorSlave};
 use crate::hardware::rail::RailConfig;
 
-/// 벤치 4-dof Dynamixel + yaw 미러(ID1↔ID2).
+/// 벤치 4-dof Dynamixel + base_pitch 미러(ID1↔ID2).
 ///
 /// 기본 포트 `COM8`. 호출측/`--dxl-port`/`--port`로 덮어쓴다.
 pub fn dynamixel() -> DynamixelConfig {

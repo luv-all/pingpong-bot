@@ -241,7 +241,7 @@ impl RobotState {
         return false;
     }
 
-    /// 토크 한도(`τ_max/I`)로 목표 샘플을 추종한다 — 듀얼 yaw vs 단일 비교용.
+    /// 토크 한도(`τ_max/I`)로 목표 샘플을 추종한다 — 듀얼 base_pitch vs 단일 비교용.
     ///
     /// 관절 속도 상태 `ω`를 두고 `|α| ≤ τ_max/I`로 적분한다. 위치만 클램프하면
     /// 궤적 초반에 포화되지 않아 듀얼/단일이 같아 보인다.
@@ -392,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn dual_yaw_torque_tracks_farther_than_single() {
+    fn dual_base_pitch_torque_tracks_farther_than_single() {
         let arm = crate::defaults::primitive_4dof().expect("arm").arm;
         let start = arm.initial_state();
         let mut impact = start.joints().clone();

@@ -13,7 +13,7 @@ pub struct ControlParams {
     pub ekf_meas_jump_m: f64,
     pub max_joint_accel: f64,
     /// 관절별 토크 상한 [N·m] — [`joint_torque_limits_4dof_array`] SSOT
-    /// (stall×derate, yaw 듀얼 포함).
+    /// (stall×derate, base_pitch 듀얼 포함).
     pub max_joint_torques: [f64; 4],
     pub joint_inertia: f64,
     pub racket_open_pitch: f64,

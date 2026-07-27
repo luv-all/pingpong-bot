@@ -12,7 +12,7 @@
 | 영역 | 상태 | 비고 |
 |------|------|------|
 | 접수 평면 `HitPlane { y }` | ✅ | `DEFAULT_HIT_PLANE_Y = 0.30` |
-| 4DOF IK + 리니어 레일 | ✅ | yaw·어깨·팔꿈치·손목 |
+| 4DOF IK + 리니어 레일 | ✅ | base_pitch·pan·팔꿈치·손목 |
 | quintic 스윙 + 관절 한계 | ✅ | `planner::trajectory`, `plan_swing` |
 | 임팩트 역산 + 로프트 \(v_{out}\) | ✅ | `planner::impact` |
 | 본선 타격 = sim ground truth (기본) | ✅ | `sim.use_ground_truth=false`로 EKF control 실험 |

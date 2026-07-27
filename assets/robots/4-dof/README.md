@@ -25,11 +25,21 @@ cargo run -p pingpong-bot -- --robot 4-dof
 
 | 이름 | type | 역할 |
 |------|------|------|
-| Revolute 6 | continuous | yaw |
-| Revolute 9 | revolute | shoulder |
+| Revolute 6 | continuous | base_pitch |
+| Revolute 9 | revolute | pan |
 | Revolute 13 | revolute | elbow |
 | Revolute 18 | revolute | wrist |
 | EE | `pingpong_paddle_v5_1` | 라켓 |
+
+축 (URDF `axis`, 마운트 rpy 전부 0):
+
+- `base_pitch` — `(-1, 0, 0)` 수평. YZ평면 피치로 팔 전체를 앞뒤로 움직인다.
+- `pan` — `(0, 0, -1)` 수직. 좌우 선회.
+- `elbow` / `wrist` — `(-1, 0, 0)` 수평 피치.
+
+⚠️ `base_pitch`는 예전에 `yaw`라고 불렸으나 **축이 수평(−X)이라 yaw가 아니다** —
+실제 yaw(수직축 선회)는 `pan`이다. 2026-07-27에 정정했다. 그 이전 커밋·문서의
+"yaw"는 j0을, "shoulder"는 j1을 가리킨다.
 
 ## 실물 Dynamixel 매핑
 
@@ -37,7 +47,7 @@ URDF movable joint 순서와 모터 ID 순서는 고정이다.
 
 | URDF joint | Dynamixel ID | sign | notes |
 |------------|--------------|------|-------|
-| Revolute 6 | 1 (+ slave **2** mirrored) | -1 | yaw 듀얼: `slave_ticks = 2·zero − master` |
+| Revolute 6 | 1 (+ slave **2** mirrored) | -1 | base_pitch 듀얼: `slave_ticks = 2·zero − master` |
 | Revolute 9 | 3 | +1 | |
 | Revolute 13 | 4 | +1 | |
 | Revolute 18 | 5 | +1 | |

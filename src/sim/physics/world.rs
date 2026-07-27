@@ -966,9 +966,9 @@ impl SimWorld {
         }
     }
 
-    /// 테스트: yaw 모터 max_force를 덮어쓴다.
+    /// 테스트: base_pitch 모터 max_force를 덮어쓴다.
     #[cfg(test)]
-    pub fn set_yaw_motor_max_force_for_test(&mut self, tau0: f64) {
+    pub fn set_base_pitch_motor_max_force_for_test(&mut self, tau0: f64) {
         let mut torques = crate::defaults::control().max_joint_torques;
         torques[0] = tau0;
         self.arm_bodies
@@ -2386,13 +2386,13 @@ mod tests {
     }
 
     #[test]
-    fn dual_yaw_motor_max_force_is_double_single_in_world() {
+    fn dual_base_pitch_motor_max_force_is_double_single_in_world() {
         let arm = test_robot();
         let mut world = SimWorld::new(arm);
-        world.set_yaw_motor_max_force_for_test(12.0);
-        let dual = yaw_motor_max_force(&world);
-        world.set_yaw_motor_max_force_for_test(6.0);
-        let single = yaw_motor_max_force(&world);
+        world.set_base_pitch_motor_max_force_for_test(12.0);
+        let dual = base_pitch_motor_max_force(&world);
+        world.set_base_pitch_motor_max_force_for_test(6.0);
+        let single = base_pitch_motor_max_force(&world);
         assert!(
             (dual - 12.0).abs() < 1e-3 && (single - 6.0).abs() < 1e-3,
             "dual={dual} single={single}"
@@ -2400,7 +2400,7 @@ mod tests {
         assert!(dual > single + 1.0);
     }
 
-    fn yaw_motor_max_force(world: &SimWorld) -> f32 {
+    fn base_pitch_motor_max_force(world: &SimWorld) -> f32 {
         let handle = world.arm_bodies.joint_handles[0];
         let (mbodies, link_id) = world.multibody_joint_set.get(handle).expect("joint");
         let link = mbodies.link(link_id).expect("link");

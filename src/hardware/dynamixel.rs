@@ -23,7 +23,7 @@ pub const PROFILE_VELOCITY_REV_MIN_PER_LSB: f64 = 0.229;
 ///
 /// source: https://emanual.robotis.com/docs/en/dxl/mx/mx-28-2/, retrieved 2026-07-23.
 /// 4축 체인에서 팔꿈치·손목을 구동하는 모터(`assets/robots/4-dof/README.md` 매핑).
-/// 어깨·yaw를 구동하는 MX-64R(63 rpm@12V)보다 느려서, 단일 스칼라 `max_joint_speed`의
+/// base_pitch·pan을 구동하는 MX-64R(63 rpm@12V)보다 느려서, 단일 스칼라 `max_joint_speed`의
 /// 기준을 이 쪽으로 잡는다 — 실제 로봇에서 팔 전체는 가장 느린 관절 속도로 제약된다.
 /// 실기 버스 전압은 이 repo 어디에도 명시돼 있지 않아 Robotis 권장값(12V)을 쓴다.
 const MX28_NO_LOAD_SPEED_RPM: f64 = 55.0;
@@ -70,7 +70,7 @@ pub const DYNAMIXEL_MAX_JOINT_SPEED_RAD_S: f64 = rev_min_to_rad_s(MX28_NO_LOAD_S
 // 가정했다. 버스 전압과 감쇠 계수 모두 실측 PSU/열 데이터로 확인해야 하는
 // 가정값이다.
 
-/// 12.0V stall torque [N*m] — MX-64R (yaw, shoulder). specs.md §1.
+/// 12.0V stall torque [N*m] — MX-64R (base_pitch, pan). specs.md §1.
 pub const MX64_STALL_TORQUE_NM: f64 = 6.0;
 /// 12.0V stall torque [N*m] — MX-28T (elbow, wrist). specs.md §1.
 pub const MX28_STALL_TORQUE_NM: f64 = 2.5;
@@ -79,13 +79,13 @@ pub const CONTINUOUS_TORQUE_DERATE: f64 = 0.5;
 
 /// 4-dof 체인의 관절별 연속 토크 안전 한계 [N*m] — **SSOT**.
 ///
-/// 모터 매핑(specs.md §3): joint0=yaw=MX-64R x2(듀얼), joint1=shoulder=MX-64R,
+/// 모터 매핑(specs.md §3): joint0=base_pitch=MX-64R x2(듀얼), joint1=pan=MX-64R,
 /// joint2=elbow=MX-28T, joint3=wrist=MX-28T.
 ///
-/// joint0(yaw)만 모터 2배: URDF에서 `Rigid 4`/`Rigid 5`가 각각
+/// joint0(base_pitch)만 모터 2배: URDF에서 `Rigid 4`/`Rigid 5`가 각각
 /// `MX-64R_v1__2__1`/`MX-64R_v1__1__1`을 `base_link`에 대칭(±6.625cm) 고정하고,
-/// `Revolute 6`(yaw)은 그중 하나만 부모로 삼는다 — 나머지 한 대는 어떤 관절도
-/// 구동하지 않는 것처럼 보이지만, 실기에서는 둘이 기계적으로 결합돼 같은 yaw
+/// `Revolute 6`(base_pitch)은 그중 하나만 부모로 삼는다 — 나머지 한 대는 어떤 관절도
+/// 구동하지 않는 것처럼 보이지만, 실기에서는 둘이 기계적으로 결합돼 같은 base_pitch
 /// 축에 토크를 함께 낸다(2026-07-23, 하드웨어 담당자 확인). 운동학 모델은 이
 /// 축을 여전히 관절 1개로 다루지만 토크 예산은 2대분이어야 한다.
 pub fn joint_torque_limits_4dof() -> Vec<f64> {

@@ -119,7 +119,7 @@ pub fn table_penetration(arm: &Arm, rail_x: f64, joints: &Joints) -> f64 {
         .fold(0.0, f64::max);
 }
 
-/// 관통 시 EE를 들어 올려 재IK - 손목 open/yaw 힌트 유지.
+/// 관통 시 EE를 들어 올려 재IK - 손목 open/base_pitch 힌트 유지.
 pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
     let mut current = joints.clone();
     let wrist_index = arm.wrist_joint_index();
@@ -146,7 +146,7 @@ pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
         } else {
             arm.inverse_kinematics_near(lifted, Some(&current))
         }) else {
-            // IK 실패 시 어깨를 살짝 올려 폴백
+            // IK 실패 시 j1(pan, 수직축)을 살짝 돌려 폴백
             if current.values.len() > 1 {
                 let raised = current.values[1] + 0.08;
                 current.values[1] = arm

@@ -28,7 +28,7 @@ use crate::robot::{
 /// 맞춰 재보정 — 전폭 주파 0.305초로, 연속적인 움직임으로 보인다.
 pub const RAIL_MAX_SPEED: f64 = 5.0;
 
-/// 4-DOF 휴지(ready) 자세 [rad] — yaw, 어깨, 팔꿈치, 손목 순.
+/// 4-DOF 휴지(ready) 자세 [rad] — base_pitch, pan, 팔꿈치, 손목 순.
 ///
 /// **왜 관절 한계 중점(예전 값)이 아닌가**: 스윙 커밋 실패의 실제 병목은
 /// 임팩트 자세의 도달성이 아니라 *휴지 자세 → 임팩트 자세* 관절공간 이동에
@@ -153,7 +153,7 @@ pub fn primitive_4dof_with_mount(mount_y: f64, mount_z: f64) -> Result<Robot, Ro
 /// 프레임부터 누적한 값(전부 rpy=0이라 순수 평행이동).
 fn primitive_4dof_inertials() -> (Vec<LinkInertial>, Vec<LinkInertial>) {
     let link_inertials = vec![
-        // yaw: FR05-H101_v1__1__1
+        // base_pitch: FR05-H101_v1__1__1
         LinkInertial {
             mass: 0.05198831685263556,
             com: Point3::new(
@@ -167,7 +167,7 @@ fn primitive_4dof_inertials() -> (Vec<LinkInertial>, Vec<LinkInertial>) {
                 -0.0, 0.0, 2.6e-05,
             ),
         },
-        // shoulder: FR05-H101_v1_1
+        // pan: FR05-H101_v1_1
         LinkInertial {
             mass: 0.05198831685263556,
             com: Point3::new(
@@ -211,7 +211,7 @@ fn primitive_4dof_inertials() -> (Vec<LinkInertial>, Vec<LinkInertial>) {
         },
     ];
     let aggregated_inertials = vec![
-        // yaw child(FR05-H101) + Rigid7→FR05-B101 + Rigid7·Rigid8→MX-64R 몸체.
+        // base_pitch child(FR05-H101) + Rigid7→FR05-B101 + Rigid7·Rigid8→MX-64R 몸체.
         LinkInertial::combine(&[
             (Isometry3::identity(), link_inertials[0]),
             (
@@ -247,7 +247,7 @@ fn primitive_4dof_inertials() -> (Vec<LinkInertial>, Vec<LinkInertial>) {
                 },
             ),
         ]),
-        // shoulder child(FR05-H101) + Rigid10→arm_v9 + Rigid11→FR07-S101 + Rigid12→MX-28T 몸체.
+        // pan child(FR05-H101) + Rigid10→arm_v9 + Rigid11→FR07-S101 + Rigid12→MX-28T 몸체.
         LinkInertial::combine(&[
             (Isometry3::identity(), link_inertials[1]),
             (
