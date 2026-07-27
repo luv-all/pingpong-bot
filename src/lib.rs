@@ -60,10 +60,10 @@ pub use planner::{
     verify_impact_model,
 };
 pub use robot::{
-    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, LinkInertia, LinkInertial,
-    MountPreset, RacketPose, RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose,
-    RobotState, SerialChain, SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual,
-    UrdfLoadError, UrdfModel, is_feasible, required_torque,
+    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, LinkInertial, MountPreset,
+    RacketPose, RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose, RobotState,
+    SerialChain, SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual, UrdfLoadError,
+    UrdfModel, is_feasible, required_torque,
 };
 pub use sim::{
     BallShooterSettings, BallState, ShooterLayout, SimBallEstimator, SimRuntimeControls,

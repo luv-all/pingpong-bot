@@ -2,7 +2,6 @@
 
 pub mod bang_bang;
 pub mod collision;
-pub mod dynamics;
 pub mod impact;
 pub mod swing;
 

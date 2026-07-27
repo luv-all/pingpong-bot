@@ -3,7 +3,7 @@
 //! 측정하는 오프라인 벤치마크/프로파일링 도구.
 //!
 //! `plan_swing`(실제 게임플레이 경로, quintic 궤적)은 건드리지 않는다 — 이
-//! 도구는 그 대신 매 스텝 (`planner::dynamics::mass_matrix`/`forward_dynamics`)
+//! 도구는 그 대신 매 스텝 (`robot::dynamics::mass_matrix`/`forward_dynamics`)
 //! 로 실제 강체 동역학을 적분하면서, 관절마다 시간최적(bang-bang) 스위칭
 //! 곡선으로 토크를 명령한다. 사전에 정해둔 궤적 "모양"이 없다 — 매 틱 현재
 //! 상태에서 다시 스위칭을 계산하는 폐루프라 관절 간 결합(coupling)에도
@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use nalgebra::Vector3;
-use pingpong_bot::planner::dynamics::{forward_dynamics, mass_matrix};
+use pingpong_bot::robot::dynamics::{forward_dynamics, mass_matrix};
 use pingpong_bot::{
     Arm, Joints, MountPreset, Point3, RobotBuilder, RobotPose, defaults, rally_return_velocity,
     required_racket_velocity,

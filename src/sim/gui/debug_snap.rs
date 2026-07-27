@@ -154,30 +154,20 @@ impl SimDebugSnapshot {
         let duration = trajectory.duration_secs.max(f64::EPSILON);
         let samples = ((duration / 0.005).ceil() as usize).max(24);
         let n = arm.joint_count();
+        // aggregated_inertials는 primitive·URDF 프리셋 모두 필수로 채워져
+        // required_torque가 항상 RNEA로 계산된다 — 관성 데이터가 없어 스칼라
+        // 근사(joint_inertia * alpha)로 폴백하던 옛 경로는 이제 없다.
         let mut peaks = vec![0.0_f64; n];
-        let mut have_rnea = arm.inertias.is_some();
-        if have_rnea {
-            for k in 0..=samples {
-                let t = duration * k as f64 / samples as f64;
-                let q = trajectory.sample_at(t);
-                let qd = trajectory.sample_velocity_at(t);
-                let qdd = trajectory.sample_acceleration_at(t);
-                if let Some(tau) = crate::robot::required_torque(arm, &q.values, &qd, &qdd) {
-                    for i in 0..n {
-                        peaks[i] = f64::max(peaks[i], tau[i].abs());
-                    }
-                } else {
-                    have_rnea = false;
-                    break;
+        for k in 0..=samples {
+            let t = duration * k as f64 / samples as f64;
+            let q = trajectory.sample_at(t);
+            let qd = trajectory.sample_velocity_at(t);
+            let qdd = trajectory.sample_acceleration_at(t);
+            if let Some(tau) = crate::robot::required_torque(arm, &q.values, &qd, &qdd) {
+                for i in 0..n {
+                    peaks[i] = f64::max(peaks[i], tau[i].abs());
                 }
             }
-        }
-        if !have_rnea {
-            let alphas = trajectory.peak_joint_accelerations();
-            peaks = alphas
-                .iter()
-                .map(|&alpha| control.joint_inertia * alpha)
-                .collect();
         }
         self.torque_peak_nm = peaks.clone();
         self.torque_over = peaks

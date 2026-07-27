@@ -1,5 +1,5 @@
 //! 순수 토크 한계 기반 bang-bang 스윙 — quintic처럼 정해둔 궤적 "모양"이
-//! 없다. 매 적분 스텝 `planner::dynamics::{mass_matrix, forward_dynamics}`로
+//! 없다. 매 적분 스텝 `robot::dynamics::{mass_matrix, forward_dynamics}`로
 //! 실제 강체 동역학을 적분하면서, 관절마다 시간최적(bang-bang) 스위칭
 //! 곡선으로 토크를 명령한다. GUI에서 quintic 스윙과 육안 비교하기 위한
 //! 디버그 경로 — `plan_swing`(quintic, 실제 게임플레이 경로)은 건드리지
@@ -13,7 +13,7 @@
 
 use nalgebra::Vector3;
 
-use super::dynamics::{forward_dynamics, mass_matrix};
+use crate::robot::dynamics::{forward_dynamics, mass_matrix};
 use super::physics::{in_swing_commit_window, solve_impact_target};
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
