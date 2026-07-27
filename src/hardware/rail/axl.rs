@@ -41,12 +41,19 @@ impl AxlRail {
         }
 
         let ffi = super::axl_ffi::AxlFfi::load(&config.dll_path)?;
+        tracing::debug!(
+            dll = %config.dll_path.display(),
+            axis = config.axis,
+            irq_no = config.irq_no,
+            "AXL DLL 로드 · AxlOpenNoReset"
+        );
         // 칩 리셋 없이 열어 보드에 기록된 엔코더/명령 위치를 유지한다.
         check_axl("AxlOpenNoReset", unsafe {
             (ffi.axl_open_no_reset)(config.irq_no)
         })?;
         let mut live = AxlLive { ffi };
         live.configure(&config)?;
+        tracing::debug!(axis = config.axis, "AXL 축 설정·서보 ON 완료");
 
         return Ok(Self {
             config,
@@ -262,6 +269,7 @@ fn check_axl(name: &str, code: u32) -> Result<(), HwError> {
     if code == super::axl_ffi::AXT_RT_SUCCESS {
         return Ok(());
     }
+    tracing::debug!(axl_fn = name, code, "AXL API 실패");
     return Err(HwError::InvalidConfig {
         reason: format!("AXL {name} code={code}"),
     });

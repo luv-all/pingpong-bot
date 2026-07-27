@@ -6,7 +6,7 @@
 //! cargo run -p pingpong-bot
 //! cargo run -p pingpong-bot -- --mode real --dxl-port COM8
 //! # 샷별 launch/commit/포기 로그 (기본 info). 더 자세히:
-//! RUST_LOG=pingpong_bot=debug cargo run -p pingpong-bot
+//! cargo run -p pingpong-bot -- --debug
 //! ```
 
 use std::sync::{Arc, Mutex};
@@ -16,14 +16,14 @@ use clap::{Parser, ValueEnum};
 #[cfg(feature = "real")]
 use pingpong_bot::{Hardware, RealHardware, detector, dynamixel, rail};
 use pingpong_bot::{
-    SimRuntimeControls, SimSession, SimSessionConfig, intercept, new_shutdown_flag, physics, robot,
+    SimRuntimeControls, SimSession, SimSessionConfig, init_tracing, intercept, new_shutdown_flag,
+    physics, robot,
 };
 #[cfg(feature = "gui")]
 use pingpong_bot::{SimViewerOptions, run_sim_viewer};
 use tracing::info;
 #[cfg(not(feature = "gui"))]
 use tracing::warn;
-use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ModeArg {
@@ -41,14 +41,17 @@ struct Args {
     /// Dynamixel 포트 오버라이드 (`defaults::dynamixel().port`보다 우선).
     #[arg(long)]
     dxl_port: Option<String>,
+    /// debug 로그 (샷별 계획·하드웨어 상세).
+    #[arg(long)]
+    debug: bool,
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
-        .init();
-
     let args = Args::parse();
+    init_tracing(args.debug, &["pingpong_bot"]);
+    if args.debug {
+        info!("debug 로그 활성");
+    }
 
     match args.mode {
         ModeArg::Sim => run_sim_entry()?,

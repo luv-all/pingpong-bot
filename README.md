@@ -66,7 +66,7 @@ cargo test -p pingpong-bot --lib
 cargo run -p pingpong-bot
 
 # 로그
-RUST_LOG=debug cargo run -p pingpong-bot
+cargo run -p pingpong-bot -- --debug
 ```
 
 실행하면 Rapier 디지털 트윈(탁구대·공·로봇) + kiss3d/egui 뷰어가 뜬다.  
@@ -108,8 +108,8 @@ cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
 
 ```bash
 cargo run -p jog -- --dry-run
-cargo run -p jog -- --port COM8
-cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
+cargo run -p jog -- --port COM8 --debug
+cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8 --debug
 ```
 
 `real` 모드는 현재 Dynamixel·AXL **pose 스모크**까지다. 실캠 풀 파이프라인은 다음 단계.
