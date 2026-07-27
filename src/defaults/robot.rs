@@ -53,15 +53,27 @@ pub const READY_JOINTS_4DOF: [f64; 4] = [0.1207, 0.0, 0.1719, -0.6756];
 
 /// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·윗면 기준).
 ///
-/// `mount_search`(2026-07-26): 현 `behind=0.02`는 ratio≤1이 **0/150**, mean≈3.79.
-/// `behind=0.10`(height=0.05)는 **10/150**, mean≈2.48 — 임팩트 끝속도 스케일
-/// (`NEAR_SINGULARITY` 2.5) 직전에 들어와 약한 스윙을 줄인다. 더 뒤(0.12)도
-/// 비슷하나, 예전 고원(`base_y` −0.10..−0.02)의 바깥쪽 끝을 고름.
-/// height 0.05는 실기 브래킷(~면 위 3~5cm)과 맞춤. 슈터는 `shot_tune`으로 재확인.
+/// **실측: 끝면 뒤 20 cm, 윗면 위 20 cm.** 이 값은 튜닝 대상이 아니라 실기
+/// 형상이다 — 바꾸려면 브래킷을 다시 만들어야 한다.
+///
+/// 2026-07-26에 `mount_search`의 feasibility 지표(`behind=0.10`/`height=0.05`가
+/// 10/150, mean ratio 2.48)만 보고 `0.10 / 0.05`로 덮어썼던 적이 있다
+/// (`73416ed`). 아래 테스트 기대값까지 같이 고쳐서 회귀로도 안 잡혔다.
+/// 2026-07-27에 원복 — 이유:
+///
+/// - **eval 이득이 0이었다.** 시뮬 마운트 30/90, 실측 마운트 30/90.
+/// - **ratio는 오히려 실측 쪽이 낫다.** 실측에서 `peak_joint_speed_ratio`가
+///   1.52~1.82로 `NEAR_SINGULARITY_SPEED_RATIO`(2.5) 아래라 균일 스케일이
+///   아예 안 걸린다. 시뮬 마운트에서는 2.55~2.64라 0.38×로 깎였다.
+/// - 실기 형상을 시뮬 점수에 맞춰 바꾸는 건 방향이 거꾸로다.
+///
+/// ⚠️ 단독 원복은 `cleared_net`을 30→10으로 떨어뜨린다. `intercept()` 접수창과
+/// `READY_JOINTS_4DOF`가 아직 시뮬 마운트에 맞춰져 있어서다 — 세트로 재적합해야
+/// 한다(플랜 §4-E). 근거: `docs/superpowers/plans/2026-07-27-return-power.md` §3.5.
 pub fn rail_frame() -> RailFrame {
     return RailFrame {
-        behind_table_end: 0.10,
-        above_table: 0.05,
+        behind_table_end: 0.20,
+        above_table: 0.20,
     };
 }
 
@@ -432,10 +444,11 @@ mod tests {
 
     #[test]
     fn rail_frame_mounts_behind_and_above_table() {
+        // 실측 형상 — 시뮬 지표에 맞춰 고치지 말 것 (`rail_frame` 주석 참고).
         let frame = rail_frame();
-        assert!((frame.mount_y() - (-0.10)).abs() < 1e-12);
-        assert!((frame.mount_z() - (table::SURFACE_Z + 0.05)).abs() < 1e-12);
-        assert_eq!(frame.mount_xyz0(), [0.0, -0.10, table::SURFACE_Z + 0.05]);
+        assert!((frame.mount_y() - (-0.20)).abs() < 1e-12);
+        assert!((frame.mount_z() - (table::SURFACE_Z + 0.20)).abs() < 1e-12);
+        assert_eq!(frame.mount_xyz0(), [0.0, -0.20, table::SURFACE_Z + 0.20]);
     }
 
     #[test]
