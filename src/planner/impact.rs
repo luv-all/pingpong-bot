@@ -40,18 +40,36 @@ pub fn rally_return_velocity(impact: Point3, _v_in: Vector3<f64>) -> Vector3<f64
 /// `fit_end_velocity` 균일 스케일로 법선까지 같이 깎였다. 횡방향 조준은
 /// 라켓 면 방향(IK)에 맡기고, 스윙 속도는 법선 + 네트 클리어용 올려치기만
 /// 책임진다.
-pub fn required_racket_velocity(
+/// 필요한 라켓 속도를 **필수 법선 성분**과 **선택 리프트 성분**으로 나눠 준다.
+///
+/// 임팩트 모델은 접선을 건드리지 않으므로 \(v_{\mathrm{out}} - v_{\mathrm{in}}\)은
+/// 항상 \(n\)에 평행하다. 즉 **`v_out`을 실제로 결정하는 건 법선 성분뿐이고**,
+/// 리프트는 [`verify_impact_model`]이 검사하는 식에 아예 들어가지 않는다
+/// (Rapier 접선 마찰로만 2차 효과가 남는다).
+///
+/// 그런데 최소노름 속도 IK는 제곱노름을 최소화하므로, 두 성분을 합쳐 통째로
+/// 넘기면 관절 예산이 **크기 비율의 제곱으로** 배분된다. 실측(2026-07-27,
+/// `tests/diag_weak_return.rs`): 법선 1.070 / 리프트 1.157 → 예산의 54%가
+/// 기여 0인 축으로 갔고, 부풀려진 피크 관절속도 때문에 균일 스케일이 걸려
+/// **정작 유효한 법선 성분까지 0.178 m/s로 뭉개졌다**(필요치의 1/6).
+///
+/// 그래서 둘을 분리해 돌려준다. 호출부는 법선을 온전히 확보한 뒤 관절 예산이
+/// 남는 만큼만 리프트를 실으면 된다 — 속도 IK가 `v_r`에 대해 선형이라
+/// \(\dot q(a + \alpha b) = \dot q(a) + \alpha\,\dot q(b)\)가 정확히 성립한다.
+pub fn required_racket_velocity_parts(
     v_in: Vector3<f64>,
     v_out: Vector3<f64>,
     normal: Vector3<f64>,
     restitution: f64,
-) -> Result<Vector3<f64>, SwingPlanError> {
+) -> Result<(Vector3<f64>, Vector3<f64>), SwingPlanError> {
+    let unreachable = || SwingPlanError::ReturnVelocityUnreachable {
+        incoming_velocity: vector3_to_array(v_in),
+        outgoing_velocity: vector3_to_array(v_out),
+    };
+
     let n = normal.normalize();
     if n.norm() < f64::EPSILON {
-        return Err(SwingPlanError::ReturnVelocityUnreachable {
-            incoming_velocity: vector3_to_array(v_in),
-            outgoing_velocity: vector3_to_array(v_out),
-        });
+        return Err(unreachable());
     }
 
     let v_in_n = v_in.dot(&n);
@@ -59,17 +77,27 @@ pub fn required_racket_velocity(
     let v_r_n = (v_out_n + restitution * v_in_n) / (1.0 + restitution);
 
     if !v_r_n.is_finite() {
-        return Err(SwingPlanError::ReturnVelocityUnreachable {
-            incoming_velocity: vector3_to_array(v_in),
-            outgoing_velocity: vector3_to_array(v_out),
-        });
+        return Err(unreachable());
     }
 
     let v_out_t = v_out - n * v_out_n;
     // 월드 수직 성분만 접선 요구에 남긴다 (올려치기). 수평 접선은 버린다.
     let lift_t = Vector3::new(0.0, 0.0, v_out_t.z);
     let lift_t = lift_t - n * lift_t.dot(&n);
-    return Ok(n * v_r_n + lift_t);
+    return Ok((n * v_r_n, lift_t));
+}
+
+/// [`required_racket_velocity_parts`]의 두 성분 합 — 예산을 나눠 쓸 필요가
+/// 없는 호출부(검증·진단·테스트)용.
+pub fn required_racket_velocity(
+    v_in: Vector3<f64>,
+    v_out: Vector3<f64>,
+    normal: Vector3<f64>,
+    restitution: f64,
+) -> Result<Vector3<f64>, SwingPlanError> {
+    let (normal_part, lift_part) =
+        required_racket_velocity_parts(v_in, v_out, normal, restitution)?;
+    return Ok(normal_part + lift_part);
 }
 
 /// v_in, v_out, normal, e 가 임팩트 모델과 맞는지 본다.
