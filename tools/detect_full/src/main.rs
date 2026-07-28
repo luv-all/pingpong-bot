@@ -104,6 +104,33 @@ fn appearance_steps(
     return Ok((px, cm_full, cas_full));
 }
 
+fn nonzero_bgr(bgr: &Mat) -> i32 {
+    let mut gray = Mat::default();
+    if imgproc::cvt_color(
+        bgr,
+        &mut gray,
+        imgproc::COLOR_BGR2GRAY,
+        0,
+        opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
+    )
+    .is_err()
+    {
+        return 0;
+    }
+    return opencv::core::count_non_zero(&gray).unwrap_or(0);
+}
+
+fn panel_debug(img: &mut Mat, lines: &[impl AsRef<str>], color: Scalar) -> Result<()> {
+    draw_debug_lines(img, lines, color).map_err(Into::into)
+}
+
+fn px_line(tag: &str, pixel: Option<PixelPoint>, r_eq: f64) -> String {
+    return match pixel {
+        Some(p) => format!("{tag}  px=({:.1},{:.1})  r~{:.0}", p.x, p.y, r_eq),
+        None => format!("{tag}  miss"),
+    };
+}
+
 fn handle_tune_key(detector: &mut RoiTrack, key: i32) -> bool {
     let p = &mut detector.params;
     let handled = match key {
@@ -289,28 +316,6 @@ fn main() -> Result<()> {
             "4 roi-off"
         };
 
-        draw_cam_label(&mut raw, "0 raw", Scalar::new(255.0, 255.0, 255.0, 0.0))?;
-        draw_cam_label(
-            &mut mask_panel,
-            "1 floor-mask",
-            Scalar::new(255.0, 255.0, 0.0, 0.0),
-        )?;
-        draw_cam_label(
-            &mut cm_panel,
-            "2 colormask",
-            Scalar::new(0.0, 255.0, 0.0, 0.0),
-        )?;
-        draw_cam_label(
-            &mut ct_panel,
-            "3 +contour",
-            Scalar::new(255.0, 128.0, 0.0, 0.0),
-        )?;
-        draw_cam_label(
-            &mut roi_panel,
-            roi_label,
-            Scalar::new(0.0, 255.0, 255.0, 0.0),
-        )?;
-
         let hit_rate = if n == 0 {
             0.0
         } else {
@@ -320,31 +325,103 @@ fn main() -> Result<()> {
             .last_area()
             .map(|a| (a / std::f64::consts::PI).sqrt())
             .unwrap_or(0.0);
-        // Hershey = ASCII only. HUD는 첫 패널(raw)에만.
-        let lines = [
-            detector.to_string(),
-            format!(
-                "area=[{:.0},{:.0}]",
-                scorer_params.min_area_px, scorer_params.max_area_px
-            ),
-            match pixel {
-                Some(p) => format!(
-                    "{}  px=({:.1},{:.1})  r~{:.0}  raw->mask->cm->ct->roi",
-                    if detector.roi.used_roi { "roi" } else { "full" },
-                    p.x,
-                    p.y,
-                    r_eq
-                ),
-                None => "miss".to_string(),
-            },
-            format!("hits={hits}/{}  ({hit_rate:.0}%)", n + 1),
-        ];
-        draw_debug_lines(&mut raw, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        let mode = if detector.roi.used_roi {
+            "roi"
+        } else if detector.roi.roi_enabled {
+            "acquire"
+        } else {
+            "full"
+        };
+        let mark = step_px.or(pixel);
+        let cm_nz = nonzero_bgr(&cm_panel);
+        let ct_nz = nonzero_bgr(&ct_panel);
+        let keep_nz = opencv::core::count_non_zero(&detector.mask.keep).unwrap_or(0);
+        let total_px = detector.mask.width.saturating_mul(detector.mask.height).max(1);
+        let cut_pct = 100.0 * f64::from(total_px - keep_nz) / f64::from(total_px);
+
+        // BGR: white / cyan / green / orange / yellow
+        let white = Scalar::new(255.0, 255.0, 255.0, 0.0);
+        let cyan = Scalar::new(255.0, 255.0, 0.0, 0.0);
+        let green = Scalar::new(0.0, 255.0, 0.0, 0.0);
+        let orange = Scalar::new(0.0, 140.0, 255.0, 0.0);
+        let yellow = Scalar::new(0.0, 255.0, 255.0, 0.0);
+
+        // 패널별 HUD (좌상단). 키 안내는 raw만.
+        panel_debug(
+            &mut raw,
+            &[
+                format!("cam{}  {detector}", cam_id.0),
+                px_line(mode, pixel, r_eq),
+                format!("hits={hits}/{}  ({hit_rate:.0}%)", n + 1),
+            ],
+            white,
+        )?;
         draw_help_lines(
             &mut raw,
             &["r ROI | [/] k | ,/. m | -/= pad | p paste | q quit"],
             Scalar::new(0.0, 255.0, 80.0, 0.0),
         )?;
+
+        panel_debug(
+            &mut mask_panel,
+            &[
+                "floor-edge keep".to_string(),
+                format!(
+                    "edge y=({:.0},{:.0})",
+                    detector.mask.line_y_at_left, detector.mask.line_y_at_right
+                ),
+                format!("cut={cut_pct:.0}%  keep={keep_nz}/{total_px}"),
+            ],
+            cyan,
+        )?;
+
+        panel_debug(
+            &mut cm_panel,
+            &[
+                "color gate".to_string(),
+                format!("nz={cm_nz}"),
+                px_line("step", mark, r_eq),
+            ],
+            green,
+        )?;
+
+        panel_debug(
+            &mut ct_panel,
+            &[
+                "color ^ edges".to_string(),
+                format!(
+                    "nz={ct_nz}  area=[{:.0},{:.0}]",
+                    scorer_params.min_area_px, scorer_params.max_area_px
+                ),
+                format!("circ>={:.2}", scorer_params.min_circularity),
+                px_line("pick", mark, r_eq),
+            ],
+            orange,
+        )?;
+
+        let roi_hud = match detector.roi.last_roi {
+            Some(r) => format!("box={}x{} @({},{})", r.width, r.height, r.x, r.y),
+            None => "box=full-frame".to_string(),
+        };
+        panel_debug(
+            &mut roi_panel,
+            &[
+                format!("{mode}  half={}", detector.roi.half_px),
+                format!(
+                    "k={:.1} m={:.1} pad={}",
+                    detector.roi.params.k, detector.roi.params.m, detector.roi.params.pad
+                ),
+                roi_hud,
+                px_line("det", pixel, r_eq),
+            ],
+            yellow,
+        )?;
+
+        draw_cam_label(&mut raw, "0 raw", white)?;
+        draw_cam_label(&mut mask_panel, "1 floor-mask", cyan)?;
+        draw_cam_label(&mut cm_panel, "2 colormask", green)?;
+        draw_cam_label(&mut ct_panel, "3 +contour", orange)?;
+        draw_cam_label(&mut roi_panel, roi_label, yellow)?;
 
         // 읽는 순서 = 파이프라인: 0→1→2 / 3→4
         let top = hstack_bgr(&[raw, mask_panel, cm_panel])?;
