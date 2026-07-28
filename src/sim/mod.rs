@@ -2,7 +2,10 @@
 //!
 //! - [`physics`]: 탁구대·슈터·로봇 라켓·공
 //! - [`session`]: 물리 스레드 + 공유 월드
-//! - [`gui`]: kiss3d 3D + egui 슈터 패널 (feature `gui`)
+//! - [`gui`]: kiss3d 3D + egui (feature `gui`)
+//!   - 레이어 R/W: `BallHandle` / `RobotHandle` / `ShooterHandle`
+//!   - 호스트: `run_scene_host` (table + optional layers)
+//!   - 풀 패널: `run_sim_viewer`
 
 pub mod eval_protocol;
 pub mod gui;
@@ -16,7 +19,11 @@ pub use eval_protocol::{
 };
 pub use gui::{CommitPhase, DebugOverlays, SimDebugSnapshot};
 #[cfg(feature = "gui")]
-pub use gui::{SimViewerOptions, run_sim_viewer};
+pub use gui::{
+    BallHandle, BallOnlyViewerOptions, BallVisual, RobotHandle, SceneHostOptions, SceneLayers,
+    SceneLayersBuilder, ShooterHandle, SimScene, SimSceneBuilder, SimViewerOptions,
+    TableSceneOptions, build_table_scene, run_ball_only_viewer, run_scene_host, run_sim_viewer,
+};
 pub use physics::{ArmMultibody, BallShooterSettings, BallState, ShooterLayout, SimWorld};
 pub use session::{
     SimBallEstimator, SimRuntimeControls, SimSession, SimSessionConfig, new_shutdown_flag,

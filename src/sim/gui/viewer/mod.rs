@@ -1,22 +1,27 @@
 //! kiss3d 3D + egui — Rapier sim 월드와 슈터 패널 (macOS: 메인 스레드 단일 창).
+//!
+//! 탁구대·공 비주얼은 [`super::scene`] 공유 API. 로봇·슈터·디버그·egui만 여기에 둔다.
+
+mod mesh_loader;
+mod panel;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, Instant};
 
+use crate::Point3;
 use crate::SwingPlanError;
+use crate::constants::table;
 use crate::constants::viewer::{
     CAMERA_DIST_DEFAULT, CAMERA_DIST_MAX, CAMERA_DIST_MIN, HIT_PLANE_WALL_HEIGHT,
 };
-use crate::constants::{ball, table};
 use kiss3d::prelude::*;
 use rapier3d::prelude::{Rotation, Vector};
 use tracing::info;
 
-use super::debug_overlays::{DebugOverlays, colors};
-use super::debug_snap::CommitPhase;
-use super::mesh_loader;
-use super::panel;
+use super::debug::overlays::{DebugOverlays, colors};
+use super::debug::snap::CommitPhase;
+use super::scene::{BallVisual, HIDDEN, TableSceneOptions, build_table_scene};
 use crate::robot::urdf::{UrdfLinkVisual, UrdfModel};
 use crate::sim::physics::shooter::{RANDOM_SHOT_TARGET_PADDING_M, ShooterLayout};
 use crate::sim::physics::world::SimWorld;
@@ -66,7 +71,6 @@ pub fn lock_world_for_frame(world: &Mutex<SimWorld>) -> Option<MutexGuard<'_, Si
     }
 }
 
-const HIDDEN: Vec3 = Vec3::new(0.0, 0.0, -10.0);
 const ARC_NODE_COUNT: usize = 48;
 const GHOST_NODE_COUNT: usize = 32;
 const OBB_NODE_COUNT: usize = 8;
@@ -116,8 +120,7 @@ enum RobotRender {
 }
 
 struct SceneDynamics {
-    ball: SceneNode3d,
-    ball_color: Color,
+    ball: BallVisual,
     shooter: SceneNode3d,
     robot: RobotRender,
     /// hit plane 예측 3D 위치 (공 비행 중 디버그)
@@ -161,7 +164,7 @@ async fn viewer_main(options: SimViewerOptions) -> Result<(), String> {
         .add_light(Light::directional(Vec3::new(-0.3, -0.4, -1.0)))
         .set_color(WHITE);
 
-    build_static_scene(&mut scene);
+    build_table_scene(&mut scene, &TableSceneOptions::default());
     let mut dynamic = build_scene_dynamics(&mut scene, options.urdf.as_deref());
 
     let controls = Arc::clone(&options.controls);
@@ -240,243 +243,12 @@ async fn viewer_main(options: SimViewerOptions) -> Result<(), String> {
     return Ok(());
 }
 
-fn build_static_scene(scene: &mut SceneNode3d) {
-    let tw = table::WIDTH_X as f32;
-    let tl = table::LENGTH_Y as f32;
-    let tcx = tw * 0.5;
-    let tcy = tl * 0.5;
-    let thick = table::HALF_THICKNESS as f32 * 2.0;
-    let surface_z = table::SURFACE_Z as f32;
-    let table_z = surface_z - thick * 0.5;
-
-    // 상판 — ITTF 블루에 가까운 딥 블루그린
-    let top = Color::new(0.05, 0.32, 0.48, 1.0);
-    let apron = Color::new(0.08, 0.10, 0.12, 1.0);
-    let line = Color::new(0.96, 0.96, 0.94, 1.0);
-    let metal = Color::new(0.42, 0.44, 0.47, 1.0);
-    let foot = Color::new(0.18, 0.18, 0.20, 1.0);
-
-    scene
-        .add_cube(tw, tl, thick)
-        .set_color(top)
-        .set_position(Vec3::new(tcx, tcy, table_z));
-
-    // 상판 아래 에이프런(가장자리 띠)
-    let apron_h = 0.04_f32;
-    let apron_t = 0.018_f32;
-    let apron_z = surface_z - thick - apron_h * 0.5;
-    scene
-        .add_cube(tw, apron_t, apron_h)
-        .set_color(apron)
-        .set_position(Vec3::new(tcx, apron_t * 0.5, apron_z));
-    scene
-        .add_cube(tw, apron_t, apron_h)
-        .set_color(apron)
-        .set_position(Vec3::new(tcx, tl - apron_t * 0.5, apron_z));
-    scene
-        .add_cube(apron_t, tl, apron_h)
-        .set_color(apron)
-        .set_position(Vec3::new(apron_t * 0.5, tcy, apron_z));
-    scene
-        .add_cube(apron_t, tl, apron_h)
-        .set_color(apron)
-        .set_position(Vec3::new(tw - apron_t * 0.5, tcy, apron_z));
-
-    add_table_court_lines(scene, tw, tl, tcx, tcy, surface_z, line);
-    add_table_legs(scene, tw, tl, surface_z - thick, metal, foot);
-    add_net_cloth(scene, tcx, tcy);
-
-    scene
-        .add_cube(tw * 1.2, tl * 1.2, 0.02)
-        .set_color(Color::new(0.22, 0.23, 0.25, 1.0))
-        .set_position(Vec3::new(tcx, tcy, 0.01));
-
-    let frame = crate::defaults::rail_frame();
-    let rail_y = frame.mount_y() as f32;
-    let rail_h = crate::constants::geometry::RAIL_VISUAL_HEIGHT as f32;
-    let rail_w = crate::constants::geometry::RAIL_VISUAL_WIDTH as f32;
-    let rail_z = frame.mount_z() as f32 - rail_h * 0.5;
-    scene
-        .add_cube(tw, rail_w, rail_h)
-        .set_color(Color::new(0.35, 0.38, 0.42, 1.0))
-        .set_position(Vec3::new(tcx, rail_y, rail_z));
-
-    // 테이블 로봇쪽 코너 윗면 = 월드 (0, 0, SURFACE_Z)
-    let axis_origin = Vec3::new(0.0, 0.0, surface_z);
-    add_axis_arrow(
-        scene,
-        axis_origin,
-        Vec3::X,
-        Color::new(0.95, 0.2, 0.15, 1.0),
-    );
-    add_axis_arrow(
-        scene,
-        axis_origin,
-        Vec3::Y,
-        Color::new(0.2, 0.85, 0.25, 1.0),
-    );
-    add_axis_arrow(
-        scene,
-        axis_origin,
-        Vec3::Z,
-        Color::new(0.25, 0.45, 1.0, 1.0),
-    );
-}
-
-/// ITTF식 백선: 외곽(~20mm) + 중앙 세로선(~3mm). 살짝 띄워 z-fighting 방지.
-fn add_table_court_lines(
-    scene: &mut SceneNode3d,
-    tw: f32,
-    tl: f32,
-    tcx: f32,
-    tcy: f32,
-    surface_z: f32,
-    line: Color,
-) {
-    let z = surface_z + 0.0015;
-    let border = 0.020_f32;
-    let center_w = 0.004_f32;
-    let h = 0.0012_f32;
-
-    // 엔드라인 (Y=0 / Y=L)
-    scene
-        .add_cube(tw, border, h)
-        .set_color(line)
-        .set_position(Vec3::new(tcx, border * 0.5, z));
-    scene
-        .add_cube(tw, border, h)
-        .set_color(line)
-        .set_position(Vec3::new(tcx, tl - border * 0.5, z));
-    // 사이드라인 (X=0 / X=W) — 코너 이중칠 피하려고 안쪽 길이만
-    let side_len = (tl - 2.0 * border).max(0.01);
-    scene
-        .add_cube(border, side_len, h)
-        .set_color(line)
-        .set_position(Vec3::new(border * 0.5, tcy, z));
-    scene
-        .add_cube(border, side_len, h)
-        .set_color(line)
-        .set_position(Vec3::new(tw - border * 0.5, tcy, z));
-    // 중앙선 (복식 서비스 라인, X 중앙 · Y 방향)
-    scene
-        .add_cube(center_w, tl - 2.0 * border, h)
-        .set_color(line)
-        .set_position(Vec3::new(tcx, tcy, z));
-}
-
-fn add_table_legs(
-    scene: &mut SceneNode3d,
-    tw: f32,
-    tl: f32,
-    top_underside_z: f32,
-    metal: Color,
-    foot: Color,
-) {
-    let inset = 0.12_f32;
-    let leg_w = 0.045_f32;
-    let foot_h = 0.025_f32;
-    let leg_h = (top_underside_z - foot_h).max(0.05);
-    let leg_z = foot_h + leg_h * 0.5;
-    let xs = [inset, tw - inset];
-    let ys = [inset, tl - inset];
-
-    for &x in &xs {
-        for &y in &ys {
-            scene
-                .add_cube(leg_w, leg_w, leg_h)
-                .set_color(metal)
-                .set_position(Vec3::new(x, y, leg_z));
-            scene
-                .add_cube(leg_w * 1.6, leg_w * 1.6, foot_h)
-                .set_color(foot)
-                .set_position(Vec3::new(x, y, foot_h * 0.5));
-        }
-    }
-
-    // 짧은 쪽·긴 쪽 가로 보강대
-    let brace_z = foot_h + leg_h * 0.28;
-    let brace_t = 0.022_f32;
-    for &y in &ys {
-        scene
-            .add_cube(tw - 2.0 * inset, brace_t, brace_t)
-            .set_color(metal)
-            .set_position(Vec3::new(tw * 0.5, y, brace_z));
-    }
-    for &x in &xs {
-        scene
-            .add_cube(brace_t, tl - 2.0 * inset, brace_t)
-            .set_color(metal)
-            .set_position(Vec3::new(x, tl * 0.5, brace_z));
-    }
-}
-
-/// 네트 외관 — 격자 cloth 메쉬 (물리 soft body 아님; Rapier는 soft 실체 판).
-fn add_net_cloth(scene: &mut SceneNode3d, table_cx: f32, table_cy: f32) {
-    let net_h = table::NET_HEIGHT as f32;
-    let net_w = table::WIDTH_X as f32;
-    let z0 = table::SURFACE_Z as f32;
-    // 실물 네트: 짙은 녹색 그물 + 흰 상단 테이프 + 검은 포스트
-    let cord = Color::new(0.12, 0.28, 0.18, 0.88);
-    let post = Color::new(0.10, 0.10, 0.11, 1.0);
-    let tape = Color::new(0.94, 0.94, 0.92, 0.98);
-
-    let post_t = 0.014_f32;
-    for x in [0.0_f32, net_w] {
-        scene
-            .add_cube(post_t, post_t, net_h + 0.02)
-            .set_color(post)
-            .set_position(Vec3::new(x, table_cy, z0 + net_h * 0.5));
-    }
-    scene
-        .add_cube(net_w, 0.008, 0.014)
-        .set_color(tape)
-        .set_position(Vec3::new(table_cx, table_cy, z0 + net_h - 0.007));
-
-    const NX: usize = 22;
-    const NZ: usize = 8;
-    let cord_t = 0.0025_f32;
-    for i in 0..=NX {
-        let x = net_w * (i as f32) / (NX as f32);
-        scene
-            .add_cube(cord_t, cord_t, net_h - 0.014)
-            .set_color(cord)
-            .set_position(Vec3::new(x, table_cy, z0 + (net_h - 0.014) * 0.5));
-    }
-    for j in 1..NZ {
-        let z = z0 + net_h * (j as f32) / (NZ as f32);
-        scene
-            .add_cube(net_w, cord_t, cord_t)
-            .set_color(cord)
-            .set_position(Vec3::new(table_cx, table_cy, z));
-    }
-}
-
-fn add_axis_arrow(scene: &mut SceneNode3d, origin: Vec3, direction: Vec3, color: Color) {
-    let dir = direction.normalize();
-    let length = 0.32_f32;
-    let tip_h = 0.07_f32;
-    let shaft_h = length - tip_h;
-    let rot = Quat::from_rotation_arc(Vec3::Y, dir);
-    scene
-        .add_cylinder(0.010, shaft_h)
-        .set_color(color)
-        .set_position(origin + dir * (shaft_h * 0.5))
-        .set_rotation(rot);
-    scene
-        .add_cone(0.024, tip_h)
-        .set_color(color)
-        .set_position(origin + dir * (shaft_h + tip_h * 0.5))
-        .set_rotation(rot);
-}
-
 fn rgba(c: [f32; 4]) -> Color {
     return Color::new(c[0], c[1], c[2], c[3]);
 }
 
 fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfModel>) -> SceneDynamics {
-    // 시합용 주황 공에 가깝게 (네온 주황 대신 매트 톤)
-    let ball_color = Color::new(0.92, 0.48, 0.12, 1.0);
-    let ball = scene.add_sphere(ball::RADIUS as f32).set_color(ball_color);
+    let ball = BallVisual::spawn(scene);
     let shooter = scene
         .add_cube(
             ShooterLayout::VISUAL_SIZE_X as f32,
@@ -577,7 +349,6 @@ fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfModel>) -> Sc
 
     return SceneDynamics {
         ball,
-        ball_color,
         shooter,
         robot,
         impact_marker,
@@ -699,13 +470,15 @@ fn sync_scene_dynamics(
     debug: &DebugOverlays,
 ) {
     let ball = world.ball_position();
-    nodes.ball.set_position(to_vec3(ball));
+    nodes
+        .ball
+        .set_world_position(Point3::new(ball.x as f64, ball.y as f64, ball.z as f64));
 
     let net_fail = debug.net_gate && world.debug_snap().net_gate_ok == Some(false);
     if net_fail {
         nodes.ball.set_color(rgba(colors::NET_FAIL));
     } else {
-        nodes.ball.set_color(nodes.ball_color);
+        nodes.ball.restore_color();
     }
 
     let (sh_pos, sh_rot) = world.shooter_pose();

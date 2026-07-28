@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use kiss3d::egui;
 
-use super::debug_overlays::DebugOverlays;
-use super::debug_snap::CommitPhase;
+use super::super::debug::overlays::DebugOverlays;
+use super::super::debug::snap::CommitPhase;
 use crate::Prediction;
 use crate::constants::viewer::{CAMERA_DIST_DEFAULT, CAMERA_DIST_MAX, CAMERA_DIST_MIN};
 use crate::defaults;
@@ -31,7 +31,7 @@ pub fn ensure_korean_fonts(ctx: &egui::Context) {
     fonts.font_data.insert(
         "NanumGothic".to_owned(),
         egui::FontData::from_static(include_bytes!(
-            "../../../assets/fonts/NanumGothic-Regular.ttf"
+            "../../../../assets/fonts/NanumGothic-Regular.ttf"
         ))
         .into(),
     );

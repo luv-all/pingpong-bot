@@ -83,5 +83,9 @@ pub use sim::{
     SimSession, SimSessionConfig, SimWorld, new_shutdown_flag,
 };
 #[cfg(feature = "gui")]
-pub use sim::{SimViewerOptions, run_sim_viewer};
+pub use sim::{
+    BallHandle, BallOnlyViewerOptions, BallVisual, RobotHandle, SceneHostOptions, SceneLayers,
+    ShooterHandle, SimScene, SimSceneBuilder, SimViewerOptions, TableSceneOptions,
+    build_table_scene, run_ball_only_viewer, run_scene_host, run_sim_viewer,
+};
 pub use telemetry::{Telemetry, TelemetryEvent, TracingTelemetry};

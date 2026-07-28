@@ -72,6 +72,30 @@ cargo run -p pingpong-bot -- --debug
 실행하면 Rapier 디지털 트윈(탁구대·공·로봇) + kiss3d/egui 뷰어가 뜬다.  
 슈터 GUI로 발사하고, 기본은 월드 ground-truth로 스윙을 커밋한다.
 
+툴용으로 같은 탁구대 씬을 **레이어로 조립**한다 (`feature = "gui"`, [`src/sim/gui/`](src/sim/gui/)):
+
+| 폴더 | 역할 |
+|------|------|
+| `host/` | `SimScene` 빌더 + `run` |
+| `layers/` | `BallHandle` / `RobotHandle` / `ShooterHandle` 원시 R/W |
+| `scene/` | `build_table_scene` · `BallVisual` |
+| `viewer/` | 풀 sim egui (panel · mesh) |
+| `debug/` | overlays · snap |
+
+```rust
+let scene = SimScene::builder().with_ball().build();
+scene.ball().unwrap().set_position(Some(xyz)); // 같은 핸들
+scene.run(shutdown)?;
+```
+
+| 조합 | 빌더 |
+|------|------|
+| verify | `.with_ball()` |
+| jog | `.with_robot(world)` |
+| 메인 | `.with_ball_from_world(w).with_robot(w).with_shooter(c, Some(w)).enable_panel(true)` |
+
+jog의 `ik`/`pose`/`swing` 등은 툴이 궤적·포즈로 만든 뒤 `scene.robot().unwrap().play(...)` 에 넣는다.
+
 ---
 
 ## 앱 기본값 — [`src/defaults/`](src/defaults/)
