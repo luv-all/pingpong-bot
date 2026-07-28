@@ -13,9 +13,9 @@
 ## 사용
 
 ```bash
-cargo run -p tune-colormask                 # --device 0
-cargo run -p tune-colormask -- --space hsv
-cargo run -p tune-colormask -- --device 0 --margin 5
+cargo run -p tune-colormask                 # --cam left + SSOT 스트림
+cargo run -p tune-colormask -- --cam left --space hsv
+cargo run -p tune-colormask -- --cam left --margin 5
 cargo run -p tune-colormask -- --path clip.mp4
 ```
 

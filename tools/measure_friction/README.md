@@ -6,12 +6,12 @@
 ## 영상 (권장)
 
 ```bash
-# 캡처 모드: --calibration 필수 (미지정 device면 0,1)
+# 캡처 모드: --calibration 필수 (기본 --cam left,right)
 cargo run -p measure-friction -- --calibration calibration.json
 
 cargo run -p measure-friction -- \
   --calibration calibration.json \
-  --device 0 --device 1
+  --cam left,right
 
 cargo run -p measure-friction -- \
   --calibration calibration.json \

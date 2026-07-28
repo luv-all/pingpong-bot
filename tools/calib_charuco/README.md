@@ -13,7 +13,7 @@ ChArUco **인터랙티브** 보정. 라이브(또는 영상)에서 코너를 눈
 ## 기본 (캡처 → 확인 → 보정)
 
 ```bash
-cargo run -p calib-charuco -- --device 0
+cargo run -p calib-charuco -- --cam left
 # -o 생략 시 calibration.json
 ```
 
@@ -27,11 +27,11 @@ cargo run -p calib-charuco -- --device 0
 초록 마커 + 마젠타 ChArUco 코너가 보드를 따라가면 저장, 아니면 `n`.
 
 ```bash
-cargo run -p calib-charuco -- --device 0 \
+cargo run -p calib-charuco -- --cam left \
   --images-dir ./boards/cam0 --min-frames 12 -o cam0.json
 
 # 녹화본으로 같은 UX
-cargo run -p calib-charuco -- --path capture.mp4 --camera-id 1 -o cam1.json
+cargo run -p calib-charuco -- --path capture.mp4 --cam right -o cam1.json
 ```
 
 ## 보조

@@ -13,9 +13,9 @@ use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CameraId, ColorSpace, ColormaskParams, FrameSource, ImageDirSource, OpenCvCapture,
-    PixelPickMouse, PixelPoint, PreviewAction, destroy_window, draw_cam_label, draw_circle_px,
-    draw_debug_lines, draw_help_lines, draw_pixel_loupe, hstack_bgr, show_bgr,
+    ColorSpace, ColormaskParams, FrameSource, ImageDirSource, OpenCvCapture, PixelPickMouse,
+    PixelPoint, PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
+    draw_help_lines, draw_pixel_loupe, hstack_bgr, show_bgr,
 };
 
 use cli::Args;
@@ -77,26 +77,23 @@ impl ChannelRange {
 }
 
 fn open_source(args: &Args) -> Result<Box<dyn FrameSource>> {
+    let cam_id = args.cam.camera_id().map_err(anyhow::Error::msg)?;
     if let Some(images) = &args.images {
         return Ok(Box::new(
-            ImageDirSource::open(CameraId(0), images)
+            ImageDirSource::open(cam_id, images)
                 .map_err(anyhow::Error::msg)
                 .context("images")?,
         ));
     }
     if let Some(path) = &args.path {
         return Ok(Box::new(
-            OpenCvCapture::from_path(CameraId(0), path)
+            OpenCvCapture::from_path(cam_id, path)
                 .map_err(anyhow::Error::msg)
                 .context("path")?,
         ));
     }
-    let device = args.device.unwrap_or(0);
-    return Ok(Box::new(
-        OpenCvCapture::from_device(CameraId(0), device)
-            .map_err(anyhow::Error::msg)
-            .with_context(|| format!("device {device}"))?,
-    ));
+    let (_r, src) = args.cam.open_one().map_err(anyhow::Error::msg)?;
+    return Ok(src);
 }
 
 fn read_bgr_avg(img: &Mat, x: i32, y: i32, radius: i32) -> Option<[u8; 3]> {

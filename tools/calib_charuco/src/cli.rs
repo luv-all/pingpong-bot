@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::args::{Args, board_spec, resolve_output};
-use pingpong_bot::{Calibration, CameraId, calibrate_charuco};
+use pingpong_bot::{Calibration, calibrate_charuco};
 
 pub fn validate(path: &PathBuf) -> Result<()> {
     let text =
@@ -45,8 +45,12 @@ pub fn emit_sim(n: u8, args: &Args) -> Result<()> {
 
 pub fn from_images(dir: &PathBuf, args: &Args) -> Result<()> {
     let output = resolve_output(args);
-    let (calib, report) = calibrate_charuco(dir, board_spec(args), CameraId(args.camera_id))
-        .map_err(anyhow::Error::msg)?;
+    let (calib, report) = calibrate_charuco(
+        dir,
+        board_spec(args),
+        args.cam.camera_id().map_err(anyhow::Error::msg)?,
+    )
+    .map_err(anyhow::Error::msg)?;
     let json = serde_json::to_string_pretty(&calib)?;
     fs::write(&output, json).with_context(|| format!("쓰기 실패: {}", output.display()))?;
     println!(

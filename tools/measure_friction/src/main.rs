@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
-use pingpong_bot::{format_physics_for_defaults, friction_from_tangential_speeds};
+use pingpong_bot::{StereoCamCliArgs, format_physics_for_defaults, friction_from_tangential_speeds};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -23,17 +23,17 @@ struct Args {
     calibration: Option<PathBuf>,
     #[arg(long = "video", value_name = "PATH")]
     videos: Vec<PathBuf>,
-    /// 웹캠 인덱스 (반복). 영상/device 미지정이면 0,1
-    #[arg(long = "device", value_name = "N")]
-    devices: Vec<i32>,
+    #[command(flatten)]
+    cam: StereoCamCliArgs,
     #[arg(long)]
     no_preview: bool,
     #[arg(long, default_value_t = 33)]
     wait_ms: i32,
     #[arg(long, default_value_t = 10_000)]
     max_frames: usize,
+    /// 파일 재생 타임라인 FPS
     #[arg(long)]
-    fps: Option<f64>,
+    timeline_fps: Option<f64>,
     #[arg(long, value_name = "VIN:VOUT,...")]
     vt_pairs: Option<String>,
     #[arg(long)]
@@ -64,7 +64,6 @@ fn main() -> Result<()> {
     let has_other = args.vt_pairs.is_some() || args.sim;
     let run_capture = args.calibration.is_some()
         || !args.videos.is_empty()
-        || !args.devices.is_empty()
         || !has_other;
 
     if run_capture {
@@ -72,14 +71,15 @@ fn main() -> Result<()> {
             .calibration
             .clone()
             .context("--calibration PATH 필요 (캡처 모드)")?;
+        let cam = args.cam.as_cam_cli();
         let result = capture_loop::run_capture(
             &cal,
             &args.videos,
-            &args.devices,
+            &cam,
             !args.no_preview,
             args.wait_ms,
             args.max_frames,
-            args.fps,
+            args.timeline_fps,
         )?;
         for (i, r) in result.rolls.iter().enumerate() {
             println!(
@@ -116,7 +116,7 @@ fn main() -> Result<()> {
         bail!(
             "입력이 없습니다. 예:\n  \
              cargo run -p measure-friction -- --calibration calib.json\n  \
-             --device 0 --device 1\n  \
+             --cam left,right\n  \
              --calibration calib.json --video cam0.mp4 --video cam1.mp4\n  \
              --vt-pairs 2.0:1.4\n  \
              --sim"

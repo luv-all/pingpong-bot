@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use pingpong_bot::MAX_REPROJ_RMSE_PX;
+use pingpong_bot::{CamCliArgs, CameraId, DEFAULT_FOV_Y_DEG, MAX_REPROJ_RMSE_PX};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -11,27 +11,10 @@ use pingpong_bot::MAX_REPROJ_RMSE_PX;
     about = "탁구대 랜드마크 8점 클릭 → solvePnP(IPPE) → Calibration JSON"
 )]
 pub struct Args {
-    /// 웹캠 인덱스 (기본 인터랙티브)
-    #[arg(long)]
-    pub device: Option<i32>,
+    #[command(flatten)]
+    pub cam: CamCliArgs,
 
-    /// 요청할 스트림 폭 (live 카메라 모드에서만 사용)
-    #[arg(long, default_value_t = 1280)]
-    pub width: i32,
-
-    /// 요청할 스트림 높이 (live 카메라 모드에서만 사용)
-    #[arg(long, default_value_t = 800)]
-    pub height: i32,
-
-    /// 요청할 FPS (live 카메라 모드에서만 사용)
-    #[arg(long, default_value_t = 120.0)]
-    pub fps: f64,
-
-    /// 요청할 FOURCC (live 카메라 모드에서만 사용)
-    #[arg(long, default_value = "MJPG")]
-    pub fourcc: String,
-
-    /// 동영상/이미지 파일
+    /// 동영상/이미지 파일 (라이브 대신)
     #[arg(long)]
     pub path: Option<PathBuf>,
 
@@ -43,11 +26,8 @@ pub struct Args {
     #[arg(long)]
     pub merge: Option<PathBuf>,
 
-    #[arg(long, default_value_t = 0)]
-    pub camera_id: u8,
-
-    /// 수직 FOV [deg] → fx/fy 근사 (dist=[])
-    #[arg(long, default_value_t = 55.0)]
+    /// 수직 FOV [deg] → fx/fy 근사 (dist=[]). 기본=B0332 HFOV70°→VFOV≈47.3°
+    #[arg(long, default_value_t = DEFAULT_FOV_Y_DEG)]
     pub fov_y: f64,
 
     /// 재투영 RMSE 한도 [px]
@@ -61,6 +41,10 @@ pub struct Args {
     /// JSON 로드 검증만
     #[arg(long)]
     pub validate: Option<PathBuf>,
+}
+
+pub fn resolve_camera_id(args: &Args) -> Result<CameraId, String> {
+    return args.cam.camera_id();
 }
 
 pub fn resolve_output(args: &Args) -> PathBuf {

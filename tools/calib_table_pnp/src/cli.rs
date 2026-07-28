@@ -9,7 +9,7 @@ use pingpong_bot::{
 };
 use serde::Deserialize;
 
-use crate::args::{Args, resolve_output};
+use crate::args::{Args, resolve_camera_id, resolve_output};
 
 #[derive(Debug, Deserialize)]
 struct PixelsFile {
@@ -56,7 +56,7 @@ pub fn from_pixels(path: &PathBuf, args: &Args) -> Result<()> {
         .map(|p| PixelPoint::new(p[0], p[1]))
         .collect();
     let result = calibrate_table_pnp(
-        CameraId(args.camera_id),
+        resolve_camera_id(args).map_err(anyhow::Error::msg)?,
         file.label,
         file.width,
         file.height,
@@ -67,8 +67,7 @@ pub fn from_pixels(path: &PathBuf, args: &Args) -> Result<()> {
     if result.reproj_rmse > args.max_rmse {
         bail!(
             "재투영 RMSE {:.2} px > --max-rmse {}",
-            result.reproj_rmse,
-            args.max_rmse
+            result.reproj_rmse, args.max_rmse
         );
     }
     ensure_reproj_below(&result, args.max_rmse).map_err(anyhow::Error::msg)?;
@@ -108,10 +107,11 @@ pub fn write_result(
     upsert_camera(&mut calib, params);
     let json = serde_json::to_string_pretty(&calib)?;
     fs::write(&output, json).with_context(|| format!("쓰기 실패: {}", output.display()))?;
+    let cam_id = resolve_camera_id(args).unwrap_or(CameraId(0));
     println!(
         "wrote table-PnP Calibration → {} (cam={}, rmse={:.2}px, candidates={}, cams={})",
         output.display(),
-        args.camera_id,
+        cam_id.0,
         rmse,
         candidates,
         calib.camera_count()

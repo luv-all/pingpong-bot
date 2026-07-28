@@ -32,40 +32,29 @@ pub fn load_calibration(path: &Path) -> Result<Calibration> {
 
 fn open_sources(
     videos: &[PathBuf],
-    devices: &[i32],
-    fps_override: Option<f64>,
+    cam: &pingpong_bot::CamCliArgs,
+    timeline_fps: Option<f64>,
 ) -> Result<Vec<Box<dyn FrameSource>>> {
     let mut sources = Vec::new();
     if !videos.is_empty() {
-        if !devices.is_empty() {
-            bail!("--video 와 --device 를 같이 쓰지 마세요");
-        }
+        let roles = cam.resolve().map_err(anyhow::Error::msg)?;
         for (i, path) in videos.iter().enumerate() {
-            let mut cap = OpenCvCapture::from_path(CameraId(i as u8), path)
+            let id = roles
+                .get(i)
+                .map(|r| r.camera_id)
+                .unwrap_or(CameraId(i as u8));
+            let mut cap = OpenCvCapture::from_path(id, path)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("video {}", path.display()))?;
-            if let Some(fps) = fps_override {
+            if let Some(fps) = timeline_fps {
                 cap.set_timeline_fps(fps);
             }
             sources.push(Box::new(cap) as Box<dyn FrameSource>);
         }
         return Ok(sources);
     }
-    if !devices.is_empty() {
-        for (i, &dev) in devices.iter().enumerate() {
-            let cap = OpenCvCapture::from_device(CameraId(i as u8), dev)
-                .map_err(anyhow::Error::msg)
-                .with_context(|| format!("device {dev}"))?;
-            sources.push(Box::new(cap) as Box<dyn FrameSource>);
-        }
-        return Ok(sources);
-    }
-    // 미지정 → 웹캠 0, 1
-    for (i, &dev) in [0, 1].iter().enumerate() {
-        let cap = OpenCvCapture::from_device(CameraId(i as u8), dev)
-            .map_err(anyhow::Error::msg)
-            .with_context(|| format!("device {dev}"))?;
-        sources.push(Box::new(cap) as Box<dyn FrameSource>);
+    for (_r, src) in cam.open_sources().map_err(anyhow::Error::msg)? {
+        sources.push(src);
     }
     return Ok(sources);
 }
@@ -89,14 +78,14 @@ fn triangulate_pixels(
 pub fn run_capture(
     calibration: &Path,
     videos: &[PathBuf],
-    devices: &[i32],
+    cam: &pingpong_bot::CamCliArgs,
     preview: bool,
     wait_ms: i32,
     max_frames: usize,
-    fps_override: Option<f64>,
+    timeline_fps: Option<f64>,
 ) -> Result<CaptureResult> {
     let calibration = load_calibration(calibration)?;
-    let mut sources = open_sources(videos, devices, fps_override)?;
+    let mut sources = open_sources(videos, cam, timeline_fps)?;
     if sources.len() < 2 {
         bail!("카메라 소스 ≥2 필요");
     }

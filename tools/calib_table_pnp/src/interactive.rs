@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use opencv::core::{Mat, Point, Scalar};
 use opencv::highgui;
 use opencv::imgproc;
@@ -13,7 +13,7 @@ use pingpong_bot::{
     draw_help_lines, draw_pixel_loupe, show_bgr, table_landmark_mesh_edges, table_landmarks,
 };
 
-use crate::args::Args;
+use crate::args::{Args, resolve_camera_id};
 use crate::cli;
 use crate::world_grid::{WorldGridParams, apply_grid_key, draw_world_grid};
 
@@ -24,11 +24,9 @@ struct Solved {
 }
 
 pub fn run(args: &Args) -> Result<()> {
-    if args.device.is_some() && args.path.is_some() {
-        bail!("--device 와 --path 를 같이 쓰지 마세요");
-    }
+    let cam_id = resolve_camera_id(args).map_err(anyhow::Error::msg)?;
+    let resolved = args.cam.resolve_one().map_err(anyhow::Error::msg)?;
 
-    let cam_id = CameraId(args.camera_id);
     let mut source: Box<dyn FrameSource> = if let Some(path) = &args.path {
         Box::new(
             OpenCvCapture::from_path(cam_id, path)
@@ -36,15 +34,8 @@ pub fn run(args: &Args) -> Result<()> {
                 .context("path")?,
         )
     } else {
-        let device = args.device.unwrap_or(0);
-        let mut cap = OpenCvCapture::from_device(cam_id, device)
-            .map_err(anyhow::Error::msg)
-            .with_context(|| format!("device {device}"))?;
-        let fourcc = parse_fourcc(&args.fourcc)?;
-        cap.request_stream(args.width, args.height, args.fps, &fourcc)
-            .map_err(anyhow::Error::msg)
-            .with_context(|| format!("device {device}: stream request"))?;
-        Box::new(cap)
+        let (_r, src) = args.cam.open_one().map_err(anyhow::Error::msg)?;
+        src
     };
 
     let window = "calib:table-pnp";
@@ -71,8 +62,13 @@ pub fn run(args: &Args) -> Result<()> {
     let mut last_fail_rmse: Option<f64> = None;
 
     println!(
-        "table-PnP — cam={} fov_y={} max_rmse={}",
-        args.camera_id, args.fov_y, args.max_rmse
+        "table-PnP — role={} cam_id={} device={} backend={} fov_y={} max_rmse={}",
+        resolved.role,
+        cam_id.0,
+        resolved.device,
+        args.cam.stream.backend,
+        args.fov_y,
+        args.max_rmse
     );
     println!("Space=freeze  LMB=click  Shift+move=loupe  z=undo  c=clear  s=save  n=live  q=quit");
     println!("(8 clicks → auto PnP + world grid; +/- [] ., adjust grid)");
@@ -260,14 +256,6 @@ pub fn run(args: &Args) -> Result<()> {
 
     destroy_window(window);
     return Ok(());
-}
-
-fn parse_fourcc(value: &str) -> Result<[u8; 4]> {
-    let bytes = value.as_bytes();
-    if bytes.len() != 4 {
-        bail!("FOURCC는 정확히 4글자여야 함: {value}");
-    }
-    return Ok([bytes[0], bytes[1], bytes[2], bytes[3]]);
 }
 
 fn try_solve(

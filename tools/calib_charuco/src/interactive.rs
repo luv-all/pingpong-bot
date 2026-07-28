@@ -3,12 +3,12 @@
 use std::fs;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use opencv::core::{Mat, Scalar};
 use opencv::imgcodecs;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CameraId, FrameSource, MIN_CHARUCO_CORNERS, OpenCvCapture, PreviewAction, destroy_window,
+    FrameSource, MIN_CHARUCO_CORNERS, OpenCvCapture, PreviewAction, destroy_window,
     detect_and_draw_charuco, draw_debug_lines, draw_help_lines, show_bgr,
 };
 
@@ -47,17 +47,14 @@ struct ReviewFrame {
 }
 
 pub fn run(args: &Args) -> Result<()> {
-    if args.device.is_some() && args.path.is_some() {
-        bail!("--device 와 --path 를 같이 쓰지 마세요");
-    }
-
+    let resolved = args.cam.resolve_one().map_err(anyhow::Error::msg)?;
+    let cam_id = resolved.camera_id;
     let images_dir = args
         .images_dir
         .clone()
-        .unwrap_or_else(|| default_images_dir(args.camera_id));
+        .unwrap_or_else(|| default_images_dir(cam_id.0));
     fs::create_dir_all(&images_dir).with_context(|| format!("mkdir {}", images_dir.display()))?;
 
-    let cam_id = CameraId(args.camera_id);
     let mut source: Box<dyn FrameSource> = if let Some(path) = &args.path {
         Box::new(
             OpenCvCapture::from_path(cam_id, path)
@@ -65,12 +62,8 @@ pub fn run(args: &Args) -> Result<()> {
                 .context("path")?,
         )
     } else {
-        let device = args.device.unwrap_or(0);
-        Box::new(
-            OpenCvCapture::from_device(cam_id, device)
-                .map_err(anyhow::Error::msg)
-                .with_context(|| format!("device {device}"))?,
-        )
+        let (_r, src) = args.cam.open_one().map_err(anyhow::Error::msg)?;
+        src
     };
 
     let window = "calib:charuco";

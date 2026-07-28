@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use pingpong_bot::CharucoBoardSpec;
+use pingpong_bot::{CamCliArgs, CharucoBoardSpec};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -11,9 +11,8 @@ use pingpong_bot::CharucoBoardSpec;
     about = "ChArUco 인터랙티브 보정 — Space 스냅·코너 확인·s 저장·종료 시 JSON"
 )]
 pub struct Args {
-    /// 웹캠 인덱스 (미지정 시 0으로 인터랙티브)
-    #[arg(long)]
-    pub device: Option<i32>,
+    #[command(flatten)]
+    pub cam: CamCliArgs,
 
     /// 동영상 파일로 같은 UX
     #[arg(long)]
@@ -30,9 +29,6 @@ pub struct Args {
     /// 종료 시 보정에 필요한 최소 저장 장수
     #[arg(long, default_value_t = 10)]
     pub min_frames: usize,
-
-    #[arg(long, default_value_t = 0)]
-    pub camera_id: u8,
 
     #[arg(long)]
     pub emit_sim: Option<u8>,

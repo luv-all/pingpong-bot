@@ -1,6 +1,5 @@
-//! 다중 웹캠 프리뷰 — `DEVICES`를 가로로 이어 붙인 한 창.
+//! 다중 웹캠 프리뷰 — `--cam` 역할을 가로로 이어 붙인 한 창.
 //!
-//! 장치 인덱스는 아래 `DEVICES`만 수정.
 //! - `q` / ESC 종료
 //! - `Space` 동결/해제
 //! - `e` 짧은 노출 시도 (macOS OpenCV/AVFoundation에선 대개 무시됨)
@@ -9,41 +8,20 @@
 
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::Parser;
 use opencv::core::Scalar;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CameraId, FrameSource, OpenCvCapture, PreviewAction, destroy_window, draw_cam_label,
-    draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
+    FrameSource, OpenCvCapture, PreviewAction, StereoCamCliArgs, ThreadedCapture, destroy_window,
+    draw_cam_label, draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
 };
-
-const DEFAULT_STREAM_W: i32 = 1280;
-const DEFAULT_STREAM_H: i32 = 800;
-const DEFAULT_STREAM_FPS: f64 = 120.0;
 
 #[derive(Parser, Debug)]
 #[command(name = "cam-preview")]
 struct Args {
-    /// 열 장치 인덱스들. 예: `--device 0,1`
-    #[arg(long = "device", value_delimiter = ',', default_value = "0")]
-    device: Vec<i32>,
-
-    /// 요청할 스트림 폭.
-    #[arg(long, default_value_t = DEFAULT_STREAM_W)]
-    width: i32,
-
-    /// 요청할 스트림 높이.
-    #[arg(long, default_value_t = DEFAULT_STREAM_H)]
-    height: i32,
-
-    /// 요청할 FPS.
-    #[arg(long, default_value_t = DEFAULT_STREAM_FPS)]
-    fps: f64,
-
-    /// 요청할 FOURCC. 기본값은 `MJPG`.
-    #[arg(long, default_value = "MJPG")]
-    fourcc: String,
+    #[command(flatten)]
+    cam: StereoCamCliArgs,
 }
 
 struct FpsMeter {
@@ -76,45 +54,84 @@ impl FpsMeter {
     }
 }
 
+enum LiveSource {
+    Direct(OpenCvCapture),
+    Threaded(ThreadedCapture),
+}
+
+impl LiveSource {
+    fn next_frame(&mut self) -> Option<pingpong_bot::Frame> {
+        return match self {
+            Self::Direct(c) => c.next_frame(),
+            Self::Threaded(c) => c.next_frame(),
+        };
+    }
+
+    fn capture_fps(&self) -> Option<f64> {
+        return match self {
+            Self::Threaded(c) => Some(c.capture_fps()),
+            Self::Direct(_) => None,
+        };
+    }
+
+    fn as_capture_mut(&mut self) -> Option<&mut OpenCvCapture> {
+        return match self {
+            Self::Direct(c) => Some(c),
+            Self::Threaded(_) => None,
+        };
+    }
+}
+
 struct CamSlot {
-    device: i32,
-    cap: OpenCvCapture,
+    label: String,
+    source: LiveSource,
+    fourcc_label: String,
+    reported_fps: Option<f64>,
+    reported_size: Option<(i32, i32)>,
+    exposure_backend: String,
     meter: FpsMeter,
-    /// 마지막 표시용 패널 (동결 시 유지).
     panel: Option<Mat>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    if args.device.is_empty() {
-        bail!("DEVICES 가 비어 있음");
+    let cam = args.cam.as_cam_cli();
+    let backend = cam.stream.backend().map_err(anyhow::Error::msg)?;
+    let resolved = cam.resolve().map_err(anyhow::Error::msg)?;
+    if resolved.is_empty() {
+        bail!("--cam 이 비어 있음");
     }
 
-    let fourcc = parse_fourcc(&args.fourcc)?;
-    let mut cams: Vec<CamSlot> = Vec::with_capacity(args.device.len());
+    let mut cams: Vec<CamSlot> = Vec::with_capacity(resolved.len());
     let mut exp_supported = true;
-    for (i, &id) in args.device.iter().enumerate() {
-        let mut cap = OpenCvCapture::from_device(CameraId(i as u8), id)
-            .map_err(anyhow::Error::msg)
-            .with_context(|| format!("device {id}"))?;
-        cap.request_stream(args.width, args.height, args.fps, &fourcc)
-            .map_err(anyhow::Error::msg)
-            .with_context(|| format!("device {id}: stream request"))?;
+    for r in resolved {
+        let mut cap =
+            OpenCvCapture::from_device_with_backend(r.camera_id, r.device, backend)
+                .map_err(anyhow::Error::msg)?;
+        cam.stream.apply(&mut cap).map_err(anyhow::Error::msg)?;
+
         let ro = cap.exposure_readout();
         if ro.likely_unsupported() {
             exp_supported = false;
         }
-        println!(
-            "device {id}: backend={} fourcc={} fps={:?} size={:?} | {}",
-            ro.backend,
-            cap.reported_fourcc().unwrap_or_else(|| "?".into()),
-            cap.reported_fps(),
-            cap.reported_size(),
-            ro.summary_line()
-        );
+        let fourcc_label = cap.reported_fourcc().unwrap_or_else(|| "?".into());
+        let reported_fps = cap.reported_fps();
+        let reported_size = cap.reported_size();
+        let exposure_backend = ro.backend.clone();
+        let label = format!("{}#{}", r.role, r.camera_id.0);
+
+        let source = if cam.stream.threaded {
+            LiveSource::Threaded(ThreadedCapture::spawn(cap))
+        } else {
+            LiveSource::Direct(cap)
+        };
         cams.push(CamSlot {
-            device: id,
-            cap,
+            label,
+            source,
+            fourcc_label,
+            reported_fps,
+            reported_size,
+            exposure_backend,
             meter: FpsMeter::new(),
             panel: None,
         });
@@ -124,23 +141,34 @@ fn main() -> Result<()> {
             "note: OpenCV macOS(AVFoundation) ignores UVC exposure — `e` will not change the image"
         );
     }
+    if cam.stream.threaded {
+        println!("threaded grab: on (meas=display fps, grab=capture thread fps)");
+    }
 
     let window = "cam_preview";
     let mut frozen = false;
     let mut short_exposure = false;
+    let s = &cam.stream;
     println!(
-        "devices={:?}  request={}x{}@{:.0} {}  Space=freeze  e=short exposure  q/ESC=quit",
-        args.device, args.width, args.height, args.fps, args.fourcc
+        "cams={}  request={}x{}@{:.0} {} backend={}  Space=freeze  e=short exposure  q/ESC=quit",
+        cams.iter()
+            .map(|c| c.label.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
+        s.width,
+        s.height,
+        s.fps,
+        s.fourcc,
+        s.backend
     );
 
     loop {
         for cam in &mut cams {
-            let Some(frame) = cam.cap.next_frame() else {
-                bail!("device {}: 프레임 끝/실패", cam.device);
+            let Some(frame) = cam.source.next_frame() else {
+                bail!("{}: 프레임 끝/실패", cam.label);
             };
             cam.meter.tick();
 
-            // 동결 중에도 grab은 해서 USB 버퍼가 쌓이지 않게 한다.
             if frozen {
                 continue;
             }
@@ -150,26 +178,25 @@ fn main() -> Result<()> {
                 .try_clone()
                 .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
             let (w, h) = (panel.cols(), panel.rows());
-            let ro = cam.cap.exposure_readout();
 
-            let mut lines = vec![format!("cam{}", cam.device), format!("{w}x{h}")];
-            let fourcc = cam.cap.reported_fourcc().unwrap_or_else(|| "?".into());
-            match cam.cap.reported_fps() {
+            let mut lines = vec![cam.label.clone(), format!("{w}x{h}")];
+            match cam.reported_fps {
                 Some(cap_fps) => lines.push(format!(
-                    "fps {:.1} meas / {:.0} cap  {fourcc}",
-                    cam.meter.fps, cap_fps
+                    "fps {:.1} meas / {:.0} cap  {}",
+                    cam.meter.fps, cap_fps, cam.fourcc_label
                 )),
-                None => lines.push(format!("fps {:.1} meas  {fourcc}", cam.meter.fps)),
+                None => lines.push(format!("fps {:.1} meas  {}", cam.meter.fps, cam.fourcc_label)),
             }
-            lines.push(ro.summary_line());
-            if short_exposure {
-                if ro.likely_unsupported() {
-                    lines.push("exp short (ignored)".into());
-                } else {
-                    lines.push("exp short".into());
+            if let Some(grab) = cam.source.capture_fps() {
+                if grab > 0.0 {
+                    lines.push(format!("grab {grab:.1}"));
                 }
             }
-            if let Some((rw, rh)) = cam.cap.reported_size() {
+            lines.push(format!("be {}", cam.exposure_backend));
+            if short_exposure {
+                lines.push("exp short".into());
+            }
+            if let Some((rw, rh)) = cam.reported_size {
                 if rw != w || rh != h {
                     lines.push(format!("cap {rw}x{rh}"));
                 }
@@ -178,7 +205,7 @@ fn main() -> Result<()> {
             draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
             draw_cam_label(
                 &mut panel,
-                &format!("cam{}", cam.device),
+                &cam.label,
                 Scalar::new(0.0, 255.0, 255.0, 0.0),
             )?;
             cam.panel = Some(panel);
@@ -187,7 +214,7 @@ fn main() -> Result<()> {
         let mut panels = Vec::with_capacity(cams.len());
         for cam in &cams {
             let Some(panel) = &cam.panel else {
-                bail!("device {}: 첫 프레임 없음", cam.device);
+                bail!("{}: 첫 프레임 없음", cam.label);
             };
             let mut shown = panel
                 .try_clone()
@@ -219,16 +246,23 @@ fn main() -> Result<()> {
                 short_exposure = !short_exposure;
                 let mut any_ok = false;
                 for cam in &mut cams {
+                    let Some(cap) = cam.source.as_capture_mut() else {
+                        println!(
+                            "{}: exposure N/A in --threaded (restart without it to tune)",
+                            cam.label
+                        );
+                        continue;
+                    };
                     let ok = if short_exposure {
-                        cam.cap.request_short_exposure()
+                        cap.request_short_exposure()
                     } else {
-                        cam.cap.request_auto_exposure()
+                        cap.request_auto_exposure()
                     };
                     any_ok |= ok;
-                    let ro = cam.cap.exposure_readout();
+                    let ro = cap.exposure_readout();
                     println!(
-                        "device {}: set_ok={ok} backend={} | {}",
-                        cam.device,
+                        "{}: set_ok={ok} backend={} | {}",
+                        cam.label,
                         ro.backend,
                         ro.summary_line()
                     );
@@ -244,13 +278,6 @@ fn main() -> Result<()> {
     }
 
     destroy_window(window);
+    let _ = cams;
     return Ok(());
-}
-
-fn parse_fourcc(value: &str) -> Result<[u8; 4]> {
-    let bytes = value.as_bytes();
-    if bytes.len() != 4 {
-        bail!("FOURCC는 정확히 4글자여야 함: {value}");
-    }
-    return Ok([bytes[0], bytes[1], bytes[2], bytes[3]]);
 }
