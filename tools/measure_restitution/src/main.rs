@@ -13,7 +13,7 @@ use nalgebra::Vector3;
 use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{
-    PhysicsParams, StereoCamCliArgs, calibration_path, drag_from_trajectory,
+    PhysicsParams, StereoPairCliArgs, calibration_path, drag_from_trajectory,
     format_physics_for_defaults, restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
 
@@ -29,7 +29,7 @@ struct Args {
     #[arg(long = "video", value_name = "PATH")]
     videos: Vec<PathBuf>,
     #[command(flatten)]
-    cam: StereoCamCliArgs,
+    cam: StereoPairCliArgs,
     #[arg(long)]
     no_preview: bool,
     #[arg(long, default_value_t = 33)]

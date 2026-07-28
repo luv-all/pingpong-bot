@@ -6,12 +6,11 @@
 ## 영상 (권장)
 
 ```bash
-# 캡처 모드: calibration 기본=`data/calibration.json` SSOT (기본 --cam left,right)
+# 캡처 모드: calibration 기본=`data/calibration.json` SSOT (항상 left+right, --cam 없음)
 cargo run -p measure-friction
 
 cargo run -p measure-friction -- \
-  --calibration data/calibration.json \
-  --cam left,right
+  --calibration data/calibration.json
 
 cargo run -p measure-friction -- \
   --calibration data/calibration.json \

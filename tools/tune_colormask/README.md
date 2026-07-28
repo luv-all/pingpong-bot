@@ -3,6 +3,7 @@
 탁구공 위 픽셀을 클릭해 **YCrCb / HSV** `inRange` 범위를 뽑는다.  
 채널별 **양꼬리 퍼센타일**(`--trim`, 기본 10% → p10..p90)로 하이라이트·그림자·혼색 아웃라이어를 잘라낸 뒤 `--margin`을 더한다.  
 `p` (및 샘플 있는 채 종료) 시 현재 `--cam`의 **범위 + BGR 샘플**(`[[B,G,R],…]`)을 [`data/colormask.json`](../../data/colormask.json)에 upsert.  
+`--cam left|right` **필수** (어느 카메라인지 명시).  
 다음 실행 시 같은 캠의 샘플을 자동 로드해 이어서 픽한다 (픽셀 좌표는 저장하지 않음).
 
 ## 화면
@@ -16,7 +17,7 @@
 ## 사용
 
 ```bash
-cargo run -p tune-colormask                 # --cam left → data/colormask.json cam0
+cargo run -p tune-colormask -- --cam left   # data/colormask.json cam0
 cargo run -p tune-colormask -- --cam right  # cam1 upsert
 cargo run -p tune-colormask -- --cam left --space hsv
 cargo run -p tune-colormask -- --cam left --margin 5

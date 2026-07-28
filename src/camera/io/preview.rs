@@ -517,7 +517,24 @@ fn project_grid_pt(params: &CameraParams, x: f64, y: f64, z: f64) -> Option<Poin
     return Some(Point::new(px.x.round() as i32, px.y.round() as i32));
 }
 
+/// `[0, max]` 축 샘플. `step`으로 채우되 끝점 `max`는 항상 포함 (탁구대 네 변 보장).
+fn grid_axis_inclusive(max: f64, step: f64) -> Vec<f64> {
+    debug_assert!(max >= 0.0 && step > 0.0);
+    let mut v = Vec::new();
+    let mut t = 0.0;
+    while t < max - 1e-9 {
+        v.push(t);
+        t += step;
+    }
+    match v.last() {
+        Some(&last) if (max - last).abs() <= 1e-9 => {}
+        _ => v.push(max),
+    }
+    return v;
+}
+
 /// 탁구대 XY×Z 격자를 `project_world`로 투영해 점+선분으로 그린다.
+/// XY는 간격과 무관하게 `0`·`WIDTH_X`·`LENGTH_Y` 경계를 항상 포함한다.
 pub fn draw_world_grid(
     img: &mut Mat,
     params: &CameraParams,
@@ -533,24 +550,8 @@ pub fn draw_world_grid(
     let radius = (4.0 * s).round().max(2.0) as i32;
     let line_th = (1.0 * s).round().max(1.0) as i32;
 
-    let xs: Vec<f64> = {
-        let mut v = Vec::new();
-        let mut x = 0.0;
-        while x <= table::WIDTH_X + 1e-9 {
-            v.push(x);
-            x += xy;
-        }
-        v
-    };
-    let ys: Vec<f64> = {
-        let mut v = Vec::new();
-        let mut y = 0.0;
-        while y <= table::LENGTH_Y + 1e-9 {
-            v.push(y);
-            y += xy;
-        }
-        v
-    };
+    let xs = grid_axis_inclusive(table::WIDTH_X, xy);
+    let ys = grid_axis_inclusive(table::LENGTH_Y, xy);
 
     for (ki, k) in (0..layers).enumerate() {
         let z = table::SURFACE_Z + f64::from(k) * dz;
@@ -1074,5 +1075,19 @@ mod tests {
         assert_eq!(arrow_delta(i32::from(b'h')), Some((-1, 0)));
         assert_eq!(arrow_delta(i32::from(b'J')), Some((0, 1)));
         assert_eq!(arrow_delta(i32::from(b'q')), None);
+    }
+
+    #[test]
+    fn grid_axis_always_includes_table_edges() {
+        use crate::constants::table;
+        let xs = grid_axis_inclusive(table::WIDTH_X, 0.10);
+        let ys = grid_axis_inclusive(table::LENGTH_Y, 0.10);
+        assert!((xs[0] - 0.0).abs() < 1e-12);
+        assert!((ys[0] - 0.0).abs() < 1e-12);
+        assert!((xs.last().copied().unwrap() - table::WIDTH_X).abs() < 1e-12);
+        assert!((ys.last().copied().unwrap() - table::LENGTH_Y).abs() < 1e-12);
+        // step이 max를 나눠 떨어질 때 끝점 중복 없음
+        let even = grid_axis_inclusive(1.0, 0.25);
+        assert_eq!(even, vec![0.0, 0.25, 0.5, 0.75, 1.0]);
     }
 }

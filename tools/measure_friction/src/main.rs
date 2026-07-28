@@ -11,7 +11,7 @@ use clap::Parser;
 use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{
-    PhysicsParams, StereoCamCliArgs, calibration_path, format_physics_for_defaults,
+    PhysicsParams, StereoPairCliArgs, calibration_path, format_physics_for_defaults,
     friction_from_tangential_speeds,
 };
 
@@ -27,7 +27,7 @@ struct Args {
     #[arg(long = "video", value_name = "PATH")]
     videos: Vec<PathBuf>,
     #[command(flatten)]
-    cam: StereoCamCliArgs,
+    cam: StereoPairCliArgs,
     #[arg(long)]
     no_preview: bool,
     #[arg(long, default_value_t = 33)]
