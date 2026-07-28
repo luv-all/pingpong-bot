@@ -9,7 +9,7 @@ use crate::{
     Arm, DomainError, InterceptWindow, PhysicsParams, Prediction, RobotPose, RobotState,
     SwingPlanError, ball_past_midcourt_for_commit,
     constants::{ball, table},
-    in_swing_commit_window, plan_bang_bang_swing, plan_best_swing, plan_coarse_track,
+    in_swing_commit_window, plan_best_swing, plan_coarse_track,
 };
 use rapier3d::prelude::*;
 use tracing::{debug, info, warn};
@@ -18,6 +18,11 @@ use super::arm_bodies::ArmMultibody;
 use super::shooter::{BallShooterSettings, BallState};
 use crate::sim::estimator::predict_impact;
 use crate::sim::gui::debug_snap::{CommitPhase, SimDebugSnapshot};
+
+/// `plan_best_swing`(quintic) 재시도 스로틀, `poll_and_advance_bang_bang`의
+/// "새 요청을 보낼지" 스로틀 — 둘 다 매 틱 무거운 계획을 다시 돌리지 않게
+/// 빈도만 제한한다. `InsufficientTime`(아직 이름)은 재시도하되 이 간격으로만.
+const SWING_RETRY_THROTTLE_SECS: f64 = 0.02;
 
 /// 한 물리 스텝 입력 — `controls` 뮤텍스를 물리 연산 동안 잡지 않기 위함.
 pub struct SimStepInput<'a> {
@@ -118,6 +123,10 @@ pub struct SimWorld {
     pub diag_rapier_secs: f64,
     /// [임시 진단] 마지막 틱의 `refresh_debug_snap` 소요 [s].
     pub diag_debug_snap_secs: f64,
+    /// bang-bang 계획을 물리 스레드 밖에서 돌리는 백그라운드 워커 — 계획이
+    /// 무거워도(수십~수백 ms) 이 스레드가 블로킹돼 공 물리까지 같이
+    /// 멈추는 걸 막는다. `try_auto_swing` 문서 참고.
+    bang_bang_worker: super::bang_bang_worker::BangBangWorker,
 }
 
 impl SimWorld {
@@ -263,6 +272,7 @@ impl SimWorld {
             diag_auto_swing_secs: 0.0,
             diag_rapier_secs: 0.0,
             diag_debug_snap_secs: 0.0,
+            bang_bang_worker: super::bang_bang_worker::BangBangWorker::new(),
         };
         world.sync_shooter_pose(&default_shooter);
         return world;
@@ -475,8 +485,6 @@ impl SimWorld {
     /// - `InsufficientTime`: 스로틀 재시도. 모든 후보가 `tti < min_swing`이면 포기.
     /// - 포기 후에는 팔이 움직이지 않는다.
     fn try_auto_swing(&mut self) {
-        const SWING_RETRY_THROTTLE_SECS: f64 = 0.02;
-
         if self.ball_state != BallState::InFlight {
             self.diag_marker_secs = 0.0;
             self.diag_predictions_secs = 0.0;
@@ -593,6 +601,17 @@ impl SimWorld {
 
         self.debug_snap.commit_phase = CommitPhase::InWindow;
 
+        // GUI "Bang-bang swing (debug)" 토글 - quintic(plan_best_swing) 대신
+        // 순수 토크 기반 bang-bang(plan_bang_bang_swing)을 계획한다. 이 경로는
+        // 공용 스로틀(아래)보다 먼저 갈라진다 — 백그라운드 워커 응답은 매 틱
+        // 확인해야 계산이 끝나는 즉시 커밋할 수 있고, 스로틀은 "새 요청을
+        // 보낼지"에만 적용돼야 하기 때문이다(`poll_and_advance_bang_bang`
+        // 문서 참고).
+        if self.use_bang_bang_swing {
+            self.poll_and_advance_bang_bang(&predictions);
+            return;
+        }
+
         if self.sim_time - self.last_swing_attempt_at < SWING_RETRY_THROTTLE_SECS {
             if let Some(prediction) = predictions.first() {
                 self.set_debug_prediction(Some(prediction.clone()));
@@ -601,38 +620,6 @@ impl SimWorld {
         }
         self.last_swing_attempt_at = self.sim_time;
         let start = RobotPose::new(self.robot.rail_x(), self.robot.joints().clone());
-        // GUI "Bang-bang swing (debug)" 토글 - quintic(plan_best_swing) 대신
-        // 순수 토크 기반 bang-bang(plan_bang_bang_swing)을 계획한다. 재생
-        // 경로(RobotState::replace_bang_bang_swing/advance_swing)는 궤적
-        // "모양"을 몰라도 되게 추상화돼 있어 이 분기 하나로 끝난다.
-        if self.use_bang_bang_swing {
-            let planned = match plan_bang_bang_swing(&self.arm, &predictions, &start) {
-                Ok(planned) => planned,
-                Err(DomainError::InfeasibleSwing(ref err)) => {
-                    warn!(
-                        shot = self.shot_seq,
-                        %err,
-                        "shot: bang-bang 계획 실패 — 재시도"
-                    );
-                    return;
-                }
-                Err(other) => {
-                    warn!(shot = self.shot_seq, %other, "shot: bang-bang 계획 예외 — 재시도");
-                    return;
-                }
-            };
-            self.set_debug_prediction(Some(planned.prediction));
-            info!(
-                shot = self.shot_seq,
-                duration_secs = planned.trajectory.duration_secs(),
-                impact = ?planned.prediction.impact_position.coords,
-                tti = planned.prediction.time_to_impact_secs,
-                "shot: bang-bang commit"
-            );
-            self.robot.replace_bang_bang_swing(planned.trajectory);
-            self.swing_committed = true;
-            return;
-        }
         let planned = match plan_best_swing(&self.arm, &predictions, &start) {
             Ok(planned) => {
                 self.hard_fail_streak = 0;
@@ -727,6 +714,87 @@ impl SimWorld {
         self.swing_committed = true;
     }
 
+    /// bang-bang(GUI 디버그) 커밋 경로 — `plan_bang_bang_swing`을 이 스레드
+    /// 위에서 동기 호출하지 않는다. 그 계산은 최대 ~350스텝의 RNEA/자코비안
+    /// 반복이라 실제로 수십~수백 ms가 걸릴 수 있는데(`.omc/progress.txt`),
+    /// 이 함수는 `step()` 안에서 Rapier 적분(공 물리)보다 먼저 호출되므로
+    /// 여기서 블로킹하면 그 시간만큼 공도 같이 멈춘다 — 시뮬레이션 시계
+    /// 전체가 실제 시간보다 뒤처지고, 사용자에겐 "팔이 늦게 움직인다"(공
+    /// 도착 시점과 스윙 시작이 실제 시계 기준으로 어긋난다)로 보인다.
+    ///
+    /// 대신 `bang_bang_worker`(전용 백그라운드 스레드)에 요청만 보내고
+    /// 매 틱 논블로킹으로 결과를 확인한다 — 계산이 진행되는 동안에도 이
+    /// 함수는 즉시 리턴해 공 물리가 정상적으로 전진한다. 결과가 도착하면
+    /// "요청한 시각부터 지금까지 흐른 sim 시간"만큼 재생 시작 지점을 앞으로
+    /// 당겨(`RobotState::replace_bang_bang_swing_at`) 계산 지연을 보정한다 —
+    /// 계획 자체는 "요청 시점부터 Tg 안에 도달"을 가정하므로, 그 가정이
+    /// 실제로 성립하도록 커밋 시점의 시간 차를 메워주는 것.
+    fn poll_and_advance_bang_bang(&mut self, predictions: &[Prediction]) {
+        if let Some((requested_at, result)) = self.bang_bang_worker.poll() {
+            match result {
+                Ok(planned) => {
+                    let elapsed_since_request = (self.sim_time - requested_at).max(0.0);
+                    let duration = planned.trajectory.duration_secs();
+                    if elapsed_since_request >= duration {
+                        // 계산이 끝났을 때 이미 재생할 시간이 안 남음 — 이번
+                        // 시도는 놓쳤다. 다음 틱에 최신 예측으로 재시도한다
+                        // (아래 스로틀·재요청 로직이 자연히 처리).
+                        warn!(
+                            shot = self.shot_seq,
+                            elapsed_since_request,
+                            duration,
+                            "shot: bang-bang 계획 완료했지만 재생 시간 소진 — 포기, 재시도"
+                        );
+                    } else {
+                        self.set_debug_prediction(Some(planned.prediction));
+                        info!(
+                            shot = self.shot_seq,
+                            duration_secs = duration,
+                            elapsed_since_request,
+                            impact = ?planned.prediction.impact_position.coords,
+                            tti = planned.prediction.time_to_impact_secs,
+                            "shot: bang-bang commit (백그라운드 계획, 지연 보정 재생)"
+                        );
+                        self.robot
+                            .replace_bang_bang_swing_at(planned.trajectory, elapsed_since_request);
+                        self.swing_committed = true;
+                        return;
+                    }
+                }
+                Err(DomainError::InfeasibleSwing(ref err)) => {
+                    warn!(shot = self.shot_seq, %err, "shot: bang-bang 계획 실패 — 재시도");
+                }
+                Err(other) => {
+                    warn!(shot = self.shot_seq, %other, "shot: bang-bang 계획 예외 — 재시도");
+                }
+            }
+        }
+
+        if self.bang_bang_worker.is_busy() {
+            // 아직 계산 중 — 이번 틱은 기다리지 않고 리턴한다(물리는 계속
+            // 정상 진행).
+            if let Some(prediction) = predictions.first() {
+                self.set_debug_prediction(Some(prediction.clone()));
+            }
+            return;
+        }
+
+        if self.sim_time - self.last_swing_attempt_at < SWING_RETRY_THROTTLE_SECS {
+            if let Some(prediction) = predictions.first() {
+                self.set_debug_prediction(Some(prediction.clone()));
+            }
+            return;
+        }
+        self.last_swing_attempt_at = self.sim_time;
+        let start = RobotPose::new(self.robot.rail_x(), self.robot.joints().clone());
+        self.bang_bang_worker.submit(
+            self.sim_time,
+            Arc::clone(&self.arm),
+            predictions.to_vec(),
+            start,
+        );
+    }
+
     fn abandon_swing(&mut self, reason: &str) {
         self.swing_abandoned = true;
         self.debug_snap.record_abandon_text(reason);
@@ -805,6 +873,12 @@ impl SimWorld {
         }
         self.ball_state = BallState::InFlight;
         self.robot.cancel_swing();
+        // 이전 공에 대해 계산 중이던 bang-bang 계획이 있다면 추적을 버린다 —
+        // 그 결과가 나중에 도착해도 이번(새) 공과 무관하므로 무시해야 한다
+        // (`bang_bang_worker::poll`은 지금 추적 중인 요청 id와 안 맞는 응답을
+        // 조용히 버리므로, 백그라운드 스레드가 실제로 그 계산을 끝까지
+        // 도는 것 자체는 안전하다 — 그냥 결과가 버려질 뿐).
+        self.bang_bang_worker.cancel_inflight();
         self.swing_committed = false;
         self.swing_abandoned = false;
         self.hard_fail_streak = 0;
@@ -1724,6 +1798,49 @@ mod tests {
         let r1 = world.robot().rail_x();
         assert_ne!(j0, j1, "스윙 후 관절각이 변해야 함");
         assert!((r1 - rail_end).abs() < 0.05, "레일이 접수 x로 이동해야 함");
+    }
+
+    #[test]
+    fn bang_bang_swing_planning_does_not_block_physics_step() {
+        // 사용자 리포트(2026-07-28): "로봇팔이 늦게 움직이는 것처럼 보인다"
+        // — 원인은 `plan_bang_bang_swing`(최대 ~350스텝의 RNEA/자코비안
+        // 반복, 실제로 수십~수백 ms 걸릴 수 있음, `.omc/progress.txt`)이
+        // `step()` 안에서 Rapier 적분(공 물리)보다 먼저 동기 호출돼, 그
+        // 계산 시간만큼 공까지 같이 멈췄기 때문(`bang_bang_worker` 모듈
+        // 문서 참고). 백그라운드 워커로 옮긴 뒤에는 `step()`이 계획 완료를
+        // 기다리면 안 된다 — 이 테스트가 그 회귀를 직접 잡는다: bang-bang이
+        // 활발히 시도되는 구간에서도 매 `step()` 호출의 실제(wall-clock)
+        // 소요 시간이 짧아야 한다. 되돌려서 다시 동기 호출하면 이 값이
+        // 수십~수백 ms로 튀어 아래 assert가 실패한다.
+        let arm = test_robot();
+        let mut world = SimWorld::new(arm);
+        world.set_use_bang_bang_swing(true);
+        world.shoot_ball(&BallShooterSettings::default());
+
+        let dt = 1.0 / 1000.0;
+        // MAX_BALL_FLIGHT_SECS(4.0s)의 자동 park 안전장치보다 넉넉하게.
+        const MAX_STEPS: usize = 4_500;
+        // `plan_bang_bang_swing` 자체는 이보다 훨씬 오래(실측 수십~수백 ms)
+        // 걸릴 수 있다 — 훨씬 낮게 잡아야 "동기 호출로 되돌아갔다"는 회귀를
+        // 확실히 잡는다. 워커 스레드 스케줄링 지연 등의 여유도 감안.
+        const MAX_STEP_WALL_MS: f64 = 20.0;
+
+        let mut worst_wall_ms = 0.0_f64;
+        for _ in 0..MAX_STEPS {
+            let started = std::time::Instant::now();
+            world.step(dt, None);
+            let wall_ms = started.elapsed().as_secs_f64() * 1000.0;
+            worst_wall_ms = worst_wall_ms.max(wall_ms);
+            if world.ball_state != BallState::InFlight {
+                break;
+            }
+        }
+
+        assert!(
+            worst_wall_ms < MAX_STEP_WALL_MS,
+            "step() 한 번이 {worst_wall_ms:.2}ms 걸림(허용 {MAX_STEP_WALL_MS}ms) — \
+             bang-bang 계획이 다시 물리 스레드를 블로킹하고 있을 가능성"
+        );
     }
 
     #[test]
