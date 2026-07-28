@@ -3,12 +3,16 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use opencv::prelude::*;
 
 use super::capture::{Frame, FrameSource, OpenCvCapture};
 use crate::CameraId;
+
+/// 첫 프레임 대기 상한 (MSMF 콜드스타트용).
+const FIRST_FRAME_WAIT: Duration = Duration::from_secs(8);
+const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 struct LatestSlot {
     image: opencv::core::Mat,
@@ -23,6 +27,8 @@ pub struct ThreadedCapture {
     camera_id: CameraId,
     latest: Arc<Mutex<Option<LatestSlot>>>,
     stop: Arc<AtomicBool>,
+    /// grab 루프가 `read` 실패로 종료됨.
+    grab_ended: Arc<AtomicBool>,
     grab_count: Arc<AtomicU64>,
     join: Option<JoinHandle<()>>,
     #[allow(dead_code)]
@@ -37,9 +43,11 @@ impl ThreadedCapture {
         let camera_id = inner.camera_id();
         let latest: Arc<Mutex<Option<LatestSlot>>> = Arc::new(Mutex::new(None));
         let stop = Arc::new(AtomicBool::new(false));
+        let grab_ended = Arc::new(AtomicBool::new(false));
         let grab_count = Arc::new(AtomicU64::new(0));
         let latest_t = Arc::clone(&latest);
         let stop_t = Arc::clone(&stop);
+        let ended_t = Arc::clone(&grab_ended);
         let grab_t = Arc::clone(&grab_count);
         let join = thread::spawn(move || {
             while !stop_t.load(Ordering::Relaxed) {
@@ -59,11 +67,13 @@ impl ThreadedCapture {
                     });
                 }
             }
+            ended_t.store(true, Ordering::Release);
         });
         return Self {
             camera_id,
             latest,
             stop,
+            grab_ended,
             grab_count,
             join: Some(join),
             last_served_seq: 0,
@@ -92,17 +102,35 @@ impl ThreadedCapture {
             self.fps_window_start = Instant::now();
         }
     }
+
+    fn try_clone_latest(&self) -> Option<Frame> {
+        let guard = self.latest.lock().ok()?;
+        let slot = guard.as_ref()?;
+        let image = slot.image.try_clone().ok()?;
+        return Some(Frame::new(self.camera_id, image, slot.timestamp));
+    }
 }
 
 impl FrameSource for ThreadedCapture {
     fn next_frame(&mut self) -> Option<Frame> {
         self.refresh_capture_fps();
-        let guard = self.latest.lock().ok()?;
-        let slot = guard.as_ref()?;
-        // 새 프레임이 없어도 최신을 복제해 준다 (프리뷰가 멈추지 않게).
-        let image = slot.image.try_clone().ok()?;
-        self.last_served_seq = slot.seq;
-        return Some(Frame::new(self.camera_id, image, slot.timestamp));
+        if let Some(frame) = self.try_clone_latest() {
+            return Some(frame);
+        }
+
+        // 스폰 직후·MSMF 콜드스타트: 첫 프레임이 올 때까지 짧게 폴링.
+        // (없으면 cam-preview가 즉시 "프레임 끝/실패"로 죽음)
+        let deadline = Instant::now() + FIRST_FRAME_WAIT;
+        while Instant::now() < deadline {
+            if self.grab_ended.load(Ordering::Acquire) {
+                return None;
+            }
+            thread::sleep(POLL_INTERVAL);
+            if let Some(frame) = self.try_clone_latest() {
+                return Some(frame);
+            }
+        }
+        return None;
     }
 }
 

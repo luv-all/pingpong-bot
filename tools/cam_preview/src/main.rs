@@ -119,7 +119,7 @@ fn main() -> Result<()> {
         let reported_fps = cap.reported_fps();
         let reported_size = cap.reported_size();
         let exposure_backend = ro.backend.clone();
-        let label = format!("{}#{}", r.role, r.camera_id.0);
+        let label = format!("{}#{} (device {})", r.role, r.camera_id.0, r.device);
 
         let source = if cam.stream.threaded {
             LiveSource::Threaded(ThreadedCapture::spawn(cap))
@@ -168,7 +168,10 @@ fn main() -> Result<()> {
     loop {
         for cam in &mut cams {
             let Some(frame) = cam.source.next_frame() else {
-                bail!("{}: 프레임 끝/실패", cam.label);
+                bail!(
+                    "{}: 프레임 없음 — USB device 매핑(defaults::calib LEFT/RIGHT_DEVICE) 또는 백엔드/스레드 확인. OBS에 보이면 연결 문제는 아님",
+                    cam.label
+                );
             };
             cam.meter.tick();
 
