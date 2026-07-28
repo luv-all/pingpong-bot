@@ -9,9 +9,9 @@ use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
     CameraId, CameraParams, FrameSource, OpenCvCapture, PixelPickMouse, PixelPoint, Point3,
-    PreviewAction, TABLE_LANDMARK_COUNT, TableLandmark, calibrate_table_pnp, destroy_window,
-    draw_debug_lines, draw_help_lines, draw_pixel_loupe, show_bgr, table_landmark_mesh_edges,
-    table_landmarks, unscale_xy,
+    PreviewAction, TABLE_LANDMARK_COUNT, TableLandmark, arrow_delta, calibrate_table_pnp,
+    destroy_window, draw_debug_lines, draw_help_lines, draw_pixel_loupe, show_bgr,
+    table_landmark_mesh_edges, table_landmarks,
 };
 
 use crate::args::{Args, pending_path, resolve_camera_id, resolve_output};
@@ -76,7 +76,7 @@ pub fn run(args: &Args) -> Result<()> {
     );
     cli::hint_pending_if_exists(args, cam_id);
     println!(
-        "Space=freeze  LMB=click  Shift+move=loupe  z=undo  c=clear  s=promote  n=live  q=quit"
+        "Space=freeze  LMB/Enter=click  arrows=1px  Shift+move=loupe  z=undo  c=clear  s=promote  n=live  q=quit"
     );
     println!(
         "(accepted → pending; s promotes → {})",
@@ -88,44 +88,6 @@ pub fn run(args: &Args) -> Result<()> {
 
     loop {
         let mut clicks_changed = false;
-        let hover = {
-            let mut m = mouse.lock().expect("mouse");
-            if frozen {
-                for (x, y) in m.drain_clicks() {
-                    let (x, y) = unscale_xy(x, y, display_scale);
-                    if clicks.len() < TABLE_LANDMARK_COUNT {
-                        clicks.push(PixelPoint::new(f64::from(x), f64::from(y)));
-                        clicks_changed = true;
-                        println!(
-                            "click {}/{} → ({x},{y})  {}",
-                            clicks.len(),
-                            TABLE_LANDMARK_COUNT,
-                            marks[clicks.len() - 1].id
-                        );
-                    }
-                }
-            } else {
-                m.clicks.clear();
-            }
-            m.hover.map(|(x, y)| unscale_xy(x, y, display_scale))
-        };
-
-        if clicks_changed {
-            if clicks.len() < TABLE_LANDMARK_COUNT {
-                solved = None;
-                last_fail_rmse = None;
-            } else {
-                try_solve(
-                    args,
-                    cam_id,
-                    freeze_img.as_ref().expect("freeze_img"),
-                    &clicks,
-                    &mut solved,
-                    &mut last_fail_rmse,
-                )?;
-            }
-        }
-
         let frame_img = if frozen {
             freeze_img
                 .as_ref()
@@ -144,6 +106,46 @@ pub fn run(args: &Args) -> Result<()> {
             freeze_img = Some(img.try_clone().map_err(|e| anyhow::anyhow!("clone: {e}"))?);
             img
         };
+        let img_w = frame_img.cols();
+        let img_h = frame_img.rows();
+
+        let hover = {
+            let mut m = mouse.lock().expect("mouse");
+            m.sync(display_scale, img_w, img_h);
+            if frozen {
+                for (x, y) in m.drain_clicks() {
+                    if clicks.len() < TABLE_LANDMARK_COUNT {
+                        clicks.push(PixelPoint::new(f64::from(x), f64::from(y)));
+                        clicks_changed = true;
+                        println!(
+                            "click {}/{} → ({x},{y})  {}",
+                            clicks.len(),
+                            TABLE_LANDMARK_COUNT,
+                            marks[clicks.len() - 1].id
+                        );
+                    }
+                }
+            } else {
+                m.clear_clicks();
+            }
+            m.hover
+        };
+
+        if clicks_changed {
+            if clicks.len() < TABLE_LANDMARK_COUNT {
+                solved = None;
+                last_fail_rmse = None;
+            } else {
+                try_solve(
+                    args,
+                    cam_id,
+                    freeze_img.as_ref().expect("freeze_img"),
+                    &clicks,
+                    &mut solved,
+                    &mut last_fail_rmse,
+                )?;
+            }
+        }
 
         let mut panel = frame_img
             .try_clone()
@@ -173,8 +175,8 @@ pub fn run(args: &Args) -> Result<()> {
                         &mut panel,
                         &[
                             "+/- xy  [] layers  ., z",
-                            "Shift+move loupe",
-                            "z undo  c clear  s promote",
+                            "arrows 1px  Shift loupe",
+                            "LMB/Enter  z/c  s promote",
                             "n live  q quit",
                         ],
                         Scalar::new(0.0, 255.0, 80.0, 0.0),
@@ -192,8 +194,8 @@ pub fn run(args: &Args) -> Result<()> {
                         &mut panel,
                         &[
                             "yellow = residual",
-                            "Shift+move loupe",
-                            "z undo  c clear",
+                            "arrows 1px  Shift loupe",
+                            "LMB/Enter  z/c",
                             "n live  q quit",
                         ],
                         Scalar::new(0.0, 255.0, 80.0, 0.0),
@@ -215,8 +217,8 @@ pub fn run(args: &Args) -> Result<()> {
                 draw_help_lines(
                     &mut panel,
                     &[
-                        "LMB click",
-                        "Shift+move loupe",
+                        "LMB/Enter click",
+                        "arrows 1px  Shift loupe",
                         "z undo  c clear",
                         "n live  q quit",
                     ],
@@ -253,6 +255,18 @@ pub fn run(args: &Args) -> Result<()> {
             }
             PreviewAction::Continue => {}
             PreviewAction::Key(k) => {
+                if frozen {
+                    if let Some((dx, dy)) = arrow_delta(k) {
+                        let mut m = mouse.lock().expect("mouse");
+                        m.sync(display_scale, img_w, img_h);
+                        m.nudge(dx, dy, img_w, img_h);
+                        continue;
+                    }
+                    if k == 13 || k == 10 {
+                        mouse.lock().expect("mouse").confirm();
+                        continue;
+                    }
+                }
                 let key = k & 0xff;
                 if !frozen && key == i32::from(b' ') {
                     if freeze_img.is_some() {

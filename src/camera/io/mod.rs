@@ -18,7 +18,7 @@ pub use capture::{
 };
 pub use preview::{
     FittedBgr, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, PixelPickMouse, PreviewAction,
-    ShowBgrResult, destroy_window, display_fit_bounds, draw_cam_label, draw_circle_px,
+    ShowBgrResult, arrow_delta, destroy_window, display_fit_bounds, draw_cam_label, draw_circle_px,
     draw_debug_lines, draw_help_lines, draw_pixel_loupe, draw_world_velocity, fit_bgr_downscale,
     hstack_bgr, show_bgr, unscale_xy,
 };

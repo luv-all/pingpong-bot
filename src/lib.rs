@@ -28,7 +28,7 @@ pub use camera::{
     MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, OpenCvCapture, PixelPickMouse, PixelPoint,
     PreviewAction, ResolvedCam, ShowBgrResult, SimCamera, StereoCamCliArgs, StreamPreset,
     TABLE_LANDMARK_COUNT, TableLandmark, TablePnpResult, ThreadedCapture, arducam_b0332,
-    calibrate_charuco, calibrate_table_pnp, destroy_window, detect_and_draw_charuco,
+    arrow_delta, calibrate_charuco, calibrate_table_pnp, destroy_window, detect_and_draw_charuco,
     display_fit_bounds, dlt_triangulate, draw_cam_label, draw_circle_px, draw_debug_lines,
     draw_help_lines, draw_pixel_loupe, draw_world_velocity, ensure_reproj_below, ensure_reproj_ok,
     fit_bgr_downscale, hstack_bgr, parse_fourcc, resolve_cams, sample_at, show_bgr,

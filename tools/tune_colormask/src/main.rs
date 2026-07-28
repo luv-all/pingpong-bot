@@ -14,9 +14,9 @@ use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
     CameraId, ColorSpace, ColormaskParams, FrameSource, ImageDirSource, OpenCvCapture,
-    PixelPickMouse, PixelPoint, PreviewAction, colormask_path, destroy_window, draw_cam_label,
-    draw_circle_px, draw_debug_lines, draw_help_lines, draw_pixel_loupe, hstack_bgr,
-    load_colormask_set_or_empty, save_colormask_set, show_bgr, unscale_xy,
+    PixelPickMouse, PixelPoint, PreviewAction, arrow_delta, colormask_path, destroy_window,
+    draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines, draw_pixel_loupe,
+    hstack_bgr, load_colormask_set_or_empty, save_colormask_set, show_bgr,
 };
 
 use cli::Args;
@@ -450,7 +450,7 @@ fn main() -> Result<()> {
     );
     hint_existing(cam_id);
     println!(
-        "LMB=pick  Shift+move=loupe  z=undo  c=clear  Space=freeze  s=space  p=save+print  q=quit"
+        "LMB/Enter=pick  arrows=1px  Shift+move=loupe  z=undo  c=clear  Space=freeze  s=space  p=save+print  q=quit"
     );
 
     loop {
@@ -485,13 +485,9 @@ fn main() -> Result<()> {
         // drain clicks → sample on original panel only; Shift-hover for loupe
         let (clicks, hover) = {
             let mut m = mouse.lock().expect("mouse lock");
-            let clicks = m
-                .drain_clicks()
-                .into_iter()
-                .map(|(x, y)| unscale_xy(x, y, display_scale))
-                .collect::<Vec<_>>();
-            let hover = m.hover.map(|(x, y)| unscale_xy(x, y, display_scale));
-            (clicks, hover)
+            m.sync(display_scale, panel_w, panel_h);
+            let clicks = m.drain_clicks();
+            (clicks, m.hover)
         };
         for (mx, my) in clicks {
             if mx < 0 || my < 0 || mx >= panel_w || my >= panel_h {
@@ -567,8 +563,8 @@ fn main() -> Result<()> {
         draw_help_lines(
             &mut mosaic,
             &[
-                "LMB pick",
-                "Shift+move loupe",
+                "LMB/Enter pick",
+                "arrows 1px  Shift loupe",
                 "z undo  c clear",
                 "Space freeze",
                 "s ycrcb|hsv",
@@ -588,42 +584,48 @@ fn main() -> Result<()> {
         match shown.action {
             PreviewAction::Quit => break,
             PreviewAction::Continue => {}
-            PreviewAction::Key(key) if key == i32::from(b' ') => {
-                frozen = !frozen;
-                println!("{}", if frozen { "frozen" } else { "live" });
-            }
-            PreviewAction::Key(key) if key == i32::from(b's') || key == i32::from(b'S') => {
-                space = match space {
-                    ColorSpace::Ycrcb => ColorSpace::Hsv,
-                    ColorSpace::Hsv => ColorSpace::Ycrcb,
-                };
-                println!("space={space}");
-            }
-            PreviewAction::Key(key)
-                if key == i32::from(b'z') || key == i32::from(b'Z') || key == 8 =>
-            {
-                if samples.pop().is_some() {
-                    println!("undo → {} samples", samples.len());
+            PreviewAction::Key(k) => {
+                if let Some((dx, dy)) = arrow_delta(k) {
+                    let mut m = mouse.lock().expect("mouse lock");
+                    m.sync(display_scale, panel_w, panel_h);
+                    m.nudge(dx, dy, panel_w, panel_h);
+                    continue;
+                }
+                if k == 13 || k == 10 {
+                    mouse.lock().expect("mouse lock").confirm();
+                    continue;
+                }
+                let key = k & 0xff;
+                if key == i32::from(b' ') {
+                    frozen = !frozen;
+                    println!("{}", if frozen { "frozen" } else { "live" });
+                } else if key == i32::from(b's') || key == i32::from(b'S') {
+                    space = match space {
+                        ColorSpace::Ycrcb => ColorSpace::Hsv,
+                        ColorSpace::Hsv => ColorSpace::Ycrcb,
+                    };
+                    println!("space={space}");
+                } else if key == i32::from(b'z') || key == i32::from(b'Z') || key == 8 {
+                    if samples.pop().is_some() {
+                        println!("undo → {} samples", samples.len());
+                    }
+                } else if key == i32::from(b'c') || key == i32::from(b'C') {
+                    samples.clear();
+                    println!("cleared");
+                } else if key == i32::from(b'p') || key == i32::from(b'P') {
+                    let (y, h) = ranges_from_samples(&samples, margin)?;
+                    print_all(y, h, samples.len(), margin);
+                    let active = match space {
+                        ColorSpace::Ycrcb => y,
+                        ColorSpace::Hsv => h,
+                    };
+                    if let Some(r) = active {
+                        upsert_colormask(cam_id, space, r)?;
+                    } else {
+                        println!("(save skipped: need samples)");
+                    }
                 }
             }
-            PreviewAction::Key(key) if key == i32::from(b'c') || key == i32::from(b'C') => {
-                samples.clear();
-                println!("cleared");
-            }
-            PreviewAction::Key(key) if key == i32::from(b'p') || key == i32::from(b'P') => {
-                let (y, h) = ranges_from_samples(&samples, margin)?;
-                print_all(y, h, samples.len(), margin);
-                let active = match space {
-                    ColorSpace::Ycrcb => y,
-                    ColorSpace::Hsv => h,
-                };
-                if let Some(r) = active {
-                    upsert_colormask(cam_id, space, r)?;
-                } else {
-                    println!("(save skipped: need samples)");
-                }
-            }
-            PreviewAction::Key(_) => {}
         }
 
         n += 1;

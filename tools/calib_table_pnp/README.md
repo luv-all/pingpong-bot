@@ -38,7 +38,8 @@ cargo run -p calib-table-pnp -- --cam right --merge other.json -o data/calibrati
 | 키 | 동작 |
 |----|------|
 | `Space` | 스냅 |
-| `LMB` | 랜드마크 클릭 |
+| `LMB` / `Enter` | 랜드마크 클릭 (aim 위치) |
+| `←↑→↓` | aim 1px (마우스 이동 시 즉시 재동기화) |
 | `Shift`+이동 | 8× loupe |
 | `z` / `c` | undo / clear |
 | `s` | 본파일 promote (세션 accepted 또는 디스크 pending) |

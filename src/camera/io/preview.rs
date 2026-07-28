@@ -15,7 +15,7 @@ pub enum PreviewAction {
     Continue,
     /// `q` / ESC
     Quit,
-    /// 그 외 키 (Space=32, 's'=115 등). OpenCV waitKey 코드.
+    /// 그 외 키 (Space=32, 's'=115, 화살표=waitKeyEx 풀코드 등).
     Key(i32),
 }
 
@@ -144,17 +144,14 @@ pub fn show_bgr(window: &str, image: &Mat, wait_ms: i32) -> CvResult<ShowBgrResu
         },
     };
     highgui::imshow(window, &fitted.image)?;
-    let key = highgui::wait_key(wait_ms.max(1))?;
+    // waitKeyEx: 화살표가 macOS/X11에서 풀 키코드로 온다 (waitKey+&0xff는 Left≡'Q' 충돌).
+    let key = highgui::wait_key_ex(wait_ms.max(1))?;
     let action = if key < 0 {
         PreviewAction::Continue
+    } else if key == 27 || key == i32::from(b'q') || key == i32::from(b'Q') {
+        PreviewAction::Quit
     } else {
-        // macOS 등에서 상위 비트가 붙는 경우 대비
-        let key = key & 0xff;
-        if key == 27 || key == i32::from(b'q') || key == i32::from(b'Q') {
-            PreviewAction::Quit
-        } else {
-            PreviewAction::Key(key)
-        }
+        PreviewAction::Key(key)
     };
     return Ok(ShowBgrResult {
         action,
@@ -487,32 +484,122 @@ pub fn draw_cam_label(img: &mut Mat, label: &str, color: Scalar) -> CvResult<()>
 /// 픽셀 정밀 찍기용 loupe — [`crate::defaults::vision`].
 pub use crate::defaults::vision::{PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM};
 
-/// highgui 마우스: LMB 클릭 큐 + Shift-hold loupe 호버.
+/// highgui 마우스: LMB/Enter 픽 큐 + Shift loupe + 방향키 1px nudge.
+///
+/// 좌표 규약 (툴은 매 프레임 [`Self::sync`] 후 읽기):
+/// - [`Self::drain_clicks`] / [`Self::hover`] / aim → **원본 이미지** 픽셀
+/// - 마우스가 움직이면 aim을 마우스에 즉시 재동기화
+/// - 마우스 정지 중 방향키는 aim만 ±1px (원본 기준)
 #[derive(Debug, Default, Clone)]
 pub struct PixelPickMouse {
-    pub clicks: Vec<(i32, i32)>,
-    /// Shift 누른 채 마지막 커서 위치 (창 좌표).
+    clicks: Vec<(i32, i32)>,
+    /// Shift 홀드 시 loupe 중심 (이미지 좌표). [`Self::sync`]·[`Self::nudge`]가 갱신.
     pub hover: Option<(i32, i32)>,
     pub shift: bool,
+    mouse_win: Option<(i32, i32)>,
+    /// 마우스 좌표가 바뀌면 true → 다음 sync에서 aim = mouse.
+    mouse_moved: bool,
+    pending_lmb: bool,
+    aim_img: Option<(i32, i32)>,
 }
 
 impl PixelPickMouse {
     /// `set_mouse_callback`에서 호출. Shift는 `EVENT_FLAG_SHIFTKEY`(크로스플랫폼).
     pub fn on_event(&mut self, event: i32, x: i32, y: i32, flags: i32) {
         self.shift = (flags & highgui::EVENT_FLAG_SHIFTKEY) != 0;
-        if self.shift {
-            self.hover = Some((x, y));
-        } else {
-            self.hover = None;
+        let moved = self
+            .mouse_win
+            .map(|(mx, my)| mx != x || my != y)
+            .unwrap_or(true);
+        self.mouse_win = Some((x, y));
+        if moved {
+            self.mouse_moved = true;
         }
         if event == highgui::EVENT_LBUTTONDOWN {
-            self.clicks.push((x, y));
+            self.pending_lmb = true;
         }
     }
 
+    /// 창→이미지 동기화. 매 프레임 `drain`/`hover` 읽기 **전에** 호출.
+    pub fn sync(&mut self, scale: f64, img_w: i32, img_h: i32) {
+        if img_w <= 0 || img_h <= 0 {
+            return;
+        }
+        if self.mouse_moved {
+            if let Some((wx, wy)) = self.mouse_win {
+                let (ix, iy) = unscale_xy(wx, wy, scale);
+                self.aim_img = Some((ix.clamp(0, img_w - 1), iy.clamp(0, img_h - 1)));
+            }
+            self.mouse_moved = false;
+        } else if self.aim_img.is_none() {
+            if let Some((wx, wy)) = self.mouse_win {
+                let (ix, iy) = unscale_xy(wx, wy, scale);
+                self.aim_img = Some((ix.clamp(0, img_w - 1), iy.clamp(0, img_h - 1)));
+            }
+        }
+        if self.pending_lmb {
+            if let Some(a) = self.aim_img {
+                self.clicks.push(a);
+            }
+            self.pending_lmb = false;
+        }
+        self.hover = if self.shift { self.aim_img } else { None };
+    }
+
+    /// 원본 이미지 기준 1px 단위 nudge. aim이 아직 없으면 no-op.
+    pub fn nudge(&mut self, dx: i32, dy: i32, img_w: i32, img_h: i32) {
+        if img_w <= 0 || img_h <= 0 {
+            return;
+        }
+        let Some((x, y)) = self.aim_img else {
+            return;
+        };
+        self.aim_img = Some((
+            (x + dx).clamp(0, img_w - 1),
+            (y + dy).clamp(0, img_h - 1),
+        ));
+        if self.shift {
+            self.hover = self.aim_img;
+        }
+    }
+
+    /// Enter 등: 현재 aim을 클릭 큐에 넣는다.
+    pub fn confirm(&mut self) {
+        if let Some(a) = self.aim_img {
+            self.clicks.push(a);
+        }
+    }
+
+    /// 이미지 좌표 클릭 큐.
     pub fn drain_clicks(&mut self) -> Vec<(i32, i32)> {
         return std::mem::take(&mut self.clicks);
     }
+
+    pub fn clear_clicks(&mut self) {
+        self.clicks.clear();
+        self.pending_lmb = false;
+    }
+}
+
+/// [`PreviewAction::Key`] (waitKeyEx) → 이미지 (dx, dy). 화살표가 아니면 None.
+pub fn arrow_delta(key: i32) -> Option<(i32, i32)> {
+    // macOS NSEvent function keys
+    const MAC_UP: i32 = 0xF700;
+    const MAC_DOWN: i32 = 0xF701;
+    const MAC_LEFT: i32 = 0xF702;
+    const MAC_RIGHT: i32 = 0xF703;
+    // X11 keysyms (Linux GTK)
+    const XK_LEFT: i32 = 0xFF51;
+    const XK_UP: i32 = 0xFF52;
+    const XK_RIGHT: i32 = 0xFF53;
+    const XK_DOWN: i32 = 0xFF54;
+    return match key {
+        MAC_LEFT | XK_LEFT => Some((-1, 0)),
+        MAC_RIGHT | XK_RIGHT => Some((1, 0)),
+        MAC_UP | XK_UP => Some((0, -1)),
+        MAC_DOWN | XK_DOWN => Some((0, 1)),
+        _ => None,
+    };
 }
 
 /// `src`의 `(cx,cy)` 주변을 8× nearest로 확대해 `dst` 커서 위에 원형 loupe를 그린다.
@@ -708,5 +795,44 @@ mod tests {
         let (x, y) = unscale_xy(500, 200, 0.5);
         assert_eq!((x, y), (1000, 400));
         assert_eq!(unscale_xy(10, 20, 1.0), (10, 20));
+    }
+
+    #[test]
+    fn pixel_pick_mouse_nudge_then_mouse_resync() {
+        let mut m = PixelPickMouse::default();
+        m.on_event(highgui::EVENT_MOUSEMOVE, 10, 20, 0);
+        m.sync(1.0, 100, 100);
+        m.nudge(1, -1, 100, 100);
+
+        m.on_event(highgui::EVENT_LBUTTONDOWN, 10, 20, 0);
+        m.sync(1.0, 100, 100);
+        assert_eq!(m.drain_clicks(), vec![(11, 19)]);
+
+        m.on_event(highgui::EVENT_MOUSEMOVE, 50, 60, 0);
+        m.sync(1.0, 100, 100);
+        m.confirm();
+        assert_eq!(m.drain_clicks(), vec![(50, 60)]);
+    }
+
+    #[test]
+    fn pixel_pick_mouse_shift_hover_is_aim_image_coords() {
+        let mut m = PixelPickMouse::default();
+        m.on_event(
+            highgui::EVENT_MOUSEMOVE,
+            5,
+            10,
+            highgui::EVENT_FLAG_SHIFTKEY,
+        );
+        m.sync(0.5, 200, 200);
+        assert_eq!(m.hover, Some((10, 20)));
+        m.nudge(1, 0, 200, 200);
+        assert_eq!(m.hover, Some((11, 20)));
+    }
+
+    #[test]
+    fn arrow_delta_mac_and_x11() {
+        assert_eq!(arrow_delta(0xF702), Some((-1, 0)));
+        assert_eq!(arrow_delta(0xFF53), Some((1, 0)));
+        assert_eq!(arrow_delta(i32::from(b'q')), None);
     }
 }
