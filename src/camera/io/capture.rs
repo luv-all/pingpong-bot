@@ -36,6 +36,69 @@ pub trait HintSource: Send {
     fn next_hint(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)>;
 }
 
+/// OpenCV `VideoCapture` API 백엔드.
+///
+/// Windows에서 `Any`→MSMF가 잡히면 MJPG/고FPS가 무시되는 경우가 많아
+/// [`CaptureBackend::recommended`]는 Windows에서 DirectShow를 고른다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptureBackend {
+    /// `CAP_ANY` — OS 기본 선택.
+    #[default]
+    Any,
+    /// DirectShow (Windows UVC 고FPS에 유리).
+    DShow,
+    /// Media Foundation (Windows).
+    Msmf,
+    /// V4L2 (Linux).
+    V4l2,
+    /// AVFoundation (macOS).
+    AvFoundation,
+}
+
+impl CaptureBackend {
+    /// 호스트에서 고FPS UVC에 안전한 기본값.
+    pub fn recommended() -> Self {
+        if cfg!(target_os = "windows") {
+            return Self::DShow;
+        }
+        return Self::Any;
+    }
+
+    pub fn parse(s: &str) -> Result<Self, String> {
+        return match s.trim().to_ascii_lowercase().as_str() {
+            "any" | "default" | "" => Ok(Self::Any),
+            "dshow" | "directshow" => Ok(Self::DShow),
+            "msmf" | "mediafoundation" => Ok(Self::Msmf),
+            "v4l" | "v4l2" => Ok(Self::V4l2),
+            "avfoundation" | "avf" => Ok(Self::AvFoundation),
+            "recommended" | "auto" => Ok(Self::recommended()),
+            other => Err(format!(
+                "unknown capture backend '{other}' (any|dshow|msmf|v4l2|avfoundation|recommended)"
+            )),
+        };
+    }
+
+    pub fn as_str(self) -> &'static str {
+        return match self {
+            Self::Any => "any",
+            Self::DShow => "dshow",
+            Self::Msmf => "msmf",
+            Self::V4l2 => "v4l2",
+            Self::AvFoundation => "avfoundation",
+        };
+    }
+
+    pub fn api_pref(self) -> i32 {
+        return match self {
+            Self::Any => videoio::CAP_ANY,
+            Self::DShow => videoio::CAP_DSHOW,
+            Self::Msmf => videoio::CAP_MSMF,
+            Self::V4l2 => videoio::CAP_V4L2,
+            Self::AvFoundation => videoio::CAP_AVFOUNDATION,
+        };
+    }
+}
+
 /// OpenCV `VideoCapture` (장치 인덱스 또는 경로).
 pub struct OpenCvCapture {
     camera_id: CameraId,
@@ -47,21 +110,39 @@ pub struct OpenCvCapture {
 }
 
 impl OpenCvCapture {
+    /// [`CaptureBackend::recommended`]로 연다 (Windows → DirectShow).
     pub fn from_device(camera_id: CameraId, device: i32) -> Result<Self, String> {
-        let cap = VideoCapture::new(device, videoio::CAP_ANY)
-            .map_err(|e| format!("VideoCapture open device {device}: {e}"))?;
+        return Self::from_device_with_backend(camera_id, device, CaptureBackend::recommended());
+    }
+
+    pub fn from_device_with_backend(
+        camera_id: CameraId,
+        device: i32,
+        backend: CaptureBackend,
+    ) -> Result<Self, String> {
+        let cap = VideoCapture::new(device, backend.api_pref()).map_err(|e| {
+            format!(
+                "VideoCapture open device {device} backend={}: {e}",
+                backend.as_str()
+            )
+        })?;
         if !cap
             .is_opened()
             .map_err(|e| format!("VideoCapture is_opened: {e}"))?
         {
-            return Err(format!("VideoCapture device {device} failed to open"));
+            return Err(format!(
+                "VideoCapture device {device} backend={} failed to open",
+                backend.as_str()
+            ));
         }
-        return Ok(Self {
+        let mut out = Self {
             camera_id,
             cap,
             frame_index: 0,
             timeline: None,
-        });
+        };
+        out.apply_buffer_size_one();
+        return Ok(out);
     }
 
     pub fn from_path(camera_id: CameraId, path: &Path) -> Result<Self, String> {
@@ -87,6 +168,17 @@ impl OpenCvCapture {
             frame_index: 0,
             timeline: Some((Instant::now(), fps)),
         });
+    }
+
+    pub fn camera_id(&self) -> CameraId {
+        return self.camera_id;
+    }
+
+    fn apply_buffer_size_one(&mut self) {
+        let _ = self.cap.set(
+            videoio::CAP_PROP_BUFFERSIZE,
+            f64::from(crate::camera::arducam_b0332::BUFFER_SIZE),
+        );
     }
 
     /// 파일 타임라인 FPS를 덮어쓴다 (속도 추정용).
@@ -139,10 +231,11 @@ impl OpenCvCapture {
         return Some(s);
     }
 
-    /// UVC 스트림 모드 요청 (Arducam B0332 등은 **MJPG**여야 고FPS).
+    /// UVC 스트림 모드 요청. **Arducam B0332**는 MJPG@1280×800@120이 아니면
+    /// YUY2≈10fps로 떨어진다 — [`crate::camera::arducam_b0332`].
     ///
-    /// 예: `1280×800` + `120` + `MJPG`. 드라이버가 무시할 수 있으니
-    /// [`reported_fourcc`] / [`reported_fps`]로 확인한다.
+    /// 순서: BUFFERSIZE → FOURCC → size → fps. 드라이버가 무시할 수 있으니
+    /// [`stream_summary`] / [`warn_stream_mismatch`]로 확인한다.
     pub fn request_stream(
         &mut self,
         width: i32,
@@ -150,6 +243,7 @@ impl OpenCvCapture {
         fps: f64,
         fourcc: &[u8; 4],
     ) -> Result<(), String> {
+        self.apply_buffer_size_one();
         let code = videoio::VideoWriter::fourcc(
             fourcc[0] as char,
             fourcc[1] as char,
@@ -165,7 +259,63 @@ impl OpenCvCapture {
             .cap
             .set(videoio::CAP_PROP_FRAME_HEIGHT, f64::from(height));
         let _ = self.cap.set(videoio::CAP_PROP_FPS, fps);
+        // 일부 백엔드는 재설정 후 버퍼가 풀리므로 한 번 더.
+        self.apply_buffer_size_one();
         return Ok(());
+    }
+
+    /// 현재 스트림 한 줄 요약 (`backend=… fourcc=… fps=… size=…`).
+    pub fn stream_summary(&self) -> String {
+        let backend = self
+            .cap
+            .get_backend_name()
+            .ok()
+            .unwrap_or_else(|| "?".into());
+        let fourcc = self.reported_fourcc().unwrap_or_else(|| "?".into());
+        let fps = self
+            .reported_fps()
+            .map(|f| format!("{f:.0}"))
+            .unwrap_or_else(|| "?".into());
+        let size = self
+            .reported_size()
+            .map(|(w, h)| format!("{w}x{h}"))
+            .unwrap_or_else(|| "?".into());
+        return format!("backend={backend} fourcc={fourcc} fps={fps} size={size}");
+    }
+
+    /// 요청과 보고값이 다르면 경고 문자열. 일치하면 `None`.
+    pub fn warn_stream_mismatch(
+        &self,
+        width: i32,
+        height: i32,
+        fps: f64,
+        fourcc: &[u8; 4],
+    ) -> Option<String> {
+        let want_fcc: String = fourcc.iter().map(|&b| b as char).collect();
+        let mut parts = Vec::new();
+        if let Some(got) = self.reported_fourcc() {
+            if !got.eq_ignore_ascii_case(&want_fcc) {
+                parts.push(format!("fourcc got={got} want={want_fcc}"));
+            }
+        }
+        if let Some((w, h)) = self.reported_size() {
+            if w != width || h != height {
+                parts.push(format!("size got={w}x{h} want={width}x{height}"));
+            }
+        }
+        if let Some(got) = self.reported_fps() {
+            if (got - fps).abs() > 5.0 {
+                parts.push(format!("fps got={got:.0} want={fps:.0}"));
+            }
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        return Some(format!(
+            "stream mismatch ({}) — YUY2≈{}fps(B0332); Win은 --backend dshow, FOURCC=MJPG 확인",
+            parts.join(", "),
+            crate::camera::arducam_b0332::FPS_YUY2
+        ));
     }
 
     /// 노출 관련 드라이버 값 스냅샷 (macOS AVFoundation이면 대개 0 / 무시).

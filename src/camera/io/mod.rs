@@ -4,8 +4,11 @@ mod capture;
 pub mod preview;
 mod projection;
 mod sim;
+mod threaded;
 
-pub use capture::{ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture};
+pub use capture::{
+    CaptureBackend, ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture,
+};
 pub use preview::{
     PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, PixelPickMouse, PreviewAction, destroy_window,
     draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines, draw_pixel_loupe,
@@ -13,3 +16,4 @@ pub use preview::{
 };
 pub use projection::CameraView;
 pub use sim::SimCamera;
+pub use threaded::ThreadedCapture;

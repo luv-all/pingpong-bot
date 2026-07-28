@@ -1,0 +1,42 @@
+//! Arducam B0332 (OV9281 USB2.0 UVC) — 스트림·렌즈 기본값 SSOT.
+//!
+//! Datasheet: [OV9281 USB2.0 Low Distortion Camera Module B0332](https://cdn.robotshop.com/media/A/Adu/RB-Adu-256/pdf/arducam-1mp-ov9281-usb-camera-120fps-global-shutter-uvc-low-distortion-m12-lens-datasheet.pdf)
+//! Manual summary: [Core Electronics B0332 Manual](https://core-electronics.com.au/attachments/localcontent/B0332_Manual_50837c28540.pdf)
+//!
+//! | 항목 | 스펙 |
+//! |------|------|
+//! | Sensor | Monochrome global shutter OV9281, 1/4″ |
+//! | Resolution | 1MP **1280×800** |
+//! | Format | **MJPG** / YUY2 |
+//! | Frame rate | MJPG **120fps**@1280×800 (또한 720P·SVGA·VGA…); YUY2 **10fps**만 |
+//! | Lens | M12, EFL 2.8mm, distortion &lt;1%, **HFOV 70°** |
+//! | UVC name | `Arducam OV9281 USB Camera` |
+//!
+//! YUY2로 열리면 ~10fps가 정상이므로 고FPS는 반드시 MJPG를 요청한다.
+
+/// 네이티브 가로 [px].
+pub const WIDTH: i32 = 1280;
+/// 네이티브 세로 [px].
+pub const HEIGHT: i32 = 800;
+/// MJPG 최대 FPS (datasheet: 120fps@1280×800; 일부 리스팅은 100fps 모드도 표기).
+pub const FPS_MJPG: f64 = 120.0;
+/// YUY2 최대 FPS (고FPS 불가 — 진단용).
+pub const FPS_YUY2: f64 = 10.0;
+/// 고FPS용 FOURCC.
+pub const FOURCC_MJPG: &str = "MJPG";
+/// 저FPS 비압축 FOURCC.
+pub const FOURCC_YUY2: &str = "YUY2";
+
+/// 렌즈 수평 FOV [deg] (datasheet: 70°(H)).
+pub const HFOV_DEG: f64 = 70.0;
+/// 렌즈 EFL [mm].
+pub const EFL_MM: f64 = 2.8;
+
+/// `HFOV` + 네이티브 종횡비로 환산한 수직 FOV [deg].
+///
+/// `V = 2 atan( tan(H/2) * height/width )` → ≈ 47.3°.
+/// table-PnP `intrins_from_fov`는 **수직** FOV를 받으므로 이걸 쓴다.
+pub const VFOV_DEG: f64 = 47.3;
+
+/// OpenCV `CAP_PROP_BUFFERSIZE` — UVC 지연 최소화.
+pub const BUFFER_SIZE: i32 = 1;
