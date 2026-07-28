@@ -46,6 +46,8 @@ cargo run -p calib-table-pnp -- --cam right --merge other.json -o data/calibrati
 | `n` | live |
 | `q` | 종료 (pending 유지) |
 
+`--pad N` (기본 16): Review 캔버스 외곽에 Npx 회색 체크 패딩. 프레임에 잘린 랜드마크를 이미지 좌표(음수·폭 초과)로 찍을 수 있다. `--pad 0`이면 패딩 없음.
+
 오버레이: **초록○** = 클릭, **마젠타×** = PnP 이상 재투영, **노란선** = 잔차(px). FAIL여도 표시되므로 잔차 큰 점부터 `z`로 다시 찍으면 된다.
 
 pending: 공유 `data/calibration.pending.json`에 `cameras[]` upsert. `s`는 현재 cam만 본파일로 promote하고 pending에서 해당 항목만 제거.

@@ -37,6 +37,10 @@ pub struct Args {
     #[arg(long, default_value_t = MAX_REPROJ_RMSE_PX)]
     pub max_rmse: f64,
 
+    /// Review 캔버스 외곽 패딩 [px]. 프레임 밖 랜드마크 클릭용 (0=비활성)
+    #[arg(long, default_value_t = 16)]
+    pub pad: i32,
+
     /// 픽셀 JSON으로 PnP만 (인터랙티브 없음). 예: {"width":640,"height":480,"pixels":[[u,v],...]}
     #[arg(long)]
     pub from_pixels: Option<PathBuf>,
@@ -73,6 +77,7 @@ mod tests {
             merge: None,
             fov_y: DEFAULT_FOV_Y_DEG,
             max_rmse: MAX_REPROJ_RMSE_PX,
+            pad: 16,
             from_pixels: None,
             validate: None,
         };

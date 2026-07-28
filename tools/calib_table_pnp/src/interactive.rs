@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use opencv::core::{Mat, Point, Scalar};
+use opencv::core::{Mat, Point, Rect, Scalar, Vec3b};
 use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
@@ -66,13 +66,14 @@ pub fn run(args: &Args) -> Result<()> {
     let mut display_scale = 1.0;
 
     println!(
-        "table-PnP — role={} cam_id={} device={} backend={} fov_y={} max_rmse={}",
+        "table-PnP — role={} cam_id={} device={} backend={} fov_y={} max_rmse={} pad={}",
         resolved.role,
         cam_id.0,
         resolved.device,
         args.cam.stream.backend,
         args.fov_y,
-        args.max_rmse
+        args.max_rmse,
+        args.pad
     );
     cli::hint_pending_if_exists(args, cam_id);
     println!(
@@ -108,17 +109,22 @@ pub fn run(args: &Args) -> Result<()> {
         };
         let img_w = frame_img.cols();
         let img_h = frame_img.rows();
+        let pad = if frozen { args.pad.max(0) } else { 0 };
+        let canvas_w = img_w + 2 * pad;
+        let canvas_h = img_h + 2 * pad;
 
         let hover = {
             let mut m = mouse.lock().expect("mouse");
-            m.sync(display_scale, img_w, img_h);
+            m.sync(display_scale, canvas_w, canvas_h);
             if frozen {
                 for (x, y) in m.drain_clicks() {
                     if clicks.len() < TABLE_LANDMARK_COUNT {
-                        clicks.push(PixelPoint::new(f64::from(x), f64::from(y)));
+                        let fx = x - pad;
+                        let fy = y - pad;
+                        clicks.push(PixelPoint::new(f64::from(fx), f64::from(fy)));
                         clicks_changed = true;
                         println!(
-                            "click {}/{} → ({x},{y})  {}",
+                            "click {}/{} → ({fx},{fy})  {}",
                             clicks.len(),
                             TABLE_LANDMARK_COUNT,
                             marks[clicks.len() - 1].id
@@ -147,19 +153,40 @@ pub fn run(args: &Args) -> Result<()> {
             }
         }
 
-        let mut panel = frame_img
-            .try_clone()
-            .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
+        let mut panel = if frozen {
+            make_padded_canvas(&frame_img, pad)?
+        } else {
+            frame_img
+                .try_clone()
+                .map_err(|e| anyhow::anyhow!("clone: {e}"))?
+        };
+        // loupe 샘플용 (오버레이 없는 패딩 캔버스)
+        let loupe_src = if frozen && pad > 0 {
+            Some(panel.try_clone().map_err(|e| anyhow::anyhow!("clone: {e}"))?)
+        } else {
+            None
+        };
 
         if frozen {
             if let Some(ref s) = solved {
                 if s.accepted {
-                    draw_world_grid(&mut panel, &s.params, grid)?;
+                    if pad > 0 {
+                        let mut grid_layer = frame_img
+                            .try_clone()
+                            .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
+                        draw_world_grid(&mut grid_layer, &s.params, grid)?;
+                        let roi = Rect::new(pad, pad, img_w, img_h);
+                        {
+                            let mut dst = Mat::roi_mut(&mut panel, roi)?;
+                            grid_layer.copy_to(&mut dst)?;
+                        }
+                    } else {
+                        draw_world_grid(&mut panel, &s.params, grid)?;
+                    }
                 }
-                // 클릭(녹) vs 이상 재투영(마젠타) + 잔차선
-                draw_reproj_overlay(&mut panel, &clicks, &marks, &s.params)?;
+                draw_reproj_overlay(&mut panel, &clicks, &marks, &s.params, pad)?;
             }
-            draw_clicks(&mut panel, &clicks, &marks)?;
+            draw_clicks(&mut panel, &clicks, &marks, pad)?;
 
             if let Some(ref s) = solved {
                 if s.accepted {
@@ -227,7 +254,8 @@ pub fn run(args: &Args) -> Result<()> {
             }
 
             if let Some((hx, hy)) = hover {
-                let _ = draw_pixel_loupe(&mut panel, &frame_img, hx, hy);
+                let src = loupe_src.as_ref().unwrap_or(&frame_img);
+                let _ = draw_pixel_loupe(&mut panel, src, hx, hy);
             }
         } else {
             draw_debug_lines(
@@ -258,8 +286,8 @@ pub fn run(args: &Args) -> Result<()> {
                 if frozen {
                     if let Some((dx, dy)) = arrow_delta(k) {
                         let mut m = mouse.lock().expect("mouse");
-                        m.sync(display_scale, img_w, img_h);
-                        m.nudge(dx, dy, img_w, img_h);
+                        m.sync(display_scale, canvas_w, canvas_h);
+                        m.nudge(dx, dy, canvas_w, canvas_h);
                         continue;
                     }
                     if k == 13 || k == 10 {
@@ -386,6 +414,40 @@ fn print_per_point_residuals(clicks: &[PixelPoint], params: &CameraParams) {
     println!("  residuals[px] {}", parts.join(" "));
 }
 
+fn to_canvas(p: PixelPoint, pad: i32) -> PixelPoint {
+    return PixelPoint::new(p.x + f64::from(pad), p.y + f64::from(pad));
+}
+
+fn to_canvas_pts(pts: &[PixelPoint], pad: i32) -> Vec<PixelPoint> {
+    return pts.iter().copied().map(|p| to_canvas(p, pad)).collect();
+}
+
+/// Review용: 회색 체크 패딩 + 프레임. `pad==0`이면 프레임 복제.
+fn make_padded_canvas(frame: &Mat, pad: i32) -> Result<Mat> {
+    if pad <= 0 {
+        return frame
+            .try_clone()
+            .map_err(|e| anyhow::anyhow!("clone: {e}"));
+    }
+    let fw = frame.cols();
+    let fh = frame.rows();
+    let cw = fw + 2 * pad;
+    let ch = fh + 2 * pad;
+    let mut out = Mat::zeros(ch, cw, frame.typ())?.to_mat()?;
+    for y in 0..ch {
+        for x in 0..cw {
+            let g = if (x + y) % 2 == 0 { 40u8 } else { 72u8 };
+            *out.at_2d_mut::<Vec3b>(y, x)? = Vec3b::from([g, g, g]);
+        }
+    }
+    {
+        let roi = Rect::new(pad, pad, fw, fh);
+        let mut dst = Mat::roi_mut(&mut out, roi)?;
+        frame.copy_to(&mut dst)?;
+    }
+    return Ok(out);
+}
+
 fn draw_complete_edges(
     panel: &mut Mat,
     pts: &[PixelPoint],
@@ -419,11 +481,17 @@ fn draw_mesh_edges(
     return Ok(());
 }
 
-/// 클릭 점(녹색) + 현재 꼭짓점 완전연결 메시(주황).
-fn draw_clicks(panel: &mut Mat, clicks: &[PixelPoint], marks: &[TableLandmark]) -> Result<()> {
-    draw_complete_edges(panel, clicks, Scalar::new(255.0, 128.0, 0.0, 0.0), 1)?;
+/// 클릭 점(녹색) + 현재 꼭짓점 완전연결 메시(주황). `pad`는 캔버스 오프셋.
+fn draw_clicks(
+    panel: &mut Mat,
+    clicks: &[PixelPoint],
+    marks: &[TableLandmark],
+    pad: i32,
+) -> Result<()> {
+    let pts = to_canvas_pts(clicks, pad);
+    draw_complete_edges(panel, &pts, Scalar::new(255.0, 128.0, 0.0, 0.0), 1)?;
 
-    for (i, px) in clicks.iter().enumerate() {
+    for (i, px) in pts.iter().enumerate() {
         let p = Point::new(px.x.round() as i32, px.y.round() as i32);
         imgproc::circle(
             panel,
@@ -456,23 +524,23 @@ fn draw_reproj_overlay(
     clicks: &[PixelPoint],
     marks: &[TableLandmark],
     params: &CameraParams,
+    pad: i32,
 ) -> Result<()> {
     if clicks.len() != TABLE_LANDMARK_COUNT {
         return Ok(());
     }
-    // 이미지 밖이어도 잔차 표시용으로 투영 (project_world는 클램프해 None)
     let ideals: Vec<Option<PixelPoint>> = marks
         .iter()
-        .map(|m| project_unclipped(params, m.world))
+        .map(|m| project_unclipped(params, m.world).map(|p| to_canvas(p, pad)))
         .collect();
+    let click_pts = to_canvas_pts(clicks, pad);
     let Some(ideal_pts): Option<Vec<PixelPoint>> = ideals.iter().cloned().collect() else {
-        // 하나라도 카메라 뒤면 메시 스킵, 보이는 점만 잔차
-        draw_residuals_partial(panel, clicks, &ideals)?;
+        draw_residuals_partial(panel, &click_pts, &ideals)?;
         return Ok(());
     };
 
     draw_mesh_edges(panel, &ideal_pts, Scalar::new(255.0, 0.0, 255.0, 0.0), 2)?;
-    draw_residuals_partial(panel, clicks, &ideals)?;
+    draw_residuals_partial(panel, &click_pts, &ideals)?;
     return Ok(());
 }
 
