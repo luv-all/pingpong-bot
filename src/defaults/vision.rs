@@ -3,10 +3,11 @@
 use anyhow::{Context, Result, bail};
 
 use crate::CameraId;
-use crate::defaults::calib::colormask_path;
+use crate::camera::{Calibration, CameraParams};
+use crate::defaults::calib::{calibration_path, colormask_path};
 use crate::detector::{
-    ColorContourCascade, ColormaskParams, RoiParams, RoiTrack, Scorer, ScorerParams, fuse,
-    load_colormask_set, track,
+    ColorContourCascade, ColormaskParams, FloorEdgeMask, RoiParams, Scorer, ScorerParams,
+    SpatialGate, fuse, load_colormask_set, scorer_params_from_calib, track,
 };
 
 /// fuse scorer motion 가중.
@@ -32,10 +33,10 @@ impl Default for RoiParams {
     fn default() -> Self {
         return Self {
             k: 3.5,
-            pad: 24,
+            pad: 32,
             m: 1.0,
             half_min: 48,
-            half_max: 240,
+            half_max: 320,
         };
     }
 }
@@ -55,18 +56,40 @@ pub fn colormask_for(camera_id: CameraId) -> Result<ColormaskParams> {
     return Ok(params);
 }
 
-fn assemble(color: ColormaskParams) -> RoiTrack {
-    let scorer = ScorerParams::default();
+/// [`calibration_path`]에서 캠 [`CameraParams`]. 없으면 에러.
+pub fn camera_params_for(camera_id: CameraId) -> Result<CameraParams> {
+    let path = calibration_path();
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("calibration 읽기: {}", path.display()))?;
+    let calib: Calibration = serde_json::from_str(&text)
+        .with_context(|| format!("calibration JSON: {}", path.display()))?;
+    let Some(params) = calib.params(camera_id).cloned() else {
+        bail!(
+            "{} 에 cam{} 없음 — calib-table-pnp 등으로 저장",
+            path.display(),
+            camera_id.0
+        );
+    };
+    return Ok(params);
+}
+
+fn assemble(camera_id: CameraId, color: ColormaskParams, cam: &CameraParams) -> Result<SpatialGate> {
+    let circ = ScorerParams::default().min_circularity;
+    let scorer = scorer_params_from_calib(cam, circ)?;
     let cascade = ColorContourCascade::new(color, &scorer);
     let fuse_det = fuse(
         cascade,
         Scorer::from(&scorer).with_motion_weight(MOTION_WEIGHT),
     )
     .with_motion_weight(MOTION_WEIGHT);
-    return track(fuse_det, RoiParams::default());
+    let tracked = track(fuse_det, RoiParams::default());
+    let mask = FloorEdgeMask::from_params(camera_id, cam)?;
+    return Ok(SpatialGate::new(mask, tracked));
 }
 
-/// 본선: 캠별 colormask → contour cascade + ROI track.
-pub fn detector_for(camera_id: CameraId) -> Result<RoiTrack> {
-    return Ok(assemble(colormask_for(camera_id)?));
+/// 본선: floor-edge 마스크 → colormask → contour cascade → ROI track.
+/// 캘리브·colormask SSOT 필수.
+pub fn detector_for(camera_id: CameraId) -> Result<SpatialGate> {
+    let cam = camera_params_for(camera_id)?;
+    return assemble(camera_id, colormask_for(camera_id)?, &cam);
 }

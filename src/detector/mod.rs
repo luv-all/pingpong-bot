@@ -9,6 +9,7 @@
 pub mod appearance;
 pub mod fuse_layer;
 pub mod motion;
+pub mod spatial;
 mod track;
 mod undistort;
 
@@ -23,6 +24,7 @@ pub use fuse_layer::fuse::{
 pub use fuse_layer::params::{self as params, RoiParams, ScorerParams};
 pub use fuse_layer::scorer::{self as scorer, Scorer};
 pub use motion::MotionPrior;
+pub use spatial::{FloorEdgeMask, SpatialGate, scorer_params_from_calib};
 pub use track::{RoiTrack, track};
 pub use undistort::undistort_frame;
 

@@ -1,6 +1,6 @@
-//! fuse 본선 디버그 — adaptive ROI + 누적 파이프라인 패널.
+//! fuse 본선 디버그 — floor-edge 마스크 + adaptive ROI + 누적 파이프라인 패널.
 //!
-//! 스텝: `0 original → 1 colormask → 2 +contour → 3 roi`
+//! 스텝: `0 floor-mask → 1 colormask → 2 +contour → 3 roi`
 //! track 중이면 1·2는 ROI 크롭에서만 계산(본선과 동일).
 //! 키: `r` ROI · `[` `]` k · `,` `.` m · `-` `=` pad · `p` paste · `q`/ESC
 
@@ -14,8 +14,9 @@ use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
     BallDetector, ColorContourCascade, Frame, FrameSource, ImageDirSource, OpenCvCapture,
-    PixelPoint, PreviewAction, RoiTrack, Scorer, ScorerParams, destroy_window, draw_cam_label,
-    draw_circle_px, draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
+    PixelPoint, PreviewAction, RoiTrack, Scorer, ScorerParams, camera_params_for, destroy_window,
+    draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines, hstack_bgr,
+    scorer_params_from_calib, show_bgr,
 };
 
 use cli::Args;
@@ -155,17 +156,22 @@ fn main() -> Result<()> {
 
     let mut source = open_source(&args)?;
     let cam_id = source.camera_id();
+    let cam = camera_params_for(cam_id)?;
     let mut detector = pingpong_bot::detector_for(cam_id)?;
     if args.no_roi {
         detector.set_roi_enabled(false);
     }
 
-    let scorer_params = ScorerParams::default();
+    let circ = ScorerParams::default().min_circularity;
+    let scorer_params = scorer_params_from_calib(&cam, circ)?;
     let scorer = Scorer::from(&scorer_params);
     let mut cascade =
         ColorContourCascade::new(pingpong_bot::colormask_for(cam_id)?, &scorer_params);
 
-    println!("{detector} (cam{} colormask → contour → ROI)", cam_id.0);
+    println!(
+        "{detector} (cam{} floor-mask → colormask → contour → ROI) area=[{:.0},{:.0}]",
+        cam_id.0, scorer_params.min_area_px, scorer_params.max_area_px
+    );
     println!("keys: r ROI  [ ] k  , . m  - = pad  p paste  q/ESC quit");
 
     let window = "detect:full";
@@ -186,6 +192,18 @@ fn main() -> Result<()> {
     while let Some(frame) = source.next_frame() {
         let pixel = detector.detect(&frame);
 
+        let masked_img = detector
+            .mask
+            .apply_bgr(&frame.image)
+            .context("floor-mask apply")?;
+        let masked_frame = Frame {
+            camera_id: frame.camera_id,
+            image: masked_img
+                .try_clone()
+                .map_err(|e| anyhow::anyhow!("clone: {e}"))?,
+            timestamp: frame.timestamp,
+        };
+
         // 본선이 이번 프레임에 쓴 영역과 동일하게 1·2 스텝을 돌린다.
         let step_roi = if detector.used_roi {
             detector.last_roi
@@ -193,12 +211,12 @@ fn main() -> Result<()> {
             None
         };
         let (step_px, mut cm_panel, mut ct_panel) =
-            cascade_steps(&mut cascade, &scorer, &frame, step_roi)?;
+            cascade_steps(&mut cascade, &scorer, &masked_frame, step_roi)?;
 
-        let mut original = frame
-            .image
-            .try_clone()
-            .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
+        let mut original = masked_img;
+        detector
+            .mask
+            .draw_edge_line(&mut original, Scalar::new(255.0, 255.0, 0.0, 0.0), 2)?;
 
         if let Some(r) = detector.last_roi {
             imgproc::rectangle(
@@ -255,9 +273,9 @@ fn main() -> Result<()> {
             draw_circle_px(&mut ct_panel, p, 8, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
         }
 
-        let mut roi_panel = empty_like(&frame)?;
+        let mut roi_panel = empty_like(&masked_frame)?;
         if let Some(r) = detector.last_roi {
-            if let Ok(view) = Mat::roi(&frame.image, r) {
+            if let Ok(view) = Mat::roi(&masked_frame.image, r) {
                 if let Ok(owned) = view.try_clone() {
                     paste_at(&mut roi_panel, &owned, r)?;
                 }
@@ -288,7 +306,7 @@ fn main() -> Result<()> {
 
         draw_cam_label(
             &mut original,
-            "0 original",
+            "0 floor-mask",
             Scalar::new(255.0, 255.0, 255.0, 0.0),
         )?;
         draw_cam_label(
@@ -319,9 +337,13 @@ fn main() -> Result<()> {
         // Hershey = ASCII only. 모자이크가 아니라 패널에 그려 스케일이 폭주하지 않게.
         let lines = [
             detector.to_string(),
+            format!(
+                "area=[{:.0},{:.0}]",
+                scorer_params.min_area_px, scorer_params.max_area_px
+            ),
             match pixel {
                 Some(p) => format!(
-                    "{}  px=({:.1},{:.1})  r~{:.0}  cm->ct->roi",
+                    "{}  px=({:.1},{:.1})  r~{:.0}  mask->cm->ct->roi",
                     if detector.used_roi { "roi" } else { "full" },
                     p.x,
                     p.y,
@@ -360,7 +382,7 @@ fn main() -> Result<()> {
                     println!("roi → {}", if detector.roi_enabled { "on" } else { "off" });
                 }
                 PreviewAction::Key(key) => {
-                    handle_tune_key(&mut detector, key);
+                    handle_tune_key(&mut detector.inner, key);
                 }
                 PreviewAction::Continue => {}
             }

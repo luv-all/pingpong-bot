@@ -77,8 +77,8 @@ pub use sim::{
 };
 pub use sim_motor::SimMotorParams;
 pub use vision::{
-    MOTION_DIFF_THRESH, MOTION_WEIGHT, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, colormask_for,
-    detector_for,
+    MOTION_DIFF_THRESH, MOTION_WEIGHT, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, camera_params_for,
+    colormask_for, detector_for,
 };
 
 #[cfg(test)]

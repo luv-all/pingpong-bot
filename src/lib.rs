@@ -38,16 +38,16 @@ pub use camera::{
 pub use defaults::{
     ControlParams, DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME,
     DEFAULT_COLORMASK_PATH, DEFAULT_DATA_DIR, EstimatorParams, ImpactParams, PhysicsParams,
-    SimMotorParams, calibration_path, calibration_pending_path, colormask_for, colormask_path,
-    detector_for, ensure_parent_dir, primitive_4dof, rail_frame, robot, shared_robot, urdf_4dof,
-    urdf_test,
+    SimMotorParams, calibration_path, calibration_pending_path, camera_params_for, colormask_for,
+    colormask_path, detector_for, ensure_parent_dir, primitive_4dof, rail_frame, robot, shared_robot,
+    urdf_4dof, urdf_test,
 };
 pub use detector::{
     BallDetector, Candidate, CandidateGenerator, ColorContourCascade, ColorSpace, ColormaskBgr,
-    ColormaskCam, ColormaskDetector, ColormaskParams, ColormaskSet, ContourDetector, FuseDetector,
-    IntoCandidateGenerators, MotionPrior, ParseColorSpaceError, RoiParams, RoiTrack, Scorer,
-    ScorerParams, fuse, load_colormask_set, load_colormask_set_or_empty, passthrough_detect,
-    save_colormask_set, track, undistort_frame,
+    ColormaskCam, ColormaskDetector, ColormaskParams, ColormaskSet, ContourDetector, FloorEdgeMask,
+    FuseDetector, IntoCandidateGenerators, MotionPrior, ParseColorSpaceError, RoiParams, RoiTrack,
+    Scorer, ScorerParams, SpatialGate, fuse, load_colormask_set, load_colormask_set_or_empty,
+    passthrough_detect, save_colormask_set, scorer_params_from_calib, track, undistort_frame,
 };
 pub use error::{DomainError, HwError, ObservationError, SwingPlanError};
 pub use estimator::{
