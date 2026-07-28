@@ -690,6 +690,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cam-list"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "opencv",
+ "pingpong-bot",
+]
+
+[[package]]
 name = "cam-preview"
 version = "0.1.0"
 dependencies = [

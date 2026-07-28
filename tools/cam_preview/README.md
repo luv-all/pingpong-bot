@@ -4,6 +4,7 @@
 
 카메라 인자는 공용 SSOT (`StereoCamCliArgs`): `--cam left|right` + 스트림.
 USB 장치 번호는 CLI에 없고 [`CamRigConfig`](`pingpong_bot`)가 역할별로 부여한다 (기본 left→0, right→1).
+인덱스가 헷갈리면 [`cam-list`](../cam_list/README.md)로 프로브한다.
 
 ```bash
 # 기본: left+right, B0332 full, recommended 백엔드, grab 스레드 on

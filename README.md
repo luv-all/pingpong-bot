@@ -260,6 +260,7 @@ cargo run -p pingpong-bot
 
 | crate | README |
 |-------|--------|
+| `cam-list` | [cam_list](tools/cam_list/README.md) — OpenCV device 인덱스 프로브 |
 | `cam-preview` | [cam_preview](tools/cam_preview/README.md) |
 | `calib-charuco` | [calib_charuco](tools/calib_charuco/README.md) |
 | `calib-table-pnp` | [calib_table_pnp](tools/calib_table_pnp/README.md) — 8점 PnP + 월드 격자 검증 |
