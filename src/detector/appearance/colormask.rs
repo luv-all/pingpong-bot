@@ -6,11 +6,9 @@ use opencv::core::{Point, Scalar, Vector};
 use opencv::imgproc;
 use opencv::prelude::*;
 
-use super::super::BallDetector;
-use super::super::candidate::{Candidate, candidates_from_contours};
-use super::super::fuse::CandidateGenerator;
+use super::super::scoring::candidate::{Candidate, candidates_from_contours};
 use super::super::motion::draw_candidate_contour;
-use super::super::scorer::Scorer;
+use super::super::scoring::scorer::Scorer;
 use crate::PixelPoint;
 use crate::camera::Frame;
 
@@ -275,30 +273,6 @@ impl ColormaskDetector {
     }
 }
 
-impl CandidateGenerator for ColormaskDetector {
-    fn generate(&mut self, frame: &Frame) -> Vec<Candidate> {
-        let Some(mask) = self.color_mask(frame) else {
-            return Vec::new();
-        };
-        return self.candidates_from_mask(&mask);
-    }
-}
-
-impl BallDetector for ColormaskDetector {
-    fn detect(&mut self, frame: &Frame) -> Option<PixelPoint> {
-        let scorer = Scorer::from(&crate::detector::ScorerParams {
-            min_area_px: 20.0,
-            max_area_px: 20_000.0,
-            min_circularity: 0.55,
-        });
-        return self.detect_debug(frame, &scorer).0;
-    }
-
-    fn last_area(&self) -> Option<f64> {
-        return self.last_area;
-    }
-}
-
 fn empty_bgr(frame: &Frame) -> Mat {
     return Mat::zeros(frame.image.rows(), frame.image.cols(), frame.image.typ())
         .ok()
@@ -338,7 +312,8 @@ mod tests {
             c2_max: 255,
         };
         let mut det = ColormaskDetector::new(params);
-        let pixel = det.detect(&frame).expect("should find blob");
+        let scorer = Scorer::shape(20.0, 20_000.0, 0.55);
+        let pixel = det.detect_debug(&frame, &scorer).0.expect("should find blob");
         assert!((pixel.x - 100.0).abs() < 5.0, "x={}", pixel.x);
         assert!((pixel.y - 80.0).abs() < 5.0, "y={}", pixel.y);
     }

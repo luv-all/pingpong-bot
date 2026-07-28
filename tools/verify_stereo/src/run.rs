@@ -10,7 +10,7 @@ use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    BallDetector, Calibration, CameraId, Frame, FrameSource, OpenCvCapture, PixelPoint, Point3,
+    Calibration, CameraId, Detector, Frame, FrameSource, OpenCvCapture, PixelPoint, Point3,
     PreviewAction, WorldGridParams, apply_grid_key, destroy_window, detector_for,
     display_fit_bounds, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines,
     draw_world_grid, fit_bgr_downscale, triangulate_views,
@@ -136,9 +136,9 @@ pub fn run_opencv(args: &Args) -> Result<()> {
     }
 
     let ids: Vec<CameraId> = sources.iter().map(|s| s.camera_id()).collect();
-    let mut detectors: Vec<Box<dyn BallDetector>> = Vec::with_capacity(ids.len());
+    let mut detectors: Vec<Detector> = Vec::with_capacity(ids.len());
     for &id in &ids {
-        detectors.push(Box::new(detector_for(id)?));
+        detectors.push(detector_for(id)?);
     }
 
     let win_left = "verify:left";

@@ -1,4 +1,4 @@
-//! fuse 본선 디버그 — floor-edge 마스크 + adaptive ROI + 누적 파이프라인 패널.
+//! Detector 본선 디버그 — floor-edge 마스크 + adaptive ROI + 누적 파이프라인 패널.
 //!
 //! 스텝: `0 raw → 1 floor-mask → 2 colormask → 3 +contour → 4 roi`
 //! track 중이면 2·3은 ROI 크롭에서만 계산(본선과 동일).
@@ -13,10 +13,9 @@ use opencv::imgcodecs;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    BallDetector, ColorContourCascade, Frame, FrameSource, ImageDirSource, OpenCvCapture,
-    PixelPoint, PreviewAction, RoiTrack, Scorer, ScorerParams, camera_params_for, destroy_window,
-    draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines, hstack_bgr,
-    scorer_params_from_calib, show_bgr,
+    AppearanceChain, ColormaskDetector, ContourDetector, Frame, FrameSource, ImageDirSource,
+    OpenCvCapture, PixelPoint, PreviewAction, RoiTrack, Scorer, destroy_window, draw_cam_label,
+    draw_circle_px, draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
 };
 
 use cli::Args;
@@ -73,15 +72,15 @@ fn paste_at(dst: &mut Mat, src: &Mat, r: Rect) -> Result<()> {
     return Ok(());
 }
 
-/// 본선과 같은 영역에서 cascade 스텝을 돌린다. ROI track이면 크롭.
-fn cascade_steps(
-    cascade: &mut ColorContourCascade,
+/// 본선과 같은 영역에서 appearance 스텝을 돌린다. ROI track이면 크롭.
+fn appearance_steps(
+    appearance: &mut AppearanceChain,
     scorer: &Scorer,
     frame: &Frame,
     roi: Option<Rect>,
 ) -> Result<(Option<PixelPoint>, Mat, Mat)> {
     let Some(r) = roi else {
-        let (px, cm, cas) = cascade.detect_debug(frame, scorer);
+        let (px, cm, cas) = appearance.detect_debug(frame, scorer);
         return Ok((px, cm, cas));
     };
 
@@ -94,7 +93,7 @@ fn cascade_steps(
         image: owned,
         timestamp: frame.timestamp,
     };
-    let (local_px, cm_local, cas_local) = cascade.detect_debug(&local, scorer);
+    let (local_px, cm_local, cas_local) = appearance.detect_debug(&local, scorer);
 
     let mut cm_full = empty_like(frame)?;
     let mut cas_full = empty_like(frame)?;
@@ -156,20 +155,19 @@ fn main() -> Result<()> {
 
     let mut source = open_source(&args)?;
     let cam_id = source.camera_id();
-    let cam = camera_params_for(cam_id)?;
     let mut detector = pingpong_bot::detector_for(cam_id)?;
     if args.no_roi {
         detector.set_roi_enabled(false);
     }
 
-    let circ = ScorerParams::default().min_circularity;
-    let scorer_params = scorer_params_from_calib(&cam, circ)?;
+    let scorer_params = detector.scorer.clone();
     let scorer = Scorer::from(&scorer_params);
-    let mut cascade =
-        ColorContourCascade::new(pingpong_bot::colormask_for(cam_id)?, &scorer_params);
+    let mut appearance = AppearanceChain::new()
+        .then(ColormaskDetector::new(pingpong_bot::colormask_for(cam_id)?))
+        .then(ContourDetector::from(&scorer_params));
 
     println!(
-        "{detector} (cam{} raw → floor-mask → colormask → contour → ROI) area=[{:.0},{:.0}]",
+        "{detector} (cam{} raw → mask → color → contour → ROI) area=[{:.0},{:.0}]",
         cam_id.0, scorer_params.min_area_px, scorer_params.max_area_px
     );
     println!("keys: r ROI  [ ] k  , . m  - = pad  p paste  q/ESC quit");
@@ -205,13 +203,13 @@ fn main() -> Result<()> {
         };
 
         // 본선이 이번 프레임에 쓴 영역과 동일하게 2·3 스텝을 돌린다.
-        let step_roi = if detector.used_roi {
-            detector.last_roi
+        let step_roi = if detector.roi.used_roi {
+            detector.roi.last_roi
         } else {
             None
         };
         let (step_px, mut cm_panel, mut ct_panel) =
-            cascade_steps(&mut cascade, &scorer, &masked_frame, step_roi)?;
+            appearance_steps(&mut appearance, &scorer, &masked_frame, step_roi)?;
 
         let mut raw = frame
             .image
@@ -222,7 +220,7 @@ fn main() -> Result<()> {
             .mask
             .draw_edge_line(&mut mask_panel, Scalar::new(255.0, 255.0, 0.0, 0.0), 2)?;
 
-        if let Some(r) = detector.last_roi {
+        if let Some(r) = detector.roi.last_roi {
             let cyan = Scalar::new(255.0, 255.0, 0.0, 0.0);
             imgproc::rectangle(&mut raw, r, cyan, 2, imgproc::LINE_8, 0)?;
             imgproc::rectangle(&mut mask_panel, r, cyan, 2, imgproc::LINE_8, 0)?;
@@ -232,10 +230,10 @@ fn main() -> Result<()> {
 
         if let Some(p) = pixel {
             hits += 1;
-            let mode = if detector.used_roi { "roi" } else { "full" };
+            let mode = if detector.roi.used_roi { "roi" } else { "full" };
             println!(
                 "frame={n} {mode} half={} px=({:.1}, {:.1})",
-                detector.half_px, p.x, p.y
+                detector.roi.half_px, p.x, p.y
             );
             draw_circle_px(&mut raw, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
             draw_circle_px(&mut mask_panel, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
@@ -261,7 +259,7 @@ fn main() -> Result<()> {
         }
 
         let mut roi_panel = empty_like(&masked_frame)?;
-        if let Some(r) = detector.last_roi {
+        if let Some(r) = detector.roi.last_roi {
             if let Ok(view) = Mat::roi(&masked_frame.image, r) {
                 if let Ok(owned) = view.try_clone() {
                     paste_at(&mut roi_panel, &owned, r)?;
@@ -283,9 +281,9 @@ fn main() -> Result<()> {
             draw_circle_px(&mut roi_panel, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
         }
 
-        let roi_label = if detector.used_roi {
+        let roi_label = if detector.roi.used_roi {
             "4 roi"
-        } else if detector.roi_enabled {
+        } else if detector.roi.roi_enabled {
             "4 acquire"
         } else {
             "4 roi-off"
@@ -332,7 +330,7 @@ fn main() -> Result<()> {
             match pixel {
                 Some(p) => format!(
                     "{}  px=({:.1},{:.1})  r~{:.0}  raw->mask->cm->ct->roi",
-                    if detector.used_roi { "roi" } else { "full" },
+                    if detector.roi.used_roi { "roi" } else { "full" },
                     p.x,
                     p.y,
                     r_eq
@@ -366,11 +364,11 @@ fn main() -> Result<()> {
             match show_bgr(window, &mosaic, wait_ms)?.action {
                 PreviewAction::Quit => break,
                 PreviewAction::Key(key) if key == i32::from(b'r') || key == i32::from(b'R') => {
-                    detector.set_roi_enabled(!detector.roi_enabled);
-                    println!("roi → {}", if detector.roi_enabled { "on" } else { "off" });
+                    detector.set_roi_enabled(!detector.roi.roi_enabled);
+                    println!("roi → {}", if detector.roi.roi_enabled { "on" } else { "off" });
                 }
                 PreviewAction::Key(key) => {
-                    handle_tune_key(&mut detector.inner, key);
+                    handle_tune_key(&mut detector.roi, key);
                 }
                 PreviewAction::Continue => {}
             }
@@ -388,7 +386,7 @@ fn main() -> Result<()> {
     println!("done frames={n} hits={hits} {detector}");
     println!(
         "// paste into RoiParams::default()\n{}",
-        detector.params.to_defaults_snippet()
+        detector.roi.params.to_defaults_snippet()
     );
     return Ok(());
 }

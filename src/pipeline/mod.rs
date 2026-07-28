@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::camera::{CameraParams, FrameSource, HintSource};
-use crate::detector::{BallDetector, passthrough_detect, undistort_frame};
+use crate::detector::{Detector, passthrough_detect, undistort_frame};
 use crate::{
     BallObservation, CameraId, DomainError, Estimator, Hardware, InterceptWindow, Prediction,
     Robot, SwingPlanError, Telemetry, TelemetryEvent, plan_best_swing,
@@ -54,7 +54,7 @@ pub enum CameraFeed {
     /// 실물 — capture → undistort → detect.
     Detect {
         source: Box<dyn FrameSource>,
-        detector: Box<dyn BallDetector>,
+        detector: Box<Detector>,
         params: CameraParams,
     },
 }

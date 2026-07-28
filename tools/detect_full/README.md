@@ -1,6 +1,12 @@
 # detect-full
 
-런타임과 같은 **fuse DSL** 본선 (`defaults::detector_for(cam_id)`) + adaptive ROI 튜닝.
+런타임과 같은 **Detector 빌더** 본선 (`defaults::detector_for(cam_id)`) + adaptive ROI 튜닝.
+
+조립 예 (`vision.rs`):
+
+```text
+.mask(…) .then(ColormaskDetector) .then(ContourDetector) .scorer(…) .roi(…)
+```
 
 파이프라인 스텝(읽는 순서):
 
@@ -9,7 +15,7 @@
 
 - **0**: 원본 BGR
 - **1**: 캘리브 테이블 옆변(`x=0` / `x=W`) 투영 사다리꼴로 바닥 제거 + 변 선
-- **2→3**: 마스크된 프레임에서 색 통과 영역만 Canny (`ColorContourCascade`)
+- **2→3**: 마스크된 프레임에서 appearance `.then` (color→contour)
 - **track 중**: 2·3도 ROI 크롭에서 계산 (본선과 동일 영역)
 - Scorer `min/max_area`는 캘리브+`BALL_RADIUS`로 캠별 추정
 

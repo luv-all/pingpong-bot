@@ -43,11 +43,11 @@ pub use defaults::{
     urdf_4dof, urdf_test,
 };
 pub use detector::{
-    BallDetector, Candidate, CandidateGenerator, ColorContourCascade, ColorSpace, ColormaskBgr,
-    ColormaskCam, ColormaskDetector, ColormaskParams, ColormaskSet, ContourDetector, FloorEdgeMask,
-    FuseDetector, IntoCandidateGenerators, MotionPrior, ParseColorSpaceError, RoiParams, RoiTrack,
-    Scorer, ScorerParams, SpatialGate, fuse, load_colormask_set, load_colormask_set_or_empty,
-    passthrough_detect, save_colormask_set, scorer_params_from_calib, track, undistort_frame,
+    AppearanceChain, AppearanceLayer, Candidate, CandidateGenerator, ColorSpace, ColormaskBgr,
+    ColormaskCam, ColormaskDetector, ColormaskParams, ColormaskSet, ContourDetector, Detector,
+    DetectorBuilder, FloorEdgeMask, MotionPrior, ParseColorSpaceError, RoiParams, RoiTrack, Scorer,
+    ScorerParams, load_colormask_set, load_colormask_set_or_empty, passthrough_detect,
+    save_colormask_set, scorer_params_from_calib, undistort_frame,
 };
 pub use error::{DomainError, HwError, ObservationError, SwingPlanError};
 pub use estimator::{

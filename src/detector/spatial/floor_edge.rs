@@ -1,7 +1,7 @@
 //! 월드 `x=0`(left) / `x=W`(right) 변 → 이미지 기울어진 직선 → 바닥 사다리꼴 제거.
 
 use anyhow::{Result, bail, ensure};
-use opencv::core::{Point, Scalar, Size, Vector};
+use opencv::core::{Point, Scalar, Vector};
 use opencv::imgproc;
 use opencv::prelude::*;
 
@@ -28,11 +28,7 @@ impl FloorEdgeMask {
         ensure!(w > 1 && h > 1, "bad image size {}x{}", w, h);
 
         let z = table::SURFACE_Z;
-        let x_edge = if cam_id.0 == 0 {
-            0.0
-        } else {
-            table::WIDTH_X
-        };
+        let x_edge = if cam_id.0 == 0 { 0.0 } else { table::WIDTH_X };
         let p0 = Point3::new(x_edge, 0.0, z);
         let p1 = Point3::new(x_edge, table::LENGTH_Y, z);
         let Some((u0, v0, _)) = project_unbounded(params, p0) else {
@@ -63,12 +59,8 @@ impl FloorEdgeMask {
         let bottom_side = side_of_line(u0, v0, u1, v1, bottom_centroid_x, bottom_centroid_y);
         let mask_bottom = exterior_side * bottom_side >= 0.0;
 
-        let mut keep = Mat::new_rows_cols_with_default(
-            h,
-            w,
-            opencv::core::CV_8UC1,
-            Scalar::all(255.0),
-        )?;
+        let mut keep =
+            Mat::new_rows_cols_with_default(h, w, opencv::core::CV_8UC1, Scalar::all(255.0))?;
 
         let yl = y_left.clamp(0.0, f64::from(h - 1));
         let yr = y_right.clamp(0.0, f64::from(h - 1));
@@ -87,13 +79,7 @@ impl FloorEdgeMask {
                 Point::new(w - 1, yr.round() as i32),
             ])
         };
-        imgproc::fill_convex_poly(
-            &mut keep,
-            &poly,
-            Scalar::all(0.0),
-            imgproc::LINE_8,
-            0,
-        )?;
+        imgproc::fill_convex_poly(&mut keep, &poly, Scalar::all(0.0), imgproc::LINE_8, 0)?;
 
         return Ok(Self {
             keep,
@@ -135,10 +121,7 @@ impl FloorEdgeMask {
 }
 
 /// 이미지 경계 무시 핀홀 투영. 카메라 뒤면 None. `(u, v, Z_cam)`.
-pub(crate) fn project_unbounded(
-    params: &CameraParams,
-    point: Point3,
-) -> Option<(f64, f64, f64)> {
+pub(crate) fn project_unbounded(params: &CameraParams, point: Point3) -> Option<(f64, f64, f64)> {
     let x_cam = params.rotation * point.coords + params.translation;
     if x_cam.z <= 0.05 {
         return None;
@@ -222,9 +205,12 @@ mod tests {
     fn apply_bgr_blacks_masked_pixels() {
         let params = overhead_looking_down();
         let mask = FloorEdgeMask::from_params(CameraId(0), &params).unwrap();
-        let mut bgr =
-            Mat::new_size_with_default(Size::new(640, 480), opencv::core::CV_8UC3, Scalar::all(200.0))
-                .unwrap();
+        let mut bgr = Mat::new_size_with_default(
+            opencv::core::Size::new(640, 480),
+            opencv::core::CV_8UC3,
+            Scalar::all(200.0),
+        )
+        .unwrap();
         // force one masked pixel known: find any keep==0
         let mut found = None;
         'outer: for y in 0..480 {

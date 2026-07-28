@@ -6,11 +6,11 @@ use crate::CameraId;
 use crate::camera::{Calibration, CameraParams};
 use crate::defaults::calib::{calibration_path, colormask_path};
 use crate::detector::{
-    ColorContourCascade, ColormaskParams, FloorEdgeMask, RoiParams, Scorer, ScorerParams,
-    SpatialGate, fuse, load_colormask_set, scorer_params_from_calib, track,
+    ColormaskDetector, ColormaskParams, ContourDetector, Detector, FloorEdgeMask, RoiParams,
+    Scorer, ScorerParams, load_colormask_set, scorer_params_from_calib,
 };
 
-/// fuse scorer motion 가중.
+/// scorer motion 가중.
 pub const MOTION_WEIGHT: f64 = 0.5;
 /// MotionPrior absdiff 이진화 임계.
 pub const MOTION_DIFF_THRESH: f64 = 25.0;
@@ -73,23 +73,22 @@ pub fn camera_params_for(camera_id: CameraId) -> Result<CameraParams> {
     return Ok(params);
 }
 
-fn assemble(camera_id: CameraId, color: ColormaskParams, cam: &CameraParams) -> Result<SpatialGate> {
+fn assemble(camera_id: CameraId, color: ColormaskParams, cam: &CameraParams) -> Result<Detector> {
     let circ = ScorerParams::default().min_circularity;
     let scorer = scorer_params_from_calib(cam, circ)?;
-    let cascade = ColorContourCascade::new(color, &scorer);
-    let fuse_det = fuse(
-        cascade,
-        Scorer::from(&scorer).with_motion_weight(MOTION_WEIGHT),
-    )
-    .with_motion_weight(MOTION_WEIGHT);
-    let tracked = track(fuse_det, RoiParams::default());
-    let mask = FloorEdgeMask::from_params(camera_id, cam)?;
-    return Ok(SpatialGate::new(mask, tracked));
+
+    return Detector::builder()
+        .mask(FloorEdgeMask::from_params(camera_id, cam)?)
+        .then(ColormaskDetector::new(color))
+        .then(ContourDetector::from(&scorer))
+        .scorer(Scorer::from(&scorer).with_motion_weight(MOTION_WEIGHT))
+        .roi(RoiParams::default())
+        .build();
 }
 
-/// 본선: floor-edge 마스크 → colormask → contour cascade → ROI track.
+/// 본선: mask → color → contour → scorer + ROI track.
 /// 캘리브·colormask SSOT 필수.
-pub fn detector_for(camera_id: CameraId) -> Result<SpatialGate> {
+pub fn detector_for(camera_id: CameraId) -> Result<Detector> {
     let cam = camera_params_for(camera_id)?;
     return assemble(camera_id, colormask_for(camera_id)?, &cam);
 }

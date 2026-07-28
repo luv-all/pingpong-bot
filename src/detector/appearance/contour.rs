@@ -4,12 +4,10 @@ use opencv::core::{Point, Vector};
 use opencv::imgproc;
 use opencv::prelude::*;
 
-use super::super::BallDetector;
-use super::super::candidate::{Candidate, candidates_from_contours};
-use super::super::fuse::CandidateGenerator;
+use super::super::scoring::candidate::{Candidate, candidates_from_contours};
 use super::super::motion::draw_candidate_contour;
-use super::super::params::ScorerParams;
-use super::super::scorer::Scorer;
+use super::super::scoring::params::ScorerParams;
+use super::super::scoring::scorer::Scorer;
 use crate::PixelPoint;
 use crate::camera::Frame;
 
@@ -143,15 +141,6 @@ impl ContourDetector {
     }
 }
 
-impl CandidateGenerator for ContourDetector {
-    fn generate(&mut self, frame: &Frame) -> Vec<Candidate> {
-        let Some(edges) = self.edge_mask(frame) else {
-            return Vec::new();
-        };
-        return self.candidates_from_edges(&edges);
-    }
-}
-
 impl Default for ContourDetector {
     fn default() -> Self {
         return Self::new(crate::detector::ScorerParams {
@@ -171,15 +160,5 @@ impl From<ScorerParams> for ContourDetector {
 impl From<&ScorerParams> for ContourDetector {
     fn from(params: &ScorerParams) -> Self {
         return Self::new(params.clone());
-    }
-}
-
-impl BallDetector for ContourDetector {
-    fn detect(&mut self, frame: &Frame) -> Option<PixelPoint> {
-        return self.detect_debug(frame).0;
-    }
-
-    fn last_area(&self) -> Option<f64> {
-        return self.last_area;
     }
 }

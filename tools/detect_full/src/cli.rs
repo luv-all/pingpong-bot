@@ -4,7 +4,7 @@ use clap::Parser;
 use pingpong_bot::CamCliArgs;
 
 #[derive(Parser, Debug)]
-#[command(about = "fuse 본선 — adaptive ROI 튜닝 + 단계 패널")]
+#[command(about = "Detector 본선 — adaptive ROI 튜닝 + 단계 패널")]
 pub struct Args {
     #[command(flatten)]
     pub cam: CamCliArgs,

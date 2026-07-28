@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use opencv::core::Scalar;
 use opencv::prelude::*;
 use pingpong_bot::{
-    BallDetector, BounceEvent, Calibration, CameraId, FrameSource, OpenCvCapture, PixelPoint,
+    BounceEvent, Calibration, CameraId, Detector, FrameSource, OpenCvCapture, PixelPoint,
     Point3, PreviewAction, TrajPoint, destroy_window, detect_bounces, draw_cam_label,
     draw_circle_px, draw_debug_lines, draw_help_lines, draw_world_velocity, hstack_bgr,
     mean_bounce_e, show_bgr, triangulate_views,
@@ -98,13 +98,9 @@ pub fn run_capture(
     }
 
     let ids: Vec<_> = sources.iter().map(|s| s.camera_id()).collect();
-    let mut detectors: Vec<Box<dyn BallDetector>> = ids
+    let mut detectors: Vec<Detector> = ids
         .iter()
-        .map(|&id| {
-            Ok::<_, anyhow::Error>(
-                Box::new(pingpong_bot::detector_for(id)?) as Box<dyn BallDetector>
-            )
-        })
+        .map(|&id| pingpong_bot::detector_for(id))
         .collect::<Result<Vec<_>>>()?;
 
     let window = "measure:restitution";

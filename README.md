@@ -236,7 +236,7 @@ src/
   defaults/     앱 기본값 SSOT (physics · vision · robot · hardware · …)
   constants/    ITTF · 기하 · 제어 상수
   camera/       calib/ · tri/ · io/
-  detector/     appearance/ · fuse_layer/ · motion/
+  detector/     appearance/ · scoring/ · motion/ · spatial/
   estimator/    ekf · ballistics · measure/
   planner/      swing/ · impact · collision
   robot/        build/ · urdf/ · Arm · state
