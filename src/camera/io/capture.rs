@@ -38,16 +38,16 @@ pub trait HintSource: Send {
 
 /// OpenCV `VideoCapture` API 백엔드.
 ///
-/// Windows에서 `Any`→MSMF가 잡히면 MJPG/고FPS가 무시되는 경우가 많아
-/// [`CaptureBackend::recommended`]는 Windows에서 DirectShow를 고른다.
+/// Windows에서 DSHOW는 MJPG 협상이 자주 실패하고 YUY2(~10fps)에 갇힌다.
+/// 듀얼 UVC는 [`CaptureBackend::recommended`]가 **MSMF**를 고른다 (hinguri 실측 경로).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CaptureBackend {
     /// `CAP_ANY` — OS 기본 선택.
     #[default]
     Any,
-    /// DirectShow (Windows UVC 고FPS에 유리).
+    /// DirectShow (Windows). MJPG 실패 시 YUY2로 떨어지기 쉬움.
     DShow,
-    /// Media Foundation (Windows).
+    /// Media Foundation (Windows). 듀얼·고FPS에 유리.
     Msmf,
     /// V4L2 (Linux).
     V4l2,
@@ -59,7 +59,7 @@ impl CaptureBackend {
     /// 호스트에서 고FPS UVC에 안전한 기본값.
     pub fn recommended() -> Self {
         if cfg!(target_os = "windows") {
-            return Self::DShow;
+            return Self::Msmf;
         }
         return Self::Any;
     }
@@ -99,6 +99,45 @@ impl CaptureBackend {
     }
 }
 
+/// MSMF 등이 돌려주는 `????` / 비그래픽 FOURCC는 비교 불가.
+pub fn fourcc_report_readable(got: &str) -> bool {
+    return !got.is_empty() && got.bytes().all(|b| b.is_ascii_alphanumeric());
+}
+
+/// [`OpenCvCapture::warn_stream_mismatch`] 본문 (테스트 가능).
+pub fn format_stream_mismatch(
+    want_w: i32,
+    want_h: i32,
+    want_fps: f64,
+    want_fourcc: &str,
+    got_fourcc: Option<&str>,
+    got_size: Option<(i32, i32)>,
+    got_fps: Option<f64>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(got) = got_fourcc {
+        if fourcc_report_readable(got) && !got.eq_ignore_ascii_case(want_fourcc) {
+            parts.push(format!("fourcc got={got} want={want_fourcc}"));
+        }
+    }
+    if let Some((w, h)) = got_size {
+        if w != want_w || h != want_h {
+            parts.push(format!("size got={w}x{h} want={want_w}x{want_h}"));
+        }
+    }
+    // CAP_PROP_FPS는 허위 보고가 많아 경고에 넣지 않는다 — meas FPS를 보라.
+    let _ = got_fps;
+    let _ = want_fps;
+    if parts.is_empty() {
+        return None;
+    }
+    return Some(format!(
+        "stream mismatch ({}) — trust meas FPS; Win dual: --backend msmf; YUY2≈{}fps(B0332)",
+        parts.join(", "),
+        crate::camera::arducam_b0332::FPS_YUY2
+    ));
+}
+
 /// OpenCV `VideoCapture` (장치 인덱스 또는 경로).
 pub struct OpenCvCapture {
     camera_id: CameraId,
@@ -110,7 +149,7 @@ pub struct OpenCvCapture {
 }
 
 impl OpenCvCapture {
-    /// [`CaptureBackend::recommended`]로 연다 (Windows → DirectShow).
+    /// [`CaptureBackend::recommended`]로 연다 (Windows → MSMF).
     pub fn from_device(camera_id: CameraId, device: i32) -> Result<Self, String> {
         return Self::from_device_with_backend(camera_id, device, CaptureBackend::recommended());
     }
@@ -284,6 +323,9 @@ impl OpenCvCapture {
     }
 
     /// 요청과 보고값이 다르면 경고 문자열. 일치하면 `None`.
+    ///
+    /// MSMF 등은 FOURCC를 `????`로 돌려주는 경우가 많아, **읽을 수 없는 FOURCC는
+    /// mismatch로 치지 않는다** (meas FPS를 믿을 것).
     pub fn warn_stream_mismatch(
         &self,
         width: i32,
@@ -292,30 +334,10 @@ impl OpenCvCapture {
         fourcc: &[u8; 4],
     ) -> Option<String> {
         let want_fcc: String = fourcc.iter().map(|&b| b as char).collect();
-        let mut parts = Vec::new();
-        if let Some(got) = self.reported_fourcc() {
-            if !got.eq_ignore_ascii_case(&want_fcc) {
-                parts.push(format!("fourcc got={got} want={want_fcc}"));
-            }
-        }
-        if let Some((w, h)) = self.reported_size() {
-            if w != width || h != height {
-                parts.push(format!("size got={w}x{h} want={width}x{height}"));
-            }
-        }
-        if let Some(got) = self.reported_fps() {
-            if (got - fps).abs() > 5.0 {
-                parts.push(format!("fps got={got:.0} want={fps:.0}"));
-            }
-        }
-        if parts.is_empty() {
-            return None;
-        }
-        return Some(format!(
-            "stream mismatch ({}) — YUY2≈{}fps(B0332); Win은 --backend dshow, FOURCC=MJPG 확인",
-            parts.join(", "),
-            crate::camera::arducam_b0332::FPS_YUY2
-        ));
+        let got_fcc = self.reported_fourcc();
+        let got_size = self.reported_size();
+        let got_fps = self.reported_fps();
+        return format_stream_mismatch(width, height, fps, &want_fcc, got_fcc.as_deref(), got_size, got_fps);
     }
 
     /// 노출 관련 드라이버 값 스냅샷 (macOS AVFoundation이면 대개 0 / 무시).
@@ -477,5 +499,51 @@ impl FrameSource for ImageDirSource {
         }
         let timestamp = self.epoch + Duration::from_secs_f64(idx as f64 / self.fps);
         return Some(Frame::new(self.camera_id, image, timestamp));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fourcc_readable_rejects_msmf_junk() {
+        assert!(fourcc_report_readable("MJPG"));
+        assert!(fourcc_report_readable("YUY2"));
+        assert!(!fourcc_report_readable("????"));
+        assert!(!fourcc_report_readable("MJ?G"));
+        assert!(!fourcc_report_readable(""));
+    }
+
+    #[test]
+    fn mismatch_skips_unreadable_fourcc() {
+        assert!(format_stream_mismatch(1280, 800, 120.0, "MJPG", Some("????"), Some((1280, 800)), Some(120.0)).is_none());
+    }
+
+    #[test]
+    fn mismatch_reports_yuy2_vs_mjpg() {
+        let msg = format_stream_mismatch(1280, 800, 120.0, "MJPG", Some("YUY2"), Some((1280, 800)), Some(120.0))
+            .expect("warn");
+        assert!(msg.contains("fourcc got=YUY2"));
+        assert!(msg.contains("msmf"));
+        assert!(!msg.contains("dshow"));
+    }
+
+    #[test]
+    fn mismatch_ignores_cap_fps_lie() {
+        // size/fourcc OK, only fps prop wrong → no warn (meas is SSOT)
+        assert!(format_stream_mismatch(1280, 800, 120.0, "MJPG", Some("MJPG"), Some((1280, 800)), Some(30.0)).is_none());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn windows_recommended_is_msmf() {
+        assert_eq!(CaptureBackend::recommended(), CaptureBackend::Msmf);
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn non_windows_recommended_is_any() {
+        assert_eq!(CaptureBackend::recommended(), CaptureBackend::Any);
     }
 }

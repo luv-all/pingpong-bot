@@ -2,13 +2,14 @@
 //!
 //! 앱 프리셋 [`Default`]는 [`crate::defaults::calib`]에 있다.
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 use super::capture::{CaptureBackend, OpenCvCapture};
 use super::rig::{CamRigConfig, CameraRole};
 use super::threaded::ThreadedCapture;
 use super::FrameSource;
 use crate::CameraId;
+use crate::constants::camera::arducam_b0332;
 use crate::defaults::calib::{DEFAULT_CAM_ROLES, DEFAULT_STEREO_CAM_ROLES};
 
 pub use crate::defaults::calib::{
@@ -16,7 +17,28 @@ pub use crate::defaults::calib::{
     DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH,
 };
 
-/// 공통 스트림 요청 (`--backend --width --height --fps --fourcc [--threaded]`).
+/// 해상도 프리셋 — `--width/--height` 대신 대역 실험용.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum StreamPreset {
+    /// B0332 네이티브 1280×800
+    Full,
+    /// 960×600
+    Mid,
+    /// 640×400 (hinguri 스테레오급)
+    Low,
+}
+
+impl StreamPreset {
+    pub fn size(self) -> (i32, i32) {
+        return match self {
+            Self::Full => (arducam_b0332::WIDTH, arducam_b0332::HEIGHT),
+            Self::Mid => (arducam_b0332::WIDTH_MID, arducam_b0332::HEIGHT_MID),
+            Self::Low => (arducam_b0332::WIDTH_LOW, arducam_b0332::HEIGHT_LOW),
+        };
+    }
+}
+
+/// 공통 스트림 요청 (`--backend --width --height --fps --fourcc [--threaded] [--preset]`).
 #[derive(Parser, Debug, Clone)]
 pub struct CamStreamArgs {
     /// OpenCV 백엔드: any|dshow|msmf|v4l2|avfoundation|recommended
@@ -35,9 +57,13 @@ pub struct CamStreamArgs {
     #[arg(long, default_value = DEFAULT_STREAM_FOURCC)]
     pub fourcc: String,
 
-    /// 백그라운드 grab 스레드 (UI와 캡처 분리)
-    #[arg(long, default_value_t = DEFAULT_STREAM_THREADED)]
+    /// 백그라운드 grab 스레드. 끄려면 `--threaded=false`
+    #[arg(long, default_value_t = DEFAULT_STREAM_THREADED, action = clap::ArgAction::Set)]
     pub threaded: bool,
+
+    /// 해상도 프리셋 (`full`|`mid`|`low`). 주면 `--width/--height`보다 우선.
+    #[arg(long, value_enum)]
+    pub preset: Option<StreamPreset>,
 }
 
 impl CamStreamArgs {
@@ -49,19 +75,32 @@ impl CamStreamArgs {
         return parse_fourcc(&self.fourcc);
     }
 
+    /// `--preset`이 있으면 그 크기, 없으면 `--width/--height`.
+    pub fn resolved_size(&self) -> (i32, i32) {
+        if let Some(p) = self.preset {
+            return p.size();
+        }
+        return (self.width, self.height);
+    }
+
     pub fn apply(&self, cap: &mut OpenCvCapture) -> Result<(), String> {
         let fourcc = self.fourcc_bytes()?;
-        cap.request_stream(self.width, self.height, self.fps, &fourcc)?;
+        let (width, height) = self.resolved_size();
+        cap.request_stream(width, height, self.fps, &fourcc)?;
+        let preset_tag = self
+            .preset
+            .map(|p| format!(" preset={p:?}"))
+            .unwrap_or_default();
         println!(
-            "cam {}: requested={}x{}@{:.0} {} | {}",
+            "cam {}: requested={}x{}@{:.0} {}{preset_tag} | {}",
             cap.camera_id().0,
-            self.width,
-            self.height,
+            width,
+            height,
             self.fps,
             self.fourcc,
             cap.stream_summary()
         );
-        if let Some(warn) = cap.warn_stream_mismatch(self.width, self.height, self.fps, &fourcc) {
+        if let Some(warn) = cap.warn_stream_mismatch(width, height, self.fps, &fourcc) {
             println!("cam {}: WARN {warn}", cap.camera_id().0);
         }
         return Ok(());

@@ -19,6 +19,12 @@
 pub const WIDTH: i32 = 1280;
 /// 네이티브 세로 [px].
 pub const HEIGHT: i32 = 800;
+/// 대역 중간 프리셋 (듀얼 meas 올리기용).
+pub const WIDTH_MID: i32 = 960;
+pub const HEIGHT_MID: i32 = 600;
+/// 대역 낮음 프리셋 (hinguri 스테레오급).
+pub const WIDTH_LOW: i32 = 640;
+pub const HEIGHT_LOW: i32 = 400;
 /// MJPG 최대 FPS (datasheet: 120fps@1280×800).
 pub const FPS_MJPG: f64 = 120.0;
 /// YUY2 최대 FPS (고FPS 불가 — 진단용).

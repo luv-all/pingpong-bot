@@ -150,17 +150,19 @@ fn main() -> Result<()> {
     let mut frozen = false;
     let mut short_exposure = false;
     let s = &cam.stream;
+    let (req_w, req_h) = s.resolved_size();
     println!(
-        "cams={}  request={}x{}@{:.0} {} backend={}  Space=freeze  e=short exposure  q/ESC=quit",
+        "cams={}  request={}x{}@{:.0} {} backend={} threaded={}  Space=freeze  e=short exposure  q/ESC=quit",
         cams.iter()
             .map(|c| c.label.as_str())
             .collect::<Vec<_>>()
             .join(","),
-        s.width,
-        s.height,
+        req_w,
+        req_h,
         s.fps,
         s.fourcc,
-        s.backend
+        s.backend,
+        s.threaded
     );
 
     loop {

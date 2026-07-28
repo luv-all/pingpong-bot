@@ -13,7 +13,8 @@ pub const DEFAULT_STREAM_WIDTH: i32 = arducam_b0332::WIDTH;
 pub const DEFAULT_STREAM_HEIGHT: i32 = arducam_b0332::HEIGHT;
 pub const DEFAULT_STREAM_FPS: f64 = arducam_b0332::FPS_MJPG;
 pub const DEFAULT_STREAM_FOURCC: &str = arducam_b0332::FOURCC_MJPG;
-pub const DEFAULT_STREAM_THREADED: bool = false;
+/// 라이브 UI와 캡처 분리 (hinguri grab 스레드와 동일 계열). 끄려면 `--threaded=false`.
+pub const DEFAULT_STREAM_THREADED: bool = true;
 pub const DEFAULT_FOV_Y_DEG: f64 = arducam_b0332::VFOV_DEG;
 
 /// 벤치 스테레오 리그 — USB 순서가 바뀌면 **여기만** 고친다.
@@ -42,6 +43,7 @@ impl Default for CamStreamArgs {
             fps: DEFAULT_STREAM_FPS,
             fourcc: DEFAULT_STREAM_FOURCC.into(),
             threaded: DEFAULT_STREAM_THREADED,
+            preset: None,
         };
     }
 }
