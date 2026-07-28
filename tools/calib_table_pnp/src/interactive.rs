@@ -37,11 +37,14 @@ pub fn run(args: &Args) -> Result<()> {
         )
     } else {
         let device = args.device.unwrap_or(0);
-        Box::new(
-            OpenCvCapture::from_device(cam_id, device)
-                .map_err(anyhow::Error::msg)
-                .with_context(|| format!("device {device}"))?,
-        )
+        let mut cap = OpenCvCapture::from_device(cam_id, device)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("device {device}"))?;
+        let fourcc = parse_fourcc(&args.fourcc)?;
+        cap.request_stream(args.width, args.height, args.fps, &fourcc)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("device {device}: stream request"))?;
+        Box::new(cap)
     };
 
     let window = "calib:table-pnp";
@@ -257,6 +260,14 @@ pub fn run(args: &Args) -> Result<()> {
 
     destroy_window(window);
     return Ok(());
+}
+
+fn parse_fourcc(value: &str) -> Result<[u8; 4]> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 4 {
+        bail!("FOURCC는 정확히 4글자여야 함: {value}");
+    }
+    return Ok([bytes[0], bytes[1], bytes[2], bytes[3]]);
 }
 
 fn try_solve(

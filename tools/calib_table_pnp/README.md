@@ -1,6 +1,6 @@
 # calib-table-pnp
 
-탁구대 **규격 랜드마크 8점**을 클릭해 OpenCV `solvePnP`(IPPE)로 카메라 외참 `R|t`를 잡고, 같은 창에서 **월드 XY×Z 무지개 격자**로 투영을 확인한 뒤 `Calibration` JSON을 쓴다. Charuco 없이 FOV로 `K`만 근사 (`dist=[]`).
+탁구대 **규격 랜드마크 8점**을 클릭해 OpenCV `solvePnP`(IPPE)로 카메라 외참 `R|t`를 잡고, 같은 창에서 **월드 XY×Z 무지개 격자**로 투영을 확인한 뒤 `Calibration` JSON을 쓴다. Charuco 없이 FOV로 `K`만 근사 (`dist=[]`). 라이브 카메라는 `--width --height --fps --fourcc`로 스트림 요청 가능.
 
 | 파일 | 역할 |
 |------|------|
@@ -38,6 +38,9 @@
 ```bash
 # 캠 0
 cargo run -p calib-table-pnp -- --device 0 -o calibration.json
+
+# 1280x800 MJPG로 요청
+cargo run -p calib-table-pnp -- --device 0 --width 1280 --height 800 --fps 120 --fourcc MJPG -o calibration.json
 
 # 캠 1을 같은 JSON에 합치기
 cargo run -p calib-table-pnp -- --device 1 --camera-id 1 \

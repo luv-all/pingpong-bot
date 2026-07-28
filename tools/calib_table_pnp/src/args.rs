@@ -15,6 +15,22 @@ pub struct Args {
     #[arg(long)]
     pub device: Option<i32>,
 
+    /// 요청할 스트림 폭 (live 카메라 모드에서만 사용)
+    #[arg(long, default_value_t = 1280)]
+    pub width: i32,
+
+    /// 요청할 스트림 높이 (live 카메라 모드에서만 사용)
+    #[arg(long, default_value_t = 800)]
+    pub height: i32,
+
+    /// 요청할 FPS (live 카메라 모드에서만 사용)
+    #[arg(long, default_value_t = 120.0)]
+    pub fps: f64,
+
+    /// 요청할 FOURCC (live 카메라 모드에서만 사용)
+    #[arg(long, default_value = "MJPG")]
+    pub fourcc: String,
+
     /// 동영상/이미지 파일
     #[arg(long)]
     pub path: Option<PathBuf>,
