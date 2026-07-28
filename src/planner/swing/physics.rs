@@ -59,13 +59,15 @@ pub fn accel(
 ///
 /// 창보다 이르면 대기(발사 직후 긴 궤적 금지), 짧으면 `InsufficientTime`.
 pub fn in_swing_commit_window(time_to_impact_secs: f64) -> bool {
-    return (defaults::ControlParams::default().min_swing_secs..=defaults::ControlParams::default().swing_commit_max_secs)
+    return (defaults::ControlParams::default().min_swing_secs
+        ..=defaults::ControlParams::default().swing_commit_max_secs)
         .contains(&time_to_impact_secs);
 }
 
 /// 네트 통과 후인지 - ground truth/EKF control 공통 commit 게이트.
 pub fn ball_past_midcourt_for_commit(ball_y: f64) -> bool {
-    return ball_y <= table::LENGTH_Y * defaults::ControlParams::default().swing_commit_max_ball_y_frac;
+    return ball_y
+        <= table::LENGTH_Y * defaults::ControlParams::default().swing_commit_max_ball_y_frac;
 }
 
 /// IK로 역산한 목표 관절속도가 실제 한계의 이 배수를 넘으면 "특이점 근처"로
@@ -905,7 +907,8 @@ mod tests {
 
     #[test]
     fn midcourt_gate_matches_fraction() {
-        let limit = table::LENGTH_Y * defaults::ControlParams::default().swing_commit_max_ball_y_frac;
+        let limit =
+            table::LENGTH_Y * defaults::ControlParams::default().swing_commit_max_ball_y_frac;
         assert!(!ball_past_midcourt_for_commit(limit + 0.01));
         assert!(ball_past_midcourt_for_commit(limit));
         assert!(ball_past_midcourt_for_commit(0.3));
@@ -1074,7 +1077,10 @@ mod tests {
             panic!("InsufficientTime 기대");
         };
         assert!((time_to_impact_secs - 0.05).abs() < f64::EPSILON);
-        assert!((min_swing_secs - defaults::ControlParams::default().min_swing_secs).abs() < f64::EPSILON);
+        assert!(
+            (min_swing_secs - defaults::ControlParams::default().min_swing_secs).abs()
+                < f64::EPSILON
+        );
     }
 
     #[test]

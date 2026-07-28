@@ -149,7 +149,8 @@ fn rest_height() -> f64 {
 
 /// 테이블에 붙어 느리게 구르는 상태 (비행/바운스 중이면 false).
 fn is_table_rolling(position: Vector3<f64>, velocity: Vector3<f64>) -> bool {
-    let on_table = position.z <= rest_height() + defaults::EstimatorParams::default().min_strike_clearance;
+    let on_table =
+        position.z <= rest_height() + defaults::EstimatorParams::default().min_strike_clearance;
     let flat = velocity.z.abs() < 0.5;
     return on_table && flat;
 }

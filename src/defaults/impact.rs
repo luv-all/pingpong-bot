@@ -40,4 +40,3 @@ impl Default for ImpactParams {
         };
     }
 }
-

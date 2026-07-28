@@ -106,9 +106,8 @@ fn main() -> Result<()> {
     let mut cams: Vec<CamSlot> = Vec::with_capacity(resolved.len());
     let mut exp_supported = true;
     for r in resolved {
-        let mut cap =
-            OpenCvCapture::from_device_with_backend(r.camera_id, r.device, backend)
-                .map_err(anyhow::Error::msg)?;
+        let mut cap = OpenCvCapture::from_device_with_backend(r.camera_id, r.device, backend)
+            .map_err(anyhow::Error::msg)?;
         cam.stream.apply(&mut cap).map_err(anyhow::Error::msg)?;
 
         let ro = cap.exposure_readout();
@@ -191,7 +190,10 @@ fn main() -> Result<()> {
                     "fps {:.1} meas / {:.0} cap  {}",
                     cam.meter.fps, cap_fps, cam.fourcc_label
                 )),
-                None => lines.push(format!("fps {:.1} meas  {}", cam.meter.fps, cam.fourcc_label)),
+                None => lines.push(format!(
+                    "fps {:.1} meas  {}",
+                    cam.meter.fps, cam.fourcc_label
+                )),
             }
             if let Some(grab) = cam.source.capture_fps() {
                 if grab > 0.0 {
@@ -209,11 +211,7 @@ fn main() -> Result<()> {
             }
 
             draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-            draw_cam_label(
-                &mut panel,
-                &cam.label,
-                Scalar::new(0.0, 255.0, 255.0, 0.0),
-            )?;
+            draw_cam_label(&mut panel, &cam.label, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
             cam.panel = Some(panel);
         }
 

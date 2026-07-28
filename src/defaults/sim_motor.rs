@@ -51,7 +51,6 @@ impl Default for SimMotorParams {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

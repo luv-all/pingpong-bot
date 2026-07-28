@@ -47,19 +47,17 @@
 
 use nalgebra::{DMatrix, DVector, Vector3};
 
-use crate::robot::dynamics::{
-    MassMatrixScratch, RneaScratch, bias_torques_into, mass_matrix_into,
-};
 use super::collision::{clamp_above_table, table_penetration};
 use super::physics::{in_swing_commit_window, solve_impact_target};
-use crate::error::{DomainError, SwingPlanError};
-use crate::robot::Arm;
-use crate::{Joints, Prediction, RobotPose};
 use crate::defaults::planner::{
     JACOBIAN_DAMPING, JDOT_STEP, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
     POSITION_TOLERANCE_RAD_OR_M, RACKET_DIRECTION_TOLERANCE_DEG, RACKET_SPEED_RATIO_TOLERANCE,
     RAIL_ACCEL_M_S2, TIME_TO_GO_BIAS,
 };
+use crate::error::{DomainError, SwingPlanError};
+use crate::robot::Arm;
+use crate::robot::dynamics::{MassMatrixScratch, RneaScratch, bias_torques_into, mass_matrix_into};
+use crate::{Joints, Prediction, RobotPose};
 
 /// "코스팅 함정"(위치항 `-6x/Tg²`이 속도오차항을 우연히 상쇄해 속도가 목표의
 /// 22~25%에서 오래 정체하다 마감 직전 폭발하는 현상 — `diag_trivial_case_trace`
@@ -327,7 +325,13 @@ pub fn step_racket_guidance(
     let racket_pos_err = current_pose.position.coords - target_racket_position;
 
     // 관절 토크/유효관성에서 이번 스텝 이 관절이 낼 수 있는 가속 한계.
-    mass_matrix_into(arm, &Joints::from_slice(q), &mut scratch.rnea, &mut scratch.mass_matrix, &mut scratch.mass);
+    mass_matrix_into(
+        arm,
+        &Joints::from_slice(q),
+        &mut scratch.rnea,
+        &mut scratch.mass_matrix,
+        &mut scratch.mass,
+    );
     let joint_a_max_full: Vec<f64> = (0..jacobian.ncols())
         .map(|col| {
             if has_rail && col == 0 {
@@ -353,8 +357,8 @@ pub fn step_racket_guidance(
                 return 1.0;
             }
             let i = col - rail_offset;
-            let speed_headroom = (1.0 - (qdot[i] / arm.max_joint_speed).abs())
-                .clamp(SPEED_HEADROOM_FLOOR, 1.0);
+            let speed_headroom =
+                (1.0 - (qdot[i] / arm.max_joint_speed).abs()).clamp(SPEED_HEADROOM_FLOOR, 1.0);
             arm.joint_torque_limits[i].powi(4) * speed_headroom.powf(SPEED_HEADROOM_EXPONENT)
         })
         .collect();
@@ -388,7 +392,11 @@ pub fn step_racket_guidance(
         }),
     );
     let perturbed_rail_x = *rail_x + *rail_v * JDOT_STEP;
-    let perturbed_q: Vec<f64> = q.iter().zip(qdot.iter()).map(|(qi, vi)| qi + vi * JDOT_STEP).collect();
+    let perturbed_q: Vec<f64> = q
+        .iter()
+        .zip(qdot.iter())
+        .map(|(qi, vi)| qi + vi * JDOT_STEP)
+        .collect();
     let perturbed_pose = RobotPose::new(perturbed_rail_x, Joints::from_slice(&perturbed_q));
     let jdot_qdot = match arm.position_jacobian_fd(&perturbed_pose) {
         Some(jacobian_perturbed) => {
@@ -407,7 +415,14 @@ pub fn step_racket_guidance(
     ]);
     let qddot_full = &j_pinv * racket_accel_vec;
 
-    bias_torques_into(arm, &Joints::from_slice(q), qdot, &mut scratch.rnea, &mut scratch.bias_zero_accel, &mut scratch.bias);
+    bias_torques_into(
+        arm,
+        &Joints::from_slice(q),
+        qdot,
+        &mut scratch.rnea,
+        &mut scratch.bias_zero_accel,
+        &mut scratch.bias,
+    );
 
     // 근접 특이점(또는 Tg가 짧아 ZEM/ZEV가 요구하는 가속이 실현 불가능하게
     // 커질 때 — 실측: `racket_accel_desired` 성분이 수백만대까지 튐)에서
@@ -429,9 +444,14 @@ pub fn step_racket_guidance(
             accel_scale = accel_scale.min(limit / raw);
         }
     }
-    let rail_accel_desired = if has_rail { qddot_full[0] * accel_scale } else { 0.0 };
-    let joint_qddot_desired: Vec<f64> =
-        (0..n).map(|i| qddot_full[i + rail_offset] * accel_scale).collect();
+    let rail_accel_desired = if has_rail {
+        qddot_full[0] * accel_scale
+    } else {
+        0.0
+    };
+    let joint_qddot_desired: Vec<f64> = (0..n)
+        .map(|i| qddot_full[i + rail_offset] * accel_scale)
+        .collect();
     let joint_qddot_desired = DVector::from_vec(joint_qddot_desired);
     let m_qddot = &scratch.mass * &joint_qddot_desired;
 
@@ -472,7 +492,10 @@ pub fn step_racket_guidance(
     // 여기서 손대면(재-IK든 감쇠 클램프든) 다음 스텝 계산에 그대로 피드백돼
     // 작은 보정도 크게 증폭된다(실측: 방향오차 4.3°→125.2°로 폭발).
 
-    return Some(RacketGuidanceStep { racket_accel_desired, torque_cmd });
+    return Some(RacketGuidanceStep {
+        racket_accel_desired,
+        torque_cmd,
+    });
 }
 
 fn plan_bang_bang_for(
@@ -570,10 +593,13 @@ fn plan_bang_bang_for(
             if step_idx.is_multiple_of(100) || step_idx <= 3 {
                 let achieved = racket_velocity_estimate(arm, rail_x, rail_v, &q, &qdot);
                 let saturated: Vec<usize> = (0..n)
-                    .filter(|&i| (step.torque_cmd[i].abs() - arm.joint_torque_limits[i]).abs() < 1e-6)
+                    .filter(|&i| {
+                        (step.torque_cmd[i].abs() - arm.joint_torque_limits[i]).abs() < 1e-6
+                    })
                     .collect();
-                let util: Vec<f64> =
-                    (0..n).map(|i| step.torque_cmd[i].abs() / arm.joint_torque_limits[i]).collect();
+                let util: Vec<f64> = (0..n)
+                    .map(|i| step.torque_cmd[i].abs() / arm.joint_torque_limits[i])
+                    .collect();
                 eprintln!(
                     "diag t={t:.3} pos_err={pos_err:.4} racket_accel_desired={:?} \
                      torque_cmd={:?} util={util:?} saturated={saturated:?} achieved_v={achieved:?} \
@@ -591,7 +617,9 @@ fn plan_bang_bang_for(
     }
 
     if diag && step_count > 0 {
-        let mean: Vec<f64> = (0..n).map(|i| torque_util_sum[i] / step_count as f64).collect();
+        let mean: Vec<f64> = (0..n)
+            .map(|i| torque_util_sum[i] / step_count as f64)
+            .collect();
         eprintln!(
             "diag SUMMARY converged={converged} steps={step_count} torque_util mean={mean:?} max={torque_util_max:?} (1.0 = 한계)"
         );
@@ -836,7 +864,11 @@ mod tests {
         jt_d: Vec<f64>,
     }
 
-    fn kinematic_ceiling(arm: &Arm, start: &RobotPose, prediction: &Prediction) -> Option<KinematicCeiling> {
+    fn kinematic_ceiling(
+        arm: &Arm,
+        start: &RobotPose,
+        prediction: &Prediction,
+    ) -> Option<KinematicCeiling> {
         let target = solve_impact_target(arm, prediction, start).ok()?;
 
         let jacobian = arm.position_jacobian_fd(&target.pose)?;
@@ -845,7 +877,13 @@ mod tests {
         let mut rnea = RneaScratch::new();
         let mut mm_scratch = MassMatrixScratch::new();
         let mut mass = DMatrix::zeros(n, n);
-        mass_matrix_into(arm, &target.pose.joints, &mut rnea, &mut mm_scratch, &mut mass);
+        mass_matrix_into(
+            arm,
+            &target.pose.joints,
+            &mut rnea,
+            &mut mm_scratch,
+            &mut mass,
+        );
 
         let has_rail = arm.rail.is_some();
         let rail_offset = usize::from(has_rail);
@@ -878,10 +916,12 @@ mod tests {
         // 정렬한다는 낙관적 가정의 선형계획(box 제약) 상한 —
         // max sum_i cap_i * |(J^T d)_i|. 실제로는 이 조합이 동시에 목표
         // *위치*까지도 맞춰야 하니 실현 가능한 속도는 이보다 항상 낮거나 같다.
-        let v_max_kinematic: f64 =
-            (0..jacobian.ncols()).map(|i| joint_v_max[i] * jt_d[i].abs()).sum();
-        let a_max_kinematic: f64 =
-            (0..jacobian.ncols()).map(|i| joint_a_max[i] * jt_d[i].abs()).sum();
+        let v_max_kinematic: f64 = (0..jacobian.ncols())
+            .map(|i| joint_v_max[i] * jt_d[i].abs())
+            .sum();
+        let a_max_kinematic: f64 = (0..jacobian.ncols())
+            .map(|i| joint_a_max[i] * jt_d[i].abs())
+            .sum();
 
         return Some(KinematicCeiling {
             target_speed,
@@ -893,7 +933,12 @@ mod tests {
         });
     }
 
-    fn print_feasibility_ceiling(label: &str, arm: &Arm, start: &RobotPose, prediction: &Prediction) {
+    fn print_feasibility_ceiling(
+        label: &str,
+        arm: &Arm,
+        start: &RobotPose,
+        prediction: &Prediction,
+    ) {
         let ceiling = kinematic_ceiling(arm, start, prediction).expect("임팩트 목표 계산 성공");
         let naive_time_to_reach = ceiling.target_speed / ceiling.a_max_kinematic;
 
@@ -919,7 +964,9 @@ mod tests {
         match plan_bang_bang_swing(arm, &[*prediction], start) {
             Ok(planned) => {
                 let end = planned.trajectory.end_joints();
-                let end_qdot = planned.trajectory.sample_velocity_at(planned.trajectory.duration_secs());
+                let end_qdot = planned
+                    .trajectory
+                    .sample_velocity_at(planned.trajectory.duration_secs());
                 let achieved = racket_velocity_estimate(
                     arm,
                     planned.trajectory.follow_through_rail_x(),
@@ -932,7 +979,9 @@ mod tests {
                 );
             }
             Err(err) => {
-                eprintln!("  => plan_bang_bang_swing: Err({err}) — 실제로는 수렴 안 함(converged=false)");
+                eprintln!(
+                    "  => plan_bang_bang_swing: Err({err}) — 실제로는 수렴 안 함(converged=false)"
+                );
             }
         }
     }
@@ -1080,7 +1129,9 @@ mod tests {
             sample_step: 0.05,
         };
 
-        for speed in [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0] {
+        for speed in [
+            3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0,
+        ] {
             let Some(pitch_deg) = find_legal_pitch_deg(speed, HEIGHT_OFFSET_M) else {
                 eprintln!(
                     "speed={speed:.1} m/s -> 반대편 코트 가운데 대역에 정상적으로 \
@@ -1126,7 +1177,9 @@ mod tests {
                             .map_or(f64::NEG_INFINITY, |c| c.v_max_kinematic / c.target_speed);
                         let ratio_b = kinematic_ceiling(&arm, &start, b)
                             .map_or(f64::NEG_INFINITY, |c| c.v_max_kinematic / c.target_speed);
-                        ratio_a.partial_cmp(&ratio_b).unwrap_or(std::cmp::Ordering::Equal)
+                        ratio_a
+                            .partial_cmp(&ratio_b)
+                            .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 if let Some(p) = best_in_window {
                     let start =
@@ -1194,14 +1247,23 @@ mod tests {
         let mut rnea = RneaScratch::new();
         let mut mm_scratch = MassMatrixScratch::new();
         let mut mass = DMatrix::zeros(n, n);
-        mass_matrix_into(arm, &target.pose.joints, &mut rnea, &mut mm_scratch, &mut mass);
+        mass_matrix_into(
+            arm,
+            &target.pose.joints,
+            &mut rnea,
+            &mut mm_scratch,
+            &mut mass,
+        );
 
         let d = target.racket_velocity.normalize();
         let a_vec = DVector::from_vec(vec![d.x, d.y, d.z]);
         let has_rail = arm.rail.is_some();
         let rail_offset = usize::from(has_rail);
 
-        eprintln!("--- {label} (관절 토크한계, rail 제외={:?}) ---", arm.joint_torque_limits);
+        eprintln!(
+            "--- {label} (관절 토크한계, rail 제외={:?}) ---",
+            arm.joint_torque_limits
+        );
         for exponent in [0.0, 2.0, 4.0] {
             let joint_preference: Vec<f64> = (0..jacobian.ncols())
                 .map(|col| {
@@ -1214,8 +1276,7 @@ mod tests {
                 .collect();
             let w_inv = DMatrix::from_diagonal(&DVector::from_vec(joint_preference));
             let j_winv = &jacobian * &w_inv;
-            let jwjt =
-                &j_winv * jacobian.transpose() + DMatrix::identity(3, 3) * JACOBIAN_DAMPING;
+            let jwjt = &j_winv * jacobian.transpose() + DMatrix::identity(3, 3) * JACOBIAN_DAMPING;
             let Some(jwjt_inv) = jwjt.try_inverse() else {
                 eprintln!("  exponent={exponent:.0} -> jwjt 역행렬 없음 (스킵)");
                 continue;
@@ -1229,7 +1290,9 @@ mod tests {
             let qddot_dir = &j_pinv * &a_vec;
             let joint_qddot: Vec<f64> = (0..n).map(|i| qddot_dir[i + rail_offset]).collect();
             let tau = &mass * DVector::from_vec(joint_qddot.clone());
-            let util: Vec<f64> = (0..n).map(|i| (tau[i] / arm.joint_torque_limits[i]).abs()).collect();
+            let util: Vec<f64> = (0..n)
+                .map(|i| (tau[i] / arm.joint_torque_limits[i]).abs())
+                .collect();
             let util_sum: f64 = util.iter().sum();
             let util_share_pct: Vec<f64> = util.iter().map(|u| u / util_sum * 100.0).collect();
 
@@ -1267,10 +1330,30 @@ mod tests {
         // 착지하는 시나리오들 — 손으로 고른 hard fixture와 달리 실제 슈터가
         // 만들 수 있는 임팩트.
         for (label, impact, incoming, tti) in [
-            ("실측 speed=6.0m/s", (0.762, 0.200, 0.999), (0.0, -4.34, 1.51), 0.248),
-            ("실측 speed=9.0m/s", (0.762, 0.350, 0.875), (0.0, -7.32, 2.15), 0.136),
-            ("실측 speed=10.0m/s", (0.762, 0.350, 0.859), (0.0, -8.26, 2.28), 0.121),
-            ("실측 speed=12.0m/s", (0.762, 0.350, 0.865), (0.0, -10.09, 2.46), 0.101),
+            (
+                "실측 speed=6.0m/s",
+                (0.762, 0.200, 0.999),
+                (0.0, -4.34, 1.51),
+                0.248,
+            ),
+            (
+                "실측 speed=9.0m/s",
+                (0.762, 0.350, 0.875),
+                (0.0, -7.32, 2.15),
+                0.136,
+            ),
+            (
+                "실측 speed=10.0m/s",
+                (0.762, 0.350, 0.859),
+                (0.0, -8.26, 2.28),
+                0.121,
+            ),
+            (
+                "실측 speed=12.0m/s",
+                (0.762, 0.350, 0.865),
+                (0.0, -10.09, 2.46),
+                0.101,
+            ),
         ] {
             print_joint_usage_by_weight_exponent(
                 label,
@@ -1352,7 +1435,9 @@ mod tests {
                     break;
                 };
                 if step % (steps / 5).max(1) == 0 || step < 3 {
-                    let pose = arm.forward_kinematics_with_rail(rail_x, &Joints::from_slice(&q)).expect("fk");
+                    let pose = arm
+                        .forward_kinematics_with_rail(rail_x, &Joints::from_slice(&q))
+                        .expect("fk");
                     let pos_err = (pose.position.coords - target_racket_position).norm();
                     last_pos_err = pos_err;
                     eprintln!("  [{label}] t={t:.3} pos_err={pos_err:.5}");
@@ -1381,13 +1466,19 @@ mod tests {
         let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
         let prediction = sample_prediction(0.3);
 
-        let home_penetration =
-            crate::planner::collision::table_penetration(&arm, start_pose.rail_x, &start_pose.joints);
+        let home_penetration = crate::planner::collision::table_penetration(
+            &arm,
+            start_pose.rail_x,
+            &start_pose.joints,
+        );
         eprintln!("home 자세 table_penetration={home_penetration:.5}m (>0이면 이미 침범)");
 
         let target = solve_impact_target(&arm, &prediction, &start_pose).expect("target");
-        let target_penetration =
-            crate::planner::collision::table_penetration(&arm, target.pose.rail_x, &target.pose.joints);
+        let target_penetration = crate::planner::collision::table_penetration(
+            &arm,
+            target.pose.rail_x,
+            &target.pose.joints,
+        );
         eprintln!(
             "임팩트 목표 자세 table_penetration={target_penetration:.5}m \
              (best_impact_candidate가 이미 >1e-3인 후보는 걸러내므로 안전할 것으로 예상)"
@@ -1425,12 +1516,21 @@ mod tests {
             let t = step as f64 * PLAN_DT_SECS;
             let remaining = tg_budget - t;
             let Some(_) = step_racket_guidance(
-                &arm, &mut q, &mut qdot, &mut rail_x, &mut rail_v,
-                target_racket_position, target_racket_velocity, remaining, PLAN_DT_SECS, &mut scratch,
+                &arm,
+                &mut q,
+                &mut qdot,
+                &mut rail_x,
+                &mut rail_v,
+                target_racket_position,
+                target_racket_velocity,
+                remaining,
+                PLAN_DT_SECS,
+                &mut scratch,
             ) else {
                 break;
             };
-            let raw_pen = crate::planner::collision::table_penetration(&arm, rail_x, &Joints::from_slice(&q));
+            let raw_pen =
+                crate::planner::collision::table_penetration(&arm, rail_x, &Joints::from_slice(&q));
             if raw_pen > 0.0 {
                 raw_penetrating_steps += 1;
             }
@@ -1441,7 +1541,8 @@ mod tests {
             } else {
                 Joints::from_slice(&q)
             };
-            let sample_pen = crate::planner::collision::table_penetration(&arm, rail_x, &sample_joints);
+            let sample_pen =
+                crate::planner::collision::table_penetration(&arm, rail_x, &sample_joints);
             if sample_pen > 0.0 {
                 sample_penetrating_steps += 1;
             }
@@ -1520,12 +1621,21 @@ mod tests {
                 let t = step as f64 * DT;
                 let remaining = TG - t;
                 let Some(_) = step_racket_guidance(
-                    &arm, &mut q, &mut qdot, &mut rail_x, &mut rail_v,
-                    target_pos, target_vel, remaining, DT, &mut scratch,
+                    &arm,
+                    &mut q,
+                    &mut qdot,
+                    &mut rail_x,
+                    &mut rail_v,
+                    target_pos,
+                    target_vel,
+                    remaining,
+                    DT,
+                    &mut scratch,
                 ) else {
                     break;
                 };
-                let Some(pose) = arm.forward_kinematics_with_rail(rail_x, &Joints::from_slice(&q)) else {
+                let Some(pose) = arm.forward_kinematics_with_rail(rail_x, &Joints::from_slice(&q))
+                else {
                     break;
                 };
                 let pos_err = (pose.position.coords - target_pos).norm();
@@ -1533,7 +1643,10 @@ mod tests {
                 history.push((pos_err, vel_ok));
             }
 
-            let min_pos_err = history.iter().map(|&(e, _)| e).fold(f64::INFINITY, f64::min);
+            let min_pos_err = history
+                .iter()
+                .map(|&(e, _)| e)
+                .fold(f64::INFINITY, f64::min);
             eprintln!(
                 "--- d={d:.3}m v={v:.3}m/s (기록된 스텝 수={}, 도달한 최소 pos_err={:.1}mm) ---",
                 history.len(),
@@ -1619,12 +1732,22 @@ mod tests {
                     let t = step as f64 * DT;
                     let remaining = TG - t;
                     let Some(_) = step_racket_guidance(
-                        &arm, &mut q, &mut qdot, &mut rail_x, &mut rail_v,
-                        target_pos, target_vel, remaining, DT, &mut scratch,
+                        &arm,
+                        &mut q,
+                        &mut qdot,
+                        &mut rail_x,
+                        &mut rail_v,
+                        target_pos,
+                        target_vel,
+                        remaining,
+                        DT,
+                        &mut scratch,
                     ) else {
                         break;
                     };
-                    let Some(pose) = arm.forward_kinematics_with_rail(rail_x, &Joints::from_slice(&q)) else {
+                    let Some(pose) =
+                        arm.forward_kinematics_with_rail(rail_x, &Joints::from_slice(&q))
+                    else {
                         break;
                     };
                     let pos_err = (pose.position.coords - target_pos).norm();
@@ -1692,17 +1815,29 @@ mod tests {
                 let t = step as f64 * DT;
                 let remaining = TG - t;
                 let time_to_go = (remaining * TIME_TO_GO_BIAS).max(MIN_TIME_TO_GO_SECS);
-                let pre_pose = arm.forward_kinematics_with_rail(rail_x, &Joints::from_slice(&q)).expect("fk");
+                let pre_pose = arm
+                    .forward_kinematics_with_rail(rail_x, &Joints::from_slice(&q))
+                    .expect("fk");
                 let pre_pos_err_vec = pre_pose.position.coords - target_pos;
                 let pre_velocity = racket_velocity_estimate(&arm, rail_x, rail_v, &q, &qdot);
                 let Some(step_result) = step_racket_guidance(
-                    &arm, &mut q, &mut qdot, &mut rail_x, &mut rail_v,
-                    target_pos, target_vel, remaining, DT, &mut scratch,
+                    &arm,
+                    &mut q,
+                    &mut qdot,
+                    &mut rail_x,
+                    &mut rail_v,
+                    target_pos,
+                    target_vel,
+                    remaining,
+                    DT,
+                    &mut scratch,
                 ) else {
                     eprintln!("  t={t:.3} -> step_racket_guidance returned None (break)");
                     break;
                 };
-                let pose = arm.forward_kinematics_with_rail(rail_x, &Joints::from_slice(&q)).expect("fk");
+                let pose = arm
+                    .forward_kinematics_with_rail(rail_x, &Joints::from_slice(&q))
+                    .expect("fk");
                 let pos_err = (pose.position.coords - target_pos).norm();
                 let achieved = racket_velocity_estimate(&arm, rail_x, rail_v, &q, &qdot);
                 let vel_ok = racket_velocity_ok(&arm, rail_x, rail_v, &q, &qdot, target_vel);
@@ -1742,10 +1877,30 @@ mod tests {
         let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
 
         for (label, impact, incoming, tti) in [
-            ("실측 speed=6.0m/s (이론상 여유 138.9%)", (0.762, 0.200, 0.999), (0.0, -4.34, 1.51), 0.248),
-            ("실측 speed=9.0m/s (이론상 여유 146.3%)", (0.762, 0.350, 0.875), (0.0, -7.32, 2.15), 0.136),
-            ("실측 speed=10.0m/s (이론상 여유 143.5%)", (0.762, 0.350, 0.859), (0.0, -8.26, 2.28), 0.121),
-            ("실측 speed=12.0m/s (이론상 여유 129.3%)", (0.762, 0.350, 0.865), (0.0, -10.09, 2.46), 0.101),
+            (
+                "실측 speed=6.0m/s (이론상 여유 138.9%)",
+                (0.762, 0.200, 0.999),
+                (0.0, -4.34, 1.51),
+                0.248,
+            ),
+            (
+                "실측 speed=9.0m/s (이론상 여유 146.3%)",
+                (0.762, 0.350, 0.875),
+                (0.0, -7.32, 2.15),
+                0.136,
+            ),
+            (
+                "실측 speed=10.0m/s (이론상 여유 143.5%)",
+                (0.762, 0.350, 0.859),
+                (0.0, -8.26, 2.28),
+                0.121,
+            ),
+            (
+                "실측 speed=12.0m/s (이론상 여유 129.3%)",
+                (0.762, 0.350, 0.865),
+                (0.0, -10.09, 2.46),
+                0.101,
+            ),
         ] {
             let prediction = Prediction {
                 time_to_impact_secs: tti,
@@ -1755,8 +1910,9 @@ mod tests {
             match plan_bang_bang_swing(&arm, &[prediction], &start_pose) {
                 Ok(planned) => {
                     let end = planned.trajectory.end_joints();
-                    let end_qdot =
-                        planned.trajectory.sample_velocity_at(planned.trajectory.duration_secs());
+                    let end_qdot = planned
+                        .trajectory
+                        .sample_velocity_at(planned.trajectory.duration_secs());
                     let achieved = racket_velocity_estimate(
                         &arm,
                         planned.trajectory.follow_through_rail_x(),
@@ -1798,14 +1954,39 @@ mod tests {
         // (피크계수 1.875) tti가 짧으면 InfeasibleSwing이 날 수 있으니, "실제로
         // quintic 게임플레이 경로가 계획 가능한" 것 중 가장 강력한 걸 쓴다.
         let candidates = [
-            ("speed=9.0m/s (target 0.869 m/s)", 0.136, (0.762, 0.350, 0.875), (0.0, -7.32, 2.15)),
-            ("speed=10.0m/s (target 0.821 m/s)", 0.121, (0.762, 0.350, 0.859), (0.0, -8.26, 2.28)),
-            ("speed=12.0m/s (target 0.814 m/s)", 0.101, (0.762, 0.350, 0.865), (0.0, -10.09, 2.46)),
-            ("speed=6.0m/s (target 0.695 m/s)", 0.248, (0.762, 0.200, 0.999), (0.0, -4.34, 1.51)),
+            (
+                "speed=9.0m/s (target 0.869 m/s)",
+                0.136,
+                (0.762, 0.350, 0.875),
+                (0.0, -7.32, 2.15),
+            ),
+            (
+                "speed=10.0m/s (target 0.821 m/s)",
+                0.121,
+                (0.762, 0.350, 0.859),
+                (0.0, -8.26, 2.28),
+            ),
+            (
+                "speed=12.0m/s (target 0.814 m/s)",
+                0.101,
+                (0.762, 0.350, 0.865),
+                (0.0, -10.09, 2.46),
+            ),
+            (
+                "speed=6.0m/s (target 0.695 m/s)",
+                0.248,
+                (0.762, 0.200, 0.999),
+                (0.0, -4.34, 1.51),
+            ),
             // 위 4개(짧은 tti)가 전부 quintic 관절속도 한계로 실패할 경우의
             // 대비책 — 기존 회귀 테스트/기본 시나리오가 검증한 실제 게임플레이
             // 기본값(`auto_swing_plans_with_strike_velocity`와 동일).
-            ("기본 회귀 시나리오(tti=0.3s)", 0.3, (table::WIDTH_X * 0.5, 0.30, 0.932), (0.0, -6.01, 1.51)),
+            (
+                "기본 회귀 시나리오(tti=0.3s)",
+                0.3,
+                (table::WIDTH_X * 0.5, 0.30, 0.932),
+                (0.0, -6.01, 1.51),
+            ),
         ];
         let mut chosen = None;
         for (label, tti, impact, incoming) in candidates {
@@ -1887,7 +2068,8 @@ mod tests {
                 for step in 0..=SAMPLES {
                     let t = trajectory.duration_secs * (step as f64 / SAMPLES as f64);
                     let q = trajectory.sample_at(t).values[i];
-                    if (q - start.joints().values[i]).abs() > (peak_q - start.joints().values[i]).abs()
+                    if (q - start.joints().values[i]).abs()
+                        > (peak_q - start.joints().values[i]).abs()
                     {
                         peak_q = q;
                         peak_t = t;
@@ -2094,10 +2276,14 @@ mod tests {
                 continue;
             };
 
-            eprintln!("speed={speed:.1} pitch={pitch_deg:.1} -> 커밋창 안 후보 {}개:", predictions.len());
+            eprintln!(
+                "speed={speed:.1} pitch={pitch_deg:.1} -> 커밋창 안 후보 {}개:",
+                predictions.len()
+            );
             for p in &predictions {
                 let dist_to_current = (p.impact_position.coords
-                    - arm.forward_kinematics_with_rail(start_pose.rail_x, &start_pose.joints)
+                    - arm
+                        .forward_kinematics_with_rail(start_pose.rail_x, &start_pose.joints)
                         .expect("fk")
                         .position
                         .coords)
@@ -2119,8 +2305,11 @@ mod tests {
                         eprintln!(
                             "  impact=({:.3},{:.3},{:.3}) tti={:.3} dist_from_home={:.3}m -> \
                              IK 자체가 실패(도달 범위 밖)",
-                            p.impact_position.x, p.impact_position.y, p.impact_position.z,
-                            p.time_to_impact_secs, dist_to_current,
+                            p.impact_position.x,
+                            p.impact_position.y,
+                            p.impact_position.z,
+                            p.time_to_impact_secs,
+                            dist_to_current,
                         );
                     }
                 }
@@ -2204,7 +2393,10 @@ mod tests {
                 continue;
             };
 
-            eprintln!("speed={speed:.1} pitch={pitch_deg:.1} -> 후보 {}개 단독 테스트:", predictions.len());
+            eprintln!(
+                "speed={speed:.1} pitch={pitch_deg:.1} -> 후보 {}개 단독 테스트:",
+                predictions.len()
+            );
             let mut any_succeeded_alone = false;
             for p in &predictions {
                 let feasibility = crate::swing_feasibility(&arm, p, &start_pose)
@@ -2312,7 +2504,9 @@ mod tests {
                 }
                 reached = true;
 
-                eprintln!("speed={speed:.1} pitch={pitch_deg:.1} -> 용량/요구량 비율 프로필(0.01 간격):");
+                eprintln!(
+                    "speed={speed:.1} pitch={pitch_deg:.1} -> 용량/요구량 비율 프로필(0.01 간격):"
+                );
                 for (y, ratio, tti) in profile.iter().step_by(5) {
                     eprintln!("    y={y:.2} tti={tti:.3} capability/requirement={ratio:.2}");
                 }
@@ -2417,7 +2611,11 @@ mod tests {
         // (x0, v0, target_v, a_max) — 목표속도 0 하나, 비영 목표속도 둘(부호 다른
         // 초기속도 포함)을 섞어 일반화 공식이 실제로 여러 형태의 경계조건에서
         // 수렴하는지 확인한다.
-        let cases = [(-1.0, 0.0, 2.0, 1.0), (1.0, 0.0, 0.0, 2.0), (0.5, -1.0, 1.0, 1.5)];
+        let cases = [
+            (-1.0, 0.0, 2.0, 1.0),
+            (1.0, 0.0, 0.0, 2.0),
+            (0.5, -1.0, 1.0, 1.5),
+        ];
         for &(x0, v0, target_v, a_max) in &cases {
             let (t, x, v) = simulate_double_integrator(x0, v0, target_v, a_max, dt, max_time)
                 .unwrap_or_else(|| {

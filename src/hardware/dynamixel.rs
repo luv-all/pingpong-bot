@@ -380,7 +380,10 @@ impl DynamixelBus {
             return Err(command_transport_error(
                 0.0,
                 joints.values.len(),
-                format!("관절 수 불일치: got {} want {joint_count}", joints.values.len()),
+                format!(
+                    "관절 수 불일치: got {} want {joint_count}",
+                    joints.values.len()
+                ),
             ));
         }
         let ticks: Vec<i32> = joints
@@ -507,7 +510,10 @@ impl DynamixelBus {
             return Err(command_transport_error(
                 duration_secs,
                 ticks.len(),
-                format!("Goal tick 길이 불일치: got {} want {joint_count}", ticks.len()),
+                format!(
+                    "Goal tick 길이 불일치: got {} want {joint_count}",
+                    ticks.len()
+                ),
             ));
         }
         let bus_goals = self.expand_goal_ticks(ticks);

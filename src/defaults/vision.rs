@@ -43,8 +43,8 @@ impl Default for RoiParams {
 /// [`crate::defaults::DEFAULT_COLORMASK_PATH`]에서 캠별 params. 파일·해당 cam 없으면 에러.
 pub fn colormask_for(camera_id: CameraId) -> Result<ColormaskParams> {
     let path = colormask_path();
-    let set = load_colormask_set(&path)
-        .with_context(|| format!("colormask 로드: {}", path.display()))?;
+    let set =
+        load_colormask_set(&path).with_context(|| format!("colormask 로드: {}", path.display()))?;
     let Some(params) = set.params(camera_id).cloned() else {
         bail!(
             "{} 에 cam{} 없음 — tune-colormask --cam … 로 저장",

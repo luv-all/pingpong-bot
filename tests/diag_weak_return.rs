@@ -284,7 +284,10 @@ fn diag_motor_tracking() {
     let launch = pingpong_bot::sim::EvalLaunchParams::default();
     let settings =
         settings_for_zone_shot(&launch, pingpong_bot::sim::eval_protocol::EvalZone::Left, 9);
-    let mut world = SimWorld::with_physics(defaults::robot().expect("robot"), defaults::PhysicsParams::default());
+    let mut world = SimWorld::with_physics(
+        defaults::robot().expect("robot"),
+        defaults::PhysicsParams::default(),
+    );
     world.set_use_ground_truth(true);
     world.shoot_ball(&settings);
 
@@ -375,8 +378,10 @@ fn diag_incoming_trajectory() {
         ),
     ] {
         let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
-        let mut world =
-            SimWorld::with_physics(defaults::robot().expect("robot"), defaults::PhysicsParams::default());
+        let mut world = SimWorld::with_physics(
+            defaults::robot().expect("robot"),
+            defaults::PhysicsParams::default(),
+        );
         world.set_use_ground_truth(true);
         world.shoot_ball(&settings);
 
@@ -449,8 +454,10 @@ fn diag_miss_cause() {
     );
     for (i, (zone, index_in_zone)) in shot_schedule(EvalMode::Block).into_iter().enumerate() {
         let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
-        let mut world =
-            SimWorld::with_physics(defaults::robot().expect("robot"), defaults::PhysicsParams::default());
+        let mut world = SimWorld::with_physics(
+            defaults::robot().expect("robot"),
+            defaults::PhysicsParams::default(),
+        );
         world.set_use_ground_truth(true);
         world.shoot_ball(&settings);
 

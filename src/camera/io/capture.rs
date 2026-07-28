@@ -339,7 +339,15 @@ impl OpenCvCapture {
         let got_fcc = self.reported_fourcc();
         let got_size = self.reported_size();
         let got_fps = self.reported_fps();
-        return format_stream_mismatch(width, height, fps, &want_fcc, got_fcc.as_deref(), got_size, got_fps);
+        return format_stream_mismatch(
+            width,
+            height,
+            fps,
+            &want_fcc,
+            got_fcc.as_deref(),
+            got_size,
+            got_fps,
+        );
     }
 
     /// 노출 관련 드라이버 값 스냅샷 (macOS AVFoundation이면 대개 0 / 무시).
@@ -527,13 +535,32 @@ mod tests {
 
     #[test]
     fn mismatch_skips_unreadable_fourcc() {
-        assert!(format_stream_mismatch(1280, 800, 120.0, "MJPG", Some("????"), Some((1280, 800)), Some(120.0)).is_none());
+        assert!(
+            format_stream_mismatch(
+                1280,
+                800,
+                120.0,
+                "MJPG",
+                Some("????"),
+                Some((1280, 800)),
+                Some(120.0)
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn mismatch_reports_yuy2_vs_mjpg() {
-        let msg = format_stream_mismatch(1280, 800, 120.0, "MJPG", Some("YUY2"), Some((1280, 800)), Some(120.0))
-            .expect("warn");
+        let msg = format_stream_mismatch(
+            1280,
+            800,
+            120.0,
+            "MJPG",
+            Some("YUY2"),
+            Some((1280, 800)),
+            Some(120.0),
+        )
+        .expect("warn");
         assert!(msg.contains("fourcc got=YUY2"));
         assert!(msg.contains("msmf"));
         assert!(!msg.contains("dshow"));
@@ -542,7 +569,18 @@ mod tests {
     #[test]
     fn mismatch_ignores_cap_fps_lie() {
         // size/fourcc OK, only fps prop wrong → no warn (meas is SSOT)
-        assert!(format_stream_mismatch(1280, 800, 120.0, "MJPG", Some("MJPG"), Some((1280, 800)), Some(30.0)).is_none());
+        assert!(
+            format_stream_mismatch(
+                1280,
+                800,
+                120.0,
+                "MJPG",
+                Some("MJPG"),
+                Some((1280, 800)),
+                Some(30.0)
+            )
+            .is_none()
+        );
     }
 
     #[test]

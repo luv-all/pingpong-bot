@@ -132,7 +132,10 @@ fn handle_tune_key(detector: &mut RoiTrack, key: i32) -> bool {
             true
         }
         k if k == i32::from(b'p') || k == i32::from(b'P') => {
-            println!("// paste into RoiParams::default()\n{}", p.to_defaults_snippet());
+            println!(
+                "// paste into RoiParams::default()\n{}",
+                p.to_defaults_snippet()
+            );
             false
         }
         _ => false,

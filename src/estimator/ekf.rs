@@ -106,12 +106,16 @@ impl BallEkf {
             } else if self.initialized && self.velocity_seeded && dt > 1e-4 {
                 self.predict_step(dt);
                 // 주차<->발사 텔레포트: 예측 후에도 잔차가 크면 리셋
-                if (measured.coords - self.position).norm() > defaults::ControlParams::default().ekf_meas_jump_m {
+                if (measured.coords - self.position).norm()
+                    > defaults::ControlParams::default().ekf_meas_jump_m
+                {
                     self.reset();
                 }
             } else if self.initialized && !self.velocity_seeded {
                 // 시드 전: 원시 위치 점프만 검사
-                if (measured.coords - self.position).norm() > defaults::ControlParams::default().ekf_meas_jump_m {
+                if (measured.coords - self.position).norm()
+                    > defaults::ControlParams::default().ekf_meas_jump_m
+                {
                     self.reset();
                 }
             }
@@ -310,7 +314,9 @@ mod tests {
             ekf.update_position(Point3::from(pos), time);
             if let Some(pred) = ekf.predict_to(plane) {
                 if in_swing_commit_window(pred.time_to_impact_secs)
-                    && pos.y <= table::LENGTH_Y * defaults::ControlParams::default().swing_commit_max_ball_y_frac
+                    && pos.y
+                        <= table::LENGTH_Y
+                            * defaults::ControlParams::default().swing_commit_max_ball_y_frac
                 {
                     let err = (pred.impact_position.coords - truth0.impact_position.coords).norm();
                     best_err = best_err.min(err);

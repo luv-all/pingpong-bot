@@ -409,8 +409,14 @@ mod tests {
         assert_eq!(mb.joint_count(), 4);
         assert_eq!(defaults::ControlParams::default().max_joint_torques[0], 6.0);
         assert_eq!(defaults::ControlParams::default().max_joint_torques[1], 3.0);
-        assert_eq!(defaults::ControlParams::default().max_joint_torques[2], 1.25);
-        assert_eq!(defaults::ControlParams::default().max_joint_torques[3], 1.25);
+        assert_eq!(
+            defaults::ControlParams::default().max_joint_torques[2],
+            1.25
+        );
+        assert_eq!(
+            defaults::ControlParams::default().max_joint_torques[3],
+            1.25
+        );
     }
 
     #[test]

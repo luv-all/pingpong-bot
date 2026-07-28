@@ -210,7 +210,14 @@ impl BallShooterSettings {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        return predict_hit_plane(position, velocity, spin, plane, &defaults::PhysicsParams::default()).is_some();
+        return predict_hit_plane(
+            position,
+            velocity,
+            spin,
+            plane,
+            &defaults::PhysicsParams::default(),
+        )
+        .is_some();
     }
 
     /// 테이블·네트·공만 있는 가벼운 Rapier로, 수신 탄도가 **네트 collider에

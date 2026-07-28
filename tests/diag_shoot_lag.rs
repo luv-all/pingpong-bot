@@ -413,7 +413,12 @@ fn run_judder_probe(mode: Acquire, batch_lock: bool) -> (RenderSample, RenderSam
     shutdown.store(true, Ordering::Release);
     let (steps, lock_held) = physics.join().expect("물리 스레드");
     let secs = 2.0 * SAMPLE_FRAMES as f64 * 16.667e-3;
-    return (parked, flight, 100.0 * lock_held.as_secs_f64() / secs, steps);
+    return (
+        parked,
+        flight,
+        100.0 * lock_held.as_secs_f64() / secs,
+        steps,
+    );
 }
 
 fn report(title: &str, parked: &RenderSample, flight: &RenderSample, duty: f64, steps: u64) {
@@ -508,4 +513,3 @@ fn diag_render_stale_frame_judder_candidates() {
     }
     println!();
 }
-

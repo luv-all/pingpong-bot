@@ -68,7 +68,8 @@ pub fn from_pixels(path: &PathBuf, args: &Args) -> Result<()> {
     if result.reproj_rmse > args.max_rmse {
         bail!(
             "재투영 RMSE {:.2} px > --max-rmse {}",
-            result.reproj_rmse, args.max_rmse
+            result.reproj_rmse,
+            args.max_rmse
         );
     }
     ensure_reproj_below(&result, args.max_rmse).map_err(anyhow::Error::msg)?;
@@ -202,12 +203,7 @@ fn rmse_from_label(label: Option<&str>) -> Option<f64> {
     return num.parse().ok();
 }
 
-pub fn write_result(
-    args: &Args,
-    params: CameraParams,
-    rmse: f64,
-    candidates: usize,
-) -> Result<()> {
+pub fn write_result(args: &Args, params: CameraParams, rmse: f64, candidates: usize) -> Result<()> {
     let cam_id = params.camera_id;
     let output = resolve_output(args);
     let mut calib = if let Some(merge) = &args.merge {

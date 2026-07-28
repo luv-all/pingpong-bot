@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CameraId, CamRigConfig, CaptureBackend, FrameSource, OpenCvCapture, PreviewAction,
+    CamRigConfig, CameraId, CaptureBackend, FrameSource, OpenCvCapture, PreviewAction,
     destroy_window, show_bgr,
 };
 
@@ -68,7 +68,11 @@ fn main() -> Result<()> {
 fn backends_for_host() -> Vec<CaptureBackend> {
     let mut v = vec![CaptureBackend::recommended()];
     if cfg!(target_os = "windows") {
-        for b in [CaptureBackend::Msmf, CaptureBackend::DShow, CaptureBackend::Any] {
+        for b in [
+            CaptureBackend::Msmf,
+            CaptureBackend::DShow,
+            CaptureBackend::Any,
+        ] {
             if !v.contains(&b) {
                 v.push(b);
             }
@@ -82,7 +86,11 @@ fn backends_for_host() -> Vec<CaptureBackend> {
 }
 
 fn probe_backend(backend: CaptureBackend, max_index: i32, preview: bool) -> Result<()> {
-    println!("=== backend={} (api={}) ===", backend.as_str(), backend.api_pref());
+    println!(
+        "=== backend={} (api={}) ===",
+        backend.as_str(),
+        backend.api_pref()
+    );
     let mut found = 0usize;
 
     for index in 0..max_index {

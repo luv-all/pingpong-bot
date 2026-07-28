@@ -314,7 +314,11 @@ fn hit_plane_prediction_matches_simulated_ball() {
 fn table_bounce_kernel_models_spin_change() {
     let sample = observe_bounce(Vector3::new(0.0, -6.5, -2.5), Vector3::zeros());
     let spin_change = (sample.omega_after - sample.omega_before).norm();
-    let (_, kernel_w) = table_bounce(sample.v_before, sample.omega_before, &defaults::PhysicsParams::default());
+    let (_, kernel_w) = table_bounce(
+        sample.v_before,
+        sample.omega_before,
+        &defaults::PhysicsParams::default(),
+    );
     let kernel_change = (kernel_w - sample.omega_before).norm();
     println!(
         "rapier |Δω|={spin_change:.1} rad/s, kernel |Δω|={kernel_change:.1} rad/s, R={:.3}",

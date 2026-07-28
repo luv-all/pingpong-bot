@@ -4,10 +4,10 @@
 
 use clap::{Parser, ValueEnum};
 
+use super::FrameSource;
 use super::capture::{CaptureBackend, OpenCvCapture};
 use super::rig::{CamRigConfig, CameraRole};
 use super::threaded::ThreadedCapture;
-use super::FrameSource;
 use crate::CameraId;
 use crate::constants::camera::arducam_b0332;
 use crate::defaults::calib::{DEFAULT_CAM_ROLES, DEFAULT_STEREO_CAM_ROLES};
@@ -183,8 +183,7 @@ impl CamCliArgs {
         let resolved = self.resolve()?;
         let mut out = Vec::with_capacity(resolved.len());
         for r in resolved {
-            let mut cap =
-                OpenCvCapture::from_device_with_backend(r.camera_id, r.device, backend)?;
+            let mut cap = OpenCvCapture::from_device_with_backend(r.camera_id, r.device, backend)?;
             self.stream.apply(&mut cap)?;
             let src: Box<dyn FrameSource> = if self.stream.threaded {
                 Box::new(ThreadedCapture::spawn(cap))

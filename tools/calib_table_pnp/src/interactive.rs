@@ -75,7 +75,9 @@ pub fn run(args: &Args) -> Result<()> {
         args.max_rmse
     );
     cli::hint_pending_if_exists(args, cam_id);
-    println!("Space=freeze  LMB=click  Shift+move=loupe  z=undo  c=clear  s=promote  n=live  q=quit");
+    println!(
+        "Space=freeze  LMB=click  Shift+move=loupe  z=undo  c=clear  s=promote  n=live  q=quit"
+    );
     println!(
         "(accepted → pending; s promotes → {})",
         resolve_output(args).display()
@@ -370,7 +372,12 @@ fn print_per_point_residuals(clicks: &[PixelPoint], params: &CameraParams) {
     println!("  residuals[px] {}", parts.join(" "));
 }
 
-fn draw_mesh_edges(panel: &mut Mat, pts: &[PixelPoint], color: Scalar, thickness: i32) -> Result<()> {
+fn draw_mesh_edges(
+    panel: &mut Mat,
+    pts: &[PixelPoint],
+    color: Scalar,
+    thickness: i32,
+) -> Result<()> {
     for &(a_i, b_i) in table_landmark_mesh_edges() {
         if a_i >= pts.len() || b_i >= pts.len() {
             continue;

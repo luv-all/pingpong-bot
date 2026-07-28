@@ -265,7 +265,12 @@ pub fn mass_matrix_into(
 ) {
     let n = joints.values.len();
     scratch.resize(n);
-    let MassMatrixScratch { zero_accel, unit_accel, bias, tau } = scratch;
+    let MassMatrixScratch {
+        zero_accel,
+        unit_accel,
+        bias,
+        tau,
+    } = scratch;
     required_joint_torques_into(arm, joints, zero_accel, zero_accel, rnea, bias);
     if m_out.nrows() != n || m_out.ncols() != n {
         *m_out = DMatrix::zeros(n, n);

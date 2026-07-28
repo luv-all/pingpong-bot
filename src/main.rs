@@ -14,9 +14,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 #[cfg(feature = "real")]
-use pingpong_bot::{
-    CameraId, DynamixelConfig, Hardware, RailConfig, RealHardware, detector_for,
-};
+use pingpong_bot::{CameraId, DynamixelConfig, Hardware, RailConfig, RealHardware, detector_for};
 use pingpong_bot::{
     InterceptWindow, PhysicsParams, SimRuntimeControls, SimSession, SimSessionConfig, init_tracing,
     new_shutdown_flag, robot,

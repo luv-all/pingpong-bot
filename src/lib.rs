@@ -56,11 +56,11 @@ pub use estimator::{
     friction_from_tangential_speeds, mean_bounce_e, mean_roll_mu, predict_hit_plane,
     restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
-pub use hardware::{Hardware, SimHardware};
-pub use hardware::dynamixel::DynamixelConfig;
-pub use hardware::rail::RailConfig;
 #[cfg(feature = "real")]
 pub use hardware::RealHardware;
+pub use hardware::dynamixel::DynamixelConfig;
+pub use hardware::rail::RailConfig;
+pub use hardware::{Hardware, SimHardware};
 pub use logging::init_tracing;
 pub use pipeline::{CameraFeed, PipelineConfig, PipelineError, PipelineThread, run};
 pub use planner::{

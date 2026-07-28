@@ -117,7 +117,9 @@ pub fn verify_impact_model(
 /// 무저항 탄도로 네트 통과 높이를 검사한다.
 pub fn clears_net_ballistic(impact: Point3, v_out: Vector3<f64>) -> bool {
     let y_net = table::LENGTH_Y * 0.5;
-    let z_min = table::SURFACE_Z + table::NET_HEIGHT + defaults::ImpactParams::default().net_clearance * 0.5;
+    let z_min = table::SURFACE_Z
+        + table::NET_HEIGHT
+        + defaults::ImpactParams::default().net_clearance * 0.5;
     if v_out.y <= 1e-6 {
         return false;
     }

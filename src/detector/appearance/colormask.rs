@@ -14,7 +14,9 @@ use super::super::scorer::Scorer;
 use crate::PixelPoint;
 use crate::camera::Frame;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, serde::Serialize, serde::Deserialize,
+)]
 #[value(rename_all = "lower")]
 #[serde(rename_all = "lowercase")]
 pub enum ColorSpace {

@@ -83,15 +83,10 @@ fn main() -> Result<()> {
         || args.sim
         || args.sim_ballistics
         || args.drag_csv.is_some();
-    let run_capture = args.calibration.is_some()
-        || !args.videos.is_empty()
-        || !has_other;
+    let run_capture = args.calibration.is_some() || !args.videos.is_empty() || !has_other;
 
     if run_capture {
-        let cal = args
-            .calibration
-            .clone()
-            .unwrap_or_else(calibration_path);
+        let cal = args.calibration.clone().unwrap_or_else(calibration_path);
         let cam = args.cam.as_cam_cli();
         let result = capture_loop::run_capture(
             &cal,

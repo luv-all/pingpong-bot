@@ -43,9 +43,9 @@ pub use calib::{
     DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME, DEFAULT_CAM_ROLES,
     DEFAULT_COLORMASK_PATH, DEFAULT_DATA_DIR, DEFAULT_FOV_Y_DEG, DEFAULT_STEREO_CAM_ROLES,
     DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT,
-    DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH, LEFT_CAMERA_ID, LEFT_DEVICE,
-    MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, RIGHT_CAMERA_ID, RIGHT_DEVICE, calibration_path,
-    calibration_pending_path, colormask_path, ensure_parent_dir,
+    DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH, LEFT_CAMERA_ID, LEFT_DEVICE, MAX_REPROJ_RMSE_PX,
+    MIN_CHARUCO_CORNERS, RIGHT_CAMERA_ID, RIGHT_DEVICE, calibration_path, calibration_pending_path,
+    colormask_path, ensure_parent_dir,
 };
 pub use control::ControlParams;
 pub use dxl_limits::{
@@ -84,10 +84,10 @@ pub use vision::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::detector::{RoiParams, ScorerParams};
     use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
     use crate::planner::InterceptWindow;
-    use crate::detector::{RoiParams, ScorerParams};
     use crate::{CameraId, colormask_for};
 
     #[test]

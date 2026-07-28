@@ -88,9 +88,7 @@ pub enum SwingPlanError {
     )]
     TrajectoryExceedsTorque { rail_end_x: f64, utilization: f64 },
     /// 임팩트/궤적 자세가 테이블을 관통
-    #[error(
-        "테이블 관통 {depth:.3}m - 목표 ({target_x:.3}, {target_y:.3}, {target_z:.3}) m"
-    )]
+    #[error("테이블 관통 {depth:.3}m - 목표 ({target_x:.3}, {target_y:.3}, {target_z:.3}) m")]
     TablePenetration {
         target_x: f64,
         target_y: f64,
@@ -252,6 +250,9 @@ mod tests {
             min_swing_secs: 0.1,
         };
         let err = DomainError::InfeasibleSwing(inner.clone());
-        assert_eq!(err.source().map(ToString::to_string), Some(inner.to_string()));
+        assert_eq!(
+            err.source().map(ToString::to_string),
+            Some(inner.to_string())
+        );
     }
 }

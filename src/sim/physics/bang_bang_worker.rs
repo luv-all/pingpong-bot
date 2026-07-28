@@ -55,7 +55,8 @@ impl BangBangWorker {
         let (res_tx, res_rx) = unbounded::<Response>();
         thread::spawn(move || {
             for request in req_rx.iter() {
-                let result = plan_bang_bang_swing(&request.arm, &request.predictions, &request.start);
+                let result =
+                    plan_bang_bang_swing(&request.arm, &request.predictions, &request.start);
                 // 수신측(SimWorld)이 이미 drop돼 채널이 끊겼으면 조용히 종료.
                 if res_tx
                     .send(Response {
@@ -201,8 +202,14 @@ mod tests {
         }
         let (requested_at, _result) = resolved.expect("5초 안에 결과가 와야 함");
         assert_eq!(requested_at, 0.0, "요청 시각이 그대로 보존돼야 함");
-        assert!(!worker.is_busy(), "poll 이후에는 더 이상 busy가 아니어야 함");
-        assert!(worker.poll().is_none(), "한 번 소비한 응답을 다시 반환하면 안 됨");
+        assert!(
+            !worker.is_busy(),
+            "poll 이후에는 더 이상 busy가 아니어야 함"
+        );
+        assert!(
+            worker.poll().is_none(),
+            "한 번 소비한 응답을 다시 반환하면 안 됨"
+        );
     }
 
     #[test]
