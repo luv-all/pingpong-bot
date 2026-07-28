@@ -86,7 +86,7 @@ cargo run -p pingpong-bot -- --debug
 | `impact` | `ImpactParams::default()` | 랠리 리턴 휴리스틱 |
 | `estimator` | `EstimatorParams::default()` | EKF·탄도 |
 | `planner` | `InterceptWindow::default()` | 인터셉트 y 창 |
-| `vision` | `*Params::default()` / `detector()` | fuse 조립 |
+| `vision` | `*Params::default()` / `detector_for` | fuse 조립 |
 | `hardware` | `DynamixelConfig` / `RailConfig::default()` | 실기 버스·레일 |
 | `robot` | `robot()` | **지금 쓰는** `Robot` (바꾸려면 이 함수 본문만) |
 
@@ -273,15 +273,16 @@ cargo run -p pingpong-bot
 
 ### 비전 오프라인 흐름
 
-보정·검출은 툴에서 JSON/프리뷰로 검증하고, 런타임 조립은 `defaults::detector()`.
+보정·검출은 툴에서 JSON/프리뷰로 검증하고, 런타임 조립은 `defaults::detector_for(cam_id)` (`data/calibration.json` · `data/colormask.json`).
 
 ```mermaid
 flowchart LR
-  table["탁구대 8점"] --> pnp["calib-table-pnp"] --> json["Calibration JSON"]
+  table["탁구대 8점"] --> pnp["calib-table-pnp"] --> json["data/calibration.json"]
   json --> full["detect-full / DLT"]
   frames["폴더/영상"] --> appearance["detect-appearance"]
   appearance --> full
-  full --> defaults["defaults::detector()"]
+  full --> defaults["defaults::detector_for"]
+  tune["tune-colormask"] --> cm["data/colormask.json"] --> defaults
 ```
 
 - 외참(운영): [calib_table_pnp](tools/calib_table_pnp/README.md) (클릭 → 자동 PnP → 무지개 격자 → 저장) → DLT

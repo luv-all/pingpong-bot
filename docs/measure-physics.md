@@ -85,7 +85,7 @@ v_{\mathrm{out}}\cdot n = (1+e)\,v_r\cdot n - e\,v_{\mathrm{in}}\cdot n
 낙하 → 테이블 바운스에서 \(e = |v_z'| / |v_z|\) (또는 높이비 \(\sqrt{h_1/h_0}\)).
 
 ```bash
-cargo run -p measure-restitution -- --calibration calibration.json
+cargo run -p measure-restitution -- --calibration data/calibration.json
 cargo run -p measure-restitution -- --heights 0.40,0.29,0.21
 cargo run -p measure-restitution -- --sim   # 시뮬 회귀용
 ```
@@ -97,7 +97,7 @@ stdout의 `restitution:` → `PhysicsParams::default()`.
 테이블 위 롤에서 접선 감쇠 \(v_t' \approx (1-\mu) v_t\).
 
 ```bash
-cargo run -p measure-friction -- --calibration calibration.json
+cargo run -p measure-friction -- --calibration data/calibration.json
 cargo run -p measure-friction -- --sim
 ```
 

@@ -4,7 +4,7 @@
 
 라이브 스트림·FOV 기본은 **Arducam B0332** datasheet SSOT (`arducam_b0332`: 1280×800@120 MJPG, HFOV70°→VFOV≈47.3°).
 
-저장/로드 기본 경로는 **`calibration.json`** (`defaults::calib::DEFAULT_CALIBRATION_PATH`). left/right 각각 실행해도 같은 번들에 upsert.
+저장/로드 기본 경로는 **`data/calibration.json`** (`defaults::calib::DEFAULT_CALIBRATION_PATH`). left/right 각각 실행해도 같은 번들에 upsert.
 
 | 파일 | 역할 |
 |------|------|
@@ -23,7 +23,7 @@
 ## 사용
 
 ```bash
-# -o 생략 → calibration.json (카메라별 upsert)
+# -o 생략 → data/calibration.json (카메라별 upsert)
 cargo run -p calib-table-pnp -- --cam left
 cargo run -p calib-table-pnp -- --cam right
 
@@ -32,7 +32,7 @@ cargo run -p calib-table-pnp -- --path capture.mp4 --cam left
 
 # 다른 파일로 쓰거나 합치기
 cargo run -p calib-table-pnp -- --cam left -o other.json
-cargo run -p calib-table-pnp -- --cam right --merge other.json -o calibration.json
+cargo run -p calib-table-pnp -- --cam right --merge other.json -o data/calibration.json
 ```
 
 | 키 | 동작 |
@@ -47,4 +47,4 @@ cargo run -p calib-table-pnp -- --cam right --merge other.json -o calibration.js
 
 오버레이: **초록○** = 클릭, **마젠타×** = PnP 이상 재투영, **노란선** = 잔차(px). FAIL여도 표시되므로 잔차 큰 점부터 `z`로 다시 찍으면 된다.
 
-pending: 공유 `calibration.pending.json`에 `cameras[]` upsert. `s`는 현재 cam만 본파일로 promote하고 pending에서 해당 항목만 제거.
+pending: 공유 `data/calibration.pending.json`에 `cameras[]` upsert. `s`는 현재 cam만 본파일로 promote하고 pending에서 해당 항목만 제거.

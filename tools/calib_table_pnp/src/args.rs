@@ -84,7 +84,7 @@ mod tests {
         assert_eq!(resolve_output(&args), calibration_path());
         assert_eq!(
             pending_path(&args),
-            PathBuf::from(pingpong_bot::DEFAULT_CALIBRATION_PENDING_NAME)
+            PathBuf::from("data/calibration.pending.json")
         );
     }
 

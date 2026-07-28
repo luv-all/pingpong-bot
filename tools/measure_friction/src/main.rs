@@ -21,7 +21,7 @@ use pingpong_bot::{
     about = "테이블 마찰 μ 측정 → PhysicsParams::default() 스니펫. 영상 멀티캠 또는 수동 숫자"
 )]
 struct Args {
-    /// Calibration JSON (캡처 기본: `calibration.json` SSOT)
+    /// Calibration JSON (캡처 기본: `data/calibration.json` SSOT)
     #[arg(long, value_name = "PATH")]
     calibration: Option<PathBuf>,
     #[arg(long = "video", value_name = "PATH")]
@@ -119,7 +119,7 @@ fn main() -> Result<()> {
         bail!(
             "입력이 없습니다. 예:\n  \
              cargo run -p measure-friction\n  \
-             cargo run -p measure-friction -- --calibration calibration.json\n  \
+             cargo run -p measure-friction -- --calibration data/calibration.json\n  \
              --video cam0.mp4 --video cam1.mp4\n  \
              --vt-pairs 2.0:1.4\n  \
              --sim"

@@ -1,7 +1,7 @@
 //! 캘리브·라이브 캠 CLI **요청** — [`Default`]가 앱 프리셋.
 //!
 //! datasheet(B0332)는 [`crate::constants::camera`]. USB device·보드 치수는 여기.
-//! Calibration JSON 경로는 [`DEFAULT_CALIBRATION_PATH`] — 저장·로드 툴 전부 여기만.
+//! 비전 산출물 JSON은 [`DEFAULT_DATA_DIR`] 아래 — calib·colormask 툴 전부 여기만.
 
 use std::path::{Path, PathBuf};
 
@@ -21,17 +21,26 @@ pub const DEFAULT_STREAM_FOURCC: &str = arducam_b0332::FOURCC_MJPG;
 pub const DEFAULT_STREAM_THREADED: bool = true;
 pub const DEFAULT_FOV_Y_DEG: f64 = arducam_b0332::VFOV_DEG;
 
-/// 멀티캠 `Calibration` 번들 SSOT. calib 저장·measure 로드 기본 경로.
-pub const DEFAULT_CALIBRATION_PATH: &str = "calibration.json";
-/// table-PnP accepted 해 사이드카 (본파일 upsert 전). `-o` 옆 또는 CWD.
+/// 캘리브·colormask 등 비전 산출물 루트.
+pub const DEFAULT_DATA_DIR: &str = "data";
+/// 멀티캠 `Calibration` 번들 SSOT.
+pub const DEFAULT_CALIBRATION_PATH: &str = "data/calibration.json";
+/// table-PnP accepted 해 사이드카 파일명 (`-o` 부모 또는 [`DEFAULT_DATA_DIR`]).
 pub const DEFAULT_CALIBRATION_PENDING_NAME: &str = "calibration.pending.json";
+/// 카메라별 `ColormaskParams` 번들 SSOT.
+pub const DEFAULT_COLORMASK_PATH: &str = "data/colormask.json";
 
 /// [`DEFAULT_CALIBRATION_PATH`]의 `PathBuf`.
 pub fn calibration_path() -> PathBuf {
     return PathBuf::from(DEFAULT_CALIBRATION_PATH);
 }
 
-/// `-o`가 있으면 그 부모 옆 pending, 없으면 CWD의 [`DEFAULT_CALIBRATION_PENDING_NAME`].
+/// [`DEFAULT_COLORMASK_PATH`]의 `PathBuf`.
+pub fn colormask_path() -> PathBuf {
+    return PathBuf::from(DEFAULT_COLORMASK_PATH);
+}
+
+/// `-o`가 있으면 그 부모 옆 pending, 없으면 [`DEFAULT_DATA_DIR`] 아래.
 pub fn calibration_pending_path(output: Option<&Path>) -> PathBuf {
     if let Some(output) = output {
         if let Some(parent) = output.parent() {
@@ -40,7 +49,17 @@ pub fn calibration_pending_path(output: Option<&Path>) -> PathBuf {
             }
         }
     }
-    return PathBuf::from(DEFAULT_CALIBRATION_PENDING_NAME);
+    return PathBuf::from(DEFAULT_DATA_DIR).join(DEFAULT_CALIBRATION_PENDING_NAME);
+}
+
+/// `path`의 부모 디렉터리를 만든다 (`data/` 등).
+pub fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            return std::fs::create_dir_all(parent);
+        }
+    }
+    return Ok(());
 }
 
 /// 벤치 스테레오 리그 — USB 순서가 바뀌면 **여기만** 고친다.

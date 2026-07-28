@@ -97,9 +97,15 @@ pub fn run_capture(
         );
     }
 
-    let mut detectors: Vec<Box<dyn BallDetector>> = (0..sources.len())
-        .map(|_| Box::new(pingpong_bot::detector()) as Box<dyn BallDetector>)
-        .collect();
+    let ids: Vec<_> = sources.iter().map(|s| s.camera_id()).collect();
+    let mut detectors: Vec<Box<dyn BallDetector>> = ids
+        .iter()
+        .map(|&id| {
+            Ok::<_, anyhow::Error>(
+                Box::new(pingpong_bot::detector_for(id)?) as Box<dyn BallDetector>
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     let window = "measure:restitution";
     let mut traj = Vec::new();

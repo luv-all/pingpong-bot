@@ -124,6 +124,12 @@ pub fn write_pending(
     });
     upsert_camera(&mut calib, params);
     let json = serde_json::to_string_pretty(&calib)?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("디렉터리 생성: {}", parent.display()))?;
+        }
+    }
     fs::write(&path, json).with_context(|| format!("pending 쓰기: {}", path.display()))?;
     println!(
         "pending upsert → {} (cam={}, rmse={:.2}px, candidates={}, pending_cams={}) — s=promote, q=keep",
@@ -229,6 +235,12 @@ pub fn write_result(
 
     upsert_camera(&mut calib, params);
     let json = serde_json::to_string_pretty(&calib)?;
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("디렉터리 생성: {}", parent.display()))?;
+        }
+    }
     fs::write(&output, json).with_context(|| format!("쓰기 실패: {}", output.display()))?;
     clear_pending_camera(args, cam_id);
     println!(

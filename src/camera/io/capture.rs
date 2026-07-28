@@ -29,6 +29,8 @@ impl Frame {
 /// 카메라/파일에서 BGR 프레임을 낸다.
 pub trait FrameSource: Send {
     fn next_frame(&mut self) -> Option<Frame>;
+
+    fn camera_id(&self) -> CameraId;
 }
 
 /// sim·구 경로: 이미 아는 픽셀 힌트 (검출기 우회).
@@ -448,6 +450,10 @@ impl FrameSource for OpenCvCapture {
         self.frame_index += 1;
         return Some(Frame::new(self.camera_id, image, timestamp));
     }
+
+    fn camera_id(&self) -> CameraId {
+        return self.camera_id;
+    }
 }
 
 /// 디렉터리의 이미지를 정렬된 순서로 한 장씩 낸다 (`detect_*` 실험용).
@@ -499,6 +505,10 @@ impl FrameSource for ImageDirSource {
         }
         let timestamp = self.epoch + Duration::from_secs_f64(idx as f64 / self.fps);
         return Some(Frame::new(self.camera_id, image, timestamp));
+    }
+
+    fn camera_id(&self) -> CameraId {
+        return self.camera_id;
     }
 }
 

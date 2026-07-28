@@ -93,7 +93,7 @@
 설계: [`docs/superpowers/specs/2026-07-18-vision-pipeline-design.md`](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md)
 
 보정은 **오프라인 툴 → JSON → 런타임 로드**. 캡처와 검출은 `Frame` + `BallDetector`로 분리.  
-앱 검출 조립 SSOT: `defaults::detector()`.
+앱 검출 조립 SSOT: `defaults::detector_for(CameraId)` (`data/colormask.json`).
 
 - [x] `camera`에 OpenCV 삼각측량과 다중 뷰 DLT 통합
 - [x] OpenCV **공 검출** — fuse + `detect-appearance` / `detect-full` (ROI `r`)

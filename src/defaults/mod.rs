@@ -6,7 +6,7 @@
 //! 패턴:
 //! - `impl Default for Params|Config|CliArgs` — 앱 프리셋
 //! - `pub const` — clap `default_value_t`·임계값
-//! - [`detector`] / [`robot`] — 조립이 `Result`이거나 파이프라인인 팩토리만 예외
+//! - [`detector_for`] / [`robot`] — 조립이 `Result`이거나 파이프라인인 팩토리만 예외
 //!
 //! | 모듈 | Default |
 //! |------|--------|
@@ -15,7 +15,7 @@
 //! | [`impact`] | `ImpactParams` |
 //! | [`estimator`] | `EstimatorParams` |
 //! | [`robot`] | URDF·primitive (`Result`) |
-//! | [`vision`] | Scorer/Colormask/Roi + [`detector`] |
+//! | [`vision`] | Scorer/Roi + [`detector_for`] |
 //! | [`calib`] | Cam* / Charuco / Rig |
 //! | [`hardware`] | DynamixelConfig / RailConfig |
 //! | [`dxl_limits`] | derate·속도·토크 배열 |
@@ -41,10 +41,11 @@ pub mod vision;
 pub use calib::{
     CHARUCO_MARKER_LENGTH_M, CHARUCO_SQUARE_LENGTH_M, CHARUCO_SQUARES_X, CHARUCO_SQUARES_Y,
     DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME, DEFAULT_CAM_ROLES,
-    DEFAULT_FOV_Y_DEG, DEFAULT_STEREO_CAM_ROLES, DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC,
-    DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH,
-    LEFT_CAMERA_ID, LEFT_DEVICE, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, RIGHT_CAMERA_ID,
-    RIGHT_DEVICE, calibration_path, calibration_pending_path,
+    DEFAULT_COLORMASK_PATH, DEFAULT_DATA_DIR, DEFAULT_FOV_Y_DEG, DEFAULT_STEREO_CAM_ROLES,
+    DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT,
+    DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH, LEFT_CAMERA_ID, LEFT_DEVICE,
+    MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, RIGHT_CAMERA_ID, RIGHT_DEVICE, calibration_path,
+    calibration_pending_path, colormask_path, ensure_parent_dir,
 };
 pub use control::ControlParams;
 pub use dxl_limits::{
@@ -76,7 +77,8 @@ pub use sim::{
 };
 pub use sim_motor::SimMotorParams;
 pub use vision::{
-    MOTION_DIFF_THRESH, MOTION_WEIGHT, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, detector,
+    MOTION_DIFF_THRESH, MOTION_WEIGHT, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, colormask_for,
+    detector_for,
 };
 
 #[cfg(test)]
@@ -85,7 +87,8 @@ mod tests {
     use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
     use crate::planner::InterceptWindow;
-    use crate::detector::{ColormaskParams, RoiParams, ScorerParams};
+    use crate::detector::{RoiParams, ScorerParams};
+    use crate::{CameraId, colormask_for};
 
     #[test]
     fn presets_validate() {
@@ -95,7 +98,8 @@ mod tests {
         EstimatorParams::default().validate().unwrap();
         InterceptWindow::default().validate().unwrap();
         ScorerParams::default().validate().unwrap();
-        ColormaskParams::default().validate().unwrap();
+        colormask_for(CameraId(0)).unwrap().validate().unwrap();
+        colormask_for(CameraId(1)).unwrap().validate().unwrap();
         RoiParams::default().validate().unwrap();
         DynamixelConfig::default().validate().unwrap();
         RailConfig::default().validate().unwrap();

@@ -1,0 +1,24 @@
+{
+  "cameras": [
+    {
+      "camera_id": 0,
+      "space": "ycrcb",
+      "c0_min": 172,
+      "c0_max": 250,
+      "c1_min": 131,
+      "c1_max": 188,
+      "c2_min": 7,
+      "c2_max": 94
+    },
+    {
+      "camera_id": 1,
+      "space": "ycrcb",
+      "c0_min": 172,
+      "c0_max": 250,
+      "c1_min": 131,
+      "c1_max": 188,
+      "c2_min": 7,
+      "c2_max": 94
+    }
+  ]
+}

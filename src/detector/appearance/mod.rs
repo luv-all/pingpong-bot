@@ -5,5 +5,8 @@ mod colormask;
 mod contour;
 
 pub use cascade::ColorContourCascade;
-pub use colormask::{ColorSpace, ColormaskDetector, ColormaskParams, ParseColorSpaceError};
+pub use colormask::{
+    ColorSpace, ColormaskCam, ColormaskDetector, ColormaskParams, ColormaskSet, ParseColorSpaceError,
+    load_colormask_set, load_colormask_set_or_empty, save_colormask_set,
+};
 pub use contour::ContourDetector;

@@ -1,6 +1,6 @@
 # detect-full
 
-런타임과 같은 **fuse DSL** 본선 (`defaults::detector()`) + adaptive ROI 튜닝.
+런타임과 같은 **fuse DSL** 본선 (`defaults::detector_for(cam_id)`) + adaptive ROI 튜닝.
 
 파이프라인 스텝(읽는 순서):
 
@@ -19,7 +19,7 @@
 - **`p`**: `RoiParams::default()` paste 스니펫
 - **`q` / ESC**: 종료
 
-SSOT: `src/defaults/vision.rs` → `detector()` / `roi()` / `colormask()` / `scorer()`
+SSOT: `src/defaults/vision.rs` → `detector_for` / `colormask_for` · `data/colormask.json`
 
 appearance 단독 비교(병렬): [detect-appearance](../detect_appearance/README.md).
 

@@ -1,7 +1,7 @@
 # tune-colormask
 
 탁구공 위 픽셀을 클릭해 **YCrCb / HSV** `inRange` 범위를 뽑는다.  
-파일은 건드리지 않는다 — 콘솔에 `ColormaskParams::default()`에 붙여넣을 Rust 조각만 출력.
+`p` (및 샘플 있는 채 종료) 시 현재 `--cam`을 [`data/colormask.json`](../../data/colormask.json)에 upsert. Rust 스니펫도 콘솔에 출력.
 
 ## 화면
 
@@ -13,7 +13,8 @@
 ## 사용
 
 ```bash
-cargo run -p tune-colormask                 # --cam left + SSOT 스트림
+cargo run -p tune-colormask                 # --cam left → data/colormask.json cam0
+cargo run -p tune-colormask -- --cam right  # cam1 upsert
 cargo run -p tune-colormask -- --cam left --space hsv
 cargo run -p tune-colormask -- --cam left --margin 5
 cargo run -p tune-colormask -- --path clip.mp4
@@ -27,7 +28,7 @@ cargo run -p tune-colormask -- --path clip.mp4
 | `c` | 샘플 전체 삭제 |
 | `Space` | freeze / live |
 | `s` | ycrcb ↔ hsv (미리보기) |
-| `p` | 양쪽 space `ColormaskParams` Rust 출력 |
-| `q` / ESC | 종료 |
+| `p` | 저장(현재 space) + 양쪽 space Rust 출력 |
+| `q` / ESC | 종료 (샘플 있으면 저장) |
 
-`p` 출력을 `src/defaults/vision.rs`의 `colormask()`에 수동으로 넣는다.
+SSOT: `defaults::DEFAULT_COLORMASK_PATH` → `detector_for(CameraId)`.

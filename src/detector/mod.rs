@@ -4,7 +4,7 @@
 //! - [`fuse_layer`] — candidate · scorer · fuse
 //! - [`motion`] — `MotionPrior`
 //!
-//! **조립 SSOT:** [`crate::defaults::detector`].
+//! **조립 SSOT:** [`crate::defaults::detector_for`].
 
 pub mod appearance;
 pub mod fuse_layer;

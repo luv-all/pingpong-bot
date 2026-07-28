@@ -13,9 +13,9 @@ use opencv::imgcodecs;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    BallDetector, ColorContourCascade, ColormaskParams, Frame, FrameSource, ImageDirSource,
-    OpenCvCapture, PixelPoint, PreviewAction, RoiTrack, Scorer, ScorerParams, destroy_window,
-    draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
+    BallDetector, ColorContourCascade, Frame, FrameSource, ImageDirSource, OpenCvCapture,
+    PixelPoint, PreviewAction, RoiTrack, Scorer, ScorerParams, destroy_window, draw_cam_label,
+    draw_circle_px, draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
 };
 
 use cli::Args;
@@ -151,16 +151,18 @@ fn main() -> Result<()> {
     }
 
     let mut source = open_source(&args)?;
-    let mut detector = pingpong_bot::detector();
+    let cam_id = source.camera_id();
+    let mut detector = pingpong_bot::detector_for(cam_id)?;
     if args.no_roi {
         detector.set_roi_enabled(false);
     }
 
     let scorer_params = ScorerParams::default();
     let scorer = Scorer::from(&scorer_params);
-    let mut cascade = ColorContourCascade::new(ColormaskParams::default(), &scorer_params);
+    let mut cascade =
+        ColorContourCascade::new(pingpong_bot::colormask_for(cam_id)?, &scorer_params);
 
-    println!("{detector} (defaults: colormask → contour → ROI)");
+    println!("{detector} (cam{} colormask → contour → ROI)", cam_id.0);
     println!("keys: r ROI  [ ] k  , . m  - = pad  p paste  q/ESC quit");
 
     let window = "detect:full";

@@ -278,7 +278,7 @@ track(fuse_from_vision(&vision)?, vision.roi_half_px);
 
 ```rust
 // 앱 SSOT — defaults
-let detect = detector(); // fuse(generators![…], scorer) + track
+let detect = detector_for(cam_id)?; // fuse(generators![…], scorer) + track
 ```
 
 툴: `detect-appearance` / `detect-full`은 선택적 `[vision]` TOML 어댑터(`fuse_vision`) 가능.  

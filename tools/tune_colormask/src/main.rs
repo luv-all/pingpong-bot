@@ -1,6 +1,6 @@
-//! 탁구공 색 범위 튜닝 — 픽커 → min/max → dry-run Rust 출력.
+//! 탁구공 색 범위 튜닝 — 픽커 → min/max → `data/colormask.json` upsert.
 //!
-//! 레이아웃: (original | mask) / 색상 띠. 파일 저장 없음.
+//! 레이아웃: (original | mask) / 색상 띠. `p`로 현재 space를 캠별로 저장.
 
 mod cli;
 
@@ -13,9 +13,10 @@ use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    ColorSpace, ColormaskParams, FrameSource, ImageDirSource, OpenCvCapture, PixelPickMouse,
-    PixelPoint, PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
-    draw_help_lines, draw_pixel_loupe, hstack_bgr, show_bgr, unscale_xy,
+    CameraId, ColorSpace, ColormaskParams, FrameSource, ImageDirSource, OpenCvCapture,
+    PixelPickMouse, PixelPoint, PreviewAction, colormask_path, destroy_window, draw_cam_label,
+    draw_circle_px, draw_debug_lines, draw_help_lines, draw_pixel_loupe, hstack_bgr,
+    load_colormask_set_or_empty, save_colormask_set, show_bgr, unscale_xy,
 };
 
 use cli::Args;
@@ -176,7 +177,7 @@ fn space_label(space: ColorSpace) -> &'static str {
 fn print_params(space: ColorSpace, range: ChannelRange) {
     let p = range.to_params(space);
     let axes = space_label(space);
-    println!("// paste into ColormaskParams::default() — space={space} ({axes})");
+    println!("// ColormaskParams — space={space} ({axes})");
     println!("ColormaskParams {{");
     println!(
         "    space: ColorSpace::{},",
@@ -218,6 +219,44 @@ fn print_all(ycrcb: Option<ChannelRange>, hsv: Option<ChannelRange>, n: usize, m
         None => println!("(hsv: need samples)"),
     }
     println!("----------------------------------------------");
+}
+
+fn upsert_colormask(cam_id: CameraId, space: ColorSpace, range: ChannelRange) -> Result<()> {
+    let path = colormask_path();
+    let mut set = load_colormask_set_or_empty(&path)?;
+    let params = range.to_params(space);
+    params.validate()?;
+    set.upsert(cam_id, params);
+    save_colormask_set(&path, &set)?;
+    println!(
+        "wrote colormask → {} (cam={}, space={}, cams={})",
+        path.display(),
+        cam_id.0,
+        space,
+        set.cameras.len()
+    );
+    return Ok(());
+}
+
+fn hint_existing(cam_id: CameraId) {
+    let path = colormask_path();
+    let Ok(set) = load_colormask_set_or_empty(&path) else {
+        return;
+    };
+    if let Some(p) = set.params(cam_id) {
+        println!(
+            "existing {} cam{}: space={} c0=[{},{}] c1=[{},{}] c2=[{},{}]",
+            path.display(),
+            cam_id.0,
+            p.space,
+            p.c0_min,
+            p.c0_max,
+            p.c1_min,
+            p.c1_max,
+            p.c2_min,
+            p.c2_max
+        );
+    }
 }
 
 fn make_mask_bgr(bgr: &Mat, space: ColorSpace, range: ChannelRange) -> Result<Mat> {
@@ -371,6 +410,7 @@ fn vstack_bgr(top: &Mat, bottom: &Mat) -> Result<Mat> {
 fn main() -> Result<()> {
     let args = Args::parse();
     let margin = args.margin.min(32);
+    let cam_id = args.cam.camera_id().map_err(anyhow::Error::msg)?;
     let mut source = open_source(&args)?;
     let mut space = args.space;
     let wait_ms = args
@@ -404,7 +444,13 @@ fn main() -> Result<()> {
     let mut display_scale = 1.0;
 
     println!(
-        "tune-colormask space={space} margin={margin}  LMB=pick  Shift+move=loupe  z=undo  c=clear  Space=freeze  s=space  p=print  q=quit"
+        "tune-colormask cam={} space={space} margin={margin} → {}",
+        cam_id.0,
+        colormask_path().display()
+    );
+    hint_existing(cam_id);
+    println!(
+        "LMB=pick  Shift+move=loupe  z=undo  c=clear  Space=freeze  s=space  p=save+print  q=quit"
     );
 
     loop {
@@ -526,7 +572,7 @@ fn main() -> Result<()> {
                 "z undo  c clear",
                 "Space freeze",
                 "s ycrcb|hsv",
-                "p print",
+                "p save+print",
                 "q/ESC quit",
             ],
             Scalar::new(0.0, 255.0, 80.0, 0.0),
@@ -567,6 +613,15 @@ fn main() -> Result<()> {
             PreviewAction::Key(key) if key == i32::from(b'p') || key == i32::from(b'P') => {
                 let (y, h) = ranges_from_samples(&samples, margin)?;
                 print_all(y, h, samples.len(), margin);
+                let active = match space {
+                    ColorSpace::Ycrcb => y,
+                    ColorSpace::Hsv => h,
+                };
+                if let Some(r) = active {
+                    upsert_colormask(cam_id, space, r)?;
+                } else {
+                    println!("(save skipped: need samples)");
+                }
             }
             PreviewAction::Key(_) => {}
         }
@@ -577,10 +632,17 @@ fn main() -> Result<()> {
         }
     }
 
-    // 종료 시 한 번 더 출력
+    // 종료 시 한 번 더 출력·저장
     if !samples.is_empty() {
         let (y, h) = ranges_from_samples(&samples, margin)?;
         print_all(y, h, samples.len(), margin);
+        let active = match space {
+            ColorSpace::Ycrcb => y,
+            ColorSpace::Hsv => h,
+        };
+        if let Some(r) = active {
+            upsert_colormask(cam_id, space, r)?;
+        }
     }
 
     destroy_window(window);

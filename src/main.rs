@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 #[cfg(feature = "real")]
 use pingpong_bot::{
-    DynamixelConfig, Hardware, RailConfig, RealHardware, detector,
+    CameraId, DynamixelConfig, Hardware, RailConfig, RealHardware, detector_for,
 };
 use pingpong_bot::{
     InterceptWindow, PhysicsParams, SimRuntimeControls, SimSession, SimSessionConfig, init_tracing,
@@ -121,7 +121,7 @@ fn run_real_entry(args: &Args) -> Result<()> {
         RealHardware::new(dxl, Some(RailConfig::default()), arm).context("RealHardware")?;
     let pose = hardware.read_pose().context("read pose")?;
     info!(joints = ?pose.joints.values, "pose");
-    let _ = detector();
+    let _ = detector_for(CameraId(0)).context("detector_for cam0")?;
     return Ok(());
 }
 

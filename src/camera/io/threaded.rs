@@ -117,7 +117,6 @@ impl FrameSource for ThreadedCapture {
         if let Some(frame) = self.try_clone_latest() {
             return Some(frame);
         }
-
         // 스폰 직후·MSMF 콜드스타트: 첫 프레임이 올 때까지 짧게 폴링.
         // (없으면 cam-preview가 즉시 "프레임 끝/실패"로 죽음)
         let deadline = Instant::now() + FIRST_FRAME_WAIT;
@@ -131,6 +130,10 @@ impl FrameSource for ThreadedCapture {
             }
         }
         return None;
+    }
+
+    fn camera_id(&self) -> CameraId {
+        return self.camera_id;
     }
 }
 

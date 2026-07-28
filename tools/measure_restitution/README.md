@@ -8,15 +8,15 @@
 멀티캠 + **Calibration JSON** → 검출 → 삼각측량 → 바운스에서 $e = |v_z'|/|v_z|$.
 
 ```bash
-# 캡처 모드: calibration 기본=`calibration.json` SSOT (기본 --cam left,right)
+# 캡처 모드: calibration 기본=`data/calibration.json` SSOT (기본 --cam left,right)
 cargo run -p measure-restitution
 
 cargo run -p measure-restitution -- \
-  --calibration calibration.json \
+  --calibration data/calibration.json \
   --cam left,right
 
 cargo run -p measure-restitution -- \
-  --calibration calibration.json \
+  --calibration data/calibration.json \
   --video cam0.mp4 --video cam1.mp4
 ```
 

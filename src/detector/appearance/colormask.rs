@@ -1,6 +1,6 @@
 //! YCrCb / HSV 색 마스크로 공 검출.
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use clap::ValueEnum;
 use opencv::core::{Point, Scalar, Vector};
 use opencv::imgproc;
@@ -14,8 +14,9 @@ use super::super::scorer::Scorer;
 use crate::PixelPoint;
 use crate::camera::Frame;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, serde::Serialize, serde::Deserialize)]
 #[value(rename_all = "lower")]
+#[serde(rename_all = "lowercase")]
 pub enum ColorSpace {
     #[default]
     Ycrcb,
@@ -55,7 +56,7 @@ impl std::fmt::Display for ParseColorSpaceError {
 
 impl std::error::Error for ParseColorSpaceError {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ColormaskParams {
     pub space: ColorSpace,
     pub c0_min: u8,
@@ -73,6 +74,74 @@ impl ColormaskParams {
         ensure!(self.c2_min <= self.c2_max, "c2_min <= c2_max");
         return Ok(());
     }
+}
+
+/// 한 카메라의 colormask 엔트리 (`camera_id` + flatten params).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ColormaskCam {
+    pub camera_id: crate::CameraId,
+    #[serde(flatten)]
+    pub params: ColormaskParams,
+}
+
+/// 멀티캠 colormask 번들 (`data/colormask.json`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct ColormaskSet {
+    pub cameras: Vec<ColormaskCam>,
+}
+
+impl ColormaskSet {
+    pub fn params(&self, camera_id: crate::CameraId) -> Option<&ColormaskParams> {
+        return self
+            .cameras
+            .iter()
+            .find(|c| c.camera_id == camera_id)
+            .map(|c| &c.params);
+    }
+
+    pub fn upsert(&mut self, camera_id: crate::CameraId, params: ColormaskParams) {
+        if let Some(slot) = self.cameras.iter_mut().find(|c| c.camera_id == camera_id) {
+            slot.params = params;
+            return;
+        }
+        self.cameras.push(ColormaskCam { camera_id, params });
+        self.cameras.sort_by_key(|c| c.camera_id);
+    }
+}
+
+/// JSON에서 [`ColormaskSet`] 로드. 파일 없으면 에러.
+pub fn load_colormask_set(path: &std::path::Path) -> Result<ColormaskSet> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("colormask 읽기: {}", path.display()))?;
+    let set: ColormaskSet = serde_json::from_str(&text)
+        .with_context(|| format!("colormask JSON: {}", path.display()))?;
+    for cam in &set.cameras {
+        cam.params.validate()?;
+    }
+    return Ok(set);
+}
+
+/// 있으면 로드, 없으면 빈 셋 (upsert 시작용).
+pub fn load_colormask_set_or_empty(path: &std::path::Path) -> Result<ColormaskSet> {
+    if !path.is_file() {
+        return Ok(ColormaskSet::default());
+    }
+    return load_colormask_set(path);
+}
+
+/// [`ColormaskSet`]을 pretty JSON으로 저장 (부모 dir 생성).
+pub fn save_colormask_set(path: &std::path::Path, set: &ColormaskSet) -> Result<()> {
+    for cam in &set.cameras {
+        cam.params.validate()?;
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let json = serde_json::to_string_pretty(set)?;
+    std::fs::write(path, format!("{json}\n"))?;
+    return Ok(());
 }
 
 pub struct ColormaskDetector {

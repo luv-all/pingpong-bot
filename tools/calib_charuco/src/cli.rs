@@ -34,6 +34,8 @@ pub fn emit_sim(n: u8, args: &Args) -> Result<()> {
     let output = resolve_output(args);
     let calib = Calibration::sim(n);
     let json = serde_json::to_string_pretty(&calib)?;
+    pingpong_bot::ensure_parent_dir(&output)
+        .with_context(|| format!("디렉터리 생성: {}", output.display()))?;
     fs::write(&output, json).with_context(|| format!("쓰기 실패: {}", output.display()))?;
     println!(
         "wrote sim Calibration ({} cams, dist=[]) → {}",
@@ -52,6 +54,8 @@ pub fn from_images(dir: &PathBuf, args: &Args) -> Result<()> {
     )
     .map_err(anyhow::Error::msg)?;
     let json = serde_json::to_string_pretty(&calib)?;
+    pingpong_bot::ensure_parent_dir(&output)
+        .with_context(|| format!("디렉터리 생성: {}", output.display()))?;
     fs::write(&output, json).with_context(|| format!("쓰기 실패: {}", output.display()))?;
     println!(
         "wrote ChArUco Calibration → {} (rms={:.4}, frames={}/{})",
