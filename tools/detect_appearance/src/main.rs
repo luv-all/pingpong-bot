@@ -107,7 +107,7 @@ fn main() -> Result<()> {
         }
 
         if preview {
-            match show_bgr(window, &mosaic, wait_ms)? {
+            match show_bgr(window, &mosaic, wait_ms)?.action {
                 PreviewAction::Quit => break,
                 PreviewAction::Continue | PreviewAction::Key(_) => {}
             }

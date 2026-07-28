@@ -348,7 +348,7 @@ fn main() -> Result<()> {
         }
 
         if preview {
-            match show_bgr(window, &mosaic, wait_ms)? {
+            match show_bgr(window, &mosaic, wait_ms)?.action {
                 PreviewAction::Quit => break,
                 PreviewAction::Key(key) if key == i32::from(b'r') || key == i32::from(b'R') => {
                     detector.set_roi_enabled(!detector.roi_enabled);

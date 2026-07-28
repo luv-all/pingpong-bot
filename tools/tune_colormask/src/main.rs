@@ -15,7 +15,7 @@ use opencv::prelude::*;
 use pingpong_bot::{
     ColorSpace, ColormaskParams, FrameSource, ImageDirSource, OpenCvCapture, PixelPickMouse,
     PixelPoint, PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
-    draw_help_lines, draw_pixel_loupe, hstack_bgr, show_bgr,
+    draw_help_lines, draw_pixel_loupe, hstack_bgr, show_bgr, unscale_xy,
 };
 
 use cli::Args;
@@ -401,6 +401,7 @@ fn main() -> Result<()> {
     let mut frozen = false;
     let mut freeze_img: Option<Mat> = None;
     let mut n = 0usize;
+    let mut display_scale = 1.0;
 
     println!(
         "tune-colormask space={space} margin={margin}  LMB=pick  Shift+move=loupe  z=undo  c=clear  Space=freeze  s=space  p=print  q=quit"
@@ -438,7 +439,13 @@ fn main() -> Result<()> {
         // drain clicks → sample on original panel only; Shift-hover for loupe
         let (clicks, hover) = {
             let mut m = mouse.lock().expect("mouse lock");
-            (m.drain_clicks(), m.hover)
+            let clicks = m
+                .drain_clicks()
+                .into_iter()
+                .map(|(x, y)| unscale_xy(x, y, display_scale))
+                .collect::<Vec<_>>();
+            let hover = m.hover.map(|(x, y)| unscale_xy(x, y, display_scale));
+            (clicks, hover)
         };
         for (mx, my) in clicks {
             if mx < 0 || my < 0 || mx >= panel_w || my >= panel_h {
@@ -530,7 +537,9 @@ fn main() -> Result<()> {
             }
         }
 
-        match show_bgr(window, &mosaic, wait_ms)? {
+        let shown = show_bgr(window, &mosaic, wait_ms)?;
+        display_scale = shown.scale;
+        match shown.action {
             PreviewAction::Quit => break,
             PreviewAction::Continue => {}
             PreviewAction::Key(key) if key == i32::from(b' ') => {

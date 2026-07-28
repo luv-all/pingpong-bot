@@ -19,19 +19,147 @@ pub enum PreviewAction {
     Key(i32),
 }
 
-/// BGR 이미지를 창에 띄운다. `q` / ESC → Quit.
-pub fn show_bgr(window: &str, image: &Mat, wait_ms: i32) -> CvResult<PreviewAction> {
-    highgui::imshow(window, image)?;
+/// [`show_bgr`] 결과. `scale`은 디스플레이/원본 (항상 ≤ 1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShowBgrResult {
+    pub action: PreviewAction,
+    pub scale: f64,
+}
+
+/// downscale 전용 fit 결과.
+#[derive(Debug)]
+pub struct FittedBgr {
+    pub image: Mat,
+    /// display = source * scale, 항상 ≤ 1.
+    pub scale: f64,
+}
+
+/// 타이틀바·독 여유 (px).
+const DISPLAY_FIT_MARGIN_PX: i32 = 96;
+
+/// 모니터보다 클 때만 축소. 작으면 그대로(확대 없음).
+pub fn fit_bgr_downscale(image: &Mat, max_w: i32, max_h: i32) -> CvResult<FittedBgr> {
+    let w = image.cols();
+    let h = image.rows();
+    if w <= 0 || h <= 0 || max_w <= 0 || max_h <= 0 {
+        return Ok(FittedBgr {
+            image: image.try_clone()?,
+            scale: 1.0,
+        });
+    }
+    let scale = (max_w as f64 / w as f64)
+        .min(max_h as f64 / h as f64)
+        .min(1.0);
+    if scale >= 1.0 - 1e-12 {
+        return Ok(FittedBgr {
+            image: image.try_clone()?,
+            scale: 1.0,
+        });
+    }
+    let nw = (w as f64 * scale).round().max(1.0) as i32;
+    let nh = (h as f64 * scale).round().max(1.0) as i32;
+    let mut out = Mat::default();
+    imgproc::resize(
+        image,
+        &mut out,
+        opencv::core::Size::new(nw, nh),
+        0.0,
+        0.0,
+        imgproc::INTER_AREA,
+    )?;
+    return Ok(FittedBgr {
+        image: out,
+        scale: nw as f64 / w as f64,
+    });
+}
+
+/// 창 좌표 → 원본 이미지 좌표. `scale` ≤ 0 이거나 1이면 그대로.
+pub fn unscale_xy(x: i32, y: i32, scale: f64) -> (i32, i32) {
+    if scale <= 0.0 || (scale - 1.0).abs() < 1e-9 {
+        return (x, y);
+    }
+    return (
+        (x as f64 / scale).round() as i32,
+        (y as f64 / scale).round() as i32,
+    );
+}
+
+/// 주 디스플레이 작업 영역(여유 마진 제외). 실패 시 None → fit 생략.
+pub fn display_fit_bounds() -> Option<(i32, i32)> {
+    let (w, h) = primary_display_px()?;
+    let max_w = (w - DISPLAY_FIT_MARGIN_PX).max(320);
+    let max_h = (h - DISPLAY_FIT_MARGIN_PX).max(240);
+    return Some((max_w, max_h));
+}
+
+fn primary_display_px() -> Option<(i32, i32)> {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGMainDisplayID() -> u32;
+            fn CGDisplayPixelsWide(display: u32) -> usize;
+            fn CGDisplayPixelsHigh(display: u32) -> usize;
+        }
+        // SAFETY: CoreGraphics display query; no owned resources.
+        unsafe {
+            let id = CGMainDisplayID();
+            let w = CGDisplayPixelsWide(id) as i32;
+            let h = CGDisplayPixelsHigh(id) as i32;
+            if w > 0 && h > 0 {
+                return Some((w, h));
+            }
+        }
+        return None;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn GetSystemMetrics(index: i32) -> i32;
+        }
+        // SAFETY: Win32 metrics; no owned resources.
+        unsafe {
+            let w = GetSystemMetrics(0); // SM_CXSCREEN
+            let h = GetSystemMetrics(1); // SM_CYSCREEN
+            if w > 0 && h > 0 {
+                return Some((w, h));
+            }
+        }
+        return None;
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        return None;
+    }
+}
+
+/// BGR 이미지를 창에 띄운다. 모니터보다 크면 downscale만 한다. `q` / ESC → Quit.
+pub fn show_bgr(window: &str, image: &Mat, wait_ms: i32) -> CvResult<ShowBgrResult> {
+    let fitted = match display_fit_bounds() {
+        Some((max_w, max_h)) => fit_bgr_downscale(image, max_w, max_h)?,
+        None => FittedBgr {
+            image: image.try_clone()?,
+            scale: 1.0,
+        },
+    };
+    highgui::imshow(window, &fitted.image)?;
     let key = highgui::wait_key(wait_ms.max(1))?;
-    if key < 0 {
-        return Ok(PreviewAction::Continue);
-    }
-    // macOS 등에서 상위 비트가 붙는 경우 대비
-    let key = key & 0xff;
-    if key == 27 || key == i32::from(b'q') || key == i32::from(b'Q') {
-        return Ok(PreviewAction::Quit);
-    }
-    return Ok(PreviewAction::Key(key));
+    let action = if key < 0 {
+        PreviewAction::Continue
+    } else {
+        // macOS 등에서 상위 비트가 붙는 경우 대비
+        let key = key & 0xff;
+        if key == 27 || key == i32::from(b'q') || key == i32::from(b'Q') {
+            PreviewAction::Quit
+        } else {
+            PreviewAction::Key(key)
+        }
+    };
+    return Ok(ShowBgrResult {
+        action,
+        scale: fitted.scale,
+    });
 }
 
 /// 창을 닫는다 (프로세스 종료 전 호출 권장).
@@ -544,4 +672,41 @@ pub fn draw_pixel_loupe(dst: &mut Mat, src: &Mat, cx: i32, cy: i32) -> CvResult<
         false,
     )?;
     return Ok(());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bgr(w: i32, h: i32) -> Mat {
+        return Mat::zeros(h, w, opencv::core::CV_8UC3)
+            .unwrap()
+            .to_mat()
+            .unwrap();
+    }
+
+    #[test]
+    fn fit_downscale_keeps_small_image() {
+        let img = bgr(100, 50);
+        let fitted = fit_bgr_downscale(&img, 200, 200).unwrap();
+        assert_eq!(fitted.image.cols(), 100);
+        assert_eq!(fitted.image.rows(), 50);
+        assert!((fitted.scale - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fit_downscale_shrinks_preserving_aspect() {
+        let img = bgr(2000, 1000);
+        let fitted = fit_bgr_downscale(&img, 1000, 800).unwrap();
+        assert_eq!(fitted.image.cols(), 1000);
+        assert_eq!(fitted.image.rows(), 500);
+        assert!((fitted.scale - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn unscale_xy_roundtrips_at_half() {
+        let (x, y) = unscale_xy(500, 200, 0.5);
+        assert_eq!((x, y), (1000, 400));
+        assert_eq!(unscale_xy(10, 20, 1.0), (10, 20));
+    }
 }

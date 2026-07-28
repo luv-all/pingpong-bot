@@ -5,6 +5,7 @@
 //! - `e` 짧은 노출 시도 (macOS OpenCV/AVFoundation에선 대개 무시됨)
 //!
 //! 모자이크는 `pingpong_bot::hstack_bgr` (최대 높이 + 패딩, 손실 없음).
+//! 표시만 모니터보다 클 때 downscale (`show_bgr`).
 
 use std::time::Instant;
 
@@ -235,7 +236,7 @@ fn main() -> Result<()> {
         };
         let help = ["Space freeze", help_exp, "q/ESC quit"];
         draw_help_lines(&mut mosaic, &help, Scalar::new(0.0, 255.0, 80.0, 0.0))?;
-        match show_bgr(window, &mosaic, 1)? {
+        match show_bgr(window, &mosaic, 1)?.action {
             PreviewAction::Quit => break,
             PreviewAction::Continue => {}
             PreviewAction::Key(key) if key == i32::from(b' ') => {

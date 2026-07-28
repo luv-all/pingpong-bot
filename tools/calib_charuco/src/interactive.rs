@@ -109,7 +109,7 @@ pub fn run(args: &Args) -> Result<()> {
                 &["s save", "n skip", "q quit"],
                 Scalar::new(0.0, 255.0, 80.0, 0.0),
             )?;
-            show_bgr(window, &panel, 30)?
+            show_bgr(window, &panel, 30)?.action
         } else {
             let Some(frame) = source.next_frame() else {
                 println!("입력 스트림 종료");
@@ -130,7 +130,7 @@ pub fn run(args: &Args) -> Result<()> {
                 Scalar::new(0.0, 255.0, 80.0, 0.0),
             )?;
             // space를 받기 위해 라이브 프레임도 잠시 들고 있음
-            let action = show_bgr(window, &panel, 1)?;
+            let action = show_bgr(window, &panel, 1)?.action;
             if matches!(action, PreviewAction::Key(k) if k == i32::from(b' ')) {
                 let raw = frame
                     .image

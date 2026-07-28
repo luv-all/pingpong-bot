@@ -11,6 +11,7 @@ use pingpong_bot::{
     CameraId, CameraParams, FrameSource, OpenCvCapture, PixelPickMouse, PixelPoint, PreviewAction,
     TABLE_LANDMARK_COUNT, TableLandmark, calibrate_table_pnp, destroy_window, draw_debug_lines,
     draw_help_lines, draw_pixel_loupe, show_bgr, table_landmark_mesh_edges, table_landmarks,
+    unscale_xy,
 };
 
 use crate::args::{Args, resolve_camera_id};
@@ -60,6 +61,7 @@ pub fn run(args: &Args) -> Result<()> {
     let mut solved: Option<Solved> = None;
     let mut grid = WorldGridParams::default();
     let mut last_fail_rmse: Option<f64> = None;
+    let mut display_scale = 1.0;
 
     println!(
         "table-PnP — role={} cam_id={} device={} backend={} fov_y={} max_rmse={}",
@@ -82,6 +84,7 @@ pub fn run(args: &Args) -> Result<()> {
             let mut m = mouse.lock().expect("mouse");
             if frozen {
                 for (x, y) in m.drain_clicks() {
+                    let (x, y) = unscale_xy(x, y, display_scale);
                     if clicks.len() < TABLE_LANDMARK_COUNT {
                         clicks.push(PixelPoint::new(f64::from(x), f64::from(y)));
                         clicks_changed = true;
@@ -96,7 +99,7 @@ pub fn run(args: &Args) -> Result<()> {
             } else {
                 m.clicks.clear();
             }
-            m.hover
+            m.hover.map(|(x, y)| unscale_xy(x, y, display_scale))
         };
 
         if clicks_changed {
@@ -205,8 +208,9 @@ pub fn run(args: &Args) -> Result<()> {
         }
 
         let wait = if frozen { 30 } else { 1 };
-        let action = show_bgr(window, &panel, wait)?;
-        match action {
+        let shown = show_bgr(window, &panel, wait)?;
+        display_scale = shown.scale;
+        match shown.action {
             PreviewAction::Quit => break,
             PreviewAction::Continue => {}
             PreviewAction::Key(k) => {
