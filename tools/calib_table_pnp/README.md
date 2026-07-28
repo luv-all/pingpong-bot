@@ -4,6 +4,8 @@
 
 라이브 스트림·FOV 기본은 **Arducam B0332** datasheet SSOT (`arducam_b0332`: 1280×800@120 MJPG, HFOV70°→VFOV≈47.3°).
 
+저장/로드 기본 경로는 **`calibration.json`** (`defaults::calib::DEFAULT_CALIBRATION_PATH`). left/right 각각 실행해도 같은 번들에 upsert.
+
 | 파일 | 역할 |
 |------|------|
 | `interactive.rs` | Space 스냅 · LMB 클릭 · 자동 PnP · 격자 · s 저장 |
@@ -18,21 +20,19 @@
 3. RMSE OK → pending 사이드카 자동 저장 + 무지개 격자. FAIL여도 **초록(클릭) vs 마젠타(이상 재투영)** + 노란 잔차선 → `z`/`c`로 다시 찍기
 4. `s` — 본파일 upsert 후 pending 삭제. `q`해도 pending은 남음 (재실행 후 `s`만으로도 promote 가능)
 
-멀티캠: 카메라별로 `cam0.json` / `cam1.json` 만든 뒤 필요 시 합침. 또는 `-o calibration.json --merge`.
-
 ## 사용
 
 ```bash
-# -o 생략 → cam{id}.json (left=cam0, right=cam1)
+# -o 생략 → calibration.json (카메라별 upsert)
 cargo run -p calib-table-pnp -- --cam left
 cargo run -p calib-table-pnp -- --cam right
 
 cargo run -p calib-table-pnp -- --cam left --backend dshow
 cargo run -p calib-table-pnp -- --path capture.mp4 --cam left
 
-# 공유 번들에 upsert
-cargo run -p calib-table-pnp -- --cam left -o calibration.json
-cargo run -p calib-table-pnp -- --cam right --merge calibration.json -o calibration.json
+# 다른 파일로 쓰거나 합치기
+cargo run -p calib-table-pnp -- --cam left -o other.json
+cargo run -p calib-table-pnp -- --cam right --merge other.json -o calibration.json
 ```
 
 | 키 | 동작 |

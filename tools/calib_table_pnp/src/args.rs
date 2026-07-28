@@ -3,7 +3,10 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use pingpong_bot::{CamCliArgs, CameraId, DEFAULT_FOV_Y_DEG, MAX_REPROJ_RMSE_PX};
+use pingpong_bot::{
+    CamCliArgs, CameraId, DEFAULT_CALIBRATION_PATH, DEFAULT_FOV_Y_DEG, MAX_REPROJ_RMSE_PX,
+    calibration_pending_path,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -18,11 +21,11 @@ pub struct Args {
     #[arg(long)]
     pub path: Option<PathBuf>,
 
-    /// 출력 Calibration JSON. 생략 시 `cam{id}.json`
-    #[arg(short = 'o', long)]
-    pub output: Option<PathBuf>,
+    /// 출력 Calibration JSON. 생략 시 [`DEFAULT_CALIBRATION_PATH`] (upsert)
+    #[arg(short = 'o', long, default_value = DEFAULT_CALIBRATION_PATH)]
+    pub output: PathBuf,
 
-    /// 기존 Calibration에 이 카메라를 upsert
+    /// 기존 Calibration에 이 카메라를 upsert (미지정 시 `-o`와 동일 파일에서 읽기)
     #[arg(long)]
     pub merge: Option<PathBuf>,
 
@@ -47,36 +50,26 @@ pub fn resolve_camera_id(args: &Args) -> Result<CameraId, String> {
     return args.cam.camera_id();
 }
 
-/// `-o` 없으면 `cam{id}.json` (카메라별 파일 관례).
-pub fn resolve_output(args: &Args, cam_id: CameraId) -> PathBuf {
-    return args
-        .output
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(format!("cam{}.json", cam_id.0)));
+/// 본파일 경로 — clap 기본이 SSOT, `-o`로만 덮어씀.
+pub fn resolve_output(args: &Args) -> PathBuf {
+    return args.output.clone();
 }
 
 /// 공유 pending 번들 (`cameras[]` upsert). `-o`와 같은 디렉터리.
 pub fn pending_path(args: &Args) -> PathBuf {
-    const NAME: &str = "calibration.pending.json";
-    if let Some(ref output) = args.output {
-        if let Some(parent) = output.parent() {
-            if !parent.as_os_str().is_empty() {
-                return parent.join(NAME);
-            }
-        }
-    }
-    return PathBuf::from(NAME);
+    return calibration_pending_path(Some(&args.output));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pingpong_bot::calibration_path;
 
-    fn args_with_output(output: Option<&str>) -> Args {
+    fn args_with_output(output: &str) -> Args {
         return Args {
             cam: CamCliArgs::parse_from(["x", "--cam", "left"]),
             path: None,
-            output: output.map(PathBuf::from),
+            output: PathBuf::from(output),
             merge: None,
             fov_y: DEFAULT_FOV_Y_DEG,
             max_rmse: MAX_REPROJ_RMSE_PX,
@@ -86,20 +79,18 @@ mod tests {
     }
 
     #[test]
-    fn default_output_is_cam_id_json() {
-        let args = args_with_output(None);
+    fn default_output_is_calibration_ssot() {
+        let args = Args::parse_from(["x", "--cam", "left"]);
+        assert_eq!(resolve_output(&args), calibration_path());
         assert_eq!(
-            resolve_output(&args, CameraId(0)),
-            PathBuf::from("cam0.json")
+            pending_path(&args),
+            PathBuf::from(pingpong_bot::DEFAULT_CALIBRATION_PENDING_NAME)
         );
-        assert_eq!(pending_path(&args), PathBuf::from("calibration.pending.json"));
     }
 
     #[test]
-    fn pending_is_shared_bundle_name() {
-        let args = args_with_output(Some("cam1.json"));
-        assert_eq!(pending_path(&args), PathBuf::from("calibration.pending.json"));
-        let nested = args_with_output(Some("out/calibration.json"));
+    fn pending_follows_output_dir() {
+        let nested = args_with_output("out/calibration.json");
         assert_eq!(
             pending_path(&nested),
             PathBuf::from("out/calibration.pending.json")

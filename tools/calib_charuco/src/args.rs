@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use pingpong_bot::defaults::calib::{
     CHARUCO_MARKER_LENGTH_M, CHARUCO_SQUARE_LENGTH_M, CHARUCO_SQUARES_X, CHARUCO_SQUARES_Y,
+    DEFAULT_CALIBRATION_PATH,
 };
 use pingpong_bot::{CamCliArgs, CharucoBoardSpec};
 
@@ -25,9 +26,9 @@ pub struct Args {
     #[arg(long, value_name = "DIR")]
     pub images_dir: Option<PathBuf>,
 
-    /// 출력 Calibration JSON. 생략 시 calibration.json
-    #[arg(short = 'o', long)]
-    pub output: Option<PathBuf>,
+    /// 출력 Calibration JSON. 생략 시 [`DEFAULT_CALIBRATION_PATH`]
+    #[arg(short = 'o', long, default_value = DEFAULT_CALIBRATION_PATH)]
+    pub output: PathBuf,
 
     /// 종료 시 보정에 필요한 최소 저장 장수
     #[arg(long, default_value_t = 10)]
@@ -63,8 +64,5 @@ pub fn board_spec(args: &Args) -> CharucoBoardSpec {
 }
 
 pub fn resolve_output(args: &Args) -> PathBuf {
-    return args
-        .output
-        .clone()
-        .unwrap_or_else(|| PathBuf::from("calibration.json"));
+    return args.output.clone();
 }

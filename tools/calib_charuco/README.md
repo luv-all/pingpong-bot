@@ -14,7 +14,7 @@ ChArUco **인터랙티브** 보정. 라이브(또는 영상)에서 코너를 눈
 
 ```bash
 cargo run -p calib-charuco -- --cam left
-# -o 생략 시 calibration.json
+# -o 생략 시 calibration.json (DEFAULT_CALIBRATION_PATH SSOT)
 ```
 
 | 키 | 동작 |

@@ -95,7 +95,7 @@ pub fn hint_pending_if_exists(args: &Args, cam_id: CameraId) {
         path.display(),
         ids.join(","),
         cam_id.0,
-        resolve_output(args, cam_id).display()
+        resolve_output(args).display()
     );
     if !has_this {
         println!("  (this session cam{} not in pending yet)", cam_id.0);
@@ -203,7 +203,7 @@ pub fn write_result(
     candidates: usize,
 ) -> Result<()> {
     let cam_id = params.camera_id;
-    let output = resolve_output(args, cam_id);
+    let output = resolve_output(args);
     let mut calib = if let Some(merge) = &args.merge {
         let text = fs::read_to_string(merge)
             .with_context(|| format!("merge 읽기: {}", merge.display()))?;

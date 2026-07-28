@@ -6,8 +6,8 @@
 ## 영상 (권장)
 
 ```bash
-# 캡처 모드: --calibration 필수 (기본 --cam left,right)
-cargo run -p measure-friction -- --calibration calibration.json
+# 캡처 모드: calibration 기본=`calibration.json` SSOT (기본 --cam left,right)
+cargo run -p measure-friction
 
 cargo run -p measure-friction -- \
   --calibration calibration.json \

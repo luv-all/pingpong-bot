@@ -36,8 +36,9 @@ pub use camera::{
     triangulate_views, unscale_xy, upsert_camera,
 };
 pub use defaults::{
-    ControlParams, EstimatorParams, ImpactParams, PhysicsParams, SimMotorParams, detector,
-    primitive_4dof, rail_frame, robot, shared_robot, urdf_4dof, urdf_test,
+    ControlParams, DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME, EstimatorParams,
+    ImpactParams, PhysicsParams, SimMotorParams, calibration_path, calibration_pending_path,
+    detector, primitive_4dof, rail_frame, robot, shared_robot, urdf_4dof, urdf_test,
 };
 pub use detector::{
     BallDetector, Candidate, CandidateGenerator, ColorContourCascade, ColorSpace,

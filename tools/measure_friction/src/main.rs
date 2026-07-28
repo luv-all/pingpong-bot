@@ -11,7 +11,8 @@ use clap::Parser;
 use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{
-    PhysicsParams, StereoCamCliArgs, format_physics_for_defaults, friction_from_tangential_speeds,
+    PhysicsParams, StereoCamCliArgs, calibration_path, format_physics_for_defaults,
+    friction_from_tangential_speeds,
 };
 
 #[derive(Parser, Debug)]
@@ -20,7 +21,7 @@ use pingpong_bot::{
     about = "테이블 마찰 μ 측정 → PhysicsParams::default() 스니펫. 영상 멀티캠 또는 수동 숫자"
 )]
 struct Args {
-    /// Calibration JSON (캡처 모드 필수)
+    /// Calibration JSON (캡처 기본: `calibration.json` SSOT)
     #[arg(long, value_name = "PATH")]
     calibration: Option<PathBuf>,
     #[arg(long = "video", value_name = "PATH")]
@@ -72,7 +73,7 @@ fn main() -> Result<()> {
         let cal = args
             .calibration
             .clone()
-            .context("--calibration PATH 필요 (캡처 모드)")?;
+            .unwrap_or_else(calibration_path);
         let cam = args.cam.as_cam_cli();
         let result = capture_loop::run_capture(
             &cal,
@@ -117,9 +118,9 @@ fn main() -> Result<()> {
     if patch.is_empty() {
         bail!(
             "입력이 없습니다. 예:\n  \
-             cargo run -p measure-friction -- --calibration calib.json\n  \
-             --cam left,right\n  \
-             --calibration calib.json --video cam0.mp4 --video cam1.mp4\n  \
+             cargo run -p measure-friction\n  \
+             cargo run -p measure-friction -- --calibration calibration.json\n  \
+             --video cam0.mp4 --video cam1.mp4\n  \
              --vt-pairs 2.0:1.4\n  \
              --sim"
         );

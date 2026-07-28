@@ -13,8 +13,8 @@ use nalgebra::Vector3;
 use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{
-    PhysicsParams, StereoCamCliArgs, drag_from_trajectory, format_physics_for_defaults,
-    restitution_from_bounce_heights, restitution_from_normal_speeds,
+    PhysicsParams, StereoCamCliArgs, calibration_path, drag_from_trajectory,
+    format_physics_for_defaults, restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
 
 #[derive(Parser, Debug)]
@@ -23,7 +23,7 @@ use pingpong_bot::{
     about = "반발계수 e 측정 → PhysicsParams::default() 스니펫. 영상 멀티캠 또는 수동 숫자"
 )]
 struct Args {
-    /// Calibration JSON (캡처 모드 필수)
+    /// Calibration JSON (캡처 기본: `calibration.json` SSOT)
     #[arg(long, value_name = "PATH")]
     calibration: Option<PathBuf>,
     #[arg(long = "video", value_name = "PATH")]
@@ -91,7 +91,7 @@ fn main() -> Result<()> {
         let cal = args
             .calibration
             .clone()
-            .context("--calibration PATH 필요 (캡처 모드)")?;
+            .unwrap_or_else(calibration_path);
         let cam = args.cam.as_cam_cli();
         let result = capture_loop::run_capture(
             &cal,
@@ -153,9 +153,9 @@ fn main() -> Result<()> {
     if patch.is_empty() {
         bail!(
             "입력이 없습니다. 예:\n  \
-             cargo run -p measure-restitution -- --calibration calib.json\n  \
-             --cam left,right\n  \
-             --calibration calib.json --video cam0.mp4 --video cam1.mp4\n  \
+             cargo run -p measure-restitution\n  \
+             cargo run -p measure-restitution -- --calibration calibration.json\n  \
+             --video cam0.mp4 --video cam1.mp4\n  \
              --heights 0.40,0.29,0.21\n  \
              --sim"
         );

@@ -78,7 +78,7 @@ pub fn run(args: &Args) -> Result<()> {
     println!("Space=freeze  LMB=click  Shift+move=loupe  z=undo  c=clear  s=promote  n=live  q=quit");
     println!(
         "(accepted → pending; s promotes → {})",
-        resolve_output(args, cam_id).display()
+        resolve_output(args).display()
     );
     for (i, m) in marks.iter().enumerate() {
         println!("  {}: {}", i + 1, m.prompt);
