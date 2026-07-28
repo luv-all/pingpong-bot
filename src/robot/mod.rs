@@ -917,15 +917,39 @@ impl Arm {
             target_z: racket_velocity.z,
         };
         let jacobian = self.position_jacobian_fd(pose).ok_or_else(err)?;
-        let jjt = &jacobian * jacobian.transpose() + DMatrix::identity(3, 3) * 1e-9;
-        let inverse = jjt.try_inverse().ok_or_else(err)?;
+
+        // 균일 최소노름 대신 토크 여유가 큰(베이스에 가까운) 관절을 더 쓰도록
+        // 가중 최소노름 역산을 쓴다 — 균일 최소노름은 토크 여유가 가장 작은
+        // 엘보/손목만 계속 포화시키고, 토크가 훨씬 큰 어깨·요 관절은 거의
+        // 안 쓴다(bang-bang 경로 `step_racket_guidance`가 이 arm에서 실측
+        // 확인한 것과 같은 문제 — 정지 구간 토크 사용률 어깨 3%, 엘보 최대
+        // 100%). 지수·레일 중립가중치는 그 경로와 동일한 값(`torque_limit⁴`,
+        // 레일은 관절과 단위가 달라 1.0)을 그대로 쓴다 — 같은 로봇, 같은
+        // 물리적 근거라 값을 새로 튜닝할 이유가 없다. 감쇠는 이 함수가
+        // 원래 쓰던 `1e-9`(속도 레벨 IK)를 유지 — 가속도 레벨 역산에 필요한
+        // `JACOBIAN_DAMPING=0.05`는 근접 특이점에서 훨씬 크게 발산하는
+        // 가속도 특유의 문제라(`bang_bang.rs` 문서 참고) 여기엔 해당 없다.
+        let has_rail = self.rail.is_some();
+        let rail_offset = usize::from(has_rail);
+        let joint_preference: Vec<f64> = (0..jacobian.ncols())
+            .map(|col| {
+                if has_rail && col == 0 {
+                    return 1.0;
+                }
+                self.joint_torque_limits[col - rail_offset].powi(4)
+            })
+            .collect();
+        let w_inv = DMatrix::from_diagonal(&DVector::from_vec(joint_preference));
+
+        let j_winv = &jacobian * &w_inv;
+        let jwjt = &j_winv * jacobian.transpose() + DMatrix::identity(3, 3) * 1e-9;
+        let inverse = jwjt.try_inverse().ok_or_else(err)?;
         let target = DVector::from_vec(vec![
             racket_velocity.x,
             racket_velocity.y,
             racket_velocity.z,
         ]);
-        let velocities = jacobian.transpose() * inverse * target;
-        let has_rail = self.rail.is_some();
+        let velocities = &w_inv * jacobian.transpose() * inverse * target;
         let (rail_velocity, offset) = if has_rail {
             (velocities[0], 1)
         } else {
