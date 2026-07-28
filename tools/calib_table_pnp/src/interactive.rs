@@ -386,6 +386,22 @@ fn print_per_point_residuals(clicks: &[PixelPoint], params: &CameraParams) {
     println!("  residuals[px] {}", parts.join(" "));
 }
 
+fn draw_complete_edges(
+    panel: &mut Mat,
+    pts: &[PixelPoint],
+    color: Scalar,
+    thickness: i32,
+) -> Result<()> {
+    for i in 0..pts.len() {
+        for j in (i + 1)..pts.len() {
+            let a = Point::new(pts[i].x.round() as i32, pts[i].y.round() as i32);
+            let b = Point::new(pts[j].x.round() as i32, pts[j].y.round() as i32);
+            imgproc::line(panel, a, b, color, thickness, imgproc::LINE_AA, 0)?;
+        }
+    }
+    return Ok(());
+}
+
 fn draw_mesh_edges(
     panel: &mut Mat,
     pts: &[PixelPoint],
@@ -403,9 +419,9 @@ fn draw_mesh_edges(
     return Ok(());
 }
 
-/// 클릭 점(녹색) + 클릭 메시(주황).
+/// 클릭 점(녹색) + 현재 꼭짓점 완전연결 메시(주황).
 fn draw_clicks(panel: &mut Mat, clicks: &[PixelPoint], marks: &[TableLandmark]) -> Result<()> {
-    draw_mesh_edges(panel, clicks, Scalar::new(255.0, 128.0, 0.0, 0.0), 1)?;
+    draw_complete_edges(panel, clicks, Scalar::new(255.0, 128.0, 0.0, 0.0), 1)?;
 
     for (i, px) in clicks.iter().enumerate() {
         let p = Point::new(px.x.round() as i32, px.y.round() as i32);
