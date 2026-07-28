@@ -1,6 +1,7 @@
 //! Rapier 물리 월드 — 탁구대·슈터·팔 멀티바디.
 
 pub mod arm_bodies;
+mod bang_bang_worker;
 mod rapier_convert;
 pub mod shooter;
 pub mod world;

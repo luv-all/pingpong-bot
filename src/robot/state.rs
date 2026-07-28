@@ -144,23 +144,34 @@ impl RobotState {
 
     /// 스윙을 현재 포즈 기준 새 quintic 궤적으로 교체한다 (elapsed=0).
     pub fn replace_swing(&mut self, trajectory: crate::SwingTrajectory) {
-        self.replace_playback(PlaybackTrajectory::Quintic(trajectory));
+        self.replace_playback(PlaybackTrajectory::Quintic(trajectory), 0.0);
     }
 
     /// 스윙을 현재 포즈 기준 새 순수 토크 bang-bang 궤적으로 교체한다
     /// (elapsed=0) - GUI "bang-bang swing" 토글이 켜졌을 때 `replace_swing`
     /// 대신 쓴다.
     pub fn replace_bang_bang_swing(&mut self, trajectory: BangBangTrajectory) {
-        self.replace_playback(PlaybackTrajectory::BangBang(trajectory));
+        self.replace_playback(PlaybackTrajectory::BangBang(trajectory), 0.0);
     }
 
-    fn replace_playback(&mut self, trajectory: PlaybackTrajectory) {
-        self.targets = trajectory.sample_at(0.0);
+    /// `replace_bang_bang_swing`과 같지만 재생을 `elapsed`[s] 지점부터
+    /// 시작한다 — 백그라운드 워커에서 계획을 받아오는 동안 흐른 sim 시간을
+    /// 보정하기 위함(`sim::physics::bang_bang_worker`). 계획은 "요청한
+    /// 순간부터 `Tg` 안에 도달"을 가정하는데, 계산이 끝나 커밋되는 시점은
+    /// 그보다 늦으므로 `elapsed=0`으로 재생을 시작하면 이미 지나간 시간만큼
+    /// 뒤로 밀려 실제 공 도착보다 늦게 움직이는 것처럼 보인다.
+    pub fn replace_bang_bang_swing_at(&mut self, trajectory: BangBangTrajectory, elapsed: f64) {
+        self.replace_playback(PlaybackTrajectory::BangBang(trajectory), elapsed);
+    }
+
+    fn replace_playback(&mut self, trajectory: PlaybackTrajectory, elapsed: f64) {
+        let elapsed = elapsed.clamp(0.0, trajectory.duration_secs());
+        self.targets = trajectory.sample_at(elapsed);
         self.rail_target = trajectory.follow_through_rail_x();
-        self.rail_x = trajectory.sample_rail_at(0.0);
+        self.rail_x = trajectory.sample_rail_at(elapsed);
         self.active_swing = Some(SwingPlayback {
             trajectory,
-            elapsed: 0.0,
+            elapsed,
             joint_vel: Vec::new(),
         });
     }
