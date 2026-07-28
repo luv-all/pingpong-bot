@@ -299,8 +299,13 @@ pub fn run_opencv(args: &Args) -> Result<()> {
             let lines = [
                 format!("VERIFY hits={}/2 {xyz} {rmse_s}", hits.len()),
                 format!(
-                    "grid={} detect={} freeze={}",
-                    show_grid, show_detect, frozen
+                    "grid={} detect={} freeze={}  xy={:.2} z={:.2} L{}",
+                    show_grid,
+                    show_detect,
+                    frozen,
+                    grid.xy_step,
+                    grid.z_step,
+                    grid.z_layers
                 ),
             ];
             draw_debug_lines(panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;

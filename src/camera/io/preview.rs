@@ -611,14 +611,7 @@ pub fn draw_world_grid(
         }
     }
 
-    let lines = [
-        "World to Camera".to_string(),
-        format!(
-            "xy={:.2} z={:.2} layers={}",
-            grid.xy_step, grid.z_step, grid.z_layers
-        ),
-    ];
-    draw_debug_lines(img, &lines, Scalar::new(0.0, 0.0, 255.0, 0.0))?;
+    // HUD는 그리지 않음 — 호출측 `draw_debug_lines`와 좌상단이 겹친다.
     return Ok(());
 }
 
