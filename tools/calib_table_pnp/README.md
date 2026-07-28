@@ -51,6 +51,7 @@ cargo run -p calib-table-pnp -- --path capture.mp4 --camera-id 0 -o cam0.json
 |----|------|
 | `Space` | 스냅 (심사 모드) |
 | `LMB` | 다음 랜드마크 클릭 (8점 → 자동 PnP) |
+| `Shift`+이동 | 8× 원형 loupe (중심 픽셀 정밀 정렬) |
 | `z` | 마지막 클릭 취소 (격자 해제) |
 | `c` | 클릭 전부 삭제 |
 | `s` | Solved일 때만 JSON 저장 |

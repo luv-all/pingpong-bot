@@ -18,9 +18,9 @@ pub use calib::{
     ensure_reproj_ok, table_landmark_mesh_edges, table_landmarks, upsert_camera,
 };
 pub use io::{
-    ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture, PreviewAction,
-    SimCamera, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines,
-    draw_world_velocity, hstack_bgr, show_bgr,
+    ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture, PixelPickMouse,
+    PreviewAction, SimCamera, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
+    draw_help_lines, draw_pixel_loupe, draw_world_velocity, hstack_bgr, show_bgr,
 };
 pub use tri::{
     dlt_triangulate, sample_at, triangulate_projections, triangulate_synced, triangulate_views,

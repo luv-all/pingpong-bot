@@ -13,9 +13,9 @@ use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CameraId, ColorSpace, ColormaskParams, FrameSource, ImageDirSource, OpenCvCapture, PixelPoint,
-    PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
-    draw_help_lines, hstack_bgr, show_bgr,
+    CameraId, ColorSpace, ColormaskParams, FrameSource, ImageDirSource, OpenCvCapture,
+    PixelPickMouse, PixelPoint, PreviewAction, destroy_window, draw_cam_label, draw_circle_px,
+    draw_debug_lines, draw_help_lines, draw_pixel_loupe, hstack_bgr, show_bgr,
 };
 
 use cli::Args;
@@ -387,16 +387,14 @@ fn main() -> Result<()> {
     let window = "tune:colormask";
     highgui::named_window(window, highgui::WINDOW_AUTOSIZE)?;
 
-    let pending: Arc<Mutex<Vec<(i32, i32)>>> = Arc::new(Mutex::new(Vec::new()));
+    let mouse: Arc<Mutex<PixelPickMouse>> = Arc::new(Mutex::new(PixelPickMouse::default()));
     {
-        let pending = Arc::clone(&pending);
+        let mouse = Arc::clone(&mouse);
         highgui::set_mouse_callback(
             window,
-            Some(Box::new(move |event, x, y, _flags| {
-                if event == highgui::EVENT_LBUTTONDOWN {
-                    if let Ok(mut q) = pending.lock() {
-                        q.push((x, y));
-                    }
+            Some(Box::new(move |event, x, y, flags| {
+                if let Ok(mut m) = mouse.lock() {
+                    m.on_event(event, x, y, flags);
                 }
             })),
         )?;
@@ -408,7 +406,7 @@ fn main() -> Result<()> {
     let mut n = 0usize;
 
     println!(
-        "tune-colormask space={space} margin={margin}  LMB=pick  z=undo  c=clear  Space=freeze  s=space  p=print  q=quit"
+        "tune-colormask space={space} margin={margin}  LMB=pick  Shift+move=loupe  z=undo  c=clear  Space=freeze  s=space  p=print  q=quit"
     );
 
     loop {
@@ -440,12 +438,10 @@ fn main() -> Result<()> {
         let panel_w = frame_img.cols();
         let panel_h = frame_img.rows();
 
-        // drain clicks → sample on original panel only
-        let clicks: Vec<(i32, i32)> = {
-            let mut q = pending.lock().expect("pending lock");
-            let out = q.clone();
-            q.clear();
-            out
+        // drain clicks → sample on original panel only; Shift-hover for loupe
+        let (clicks, hover) = {
+            let mut m = mouse.lock().expect("mouse lock");
+            (m.drain_clicks(), m.hover)
         };
         for (mx, my) in clicks {
             if mx < 0 || my < 0 || mx >= panel_w || my >= panel_h {
@@ -522,6 +518,7 @@ fn main() -> Result<()> {
             &mut mosaic,
             &[
                 "LMB pick",
+                "Shift+move loupe",
                 "z undo  c clear",
                 "Space freeze",
                 "s ycrcb|hsv",
@@ -530,6 +527,11 @@ fn main() -> Result<()> {
             ],
             Scalar::new(0.0, 255.0, 80.0, 0.0),
         )?;
+        if let Some((hx, hy)) = hover {
+            if hx >= 0 && hy >= 0 && hx < panel_w && hy < panel_h {
+                let _ = draw_pixel_loupe(&mut mosaic, &frame_img, hx, hy);
+            }
+        }
 
         match show_bgr(window, &mosaic, wait_ms)? {
             PreviewAction::Quit => break,

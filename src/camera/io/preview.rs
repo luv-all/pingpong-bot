@@ -355,3 +355,195 @@ pub fn draw_cam_label(img: &mut Mat, label: &str, color: Scalar) -> CvResult<()>
     )?;
     return Ok(());
 }
+
+/// 픽셀 정밀 찍기용 loupe — 고정 8×, 지름 120px 원형.
+pub const PIXEL_LOUPE_ZOOM: i32 = 8;
+/// 소스 반경(px). 한 변 = `2 * half + 1` → 확대 후 120px.
+pub const PIXEL_LOUPE_SRC_HALF: i32 = 7;
+
+/// highgui 마우스: LMB 클릭 큐 + Shift-hold loupe 호버.
+#[derive(Debug, Default, Clone)]
+pub struct PixelPickMouse {
+    pub clicks: Vec<(i32, i32)>,
+    /// Shift 누른 채 마지막 커서 위치 (창 좌표).
+    pub hover: Option<(i32, i32)>,
+    pub shift: bool,
+}
+
+impl PixelPickMouse {
+    /// `set_mouse_callback`에서 호출. Shift는 `EVENT_FLAG_SHIFTKEY`(크로스플랫폼).
+    pub fn on_event(&mut self, event: i32, x: i32, y: i32, flags: i32) {
+        self.shift = (flags & highgui::EVENT_FLAG_SHIFTKEY) != 0;
+        if self.shift {
+            self.hover = Some((x, y));
+        } else {
+            self.hover = None;
+        }
+        if event == highgui::EVENT_LBUTTONDOWN {
+            self.clicks.push((x, y));
+        }
+    }
+
+    pub fn drain_clicks(&mut self) -> Vec<(i32, i32)> {
+        return std::mem::take(&mut self.clicks);
+    }
+}
+
+/// `src`의 `(cx,cy)` 주변을 8× nearest로 확대해 `dst` 커서 위에 원형 loupe를 그린다.
+///
+/// `src`·`dst` 크기가 달라도 됨(모자이크 왼쪽 패널 등). 좌표는 둘 다 같은 원본 픽셀 기준.
+/// 가장자리는 clamp 샘플. 중심 십자로 1px 정렬을 보이게 한다.
+pub fn draw_pixel_loupe(dst: &mut Mat, src: &Mat, cx: i32, cy: i32) -> CvResult<()> {
+    if src.empty() || dst.empty() || src.channels() != 3 || dst.channels() != 3 {
+        return Ok(());
+    }
+    let sw = src.cols();
+    let sh = src.rows();
+    if sw <= 0 || sh <= 0 || cx < 0 || cy < 0 || cx >= sw || cy >= sh {
+        return Ok(());
+    }
+
+    let half = PIXEL_LOUPE_SRC_HALF;
+    let side = 2 * half + 1;
+    let zoom = PIXEL_LOUPE_ZOOM;
+    let out_side = side * zoom;
+    let loupe_r = out_side / 2;
+
+    let mut crop = Mat::zeros(side, side, src.typ())?.to_mat()?;
+    for dy in -half..=half {
+        for dx in -half..=half {
+            let sx = (cx + dx).clamp(0, sw - 1);
+            let sy = (cy + dy).clamp(0, sh - 1);
+            let pix = *src.at_2d::<opencv::core::Vec3b>(sy, sx)?;
+            *crop.at_2d_mut::<opencv::core::Vec3b>(dy + half, dx + half)? = pix;
+        }
+    }
+
+    let mut zoomed = Mat::default();
+    imgproc::resize(
+        &crop,
+        &mut zoomed,
+        opencv::core::Size::new(out_side, out_side),
+        0.0,
+        0.0,
+        imgproc::INTER_NEAREST,
+    )?;
+
+    let mut mask = Mat::zeros(out_side, out_side, opencv::core::CV_8UC1)?.to_mat()?;
+    imgproc::circle(
+        &mut mask,
+        Point::new(loupe_r, loupe_r),
+        loupe_r - 1,
+        Scalar::all(255.0),
+        -1,
+        imgproc::LINE_8,
+        0,
+    )?;
+
+    let dw = dst.cols();
+    let dh = dst.rows();
+    let x0 = cx - loupe_r;
+    let y0 = cy - loupe_r;
+    for y in 0..out_side {
+        let dy = y0 + y;
+        if dy < 0 || dy >= dh {
+            continue;
+        }
+        for x in 0..out_side {
+            let dx = x0 + x;
+            if dx < 0 || dx >= dw {
+                continue;
+            }
+            if *mask.at_2d::<u8>(y, x)? == 0 {
+                continue;
+            }
+            let pix = *zoomed.at_2d::<opencv::core::Vec3b>(y, x)?;
+            *dst.at_2d_mut::<opencv::core::Vec3b>(dy, dx)? = pix;
+        }
+    }
+
+    let center = Point::new(cx, cy);
+    imgproc::circle(
+        dst,
+        center,
+        loupe_r,
+        Scalar::new(0.0, 255.0, 255.0, 0.0),
+        2,
+        imgproc::LINE_AA,
+        0,
+    )?;
+    // 중심 픽셀(확대 블록) 테두리
+    let block = zoom / 2;
+    imgproc::rectangle(
+        dst,
+        opencv::core::Rect::new(cx - block, cy - block, zoom, zoom),
+        Scalar::new(0.0, 0.0, 255.0, 0.0),
+        1,
+        imgproc::LINE_8,
+        0,
+    )?;
+    // 십자
+    imgproc::line(
+        dst,
+        Point::new(cx - loupe_r + 4, cy),
+        Point::new(cx - block - 2, cy),
+        Scalar::new(0.0, 255.0, 255.0, 0.0),
+        1,
+        imgproc::LINE_8,
+        0,
+    )?;
+    imgproc::line(
+        dst,
+        Point::new(cx + block + 2, cy),
+        Point::new(cx + loupe_r - 4, cy),
+        Scalar::new(0.0, 255.0, 255.0, 0.0),
+        1,
+        imgproc::LINE_8,
+        0,
+    )?;
+    imgproc::line(
+        dst,
+        Point::new(cx, cy - loupe_r + 4),
+        Point::new(cx, cy - block - 2),
+        Scalar::new(0.0, 255.0, 255.0, 0.0),
+        1,
+        imgproc::LINE_8,
+        0,
+    )?;
+    imgproc::line(
+        dst,
+        Point::new(cx, cy + block + 2),
+        Point::new(cx, cy + loupe_r - 4),
+        Scalar::new(0.0, 255.0, 255.0, 0.0),
+        1,
+        imgproc::LINE_8,
+        0,
+    )?;
+
+    let label = format!("{cx},{cy}");
+    let tx = (cx - loupe_r).clamp(2, (dw - 80).max(2));
+    let ty = (cy - loupe_r - 6).clamp(14, (dh - 2).max(14));
+    imgproc::put_text(
+        dst,
+        &label,
+        Point::new(tx, ty),
+        imgproc::FONT_HERSHEY_SIMPLEX,
+        0.45,
+        Scalar::new(0.0, 0.0, 0.0, 0.0),
+        2,
+        imgproc::LINE_AA,
+        false,
+    )?;
+    imgproc::put_text(
+        dst,
+        &label,
+        Point::new(tx, ty),
+        imgproc::FONT_HERSHEY_SIMPLEX,
+        0.45,
+        Scalar::new(0.0, 255.0, 255.0, 0.0),
+        1,
+        imgproc::LINE_AA,
+        false,
+    )?;
+    return Ok(());
+}

@@ -8,9 +8,9 @@ use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CameraId, CameraParams, FrameSource, OpenCvCapture, PixelPoint, PreviewAction,
+    CameraId, CameraParams, FrameSource, OpenCvCapture, PixelPickMouse, PixelPoint, PreviewAction,
     TABLE_LANDMARK_COUNT, TableLandmark, calibrate_table_pnp, destroy_window, draw_debug_lines,
-    draw_help_lines, show_bgr, table_landmark_mesh_edges, table_landmarks,
+    draw_help_lines, draw_pixel_loupe, show_bgr, table_landmark_mesh_edges, table_landmarks,
 };
 
 use crate::args::Args;
@@ -46,16 +46,14 @@ pub fn run(args: &Args) -> Result<()> {
 
     let window = "calib:table-pnp";
     highgui::named_window(window, highgui::WINDOW_AUTOSIZE)?;
-    let pending: Arc<Mutex<Vec<(i32, i32)>>> = Arc::new(Mutex::new(Vec::new()));
+    let mouse: Arc<Mutex<PixelPickMouse>> = Arc::new(Mutex::new(PixelPickMouse::default()));
     {
-        let pending = Arc::clone(&pending);
+        let mouse = Arc::clone(&mouse);
         highgui::set_mouse_callback(
             window,
-            Some(Box::new(move |event, x, y, _flags| {
-                if event == highgui::EVENT_LBUTTONDOWN {
-                    if let Ok(mut q) = pending.lock() {
-                        q.push((x, y));
-                    }
+            Some(Box::new(move |event, x, y, flags| {
+                if let Ok(mut m) = mouse.lock() {
+                    m.on_event(event, x, y, flags);
                 }
             })),
         )?;
@@ -73,7 +71,7 @@ pub fn run(args: &Args) -> Result<()> {
         "table-PnP — cam={} fov_y={} max_rmse={}",
         args.camera_id, args.fov_y, args.max_rmse
     );
-    println!("Space=freeze  LMB=click  z=undo  c=clear  s=save  n=live  q=quit");
+    println!("Space=freeze  LMB=click  Shift+move=loupe  z=undo  c=clear  s=save  n=live  q=quit");
     println!("(8 clicks → auto PnP + world grid; +/- [] ., adjust grid)");
     for (i, m) in marks.iter().enumerate() {
         println!("  {}: {}", i + 1, m.prompt);
@@ -81,23 +79,26 @@ pub fn run(args: &Args) -> Result<()> {
 
     loop {
         let mut clicks_changed = false;
-        if frozen {
-            let mut q = pending.lock().expect("pending");
-            for (x, y) in q.drain(..) {
-                if clicks.len() < TABLE_LANDMARK_COUNT {
-                    clicks.push(PixelPoint::new(f64::from(x), f64::from(y)));
-                    clicks_changed = true;
-                    println!(
-                        "click {}/{} → ({x},{y})  {}",
-                        clicks.len(),
-                        TABLE_LANDMARK_COUNT,
-                        marks[clicks.len() - 1].id
-                    );
+        let hover = {
+            let mut m = mouse.lock().expect("mouse");
+            if frozen {
+                for (x, y) in m.drain_clicks() {
+                    if clicks.len() < TABLE_LANDMARK_COUNT {
+                        clicks.push(PixelPoint::new(f64::from(x), f64::from(y)));
+                        clicks_changed = true;
+                        println!(
+                            "click {}/{} → ({x},{y})  {}",
+                            clicks.len(),
+                            TABLE_LANDMARK_COUNT,
+                            marks[clicks.len() - 1].id
+                        );
+                    }
                 }
+            } else {
+                m.clicks.clear();
             }
-        } else {
-            pending.lock().expect("pending").clear();
-        }
+            m.hover
+        };
 
         if clicks_changed {
             if clicks.len() < TABLE_LANDMARK_COUNT {
@@ -157,6 +158,7 @@ pub fn run(args: &Args) -> Result<()> {
                     &mut panel,
                     &[
                         "+/- xy  [] layers  ., z",
+                        "Shift+move loupe",
                         "z undo  c clear  s save",
                         "n live  q quit",
                     ],
@@ -177,9 +179,18 @@ pub fn run(args: &Args) -> Result<()> {
                 draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
                 draw_help_lines(
                     &mut panel,
-                    &["LMB click", "z undo", "c clear", "n live", "q quit"],
+                    &[
+                        "LMB click",
+                        "Shift+move loupe",
+                        "z undo  c clear",
+                        "n live  q quit",
+                    ],
                     Scalar::new(0.0, 255.0, 80.0, 0.0),
                 )?;
+            }
+
+            if let Some((hx, hy)) = hover {
+                let _ = draw_pixel_loupe(&mut panel, &frame_img, hx, hy);
             }
         } else {
             draw_debug_lines(
