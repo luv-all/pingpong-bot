@@ -155,7 +155,8 @@ pub fn load_colormask_set_or_empty(path: &std::path::Path) -> Result<ColormaskSe
     return load_colormask_set(path);
 }
 
-/// [`ColormaskSet`]을 pretty JSON으로 저장 (부모 dir 생성).
+/// [`ColormaskSet`]을 **compact** JSON으로 저장 (부모 dir 생성).
+/// samples가 많아도 pretty로 수만 줄이 되지 않게 한 줄(+ trailing `\n`)로 쓴다.
 pub fn save_colormask_set(path: &std::path::Path, set: &ColormaskSet) -> Result<()> {
     for cam in &set.cameras {
         cam.params.validate()?;
@@ -165,7 +166,7 @@ pub fn save_colormask_set(path: &std::path::Path, set: &ColormaskSet) -> Result<
             std::fs::create_dir_all(parent)?;
         }
     }
-    let json = serde_json::to_string_pretty(set)?;
+    let json = serde_json::to_string(set)?;
     std::fs::write(path, format!("{json}\n"))?;
     return Ok(());
 }
@@ -366,5 +367,36 @@ mod tests {
         let legacy = r#"{"cameras":[{"camera_id":1,"space":"ycrcb","c0_min":1,"c0_max":2,"c1_min":3,"c1_max":4,"c2_min":5,"c2_max":6}]}"#;
         let legacy_set: ColormaskSet = serde_json::from_str(legacy).unwrap();
         assert!(legacy_set.samples(CameraId(1)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn save_colormask_writes_compact_single_line() {
+        let mut set = ColormaskSet::default();
+        set.upsert(
+            CameraId(0),
+            ColormaskParams {
+                space: ColorSpace::Hsv,
+                c0_min: 1,
+                c0_max: 2,
+                c1_min: 3,
+                c1_max: 4,
+                c2_min: 5,
+                c2_max: 6,
+            },
+            vec![[10, 20, 30], [40, 50, 60]],
+        );
+        let path = std::env::temp_dir().join(format!(
+            "pp_colormask_compact_{}.json",
+            std::process::id()
+        ));
+        save_colormask_set(&path, &set).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            text.ends_with('\n') && text.matches('\n').count() == 1,
+            "expected one trailing newline only, got {} newlines",
+            text.matches('\n').count()
+        );
+        assert!(text.contains("\"samples\":[[10,20,30],[40,50,60]]"));
     }
 }

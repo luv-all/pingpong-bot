@@ -3,6 +3,10 @@
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "rust-lang.rust-analyzer"
     },
+    // data/colormask.json 은 compact SSOT — format-on-save로 pretty 풀지 않음
+    "[json]": {
+        "editor.formatOnSave": false
+    },
     "flow-icons.folders.associations": {
         "camera": "video",
         "constants": "constant",

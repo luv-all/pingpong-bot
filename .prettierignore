@@ -1,0 +1,3 @@
+# colormask samples are intentionally compact (single-line JSON).
+# Pretty-printing explodes to thousands of lines; do not format this file.
+data/colormask.json
