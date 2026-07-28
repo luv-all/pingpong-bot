@@ -288,7 +288,7 @@ cargo run -p pingpong-bot
 | `cam-preview` | [cam_preview](tools/cam_preview/README.md) |
 | `calib-charuco` | [calib_charuco](tools/calib_charuco/README.md) |
 | `calib-table-pnp` | [calib_table_pnp](tools/calib_table_pnp/README.md) — 8점 PnP + 월드 격자 검증 |
-| `detect-appearance` | [detect_appearance](tools/detect_appearance/README.md) |
+| `verify-stereo` | [verify_stereo](tools/verify_stereo/README.md) — 스테레오 격자·공 3D·sim |
 | `tune-colormask` | [tune_colormask](tools/tune_colormask/README.md) |
 | `detect-full` | [detect_full](tools/detect_full/README.md) — fuse + ROI |
 | `measure-restitution` | [measure_restitution](tools/measure_restitution/README.md) |
@@ -301,15 +301,15 @@ cargo run -p pingpong-bot
 
 ```mermaid
 flowchart LR
-  table["탁구대 8점"] --> pnp["calib-table-pnp"] --> json["data/calibration.json"]
+  table["탁구대 8점"] --> pnp["calib-table-pnp"] --> json["calibration.json"]
+  json --> verify["verify-stereo"]
   json --> full["detect-full / DLT"]
-  frames["폴더/영상"] --> appearance["detect-appearance"]
-  appearance --> full
+  frames["폴더/영상"] --> full
   full --> defaults["defaults::detector_for"]
-  tune["tune-colormask"] --> cm["data/colormask.json"] --> defaults
+  tune["tune-colormask"] --> cm["colormask.json"] --> defaults
 ```
 
-- 외참(운영): [calib_table_pnp](tools/calib_table_pnp/README.md) (클릭 → 자동 PnP → 무지개 격자 → 저장) → DLT
+- 외참(운영): [calib_table_pnp](tools/calib_table_pnp/README.md) (클릭 → 자동 PnP → 무지개 격자 → 저장) → [verify-stereo](tools/verify_stereo/README.md) / DLT
 - Charuco 인트린식: [calib_charuco](tools/calib_charuco/README.md) (비운영·레거시)
 - 설계: [비전 스펙](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md) · [verify-proj 스펙(superseded)](docs/superpowers/specs/2026-07-24-verify-proj-design.md) · [decisions J](docs/decisions.md)
 

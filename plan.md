@@ -142,8 +142,8 @@ flowchart LR
 | `measure_restitution` | 공을 떨어뜨려 바운스 전후 속도비로 반발계수 측정 | `e` → §6.1 바운스 식, `Config`(TOML) |
 | `measure_friction` | 접선 속도 변화로 마찰계수 측정 | `μ` → §6.1 바운스 식 |
 | `jog_axis` | 계산 대신 사용자 입력대로 각 축을 수동 구동, 배선·방향·한계 검증 | `Hardware` 포트를 그대로 사용 → 런타임과 같은 코드 경로 |
-| `detect_appearance` | appearance 좌우 (colormask\|contour) | `vision.appearance.*` · `vision.scorer` |
 | `detect_full` | fuse 본선 + ROI `r` 토글 | `fuse_from_vision` · `track` |
+| `verify_stereo` | 스테레오 격자·공 3D·sim | `Calibration` · `detector_for` · `SimScene` |
 
 런타임 검출은 항상 **fuse** (`generators` → Scorer → MotionPrior). 툴은 레이어/본선 디버그용이다. ROI는 화소 수를 줄이는 래퍼(가설 — [decisions J](docs/decisions.md)). `calib_charuco`가 저장하는 타입은 런타임이 읽는 타입과 동일하고, 계수 측정값은 `Config`로 흘러간다.
 

@@ -1010,16 +1010,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "detect-appearance"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "opencv",
- "pingpong-bot",
-]
-
-[[package]]
 name = "detect-full"
 version = "0.1.0"
 dependencies = [
@@ -4826,6 +4816,18 @@ dependencies = [
  "bytemuck",
  "hashbrown 0.16.1",
  "vello_common",
+]
+
+[[package]]
+name = "verify-stereo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "opencv",
+ "pingpong-bot",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

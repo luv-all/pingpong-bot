@@ -281,7 +281,7 @@ track(fuse_from_vision(&vision)?, vision.roi_half_px);
 let detect = detector_for(cam_id)?; // fuse(generators![…], scorer) + track
 ```
 
-툴: `detect-appearance` / `detect-full`은 선택적 `[vision]` TOML 어댑터(`fuse_vision`) 가능.  
+툴: `detect-full` / `verify-stereo`는 선택적 `[vision]` TOML 어댑터(`fuse_vision`) 가능.  
 앱 조립 SSOT: `src/defaults.rs`. DSL 메커니즘: `fuse` / `track`.
 
 | ID | 내용 | 상태 |

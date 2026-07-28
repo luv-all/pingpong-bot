@@ -26,8 +26,8 @@ pub use io::{
     PixelPickMouse, PreviewAction, ResolvedCam, ShowBgrResult, SimCamera, StereoCamCliArgs,
     StreamPreset, ThreadedCapture, arrow_delta, destroy_window, display_fit_bounds,
     draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines, draw_pixel_loupe,
-    draw_world_velocity, fit_bgr_downscale, hstack_bgr, parse_fourcc, resolve_cams, show_bgr,
-    unscale_xy,
+    draw_world_grid, draw_world_velocity, fit_bgr_downscale, hstack_bgr, parse_fourcc, resolve_cams,
+    show_bgr, unscale_xy, apply_grid_key, WorldGridParams,
 };
 pub use tri::{
     dlt_triangulate, sample_at, triangulate_projections, triangulate_synced, triangulate_views,

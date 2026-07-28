@@ -23,29 +23,30 @@
 
 ```text
 [오프라인]
-  스냅/이미지 ──► calib_charuco ──► calibration.json
-  detect-appearance ──► colormask | contour 좌우
-  detect-full ──► fuse_from_vision + ROI(`r`) 토글
+  스냅/이미지 ──► calib_table_pnp ──► calibration.json
+  detect-full ──► fuse + ROI(`r`) 토글
+  verify-stereo ──► 스테레오 격자·삼각·SimScene 공
 
 [런타임]
-  VideoCapture ──► Frame ──► fuse_from_vision ──► BallObservation
+  VideoCapture ──► Frame ──► detector_for ──► BallObservation
        │                         ▲
-       │                         │ vision.appearance|scorer|motion
+       │                         │ defaults / colormask.json
   Calibration 로드
        └──► (optional undistort) → triangulate_synced → EKF → …
 ```
 
 | 레이어 | 역할 | 코드 / TOML |
 |--------|------|-------------|
-| Appearance | 후보 생성 | `detector/appearance/` · `vision.appearance.*` · `generators` |
-| Scorer | area · circularity · motion soft | `detector/scorer.rs` · `vision.scorer` |
-| MotionPrior | 움직임 마스크 | `detector/motion/` · `vision.motion.weight` |
-| ROI | 탐색 범위 | `track(fuse, roi_half_px)` · detect-full `r` |
+| Appearance | 후보 생성 | `detector/appearance/` · `generators` |
+| Scorer | area · circularity · motion soft | `detector/scorer.rs` |
+| MotionPrior | 움직임 마스크 | `detector/motion/` |
+| ROI | 탐색 범위 | `track(fuse, …)` · detect-full `r` |
 
 툴은 **레이어 디버그**만. peer “방법 선택”이 아니다.
 
 ## 완료 기준
 
-- [x] `fuse_from_vision` + `[vision]` nested SSOT
-- [x] `detect-appearance` / `detect-full`
+- [x] fuse + defaults SSOT (`detector_for`)
+- [x] `detect-full`
+- [x] `verify-stereo` (스테레오 검증)
 - [x] real 경로 `CameraFeed::Detect`에 fuse 연결

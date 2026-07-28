@@ -9,9 +9,10 @@
 | 파일 | 역할 |
 |------|------|
 | `interactive.rs` | Space 스냅 · LMB 클릭 · 자동 PnP · 격자 · s 저장 |
-| `world_grid.rs` | XY×Z 무지개 격자 오버레이 (툴 전용) |
 | `cli.rs` | `--from-pixels` / `--validate` / merge |
 | `args.rs` | clap |
+
+월드 격자는 lib `draw_world_grid` (점+선).
 
 ## 흐름
 

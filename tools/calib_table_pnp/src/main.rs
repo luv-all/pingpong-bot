@@ -6,7 +6,6 @@
 mod args;
 mod cli;
 mod interactive;
-mod world_grid;
 
 use anyhow::Result;
 use clap::Parser;

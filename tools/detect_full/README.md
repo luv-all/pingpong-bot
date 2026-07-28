@@ -21,7 +21,7 @@
 
 SSOT: `src/defaults/vision.rs` → `detector_for` / `colormask_for` · `data/colormask.json`
 
-appearance 단독 비교(병렬): [detect-appearance](../detect_appearance/README.md).
+appearance 단독 비교 툴은 제거됨. 스테레오 검증은 [verify-stereo](../verify_stereo/README.md).
 
 ```bash
 cargo run -p detect-full

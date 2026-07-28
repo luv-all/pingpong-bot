@@ -30,10 +30,10 @@ pub use camera::{
     TABLE_LANDMARK_COUNT, TableLandmark, TablePnpResult, ThreadedCapture, arducam_b0332,
     arrow_delta, calibrate_charuco, calibrate_table_pnp, destroy_window, detect_and_draw_charuco,
     display_fit_bounds, dlt_triangulate, draw_cam_label, draw_circle_px, draw_debug_lines,
-    draw_help_lines, draw_pixel_loupe, draw_world_velocity, ensure_reproj_below, ensure_reproj_ok,
-    fit_bgr_downscale, hstack_bgr, parse_fourcc, resolve_cams, sample_at, show_bgr,
+    draw_help_lines, draw_pixel_loupe, draw_world_grid, draw_world_velocity, ensure_reproj_below,
+    ensure_reproj_ok, fit_bgr_downscale, hstack_bgr, parse_fourcc, resolve_cams, sample_at, show_bgr,
     table_landmark_mesh_edges, table_landmarks, triangulate_projections, triangulate_synced,
-    triangulate_views, unscale_xy, upsert_camera,
+    triangulate_views, unscale_xy, upsert_camera, apply_grid_key, WorldGridParams,
 };
 pub use defaults::{
     ControlParams, DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME,

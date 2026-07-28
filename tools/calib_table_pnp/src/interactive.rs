@@ -9,14 +9,13 @@ use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
     CameraId, CameraParams, FrameSource, OpenCvCapture, PixelPickMouse, PixelPoint, Point3,
-    PreviewAction, TABLE_LANDMARK_COUNT, TableLandmark, arrow_delta, calibrate_table_pnp,
-    destroy_window, draw_debug_lines, draw_help_lines, draw_pixel_loupe, show_bgr,
-    table_landmark_mesh_edges, table_landmarks,
+    PreviewAction, TABLE_LANDMARK_COUNT, TableLandmark, WorldGridParams, apply_grid_key, arrow_delta,
+    calibrate_table_pnp, destroy_window, draw_debug_lines, draw_help_lines, draw_pixel_loupe,
+    draw_world_grid, show_bgr, table_landmark_mesh_edges, table_landmarks,
 };
 
 use crate::args::{Args, pending_path, resolve_camera_id, resolve_output};
 use crate::cli;
-use crate::world_grid::{WorldGridParams, apply_grid_key, draw_world_grid};
 
 struct Solved {
     params: CameraParams,

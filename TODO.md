@@ -96,7 +96,7 @@
 앱 검출 조립 SSOT: `defaults::detector_for(CameraId)` (`data/colormask.json`).
 
 - [x] `camera`에 OpenCV 삼각측량과 다중 뷰 DLT 통합
-- [x] OpenCV **공 검출** — fuse + `detect-appearance` / `detect-full` (ROI `r`)
+- [x] OpenCV **공 검출** — fuse + `detect-full` (ROI `r`) / `verify-stereo`
 - [x] ColorContourCascade · adaptive ROI · `tune-colormask`
 - [x] ChArUco (`calib_charuco --emit-sim` / `--from-images` 인트린식+`dist`)
 - [x] 탁구대 랜드마크 solvePnP (`calib_table_pnp` — 8점 + FOV `K` + `R|t` + 월드 격자 검증)
