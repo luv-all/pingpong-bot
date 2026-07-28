@@ -10,8 +10,8 @@ mod threaded;
 
 pub use cam_cli::{
     CamCliArgs, CamStreamArgs, DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
-    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH, ResolvedCam, StereoCamCliArgs, StreamPreset,
-    parse_fourcc, resolve_cams,
+    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH, ResolvedCam, StereoCamCliArgs, StereoPairCliArgs,
+    StreamPreset, parse_fourcc, resolve_cams,
 };
 pub use capture::{
     CaptureBackend, ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture,

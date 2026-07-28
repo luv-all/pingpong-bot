@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use pingpong_bot::{DEFAULT_CALIBRATION_PATH, StereoCamCliArgs};
+use pingpong_bot::{DEFAULT_CALIBRATION_PATH, StereoPairCliArgs};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -11,8 +11,9 @@ use pingpong_bot::{DEFAULT_CALIBRATION_PATH, StereoCamCliArgs};
     about = "스테레오 월드 격자 + 공 삼각측량 + SimScene 공 창"
 )]
 pub struct Args {
+    /// 항상 left+right (`--cam` 없음)
     #[command(flatten)]
-    pub cam: StereoCamCliArgs,
+    pub cam: StereoPairCliArgs,
 
     /// Calibration JSON. 생략 시 [`DEFAULT_CALIBRATION_PATH`]
     #[arg(long, default_value = DEFAULT_CALIBRATION_PATH)]

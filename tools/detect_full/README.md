@@ -2,6 +2,8 @@
 
 런타임과 같은 **fuse DSL** 본선 (`defaults::detector_for(cam_id)`) + adaptive ROI 튜닝.
 
+`--cam left|right` **필수**.
+
 파이프라인 스텝(읽는 순서):
 
 | 0 original | 1 colormask |
@@ -24,8 +26,8 @@ SSOT: `src/defaults/vision.rs` → `detector_for` / `colormask_for` · `data/col
 appearance 단독 비교 툴은 제거됨. 스테레오 검증은 [verify-stereo](../verify_stereo/README.md).
 
 ```bash
-cargo run -p detect-full
-cargo run -p detect-full -- --no-roi
-cargo run -p detect-full -- --path clip.mp4
-cargo run -p detect-full -- --images ./frames -o out/
+cargo run -p detect-full -- --cam left
+cargo run -p detect-full -- --cam left --no-roi
+cargo run -p detect-full -- --cam left --path clip.mp4
+cargo run -p detect-full -- --cam left --images ./frames -o out/
 ```

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::camera::{
     CamCliArgs, CamRigConfig, CamStreamArgs, CameraId, CameraRole, CharucoBoardSpec,
-    StereoCamCliArgs,
+    StereoCamCliArgs, StereoPairCliArgs,
 };
 use crate::constants::camera::arducam_b0332;
 
@@ -71,7 +71,6 @@ pub const RIGHT_CAMERA_ID: u8 = 1;
 pub const MAX_REPROJ_RMSE_PX: f64 = 7.0;
 pub const MIN_CHARUCO_CORNERS: usize = 4;
 
-pub const DEFAULT_CAM_ROLES: [CameraRole; 1] = [CameraRole::Left];
 pub const DEFAULT_STEREO_CAM_ROLES: [CameraRole; 2] = [CameraRole::Left, CameraRole::Right];
 
 pub const CHARUCO_SQUARES_X: i32 = 5;
@@ -107,7 +106,7 @@ impl Default for CamRigConfig {
 impl Default for CamCliArgs {
     fn default() -> Self {
         return Self {
-            cam: DEFAULT_CAM_ROLES.to_vec(),
+            cam: Vec::new(),
             stream: CamStreamArgs::default(),
         };
     }
@@ -117,6 +116,14 @@ impl Default for StereoCamCliArgs {
     fn default() -> Self {
         return Self {
             cam: DEFAULT_STEREO_CAM_ROLES.to_vec(),
+            stream: CamStreamArgs::default(),
+        };
+    }
+}
+
+impl Default for StereoPairCliArgs {
+    fn default() -> Self {
+        return Self {
             stream: CamStreamArgs::default(),
         };
     }

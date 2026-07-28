@@ -12,10 +12,12 @@
 
 ```bash
 cargo run -p verify-stereo
-cargo run -p verify-stereo -- --calibration calibration.json --cam left,right
+cargo run -p verify-stereo -- --calibration calibration.json
 cargo run -p verify-stereo -- --sim false   # OpenCV만
 cargo run -p verify-stereo -- --video left.mp4 --video right.mp4
 ```
+
+항상 left+right (`--cam` 없음).
 
 sim 브리지: 부모가 자식 stdin에 `{"x":..,"y":..,"z":..}` 또는 `hide` 한 줄씩 씀.
 

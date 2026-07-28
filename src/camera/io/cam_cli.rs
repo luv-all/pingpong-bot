@@ -10,7 +10,7 @@ use super::rig::{CamRigConfig, CameraRole};
 use super::threaded::ThreadedCapture;
 use crate::CameraId;
 use crate::constants::camera::arducam_b0332;
-use crate::defaults::calib::{DEFAULT_CAM_ROLES, DEFAULT_STEREO_CAM_ROLES};
+use crate::defaults::calib::DEFAULT_STEREO_CAM_ROLES;
 
 pub use crate::defaults::calib::{
     DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
@@ -107,23 +107,19 @@ impl CamStreamArgs {
     }
 }
 
-/// 단일 캠 툴용 (`--cam left` 기본). device는 [`CamRigConfig`]가 부여.
+/// 단일 캠 툴용. `--cam left|right` **필수** (기본값 없음 — 어느 쪽인지 헷갈리지 않게).
+/// device는 [`CamRigConfig`]가 부여.
 #[derive(Parser, Debug, Clone)]
 pub struct CamCliArgs {
-    /// 로봇 기준 역할. 예: `--cam left`
-    #[arg(
-        long = "cam",
-        value_enum,
-        value_delimiter = ',',
-        default_values_t = DEFAULT_CAM_ROLES
-    )]
+    /// 로봇 기준 역할. 예: `--cam left` (생략 불가)
+    #[arg(long = "cam", value_enum, value_delimiter = ',')]
     pub cam: Vec<CameraRole>,
 
     #[command(flatten)]
     pub stream: CamStreamArgs,
 }
 
-/// 스테레오/멀티 기본 (`left,right`). `cam_preview` · `measure_*` 용.
+/// 스테레오/멀티 선택용 (`left,right` 기본). `cam-preview`처럼 한 대만 열 수도 있는 툴.
 #[derive(Parser, Debug, Clone)]
 pub struct StereoCamCliArgs {
     /// 로봇 기준 역할. 예: `--cam left,right`
@@ -139,10 +135,26 @@ pub struct StereoCamCliArgs {
     pub stream: CamStreamArgs,
 }
 
+/// 양쪽 캠 **필수** 툴용 — `--cam` 없음. 항상 left+right.
+#[derive(Parser, Debug, Clone)]
+pub struct StereoPairCliArgs {
+    #[command(flatten)]
+    pub stream: CamStreamArgs,
+}
+
 impl StereoCamCliArgs {
     pub fn as_cam_cli(&self) -> CamCliArgs {
         return CamCliArgs {
             cam: self.cam.clone(),
+            stream: self.stream.clone(),
+        };
+    }
+}
+
+impl StereoPairCliArgs {
+    pub fn as_cam_cli(&self) -> CamCliArgs {
+        return CamCliArgs {
+            cam: DEFAULT_STEREO_CAM_ROLES.to_vec(),
             stream: self.stream.clone(),
         };
     }
@@ -209,7 +221,7 @@ impl CamCliArgs {
 
 pub fn resolve_cams(roles: &[CameraRole]) -> Result<Vec<ResolvedCam>, String> {
     if roles.is_empty() {
-        return Err("--cam 이 비어 있음 (left|right)".into());
+        return Err("--cam 필수 (left|right) — 단일 캠 툴은 생략 불가".into());
     }
     let rig = CamRigConfig::default();
     let mut out = Vec::with_capacity(roles.len());

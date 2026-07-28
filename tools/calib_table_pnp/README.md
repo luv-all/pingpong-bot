@@ -2,6 +2,8 @@
 
 탁구대 **규격 랜드마크 8점**을 클릭해 OpenCV `solvePnP`(IPPE)로 카메라 외참 `R|t`를 잡고, 같은 창에서 **월드 XY×Z 무지개 격자**로 투영을 확인한 뒤 `Calibration` JSON을 쓴다. Charuco 없이 FOV로 `K`만 근사 (`dist=[]`).
 
+`--cam left|right` **필수** (한 대씩 캘리브 — 생략 시 어느 쪽인지 모호하므로 막음).
+
 라이브 스트림·FOV 기본은 **Arducam B0332** datasheet SSOT (`arducam_b0332`: 1280×800@120 MJPG, HFOV70°→VFOV≈47.3°).
 
 저장/로드 기본 경로는 **`data/calibration.json`** (`defaults::calib::DEFAULT_CALIBRATION_PATH`). left/right 각각 실행해도 같은 번들에 upsert.
