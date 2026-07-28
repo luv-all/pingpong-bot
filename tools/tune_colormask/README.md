@@ -2,7 +2,8 @@
 
 탁구공 위 픽셀을 클릭해 **YCrCb / HSV** `inRange` 범위를 뽑는다.  
 채널별 **양꼬리 퍼센타일**(`--trim`, 기본 10% → p10..p90)로 하이라이트·그림자·혼색 아웃라이어를 잘라낸 뒤 `--margin`을 더한다.  
-`p` (및 샘플 있는 채 종료) 시 현재 `--cam`을 [`data/colormask.json`](../../data/colormask.json)에 upsert. Rust 스니펫도 콘솔에 출력.
+`p` (및 샘플 있는 채 종료) 시 현재 `--cam`의 **범위 + BGR 샘플**(`[[B,G,R],…]`)을 [`data/colormask.json`](../../data/colormask.json)에 upsert.  
+다음 실행 시 같은 캠의 샘플을 자동 로드해 이어서 픽한다 (픽셀 좌표는 저장하지 않음).
 
 ## 화면
 
@@ -33,7 +34,7 @@ cargo run -p tune-colormask -- --path clip.mp4
 | `c` | 샘플 전체 삭제 |
 | `Space` | freeze / live |
 | `s` | ycrcb ↔ hsv (미리보기) |
-| `p` | 저장(현재 space) + 양쪽 space Rust 출력 |
+| `p` | 저장(현재 space 범위 + 샘플) |
 | `q` / ESC | 종료 (샘플 있으면 저장) |
 
 SSOT: `defaults::DEFAULT_COLORMASK_PATH` → `detector_for(CameraId)`.

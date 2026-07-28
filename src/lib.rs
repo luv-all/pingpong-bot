@@ -43,8 +43,8 @@ pub use defaults::{
     urdf_test,
 };
 pub use detector::{
-    BallDetector, Candidate, CandidateGenerator, ColorContourCascade, ColorSpace, ColormaskCam,
-    ColormaskDetector, ColormaskParams, ColormaskSet, ContourDetector, FuseDetector,
+    BallDetector, Candidate, CandidateGenerator, ColorContourCascade, ColorSpace, ColormaskBgr,
+    ColormaskCam, ColormaskDetector, ColormaskParams, ColormaskSet, ContourDetector, FuseDetector,
     IntoCandidateGenerators, MotionPrior, ParseColorSpaceError, RoiParams, RoiTrack, Scorer,
     ScorerParams, fuse, load_colormask_set, load_colormask_set_or_empty, passthrough_detect,
     save_colormask_set, track, undistort_frame,

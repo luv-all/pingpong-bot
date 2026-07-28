@@ -4,7 +4,7 @@ use clap::Parser;
 use pingpong_bot::{CamCliArgs, ColorSpace};
 
 #[derive(Parser, Debug)]
-#[command(about = "공 픽셀 픽커 → YCrCb/HSV inRange 범위 (dry-run 출력만)")]
+#[command(about = "공 픽셀 픽커 → YCrCb/HSV inRange → data/colormask.json upsert")]
 pub struct Args {
     #[command(flatten)]
     pub cam: CamCliArgs,

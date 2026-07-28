@@ -78,12 +78,18 @@ impl ColormaskParams {
     }
 }
 
-/// 한 카메라의 colormask 엔트리 (`camera_id` + flatten params).
+/// tune-colormask 픽 샘플 — BGR 트리플. detector는 무시.
+pub type ColormaskBgr = [u8; 3];
+
+/// 한 카메라의 colormask 엔트리 (`camera_id` + flatten params + optional samples).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ColormaskCam {
     pub camera_id: crate::CameraId,
     #[serde(flatten)]
     pub params: ColormaskParams,
+    /// `[[B,G,R], …]` — 픽셀 좌표 없음 (공은 움직이므로 색만 SSOT).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub samples: Vec<ColormaskBgr>,
 }
 
 /// 멀티캠 colormask 번들 (`data/colormask.json`).
@@ -101,12 +107,30 @@ impl ColormaskSet {
             .map(|c| &c.params);
     }
 
-    pub fn upsert(&mut self, camera_id: crate::CameraId, params: ColormaskParams) {
+    pub fn samples(&self, camera_id: crate::CameraId) -> Option<&[ColormaskBgr]> {
+        return self
+            .cameras
+            .iter()
+            .find(|c| c.camera_id == camera_id)
+            .map(|c| c.samples.as_slice());
+    }
+
+    pub fn upsert(
+        &mut self,
+        camera_id: crate::CameraId,
+        params: ColormaskParams,
+        samples: Vec<ColormaskBgr>,
+    ) {
         if let Some(slot) = self.cameras.iter_mut().find(|c| c.camera_id == camera_id) {
             slot.params = params;
+            slot.samples = samples;
             return;
         }
-        self.cameras.push(ColormaskCam { camera_id, params });
+        self.cameras.push(ColormaskCam {
+            camera_id,
+            params,
+            samples,
+        });
         self.cameras.sort_by_key(|c| c.camera_id);
     }
 }
@@ -316,5 +340,31 @@ mod tests {
         let pixel = det.detect(&frame).expect("should find blob");
         assert!((pixel.x - 100.0).abs() < 5.0, "x={}", pixel.x);
         assert!((pixel.y - 80.0).abs() < 5.0, "y={}", pixel.y);
+    }
+
+    #[test]
+    fn colormask_json_roundtrip_keeps_samples() {
+        let mut set = ColormaskSet::default();
+        set.upsert(
+            CameraId(0),
+            ColormaskParams {
+                space: ColorSpace::Hsv,
+                c0_min: 10,
+                c0_max: 20,
+                c1_min: 30,
+                c1_max: 40,
+                c2_min: 50,
+                c2_max: 60,
+            },
+            vec![[40u8, 120, 200]],
+        );
+        let json = serde_json::to_string(&set).unwrap();
+        assert!(json.contains("\"samples\":[[40,120,200]]") || json.contains("[40, 120, 200]"));
+        let loaded: ColormaskSet = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.samples(CameraId(0)).unwrap(), &[[40u8, 120, 200]]);
+        // 구포맷(samples 없음)도 로드
+        let legacy = r#"{"cameras":[{"camera_id":1,"space":"ycrcb","c0_min":1,"c0_max":2,"c1_min":3,"c1_max":4,"c2_min":5,"c2_max":6}]}"#;
+        let legacy_set: ColormaskSet = serde_json::from_str(legacy).unwrap();
+        assert!(legacy_set.samples(CameraId(1)).unwrap().is_empty());
     }
 }

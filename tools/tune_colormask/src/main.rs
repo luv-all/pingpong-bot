@@ -1,6 +1,6 @@
 //! 탁구공 색 범위 튜닝 — 픽커 → 퍼센타일 구간(+margin) → `data/colormask.json` upsert.
 //!
-//! 레이아웃: (original | mask) / 색상 띠. `p`로 현재 space를 캠별로 저장.
+//! 레이아웃: (original | mask) / swatch / scatter+iso. `p`·종료 시 `data/colormask.json` upsert.
 
 mod cli;
 
@@ -201,84 +201,57 @@ fn space_label(space: ColorSpace) -> &'static str {
     };
 }
 
-fn print_params(space: ColorSpace, range: ChannelRange) {
-    let p = range.to_params(space);
-    let axes = space_label(space);
-    println!("// ColormaskParams — space={space} ({axes})");
-    println!("ColormaskParams {{");
-    println!(
-        "    space: ColorSpace::{},",
-        match space {
-            ColorSpace::Ycrcb => "Ycrcb",
-            ColorSpace::Hsv => "Hsv",
-        }
-    );
-    println!(
-        "    c0_min: {}, // {}",
-        p.c0_min,
-        axes.split('/').next().unwrap_or("c0")
-    );
-    println!("    c0_max: {},", p.c0_max);
-    println!(
-        "    c1_min: {}, // {}",
-        p.c1_min,
-        axes.split('/').nth(1).unwrap_or("c1")
-    );
-    println!("    c1_max: {},", p.c1_max);
-    println!(
-        "    c2_min: {}, // {}",
-        p.c2_min,
-        axes.split('/').nth(2).unwrap_or("c2")
-    );
-    println!("    c2_max: {},", p.c2_max);
-    println!("}}");
-}
-
-fn print_all(
-    ycrcb: Option<ChannelRange>,
-    hsv: Option<ChannelRange>,
-    n: usize,
-    margin: u8,
-    trim_pct: f64,
-) {
-    println!("--- tune-colormask samples={n} margin={margin} trim={trim_pct}% ---");
-    match ycrcb {
-        Some(r) => print_params(ColorSpace::Ycrcb, r),
-        None => println!("(ycrcb: need samples)"),
-    }
-    println!();
-    match hsv {
-        Some(r) => print_params(ColorSpace::Hsv, r),
-        None => println!("(hsv: need samples)"),
-    }
-    println!("----------------------------------------------");
-}
-
-fn upsert_colormask(cam_id: CameraId, space: ColorSpace, range: ChannelRange) -> Result<()> {
+fn upsert_colormask(
+    cam_id: CameraId,
+    space: ColorSpace,
+    range: ChannelRange,
+    samples: &[Sample],
+) -> Result<()> {
     let path = colormask_path();
     let mut set = load_colormask_set_or_empty(&path)?;
     let params = range.to_params(space);
     params.validate()?;
-    set.upsert(cam_id, params);
+    let stored: Vec<[u8; 3]> = samples.iter().map(|s| s.bgr).collect();
+    set.upsert(cam_id, params, stored);
     save_colormask_set(&path, &set)?;
     println!(
-        "wrote colormask → {} (cam={}, space={}, cams={})",
+        "wrote colormask → {} (cam={}, space={}, samples={}, cams={})",
         path.display(),
         cam_id.0,
         space,
+        samples.len(),
         set.cameras.len()
     );
     return Ok(());
 }
 
-fn hint_existing(cam_id: CameraId) {
+fn load_samples_for_cam(cam_id: CameraId) -> Vec<Sample> {
+    let path = colormask_path();
+    let Ok(set) = load_colormask_set_or_empty(&path) else {
+        return Vec::new();
+    };
+    let Some(stored) = set.samples(cam_id) else {
+        return Vec::new();
+    };
+    // 디스크에는 BGR만 — 오버레이 좌표 없음
+    return stored
+        .iter()
+        .map(|&bgr| Sample {
+            x: -1,
+            y: -1,
+            bgr,
+        })
+        .collect();
+}
+
+fn hint_existing(cam_id: CameraId, n_samples: usize) {
     let path = colormask_path();
     let Ok(set) = load_colormask_set_or_empty(&path) else {
         return;
     };
     if let Some(p) = set.params(cam_id) {
         println!(
-            "existing {} cam{}: space={} c0=[{},{}] c1=[{},{}] c2=[{},{}]",
+            "existing {} cam{}: space={} c0=[{},{}] c1=[{},{}] c2=[{},{}] samples={}",
             path.display(),
             cam_id.0,
             p.space,
@@ -287,7 +260,15 @@ fn hint_existing(cam_id: CameraId) {
             p.c1_min,
             p.c1_max,
             p.c2_min,
-            p.c2_max
+            p.c2_max,
+            n_samples
+        );
+    } else if n_samples > 0 {
+        println!(
+            "loaded {} samples from {} cam{} (no range yet)",
+            n_samples,
+            path.display(),
+            cam_id.0
         );
     }
 }
@@ -703,20 +684,31 @@ fn main() -> Result<()> {
         )?;
     }
 
-    let mut samples: Vec<Sample> = Vec::new();
+    let mut samples: Vec<Sample> = load_samples_for_cam(cam_id);
     let mut frozen = false;
     let mut freeze_img: Option<Mat> = None;
     let mut n = 0usize;
     let mut display_scale = 1.0;
+
+    // 저장된 space가 있으면 시작 space로 맞춤
+    if let Ok(set) = load_colormask_set_or_empty(&colormask_path()) {
+        if let Some(p) = set.params(cam_id) {
+            space = p.space;
+        }
+    }
 
     println!(
         "tune-colormask cam={} space={space} margin={margin} trim={trim_pct}% → {}",
         cam_id.0,
         colormask_path().display()
     );
-    hint_existing(cam_id);
+    hint_existing(cam_id, samples.len());
+    if !samples.is_empty() {
+        println!("resumed {} samples — pick more or p to re-save", samples.len());
+    }
     println!(
-        "LMB/Enter=pick  arrows|hjkl=1px  Shift+move=loupe  z=undo  c=clear  Space=freeze  s=space  p=save+print  q=quit"
+        "LMB/Enter=pick  arrows|hjkl=1px  Shift+move=loupe  z=undo  c=clear  Space=freeze  s=space  p=save→{}  q=quit",
+        colormask_path().display()
     );
 
     loop {
@@ -781,6 +773,9 @@ fn main() -> Result<()> {
             .try_clone()
             .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
         for (i, s) in samples.iter().enumerate() {
+            if s.x < 0 || s.y < 0 {
+                continue; // resumed BGR-only — no pixel overlay
+            }
             let color = if i + 1 == samples.len() {
                 Scalar::new(0.0, 255.0, 0.0, 0.0)
             } else {
@@ -834,7 +829,7 @@ fn main() -> Result<()> {
                 "z undo  c clear",
                 "Space freeze",
                 "s ycrcb|hsv",
-                "p save+print",
+                "p save→data/colormask.json",
                 "q/ESC quit",
             ],
             Scalar::new(0.0, 255.0, 80.0, 0.0),
@@ -880,13 +875,12 @@ fn main() -> Result<()> {
                     println!("cleared");
                 } else if key == i32::from(b'p') || key == i32::from(b'P') {
                     let (y, h) = ranges_from_samples(&samples, margin, trim_pct)?;
-                    print_all(y, h, samples.len(), margin, trim_pct);
                     let active = match space {
                         ColorSpace::Ycrcb => y,
                         ColorSpace::Hsv => h,
                     };
                     if let Some(r) = active {
-                        upsert_colormask(cam_id, space, r)?;
+                        upsert_colormask(cam_id, space, r, &samples)?;
                     } else {
                         println!("(save skipped: need samples)");
                     }
@@ -900,16 +894,15 @@ fn main() -> Result<()> {
         }
     }
 
-    // 종료 시 한 번 더 출력·저장
+    // 종료 시 저장
     if !samples.is_empty() {
         let (y, h) = ranges_from_samples(&samples, margin, trim_pct)?;
-        print_all(y, h, samples.len(), margin, trim_pct);
         let active = match space {
             ColorSpace::Ycrcb => y,
             ColorSpace::Hsv => h,
         };
         if let Some(r) = active {
-            upsert_colormask(cam_id, space, r)?;
+            upsert_colormask(cam_id, space, r, &samples)?;
         }
     }
 
