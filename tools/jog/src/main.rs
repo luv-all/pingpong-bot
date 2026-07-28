@@ -13,8 +13,9 @@ use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::{
     Arm, Hardware, Joints, Point3, RailMotion, RealHardware, RobotPose, SwingTrajectory, control,
-    dynamixel, rail, robot,
+    dynamixel, init_tracing, rail, robot,
 };
+use tracing::info;
 
 #[derive(Parser, Debug)]
 #[command(name = "jog", about = "관절·레일 인터랙티브 조그 REPL")]
@@ -28,6 +29,9 @@ struct Args {
     /// 시리얼·DLL 없이 변환·IK·executor만.
     #[arg(long)]
     dry_run: bool,
+    /// debug 로그 (통신 재시도·AXL 실패 code 등).
+    #[arg(long)]
+    debug: bool,
 }
 
 struct Session {
@@ -38,13 +42,12 @@ struct Session {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("info".parse().unwrap_or_default()),
-        )
-        .init();
-    return run(Args::parse());
+    let args = Args::parse();
+    init_tracing(args.debug, &["jog", "pingpong_bot"]);
+    if args.debug {
+        info!("debug 로그 활성 — Dynamixel 재시도·AXL API 실패 code가 출력됩니다");
+    }
+    return run(args);
 }
 
 fn run(args: Args) -> Result<()> {
@@ -55,6 +58,27 @@ fn run(args: Args) -> Result<()> {
     let mut rail_cfg = rail();
     if let Some(dll_path) = args.dll_path {
         rail_cfg.dll_path = dll_path;
+    }
+
+    if args.debug {
+        info!(
+            port = %dxl.port,
+            baudrate = dxl.baudrate,
+            motor_ids = ?dxl.motor_ids,
+            dry_run = args.dry_run,
+            "Dynamixel 설정"
+        );
+        info!(
+            enabled = rail_cfg.enabled,
+            dll = %rail_cfg.dll_path.display(),
+            axis = rail_cfg.axis,
+            irq_no = rail_cfg.irq_no,
+            reverse = rail_cfg.reverse,
+            x_min_m = rail_cfg.x_min_m,
+            x_max_m = rail_cfg.x_max_m,
+            vel = rail_cfg.vel,
+            "레일 설정"
+        );
     }
 
     let robot = robot().context("defaults::robot")?;

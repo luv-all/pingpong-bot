@@ -130,13 +130,26 @@ pub struct ShotFlags {
     pub contact: bool,
     pub cleared_net: bool,
     pub returned_in: bool,
+    /// 리턴이 로봇 반쪽(`y < net_y`) 상면에 닿음 — 탁구 규칙상 반칙.
+    ///
+    /// 정상 리턴은 라켓에서 곧바로 상대 코트로 가야 한다. 자기 코트를
+    /// 거쳐 넘어가는 건 약한 스윙의 대표 증상이고 실기에서는 실점이다.
+    pub bounced_own_half: bool,
+    /// 라켓이 같은 공을 두 번 침 — 반칙.
+    pub double_hit: bool,
 }
 
 impl ShotFlags {
-    /// 0 미타격 · 1 접촉 · 2 네트 · 3 상대 코트.
+    /// 0 미타격 · 1 접촉(또는 반칙) · 2 네트 통과 · 3 상대 코트 착지.
+    ///
+    /// 반칙은 접촉만 인정해 1점으로 강등한다 — 네트를 넘겼든 상대 코트에
+    /// 들어갔든 무효다.
     pub fn score(self) -> u8 {
         if !self.contact {
             return 0;
+        }
+        if self.bounced_own_half || self.double_hit {
+            return 1;
         }
         if self.returned_in {
             return 3;
@@ -145,6 +158,12 @@ impl ShotFlags {
             return 2;
         }
         return 1;
+    }
+
+    /// 반칙으로 강등됐는지 — 패널·로그에서 "3점 조건을 다 채웠는데 반칙"을
+    /// 구분해 보여주기 위한 것.
+    pub fn is_foul(self) -> bool {
+        return self.bounced_own_half || self.double_hit;
     }
 }
 
@@ -361,8 +380,20 @@ pub struct LiveShotObserver {
     previous_y: f32,
     saw_flight: bool,
     saw_net_contact: bool,
+    /// 라켓 접촉 **이후**의 네트 접촉만 — 리턴이 네트를 스치고 넘어가는
+    /// 건 랠리 중 유효타라, `saw_net_contact`(들어오는 공 포함)와 구분한다.
+    net_contact_after_hit: bool,
+    /// 직전 스텝에 라켓과 접촉 중이었는지 — 더블히트 상승 에지 판정용.
+    racket_contact_active: bool,
+    /// 라켓에서 떨어진 뒤 경과 스텝 — 접촉 채터링을 새 히트로 오인하지
+    /// 않도록 재접촉에 최소 간격을 요구한다.
+    steps_since_release: u32,
     finished: bool,
 }
+
+/// 접촉이 끊긴 뒤 이만큼 지나서 다시 닿아야 별개의 히트로 센다 (1 kHz 기준 30 ms).
+/// Rapier narrow-phase 접촉은 임팩트 한 번에도 몇 스텝 깜빡일 수 있다.
+const RACKET_REHIT_MIN_STEPS: u32 = 30;
 
 impl LiveShotObserver {
     pub fn new(world: &SimWorld) -> Self {
@@ -372,6 +403,9 @@ impl LiveShotObserver {
             previous_y: world.ball_position().y,
             saw_flight: world.ball_state == BallState::InFlight,
             saw_net_contact: false,
+            net_contact_after_hit: false,
+            racket_contact_active: false,
+            steps_since_release: u32::MAX,
             finished: false,
         };
     }
@@ -411,17 +445,53 @@ impl LiveShotObserver {
             return true;
         }
 
-        if ball_contacts_parent(world, world.racket_handle) {
+        // 라켓 접촉 — 상승 에지로 히트를 센다. 접촉이 끊겼다 최소 간격 뒤에
+        // 다시 닿으면 더블히트(반칙)다.
+        let touching_racket = ball_contacts_parent(world, world.racket_handle);
+        if touching_racket && !self.racket_contact_active {
+            if self.flags.contact && self.steps_since_release >= RACKET_REHIT_MIN_STEPS {
+                self.flags.double_hit = true;
+            }
             self.flags.contact = true;
         }
+        if !touching_racket && self.racket_contact_active {
+            self.steps_since_release = 0;
+        } else if !touching_racket {
+            self.steps_since_release = self.steps_since_release.saturating_add(1);
+        }
+        self.racket_contact_active = touching_racket;
+
+        // 라켓 접촉 이후의 네트 접촉만 기록 — 리턴이 네트를 스치고 넘어가는
+        // 건 랠리 중 유효타다.
+        if self.flags.contact && world.ball_intersects_net() {
+            self.net_contact_after_hit = true;
+        }
+
+        // 리턴이 자기 코트(로봇 반쪽) 상면에 닿으면 반칙. `flags.contact`
+        // 게이트가 들어오는 공의 정상 바운스를 배제한다. 테이블 상면은
+        // z = SURFACE_Z 이므로 공 중심이 그보다 위여야 윗면 접촉이다
+        // (옆면을 맞으면 중심 z ≤ SURFACE_Z).
+        if self.flags.contact
+            && !self.flags.bounced_own_half
+            && position.y < net_y
+            && f64::from(position.z) > table::SURFACE_Z
+            && ball_contacts_table(world)
+        {
+            self.flags.bounced_own_half = true;
+        }
+
         let returned = self.flags.contact && velocity.y > 0.0;
         if returned && self.previous_y < net_y && position.y >= net_y {
-            self.flags.cleared_net = position.z > net_top_z;
+            // 네트를 스치고 넘어간 경우도 통과로 인정한다.
+            self.flags.cleared_net = position.z > net_top_z || self.net_contact_after_hit;
         }
         if self.flags.cleared_net
             && !self.flags.returned_in
             && position.y > net_y
-            && f64::from(position.y) < table::LENGTH_Y
+            // 끝선(edge)에 걸치는 착지도 인(in)이다.
+            && f64::from(position.y) <= table::LENGTH_Y + BALL_RADIUS
+            // 상면 착지만 인정 — 옆면을 맞고 나가는 건 아웃.
+            && f64::from(position.z) > table::SURFACE_Z
             && ball_contacts_table(world)
         {
             self.flags.returned_in = true;
@@ -581,20 +651,11 @@ mod tests {
 
     #[test]
     fn score_rubric_matches_july31() {
-        assert_eq!(
-            ShotFlags {
-                contact: false,
-                cleared_net: false,
-                returned_in: false
-            }
-            .score(),
-            0
-        );
+        assert_eq!(ShotFlags::default().score(), 0);
         assert_eq!(
             ShotFlags {
                 contact: true,
-                cleared_net: false,
-                returned_in: false
+                ..Default::default()
             }
             .score(),
             1
@@ -603,7 +664,7 @@ mod tests {
             ShotFlags {
                 contact: true,
                 cleared_net: true,
-                returned_in: false
+                ..Default::default()
             }
             .score(),
             2
@@ -612,11 +673,51 @@ mod tests {
             ShotFlags {
                 contact: true,
                 cleared_net: true,
-                returned_in: true
+                returned_in: true,
+                ..Default::default()
             }
             .score(),
             3
         );
+    }
+
+    /// 자기 코트에 바운스한 뒤 넘어간 리턴은 탁구 규칙상 반칙 — 3점 조건을
+    /// 다 채웠어도 접촉만 인정해 1점이다.
+    #[test]
+    fn own_half_bounce_is_a_foul_worth_one_point() {
+        let flags = ShotFlags {
+            contact: true,
+            cleared_net: true,
+            returned_in: true,
+            bounced_own_half: true,
+            double_hit: false,
+        };
+        assert_eq!(flags.score(), 1, "자기 코트 바운스는 1점: {flags:?}");
+        assert!(flags.is_foul());
+    }
+
+    /// 더블히트도 같은 취급.
+    #[test]
+    fn double_hit_is_a_foul_worth_one_point() {
+        let flags = ShotFlags {
+            contact: true,
+            cleared_net: true,
+            returned_in: true,
+            bounced_own_half: false,
+            double_hit: true,
+        };
+        assert_eq!(flags.score(), 1, "더블히트는 1점: {flags:?}");
+        assert!(flags.is_foul());
+    }
+
+    /// 반칙이라도 접촉 자체가 없으면 0점이다 (강등이 0점을 1점으로 올리지 않는다).
+    #[test]
+    fn foul_without_contact_is_still_zero() {
+        let flags = ShotFlags {
+            bounced_own_half: true,
+            ..Default::default()
+        };
+        assert_eq!(flags.score(), 0);
     }
 
     #[test]

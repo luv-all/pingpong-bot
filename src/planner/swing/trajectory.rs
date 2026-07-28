@@ -351,6 +351,27 @@ impl SwingTrajectory {
             .fold(0.0_f64, f64::max);
     }
 
+    /// 관절별 전 구간 peak |q̇| [rad/s].
+    ///
+    /// [`peak_joint_speed`]는 전 관절 최댓값 하나만 주므로 "어느 관절이
+    /// 병목인가"를 알 수 없다. 관절마다 모터가 달라 속도 한계도 다르므로
+    /// (MX-64R 63 rpm / MX-28T 55 rpm) 관절별 비교가 필요하다.
+    ///
+    /// [`peak_joint_speed`]: Self::peak_joint_speed
+    pub fn peak_joint_speeds(&self) -> Vec<f64> {
+        let pre = self.pre_impact_segments();
+        let post = self.follow_through_segments();
+        let n = pre.len().max(post.len());
+        let mut out = vec![0.0_f64; n];
+        for (index, segment) in pre.iter().enumerate() {
+            out[index] = out[index].max(segment.max_speed(24));
+        }
+        for (index, segment) in post.iter().enumerate() {
+            out[index] = out[index].max(segment.max_speed(24));
+        }
+        return out;
+    }
+
     /// 관절별 전 구간 peak |α| [rad/s^2].
     pub fn peak_joint_accelerations(&self) -> Vec<f64> {
         let pre = self.pre_impact_segments();
