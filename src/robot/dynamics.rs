@@ -187,6 +187,23 @@ pub fn bias_torques(arm: &Arm, joints: &Joints, joint_velocities: &[f64]) -> Vec
     return required_joint_torques(arm, joints, joint_velocities, &vec![0.0; n]);
 }
 
+/// [`bias_torques`]의 버퍼 재사용 버전. `scratch`(RNEA)와 `zero_accel`(영가속도
+/// 임시 벡터), `bias_out`을 호출부가 소유해 매 스텝 호출하는 루프(예:
+/// `planner::bang_bang::plan_bang_bang_for`)에서 힙 할당 없이 반복 계산한다.
+pub fn bias_torques_into(
+    arm: &Arm,
+    joints: &Joints,
+    joint_velocities: &[f64],
+    scratch: &mut RneaScratch,
+    zero_accel: &mut Vec<f64>,
+    bias_out: &mut Vec<f64>,
+) {
+    let n = joints.values.len();
+    zero_accel.clear();
+    zero_accel.resize(n, 0.0);
+    required_joint_torques_into(arm, joints, joint_velocities, zero_accel, scratch, bias_out);
+}
+
 /// 관성 행렬 M(q) [N*m / (rad/s^2)], 관절 `n x n`.
 ///
 /// RNEA를 질량 행렬 계산에 재사용하는 표준 트릭: 속도 0에서 단위 가속도
@@ -206,6 +223,61 @@ pub fn mass_matrix(arm: &Arm, joints: &Joints) -> DMatrix<f64> {
         }
     }
     return m;
+}
+
+/// [`mass_matrix_into`]가 매 스텝 재계산할 때 쓰는 스크래치 버퍼 모음 —
+/// 영가속도/단위가속도/토크 임시 벡터를 매 호출 새로 할당하지 않도록 호출부가
+/// 소유해 재사용한다(`RneaScratch`와 별개로, `mass_matrix`가 RNEA를 n+1회
+/// 도는 데 필요한 관절 개수짜리 작은 벡터들).
+#[derive(Debug, Default, Clone)]
+pub struct MassMatrixScratch {
+    zero_accel: Vec<f64>,
+    unit_accel: Vec<f64>,
+    bias: Vec<f64>,
+    tau: Vec<f64>,
+}
+
+impl MassMatrixScratch {
+    pub fn new() -> Self {
+        return Self::default();
+    }
+
+    fn resize(&mut self, n: usize) {
+        self.zero_accel.clear();
+        self.zero_accel.resize(n, 0.0);
+        self.unit_accel.clear();
+        self.unit_accel.resize(n, 0.0);
+        self.bias.resize(n, 0.0);
+        self.tau.resize(n, 0.0);
+    }
+}
+
+/// [`mass_matrix`]의 버퍼 재사용 버전. `rnea`(RNEA 스크래치)와 `scratch`(이
+/// 함수 전용 작은 벡터들), `m_out`(결과, 크기가 맞으면 재할당하지 않고
+/// 그대로 덮어씀)을 호출부가 소유해 매 스텝 재계산하는 루프에서 힙 할당을
+/// 피한다.
+pub fn mass_matrix_into(
+    arm: &Arm,
+    joints: &Joints,
+    rnea: &mut RneaScratch,
+    scratch: &mut MassMatrixScratch,
+    m_out: &mut DMatrix<f64>,
+) {
+    let n = joints.values.len();
+    scratch.resize(n);
+    let MassMatrixScratch { zero_accel, unit_accel, bias, tau } = scratch;
+    required_joint_torques_into(arm, joints, zero_accel, zero_accel, rnea, bias);
+    if m_out.nrows() != n || m_out.ncols() != n {
+        *m_out = DMatrix::zeros(n, n);
+    }
+    for j in 0..n {
+        unit_accel[j] = 1.0;
+        required_joint_torques_into(arm, joints, zero_accel, unit_accel, rnea, tau);
+        for i in 0..n {
+            m_out[(i, j)] = tau[i] - bias[i];
+        }
+        unit_accel[j] = 0.0;
+    }
 }
 
 /// 정방향 동역학: 명령 토크로 실제 나오는 관절 각가속도 [rad/s^2].

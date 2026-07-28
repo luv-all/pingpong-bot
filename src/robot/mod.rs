@@ -838,7 +838,7 @@ impl Arm {
     /// 라켓 위치(x,y,z) 3제약만의 수치미분 자코비안 - `(레일 유무 포함) x 관절수`.
     /// [`linear_velocities_for_racket_velocity`]와 그 조작성 평가(특이값 등)가
     /// 공유하는 빌더.
-    fn position_jacobian_fd(&self, pose: &RobotPose) -> Option<DMatrix<f64>> {
+    pub(crate) fn position_jacobian_fd(&self, pose: &RobotPose) -> Option<DMatrix<f64>> {
         const STEP: f64 = 1e-6;
         if pose.joints.values.len() != self.joint_count() {
             return None;

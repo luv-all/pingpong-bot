@@ -3,11 +3,20 @@
 //! 측정하는 오프라인 벤치마크/프로파일링 도구.
 //!
 //! `plan_swing`(실제 게임플레이 경로, quintic 궤적)은 건드리지 않는다 — 이
-//! 도구는 그 대신 매 스텝 (`robot::dynamics::mass_matrix`/`forward_dynamics`)
-//! 로 실제 강체 동역학을 적분하면서, 관절마다 시간최적(bang-bang) 스위칭
-//! 곡선으로 토크를 명령한다. 사전에 정해둔 궤적 "모양"이 없다 — 매 틱 현재
-//! 상태에서 다시 스위칭을 계산하는 폐루프라 관절 간 결합(coupling)에도
+//! 도구는 GUI 디버그 경로(`plan_bang_bang_swing`)가 매 스텝 쓰는 것과 **같은**
+//! [`pingpong_bot::step_racket_guidance`](라켓 task-space ZEM/ZEV 유도 +
+//! 토크 가중 자코비안 역산)를 그대로 호출한다 — 예전에는 이 도구가 자체
+//! `bang_bang_accel`(관절별 독립 bang-bang) 복사본을 따로 갖고 있어서, 그
+//! 스위칭 곡선에 있던 버그를 한쪽만 고치고 다른 쪽은 실측 결과가 갈라진 적이
+//! 있었다(`.omc/progress.txt`). 사전에 정해둔 궤적 "모양"이 없다 — 매 틱
+//! 현재 상태에서 다시 유도를 계산하는 폐루프라 관절 간 결합(coupling)에도
 //! 스스로 보정된다.
+//!
+//! ZEM/ZEV는 "남은 시간(`Tg`) 안에 도달"을 목표로 계산하므로, 이 도구가 매
+//! 시나리오를 시간 무제한으로 "얼마나 빨리 가는지" 재는 대신, `--max-time-secs`
+//! (기본 2.0s)를 그 `Tg`의 원본 마감으로 써서 "이 예산 안에 실제로
+//! 도달하는가"를 측정한다 — 실제 GUI/게임플레이 경로가 실제 임팩트까지 남은
+//! 시간을 그 마감으로 쓰는 것과 같은 구조다.
 //!
 //! 사용법 (하이브리드: TOML 시나리오 파일 + CLI 오버라이드):
 //!   cargo run -p swing-bench -- --scenario scenarios/example.toml
@@ -21,16 +30,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use nalgebra::Vector3;
-use pingpong_bot::robot::dynamics::{forward_dynamics, mass_matrix};
 use pingpong_bot::{
-    Arm, Joints, MountPreset, Point3, RobotBuilder, RobotPose, defaults, rally_return_velocity,
-    required_racket_velocity,
+    Arm, Joints, MountPreset, Point3, RacketGuidanceScratch, RobotBuilder, RobotPose, defaults,
+    rally_return_velocity, required_racket_velocity, step_racket_guidance,
 };
 use serde::{Deserialize, Serialize};
-
-/// 실기 AXL 레일 가속/감속 [m/s^2].
-/// 출처: `config/real-hardware.toml`의 `[hardware.rail]` accel/decel = 12.0.
-const RAIL_ACCEL_M_S2: f64 = 12.0;
 
 /// 수렴 판정 허용 오차 — `RobotState::is_at_center`의 관례(1e-3)를 따른다.
 const POSITION_TOLERANCE_RAD_OR_M: f64 = 1e-3;
@@ -264,16 +268,14 @@ struct Target {
     racket_velocity: Vector3<f64>,
 }
 
-/// 목표 속도가 실제 관절/레일 속도 한계를 넘으면 그 한계로 자른다.
-///
-/// bang-bang 스위칭 곡선은 목표 (위치,속도)를 상대좌표 원점으로 모는데,
-/// 목표 속도 자체가 실기에서 낼 수 없는 값이면(예: 원하는 라켓 속도가
-/// 특이점 근처 관절 속도로 환산돼 한계를 훌쩍 넘는 경우) 속도 오차가
-/// 절대 줄지 않아 컨트롤러가 위치는 무시한 채 그 방향으로 계속 전력
-/// 가속만 하다 위치를 지나쳐 발산한다. 여기서 미리 달성 가능한 범위로
-/// 잘라 스위칭 곡선이 실제로 수렴 가능한 목표를 보게 한다. 잘랐다는
-/// 사실 자체가 "이상적인 라켓 속도는 이 로봇 한계 밖"이라는 유의미한
-/// 정보라 `Report`에 남겨 조용히 숨기지 않는다.
+/// 목표 관절/레일 속도가 실제 한계를 넘으면 그 한계로 자른다 — 하지만 이제
+/// `simulate`가 이 클램프된 값을 직접 쓰지는 않는다(`step_racket_guidance`가
+/// 라켓 task-space 목표만 보고, 실현 가능성은 내부에서 토크/관절가속 클램프로
+/// 알아서 처리한다). 그래도 "IK가 요구한 이상적인 관절/레일 속도가 이 로봇의
+/// 원시 속도 한계를 얼마나 넘는가"는 여전히 유의미한 진단 정보라
+/// `target_speed_clamped`로 `Report`에 남긴다 — 잘랐다는 사실 자체가 "이상적인
+/// 라켓 속도는 이 로봇 한계 밖"이라는 신호이지, 시뮬레이션 결과에 영향을
+/// 주지는 않는다.
 fn clamp_target_to_speed_caps(arm: &Arm, target: &mut Target) -> bool {
     let mut clamped = false;
     for v in target.joint_velocities.iter_mut() {
@@ -373,19 +375,6 @@ fn racket_velocity_estimate(
     return Some((perturbed.position.coords - base.position.coords) / STEP);
 }
 
-/// 1차원 이중적분기를 원점(목표)으로 모는 시간최적 bang-bang 스위칭.
-///
-/// `x`/`v`는 목표 기준 상대 위치/속도 오차(`현재 - 목표`), `a_max`는 이
-/// 축이 낼 수 있는 최대 가속. 표준 최소시간 스위칭 곡선
-/// `x + v|v|/(2 a_max) = 0` 기준 부호로 ±a_max를 고른다.
-fn bang_bang_accel(x: f64, v: f64, a_max: f64) -> f64 {
-    let switch = x + v * v.abs() / (2.0 * a_max);
-    if switch.abs() < 1e-12 {
-        return 0.0;
-    }
-    return -a_max * switch.signum();
-}
-
 fn simulate(
     arm: &Arm,
     start: &RobotPose,
@@ -402,6 +391,16 @@ fn simulate(
 
     let rail_max_speed = arm.rail.as_ref().map_or(f64::INFINITY, |r| r.max_speed);
 
+    // `plan_bang_bang_for`(GUI 디버그 경로)와 같은 함수를 쓰므로, 목표도 그
+    // 함수가 기대하는 라켓(3D) 좌표계로 맞춘다 — 관절 공간 목표(`target.joints`)가
+    // 아니라 그 관절각의 FK 위치.
+    let target_racket_position = arm
+        .forward_kinematics_with_rail(target.rail_x, &target.joints)
+        .expect("target FK — compute_target이 이미 IK로 검증한 자세")
+        .position
+        .coords;
+    let mut scratch = RacketGuidanceScratch::new(n);
+
     let mut peak_util: Vec<f64> = vec![0.0; n];
     let mut peak_speed: Vec<f64> = vec![0.0; n];
     let mut peak_rail_speed = 0.0f64;
@@ -415,53 +414,42 @@ fn simulate(
     let mut position_reached_time_secs: Option<f64> = None;
 
     while t < max_time_secs {
-        let m = mass_matrix(arm, &Joints::from_slice(&q));
-        let mut torque_cmd = vec![0.0; n];
-        for i in 0..n {
-            let effective_inertia = m[(i, i)].max(1e-9);
-            let a_max = (arm.joint_torque_limits[i] / effective_inertia).max(1e-6);
-            let x = q[i] - target.joints.values[i];
-            let v = qdot[i] - target.joint_velocities[i];
-            let a_cmd = bang_bang_accel(x, v, a_max);
-            torque_cmd[i] = (a_cmd * effective_inertia)
-                .clamp(-arm.joint_torque_limits[i], arm.joint_torque_limits[i]);
-        }
-
-        let Some(accel) = forward_dynamics(arm, &Joints::from_slice(&q), &qdot, &torque_cmd) else {
+        // ZEM/ZEV의 `Tg`(목표 도달까지 남은 시간)로 이 시뮬레이션 자체의
+        // 예산(`max_time_secs`)을 쓴다 — 모듈 문서 참고.
+        let remaining_secs = max_time_secs - t;
+        let Some(step) = step_racket_guidance(
+            arm,
+            &mut q,
+            &mut qdot,
+            &mut rail_x,
+            &mut rail_v,
+            target_racket_position,
+            target.racket_velocity,
+            remaining_secs,
+            dt,
+            &mut scratch,
+        ) else {
             break;
         };
         for i in 0..n {
-            qdot[i] += accel[i] * dt;
-            qdot[i] = qdot[i].clamp(-arm.max_joint_speed, arm.max_joint_speed);
-            q[i] += qdot[i] * dt;
-            peak_util[i] = peak_util[i].max(torque_cmd[i].abs() / arm.joint_torque_limits[i]);
+            peak_util[i] = peak_util[i].max(step.torque_cmd[i].abs() / arm.joint_torque_limits[i]);
             peak_speed[i] = peak_speed[i].max(qdot[i].abs());
         }
+        peak_rail_speed = peak_rail_speed.max(rail_v.abs());
         if std::env::var("SWING_BENCH_DEBUG").is_ok() && (t % 0.05) < dt {
             eprintln!(
-                "t={t:.3} q={q:?} qdot={qdot:?} target_q={:?} target_qdot={:?}",
-                target.joints.values, target.joint_velocities
+                "t={t:.3} q={q:?} qdot={qdot:?} racket_accel_desired={:?}",
+                step.racket_accel_desired
             );
-        }
-
-        {
-            let x = rail_x - target.rail_x;
-            let v = rail_v - target.rail_velocity;
-            let a_cmd = bang_bang_accel(x, v, RAIL_ACCEL_M_S2);
-            rail_v += a_cmd * dt;
-            rail_v = rail_v.clamp(-rail_max_speed, rail_max_speed);
-            rail_x += rail_v * dt;
-            peak_rail_speed = peak_rail_speed.max(rail_v.abs());
         }
 
         t += dt;
 
-        pos_err = q
-            .iter()
-            .zip(&target.joints.values)
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max)
-            .max((rail_x - target.rail_x).abs());
+        let Some(current_pose) = arm.forward_kinematics_with_rail(rail_x, &Joints::from_slice(&q))
+        else {
+            break;
+        };
+        pos_err = (current_pose.position.coords - target_racket_position).norm();
 
         let achieved_racket_velocity =
             racket_velocity_estimate(arm, rail_x, rail_v, &q, &qdot).unwrap_or(Vector3::zeros());
