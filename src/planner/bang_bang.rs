@@ -798,6 +798,120 @@ mod tests {
             .clone();
     }
 
+    #[test]
+    #[ignore = "일회성 실측(사용자 질문, 2026-07-28): 백그라운드 워커로 옮기기 전 \
+                동기 plan_bang_bang_swing 자체의 실제 벽시계 소요 시간 — \
+                이번 세션의 알고리즘 수정(가중치·스케일링·게인)이 계산 자체를 \
+                빠르게 만들지는 않았다는 걸 직접 확인한다. \
+                실행: cargo test --release --lib diag_measure_synchronous_wall_clock_cost \
+                -- --ignored --nocapture"]
+    fn diag_measure_synchronous_wall_clock_cost() {
+        let arm = competition_arm();
+        let start = arm.initial_state();
+        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let prediction = sample_prediction(0.3);
+
+        const RUNS: usize = 20;
+        let mut total = std::time::Duration::ZERO;
+        let mut worst = std::time::Duration::ZERO;
+        for _ in 0..RUNS {
+            let t0 = std::time::Instant::now();
+            let _ = plan_bang_bang_swing(&arm, &[prediction], &start_pose);
+            let elapsed = t0.elapsed();
+            total += elapsed;
+            worst = worst.max(elapsed);
+        }
+        eprintln!(
+            "plan_bang_bang_swing 동기 호출 {RUNS}회: 평균={:.2}ms 최악={:.2}ms \
+             (이 값이 물리 스레드를 그대로 블로킹하던 시간 — 워커로 옮긴 뒤엔 \
+             이 시간이 사라지는 게 아니라 물리 스레드 밖으로 옮겨질 뿐)",
+            total.as_secs_f64() * 1000.0 / RUNS as f64,
+            worst.as_secs_f64() * 1000.0,
+        );
+    }
+
+    #[test]
+    #[ignore = "일회성 실측(사용자 질문, 2026-07-28): 실제 게임플레이 경로(quintic \
+                plan_swing)는 이번 세션에서 전혀 수정하지 않았다 — 그게 정말 \
+                bang-bang과 비교해 물리 스레드를 블로킹할 만큼 느린지, 굳이 \
+                워커로 옮길 필요가 없는 수준인지 실측으로 확인한다. \
+                실행: cargo test --release --lib diag_measure_quintic_wall_clock_cost \
+                -- --ignored --nocapture"]
+    fn diag_measure_quintic_wall_clock_cost() {
+        let arm = competition_arm();
+        let start = arm.initial_state();
+        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let prediction = sample_prediction(0.3);
+
+        const RUNS: usize = 20;
+        let mut total = std::time::Duration::ZERO;
+        let mut worst = std::time::Duration::ZERO;
+        for _ in 0..RUNS {
+            let t0 = std::time::Instant::now();
+            let _ = crate::plan_swing(&arm, prediction, &start_pose);
+            let elapsed = t0.elapsed();
+            total += elapsed;
+            worst = worst.max(elapsed);
+        }
+        eprintln!(
+            "plan_swing(quintic, 실제 게임플레이 경로) 동기 호출 {RUNS}회: \
+             평균={:.4}ms 최악={:.4}ms",
+            total.as_secs_f64() * 1000.0 / RUNS as f64,
+            worst.as_secs_f64() * 1000.0,
+        );
+    }
+
+    #[test]
+    #[ignore = "일회성 검증(사용자 요청, 2026-07-28): quintic의 임팩트 관절속도 해산\
+                (`Arm::linear_velocities_for_racket_velocity`)에 추가한 토크 가중\
+                최소노름 역산이 실제로 베이스 쪽(토크 여유 큰) 관절을 더 쓰게\
+                하는지, 같은 목표에 대해 균일(옛) 최소노름과 직접 비교한다. \
+                실행: cargo test --lib diag_quintic_velocity_solve_prefers_base_joints \
+                -- --ignored --nocapture"]
+    fn diag_quintic_velocity_solve_prefers_base_joints() {
+        let arm = competition_arm();
+        let start = arm.initial_state();
+        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let prediction = sample_prediction(0.3);
+        let target = solve_impact_target(&arm, &prediction, &start_pose).expect("target 계산");
+
+        let jacobian = arm.position_jacobian_fd(&target.pose).expect("자코비안");
+        let racket_v = target.racket_velocity;
+        let target_vec = DVector::from_vec(vec![racket_v.x, racket_v.y, racket_v.z]);
+
+        // 옛(균일 최소노름) 해 — 이번 수정 전 `linear_velocities_for_racket_velocity`가
+        // 그대로 쓰던 식을 여기 재현한다(프로덕션 함수는 이미 가중치를 쓰도록
+        // 바뀌었으므로, 비교를 위해 원래 식만 별도로 계산).
+        let jjt = &jacobian * jacobian.transpose() + DMatrix::identity(3, 3) * 1e-9;
+        let uniform_inv = jjt.try_inverse().expect("역행렬 존재");
+        let uniform_velocities = jacobian.transpose() * uniform_inv * &target_vec;
+
+        // 새(토크 가중) 해 — 프로덕션 함수를 그대로 호출.
+        let (_, weighted_joint_velocities) = arm
+            .linear_velocities_for_racket_velocity(&target.pose, racket_v)
+            .expect("가중 해");
+
+        let has_rail = arm.rail.is_some();
+        let rail_offset = usize::from(has_rail);
+        let n = weighted_joint_velocities.len();
+        let uniform_joint_velocities: Vec<f64> = (0..n)
+            .map(|i| uniform_velocities[i + rail_offset])
+            .collect();
+
+        eprintln!("관절 토크한계(rail 제외)={:?}", arm.joint_torque_limits);
+        eprintln!("균일(옛) 관절속도={uniform_joint_velocities:?}");
+        eprintln!("토크가중(신규) 관절속도={weighted_joint_velocities:?}");
+        for i in 0..n {
+            let shift = weighted_joint_velocities[i].abs() - uniform_joint_velocities[i].abs();
+            eprintln!(
+                "  joint{i} (토크한계={:.2}N·m): |v| 변화 {shift:+.4} rad/s \
+                 ({} = 이 관절 기여가 늘어남/줄어듦)",
+                arm.joint_torque_limits[i],
+                if shift > 0.0 { "증가" } else { "감소" },
+            );
+        }
+    }
+
     /// 대표 임팩트 위치 — 실제 접수 평면(y=0.30) × 실현가능 높이 대역
     /// (탁구대 위 ~17cm). 예전에는 "휴지 자세의 FK 위치"를 썼는데, 휴지
     /// 자세를 임팩트 자세들 쪽으로 옮긴 뒤(`READY_JOINTS_4DOF`)로는 그 점이
