@@ -16,10 +16,11 @@
 
 ## 흐름
 
-1. `Space` — 스냅 (Review)
-2. LMB — 랜드마크 8점 순서대로 클릭 → **8번째에서 자동 PnP**
-3. RMSE OK → pending 사이드카 자동 저장 + 무지개 격자. FAIL여도 **초록(클릭) vs 마젠타(이상 재투영)** + 노란 잔차선 → `z`/`c`로 다시 찍기
-4. `s` — 본파일 upsert 후 pending 삭제. `q`해도 pending은 남음 (재실행 후 `s`만으로도 promote 가능)
+1. 기존 `calibration.json`에 이 카메라가 있으면 **라이브부터** 격자 오버레이 (첫 클릭까지)
+2. `Space` — 스냅 (Review). 클릭 0개면 계속 기존 격자
+3. LMB — 첫 클릭부터 **recalib** (baseline 숨김) · 8점 → **자동 PnP**
+4. RMSE OK → pending 사이드카 자동 저장 + 무지개 격자. FAIL여도 **초록(클릭) vs 마젠타(이상 재투영)** + 노란 잔차선 → `z`/`c`로 다시 찍기 (`c`로 비우면 baseline 복귀)
+5. `s` — 본파일 upsert 후 pending 삭제. `q`해도 pending은 남음 (재실행 후 `s`만으로도 promote 가능)
 
 ## 사용
 

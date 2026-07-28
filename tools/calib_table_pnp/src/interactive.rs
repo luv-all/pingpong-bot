@@ -63,6 +63,7 @@ pub fn run(args: &Args) -> Result<()> {
     let mut grid = WorldGridParams::default();
     let mut last_fail_rmse: Option<f64> = None;
     let mut display_scale = 1.0;
+    let baseline = cli::load_baseline_params(args, cam_id);
 
     println!(
         "table-PnP — role={} cam_id={} device={} backend={} fov_y={} max_rmse={} pad={}",
@@ -74,6 +75,16 @@ pub fn run(args: &Args) -> Result<()> {
         args.max_rmse,
         args.pad
     );
+    if let Some(ref b) = baseline {
+        let src = args.merge.as_ref().unwrap_or(&args.output);
+        println!(
+            "baseline cam{} from {} — live/freeze overlay until first click",
+            b.camera_id.0,
+            src.display()
+        );
+    } else {
+        println!("no baseline for cam{} in {}", cam_id.0, resolve_output(args).display());
+    }
     cli::hint_pending_if_exists(args, cam_id);
     println!(
         "Space=freeze  LMB/Enter=click  arrows|hjkl=1px  Shift+move=loupe  z=undo  c=clear  s=promote  n=live  q=quit"
@@ -122,6 +133,9 @@ pub fn run(args: &Args) -> Result<()> {
                         let fy = y - pad;
                         clicks.push(PixelPoint::new(f64::from(fx), f64::from(fy)));
                         clicks_changed = true;
+                        if clicks.len() == 1 {
+                            println!("recalib — baseline overlay off");
+                        }
                         println!(
                             "click {}/{} → ({fx},{fy})  {}",
                             clicks.len(),
@@ -169,21 +183,13 @@ pub fn run(args: &Args) -> Result<()> {
         if frozen {
             if let Some(ref s) = solved {
                 if s.accepted {
-                    if pad > 0 {
-                        let mut grid_layer = frame_img
-                            .try_clone()
-                            .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
-                        draw_world_grid(&mut grid_layer, &s.params, grid)?;
-                        let roi = Rect::new(pad, pad, img_w, img_h);
-                        {
-                            let mut dst = Mat::roi_mut(&mut panel, roi)?;
-                            grid_layer.copy_to(&mut dst)?;
-                        }
-                    } else {
-                        draw_world_grid(&mut panel, &s.params, grid)?;
-                    }
+                    overlay_world_grid(&mut panel, &frame_img, &s.params, grid, pad, img_w, img_h)?;
                 }
                 draw_reproj_overlay(&mut panel, &clicks, &marks, &s.params, pad)?;
+            } else if clicks.is_empty() {
+                if let Some(ref b) = baseline {
+                    overlay_world_grid(&mut panel, &frame_img, b, grid, pad, img_w, img_h)?;
+                }
             }
             draw_clicks(&mut panel, &clicks, &marks, pad)?;
 
@@ -227,6 +233,25 @@ pub fn run(args: &Args) -> Result<()> {
                         Scalar::new(0.0, 255.0, 80.0, 0.0),
                     )?;
                 }
+            } else if clicks.is_empty() && baseline.is_some() {
+                let lines = [
+                    format!("EXISTING cam{} — click to recalibrate", cam_id.0),
+                    format!(
+                        "xy={:.2} z={:.2} layers={}",
+                        grid.xy_step, grid.z_step, grid.z_layers
+                    ),
+                ];
+                draw_debug_lines(&mut panel, &lines, Scalar::new(255.0, 128.0, 0.0, 0.0))?;
+                draw_help_lines(
+                    &mut panel,
+                    &[
+                        "+/- xy  [] layers  ., z",
+                        "LMB/Enter start recalib",
+                        "arrows|hjkl 1px  Shift loupe",
+                        "n live  q quit",
+                    ],
+                    Scalar::new(0.0, 255.0, 80.0, 0.0),
+                )?;
             } else {
                 let next = if clicks.len() < TABLE_LANDMARK_COUNT {
                     marks[clicks.len()].prompt.to_string()
@@ -257,16 +282,30 @@ pub fn run(args: &Args) -> Result<()> {
                 let _ = draw_pixel_loupe(&mut panel, src, hx, hy);
             }
         } else {
-            draw_debug_lines(
-                &mut panel,
-                &["LIVE - Space to freeze"],
-                Scalar::new(0.0, 255.0, 255.0, 0.0),
-            )?;
-            draw_help_lines(
-                &mut panel,
-                &["Space freeze", "q quit"],
-                Scalar::new(0.0, 255.0, 80.0, 0.0),
-            )?;
+            if let Some(ref b) = baseline {
+                draw_world_grid(&mut panel, b, grid)?;
+                let lines = [
+                    format!("LIVE — existing cam{} overlay", cam_id.0),
+                    "Space freeze · first click starts recalib".into(),
+                ];
+                draw_debug_lines(&mut panel, &lines, Scalar::new(255.0, 128.0, 0.0, 0.0))?;
+                draw_help_lines(
+                    &mut panel,
+                    &["+/- [] ., grid", "Space freeze", "q quit"],
+                    Scalar::new(0.0, 255.0, 80.0, 0.0),
+                )?;
+            } else {
+                draw_debug_lines(
+                    &mut panel,
+                    &["LIVE - Space to freeze"],
+                    Scalar::new(0.0, 255.0, 255.0, 0.0),
+                )?;
+                draw_help_lines(
+                    &mut panel,
+                    &["Space freeze", "q quit"],
+                    Scalar::new(0.0, 255.0, 80.0, 0.0),
+                )?;
+            }
         }
 
         let wait = if frozen { 30 } else { 1 };
@@ -341,7 +380,9 @@ pub fn run(args: &Args) -> Result<()> {
                     } else {
                         println!("PnP 미통과 — z/c로 다시 찍거나 --fov-y");
                     }
-                } else if solved.as_ref().is_some_and(|s| s.accepted) {
+                } else if solved.as_ref().is_some_and(|s| s.accepted)
+                    || (baseline.is_some() && clicks.is_empty())
+                {
                     apply_grid_key(&mut grid, key);
                 }
             }
@@ -349,6 +390,30 @@ pub fn run(args: &Args) -> Result<()> {
     }
 
     destroy_window(window);
+    return Ok(());
+}
+
+/// 패딩 캔버스면 원본 ROI에만 격자, 아니면 panel 전체에.
+fn overlay_world_grid(
+    panel: &mut Mat,
+    frame_img: &Mat,
+    params: &CameraParams,
+    grid: WorldGridParams,
+    pad: i32,
+    img_w: i32,
+    img_h: i32,
+) -> Result<()> {
+    if pad > 0 {
+        let mut grid_layer = frame_img
+            .try_clone()
+            .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
+        draw_world_grid(&mut grid_layer, params, grid)?;
+        let roi = Rect::new(pad, pad, img_w, img_h);
+        let mut dst = Mat::roi_mut(panel, roi)?;
+        grid_layer.copy_to(&mut dst)?;
+    } else {
+        draw_world_grid(panel, params, grid)?;
+    }
     return Ok(());
 }
 

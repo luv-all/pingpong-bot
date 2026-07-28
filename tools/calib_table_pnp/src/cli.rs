@@ -76,6 +76,14 @@ pub fn from_pixels(path: &PathBuf, args: &Args) -> Result<()> {
     return write_result(args, result.params, result.reproj_rmse, result.candidates);
 }
 
+/// 본파일(`-o`) 또는 `--merge`에서 이 카메라 params. 없으면 `None`.
+pub fn load_baseline_params(args: &Args, cam_id: CameraId) -> Option<CameraParams> {
+    let path = args.merge.as_ref().unwrap_or(&args.output);
+    let text = fs::read_to_string(path).ok()?;
+    let calib: Calibration = serde_json::from_str(&text).ok()?;
+    return calib.params(cam_id).cloned();
+}
+
 /// 시작 시 pending이 있으면 안내 (본파일은 안 건드림).
 pub fn hint_pending_if_exists(args: &Args, cam_id: CameraId) {
     let path = pending_path(args);
