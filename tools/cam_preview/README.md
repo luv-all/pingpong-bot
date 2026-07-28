@@ -1,11 +1,13 @@
 # cam-preview
 
-다중 웹캠을 **가로 한 창**으로 보는 프리뷰. CLI 없음.
+다중 웹캠을 **가로 한 창**으로 보는 프리뷰.
 
-장치 인덱스는 [`tools/cam_preview/src/main.rs`](src/main.rs)의 `DEVICES`만 수정:
+실행 인자로 장치/해상도/FPS/FOURCC를 바꿀 수 있다.
 
-```rust
-const DEVICES: &[i32] = &[0, 1];
+예:
+
+```bash
+cargo run -p cam-preview -- --device 0,1 --width 1280 --height 800 --fps 120 --fourcc MJPG
 ```
 
 패널마다 `WxH`, 측정 FPS, 드라이버 FPS, **FOURCC**(`MJPG`/`YUY2`)를 표시한다.

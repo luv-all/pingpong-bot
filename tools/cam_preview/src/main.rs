@@ -10,6 +10,7 @@
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
+use clap::Parser;
 use opencv::core::Scalar;
 use opencv::prelude::*;
 use pingpong_bot::{
@@ -17,15 +18,33 @@ use pingpong_bot::{
     draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
 };
 
-/// 웹캠 인덱스들 (여기만 수정).
-/// 맥북 기준 보통 0: global shutter camera 외장으로 단 것, 1: 아이폰
-const DEVICES: &[i32] = &[0, 1];
+const DEFAULT_STREAM_W: i32 = 1280;
+const DEFAULT_STREAM_H: i32 = 800;
+const DEFAULT_STREAM_FPS: f64 = 120.0;
 
-/// Arducam B0332(OV9281): MJPG@1280x800 → 최대 120fps. YUY2면 ~10fps로 떨어짐.
-const STREAM_W: i32 = 1280;
-const STREAM_H: i32 = 800;
-const STREAM_FPS: f64 = 120.0;
-const STREAM_FOURCC: &[u8; 4] = b"MJPG";
+#[derive(Parser, Debug)]
+#[command(name = "cam-preview")]
+struct Args {
+    /// 열 장치 인덱스들. 예: `--device 0,1`
+    #[arg(long = "device", value_delimiter = ',', default_value = "0")]
+    device: Vec<i32>,
+
+    /// 요청할 스트림 폭.
+    #[arg(long, default_value_t = DEFAULT_STREAM_W)]
+    width: i32,
+
+    /// 요청할 스트림 높이.
+    #[arg(long, default_value_t = DEFAULT_STREAM_H)]
+    height: i32,
+
+    /// 요청할 FPS.
+    #[arg(long, default_value_t = DEFAULT_STREAM_FPS)]
+    fps: f64,
+
+    /// 요청할 FOURCC. 기본값은 `MJPG`.
+    #[arg(long, default_value = "MJPG")]
+    fourcc: String,
+}
 
 struct FpsMeter {
     last: Option<Instant>,
@@ -66,17 +85,19 @@ struct CamSlot {
 }
 
 fn main() -> Result<()> {
-    if DEVICES.is_empty() {
+    let args = Args::parse();
+    if args.device.is_empty() {
         bail!("DEVICES 가 비어 있음");
     }
 
-    let mut cams: Vec<CamSlot> = Vec::with_capacity(DEVICES.len());
+    let fourcc = parse_fourcc(&args.fourcc)?;
+    let mut cams: Vec<CamSlot> = Vec::with_capacity(args.device.len());
     let mut exp_supported = true;
-    for (i, &id) in DEVICES.iter().enumerate() {
+    for (i, &id) in args.device.iter().enumerate() {
         let mut cap = OpenCvCapture::from_device(CameraId(i as u8), id)
             .map_err(anyhow::Error::msg)
             .with_context(|| format!("device {id}"))?;
-        cap.request_stream(STREAM_W, STREAM_H, STREAM_FPS, STREAM_FOURCC)
+        cap.request_stream(args.width, args.height, args.fps, &fourcc)
             .map_err(anyhow::Error::msg)
             .with_context(|| format!("device {id}: stream request"))?;
         let ro = cap.exposure_readout();
@@ -107,7 +128,10 @@ fn main() -> Result<()> {
     let window = "cam_preview";
     let mut frozen = false;
     let mut short_exposure = false;
-    println!("devices={DEVICES:?}  Space=freeze  e=short exposure  q/ESC=quit");
+    println!(
+        "devices={:?}  request={}x{}@{:.0} {}  Space=freeze  e=short exposure  q/ESC=quit",
+        args.device, args.width, args.height, args.fps, args.fourcc
+    );
 
     loop {
         for cam in &mut cams {
@@ -221,4 +245,12 @@ fn main() -> Result<()> {
 
     destroy_window(window);
     return Ok(());
+}
+
+fn parse_fourcc(value: &str) -> Result<[u8; 4]> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 4 {
+        bail!("FOURCC는 정확히 4글자여야 함: {value}");
+    }
+    return Ok([bytes[0], bytes[1], bytes[2], bytes[3]]);
 }
