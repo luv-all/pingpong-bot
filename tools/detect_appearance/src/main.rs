@@ -9,9 +9,9 @@ use clap::Parser;
 use opencv::core::Scalar;
 use opencv::imgcodecs;
 use pingpong_bot::{
-    ColormaskDetector, ContourDetector, FrameSource, ImageDirSource, OpenCvCapture, PixelPoint,
-    PreviewAction, destroy_window, draw_cam_label, draw_circle_px, draw_debug_lines,
-    draw_help_lines, hstack_bgr, show_bgr,
+    ColormaskDetector, ColormaskParams, ContourDetector, FrameSource, ImageDirSource, OpenCvCapture,
+    PixelPoint, PreviewAction, ScorerParams, destroy_window, draw_cam_label, draw_circle_px,
+    draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
 };
 
 use cli::Args;
@@ -43,8 +43,8 @@ fn main() -> Result<()> {
     }
 
     let mut source = open_source(&args)?;
-    let scorer = pingpong_bot::scorer();
-    let mut colormask = ColormaskDetector::new(pingpong_bot::colormask());
+    let scorer = ScorerParams::default();
+    let mut colormask = ColormaskDetector::new(ColormaskParams::default());
     let mut contour = ContourDetector::from(&scorer);
     let scorer = pingpong_bot::Scorer::from(&scorer);
     println!("appearance colormask|contour (from defaults::*)");

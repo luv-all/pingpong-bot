@@ -31,15 +31,18 @@ impl EstimatorParams {
     }
 }
 
-pub fn estimator() -> EstimatorParams {
-    return EstimatorParams {
-        min_lead: 0.05,
-        max_lead: 1.2,
-        integrate_dt: 0.001,
-        min_approach_speed_y: 0.8,
-        min_strike_clearance: 0.05,
-        q_pos: 1.0e-4,
-        q_vel: 1.0e-2,
-        r_meas: 0.0009,
-    };
+impl Default for EstimatorParams {
+    fn default() -> Self {
+        return Self {
+            min_lead: 0.05,
+            max_lead: 1.2,
+            integrate_dt: 0.001,
+            min_approach_speed_y: 0.8,
+            min_strike_clearance: 0.05,
+            q_pos: 1.0e-4,
+            q_vel: 1.0e-2,
+            r_meas: 0.0009,
+        };
+    }
 }
+

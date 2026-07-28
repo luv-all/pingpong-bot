@@ -3,6 +3,9 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use pingpong_bot::defaults::calib::{
+    CHARUCO_MARKER_LENGTH_M, CHARUCO_SQUARE_LENGTH_M, CHARUCO_SQUARES_X, CHARUCO_SQUARES_Y,
+};
 use pingpong_bot::{CamCliArgs, CharucoBoardSpec};
 
 #[derive(Parser, Debug)]
@@ -40,13 +43,13 @@ pub struct Args {
     #[arg(long)]
     pub from_images: Option<PathBuf>,
 
-    #[arg(long, default_value_t = 5)]
+    #[arg(long, default_value_t = CHARUCO_SQUARES_X)]
     pub squares_x: i32,
-    #[arg(long, default_value_t = 7)]
+    #[arg(long, default_value_t = CHARUCO_SQUARES_Y)]
     pub squares_y: i32,
-    #[arg(long, default_value_t = 0.04)]
+    #[arg(long, default_value_t = CHARUCO_SQUARE_LENGTH_M)]
     pub square_length: f32,
-    #[arg(long, default_value_t = 0.02)]
+    #[arg(long, default_value_t = CHARUCO_MARKER_LENGTH_M)]
     pub marker_length: f32,
 }
 

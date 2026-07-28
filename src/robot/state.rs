@@ -363,7 +363,7 @@ impl RobotState {
 
 #[cfg(test)]
 mod tests {
-    use crate::defaults::{ControlParams, control};
+    use crate::defaults::ControlParams;
     use crate::{RailMotion, SwingTrajectory};
 
     #[test]
@@ -418,7 +418,7 @@ mod tests {
             0.0,
         );
 
-        let dual_ctrl = control();
+        let dual_ctrl = ControlParams::default();
         let mut dual = start.clone();
         dual.replace_swing(trajectory.clone());
         for _ in 0..8 {
@@ -428,7 +428,7 @@ mod tests {
 
         let single_ctrl = ControlParams {
             max_joint_torques: [3.0, 3.0, 1.25, 1.25],
-            ..control()
+            ..ControlParams::default()
         };
         let mut single = start;
         single.replace_swing(trajectory);

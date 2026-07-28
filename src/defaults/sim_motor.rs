@@ -41,16 +41,16 @@ impl SimMotorParams {
     }
 }
 
-pub fn sim_motor() -> SimMotorParams {
-    return SimMotorParams {
-        position_stiffness: 5_000.0,
-        // 링크 질량 0.04~0.08 kg → 관절 유효 관성 I≈5e-3~1.5e-2. 임계감쇠
-        // 2√(k·I)는 10~17이다. 이전 값 200은 ζ≈12~20의 과감쇠라 라켓이 명령
-        // 속도의 28%밖에 못 따라갔고 리턴이 네트를 못 넘었다 (스윙 중 관절
-        // 추종오차 0.05 rad → 10에서 0.01 rad).
-        position_damping: 10.0,
-    };
+impl Default for SimMotorParams {
+    fn default() -> Self {
+        return Self {
+            position_stiffness: 5_000.0,
+            // 링크 질량 0.04~0.08 kg → I≈5e-3~1.5e-2. 임계감쇠 2√(k·I)≈10~17.
+            position_damping: 10.0,
+        };
+    }
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -58,7 +58,7 @@ mod tests {
 
     #[test]
     fn defaults_validate() {
-        sim_motor().validate().expect("sim_motor");
+        SimMotorParams::default().validate().expect("sim_motor");
     }
 
     /// 감쇠는 임계감쇠 대역(과감쇠도 진동도 아님)에 있어야 한다.
@@ -67,7 +67,7 @@ mod tests {
     /// 과감쇠(옛 200) 같은 값으로 되돌아가지 않게 막는 가드다.
     #[test]
     fn damping_is_near_critical_for_this_arm() {
-        let motor = sim_motor();
+        let motor = SimMotorParams::default();
         // 링크 질량 0.04~0.08 kg 기준 관절 유효 관성 하·상한.
         for inertia in [5.0e-3, 1.5e-2] {
             let zeta = motor.damping_ratio(inertia);

@@ -54,36 +54,11 @@ use super::physics::{in_swing_commit_window, solve_impact_target};
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
 use crate::{Joints, Prediction, RobotPose};
-
-/// 실기 AXL 레일 가속/감속 [m/s^2].
-/// 출처: `config/real-hardware.toml`의 `[hardware.rail]` accel/decel = 12.0.
-const RAIL_ACCEL_M_S2: f64 = 12.0;
-const POSITION_TOLERANCE_RAD_OR_M: f64 = 1e-3;
-/// 라켓 속도 크기 허용오차(목표 대비 비율) — `tools/swing_bench`와 동일 값.
-const RACKET_SPEED_RATIO_TOLERANCE: f64 = 0.15;
-/// 라켓 속도 방향 허용오차 [deg].
-const RACKET_DIRECTION_TOLERANCE_DEG: f64 = 15.0;
-/// 계획 적분 스텝 [s] — 물리 스텝(1kHz)과 맞춘다.
-const PLAN_DT_SECS: f64 = 0.001;
-/// 수렴 못 하면 포기하는 계획 시간 상한 [s] — 방어용 절대 상한일 뿐이다.
-/// ZEM/ZEV 유도(`Tg`를 `prediction.time_to_impact_secs`에 고정)로 넘어온
-/// 뒤로는 루프가 실질적으로 그 실제 임팩트 시각에서 끝나므로(커밋창 필터로
-/// 이미 ≤0.35s), 정상 경로에서는 이 값이 거의 항상 이긴다. 그래도 무언가
-/// 커밋창 필터를 거치지 않고 이 함수를 직접 호출해(예: 진단/테스트) 비정상적
-/// 으로 큰 `time_to_impact_secs`를 넘기는 경우까지 낭비 시간을 묶어 둔다 —
-/// 예전(관절별 bang-bang) 2.0s는 그 자체가 낭비의 근원이었지만(`.omc/progress.txt`),
-/// 이제는 이 상한에 걸릴 일이 실질적으로 없어 값 자체의 크기는 덜 민감하다.
-const MAX_PLAN_TIME_SECS: f64 = 0.5;
-/// 가중 최소노름 자코비안 역산의 감쇠최소제곱 정칙화 계수 —
-/// [`step_racket_guidance`] 문서 참고.
-const JACOBIAN_DAMPING: f64 = 0.05;
-/// ZEM/ZEV에 넘기는 `Tg`를 실제 남은 시간의 이 비율로 줄인다(0<1) —
-/// [`step_racket_guidance`] 문서 참고.
-const TIME_TO_GO_BIAS: f64 = 0.5;
-/// `Tg` 나누기 바닥값 [s] — [`step_racket_guidance`] 문서 참고.
-const MIN_TIME_TO_GO_SECS: f64 = 1e-3;
-/// 자코비안 시간미분(`J̇`) 유한차분 스텝 [s] — [`step_racket_guidance`] 문서 참고.
-const JDOT_STEP: f64 = 1e-4;
+use crate::defaults::planner::{
+    JACOBIAN_DAMPING, JDOT_STEP, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
+    POSITION_TOLERANCE_RAD_OR_M, RACKET_DIRECTION_TOLERANCE_DEG, RACKET_SPEED_RATIO_TOLERANCE,
+    RAIL_ACCEL_M_S2, TIME_TO_GO_BIAS,
+};
 
 /// bang-bang 적분으로 얻은 샘플 기반 궤적. quintic처럼 닫힌 형태 계수가
 /// 아니라 매 스텝 실제 좌표를 그대로 담는다 — `sample_at`/`sample_rail_at`은

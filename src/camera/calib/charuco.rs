@@ -27,17 +27,6 @@ pub struct CharucoBoardSpec {
     pub marker_length_m: f32,
 }
 
-impl Default for CharucoBoardSpec {
-    fn default() -> Self {
-        return Self {
-            squares_x: 5,
-            squares_y: 7,
-            square_length_m: 0.04,
-            marker_length_m: 0.02,
-        };
-    }
-}
-
 /// 보정 결과 메타 (로그용).
 #[derive(Debug, Clone)]
 pub struct CharucoCalibReport {
@@ -228,7 +217,7 @@ pub struct CharucoFrameDetect {
 }
 
 /// 프레임당 최소 ChArUco 코너 (저장·보정 후보).
-pub const MIN_CHARUCO_CORNERS: usize = 4;
+pub use crate::defaults::calib::MIN_CHARUCO_CORNERS;
 
 fn make_charuco_detector(
     board_spec: CharucoBoardSpec,

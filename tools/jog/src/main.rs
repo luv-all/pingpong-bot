@@ -12,18 +12,18 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::{
-    Arm, Hardware, Joints, Point3, RailMotion, RealHardware, RobotPose, SwingTrajectory, control,
-    dynamixel, init_tracing, rail, robot,
+    Arm, ControlParams, DynamixelConfig, Hardware, Joints, Point3, RailConfig, RailMotion,
+    RealHardware, RobotPose, SwingTrajectory, init_tracing, robot,
 };
 use tracing::info;
 
 #[derive(Parser, Debug)]
 #[command(name = "jog", about = "관절·레일 인터랙티브 조그 REPL")]
 struct Args {
-    /// Dynamixel 시리얼 포트 (`defaults::dynamixel().port` 덮어씀).
+    /// Dynamixel 시리얼 포트 (`DynamixelConfig::default().port` 덮어씀).
     #[arg(long)]
     port: Option<String>,
-    /// AXL.dll 경로 (`defaults::rail().dll_path` 덮어씀).
+    /// AXL.dll 경로 (`RailConfig::default().dll_path` 덮어씀).
     #[arg(long)]
     dll_path: Option<PathBuf>,
     /// 시리얼·DLL 없이 변환·IK·executor만.
@@ -51,11 +51,11 @@ fn main() -> Result<()> {
 }
 
 fn run(args: Args) -> Result<()> {
-    let mut dxl = dynamixel();
+    let mut dxl = DynamixelConfig::default();
     if let Some(port) = &args.port {
         dxl.port = port.clone();
     }
-    let mut rail_cfg = rail();
+    let mut rail_cfg = RailConfig::default();
     if let Some(dll_path) = args.dll_path {
         rail_cfg.dll_path = dll_path;
     }
@@ -284,7 +284,7 @@ fn run_swing(session: &mut Session, args: &[&str]) -> Result<()> {
 
     ensure_max_delta(session, &start.joints, &impact.joints)?;
 
-    let follow = control().swing_follow_through_secs.max(0.02);
+    let follow = ControlParams::default().swing_follow_through_secs.max(0.02);
     let approach = session.duration_secs.max(follow + 0.05);
     let impact_time = (approach - follow).max(0.05);
     let duration = impact_time + follow;

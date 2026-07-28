@@ -39,7 +39,7 @@ fn ball_touches_racket(world: &SimWorld) -> bool {
 /// 코트에 튀어 네트를 맞는 경우가 있어, 속도 부호만으로는 갈라지지 않는다.
 fn incoming_touches_net_in_sim(settings: &BallShooterSettings) -> bool {
     const DT: f64 = 1.0 / 1000.0;
-    let mut world = SimWorld::with_physics(defaults::robot().expect("robot"), defaults::physics());
+    let mut world = SimWorld::with_physics(defaults::robot().expect("robot"), defaults::PhysicsParams::default());
     world.set_use_ground_truth(true);
     world.shoot_ball(settings);
 
@@ -70,7 +70,7 @@ fn incoming_net_clearance_in_sim(settings: &BallShooterSettings) -> Option<f64> 
     const DT: f64 = 1.0 / 1000.0;
     let net_y = table::LENGTH_Y * 0.5;
     let net_top = table::SURFACE_Z + table::NET_HEIGHT;
-    let mut world = SimWorld::with_physics(defaults::robot().expect("robot"), defaults::physics());
+    let mut world = SimWorld::with_physics(defaults::robot().expect("robot"), defaults::PhysicsParams::default());
     world.set_use_ground_truth(true);
     world.shoot_ball(settings);
 

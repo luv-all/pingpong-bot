@@ -13,7 +13,7 @@ use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector3};
 use crate::Point3;
 use crate::constants::geometry;
 use crate::constants::table;
-use crate::hardware::dynamixel::{DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, joint_torque_limits_4dof};
+use crate::defaults::dxl_limits::{DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, joint_torque_limits_4dof};
 use crate::robot::{
     Arm, JointLimit, Joints, LinkInertial, MountPreset, RailFrame, Robot, RobotBuildError,
     RobotBuilder, SerialChain, SerialJoint,

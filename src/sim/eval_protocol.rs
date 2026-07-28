@@ -11,23 +11,12 @@ use crate::sim::physics::shooter::{BallShooterSettings, BallState};
 use crate::sim::physics::world::SimWorld;
 use rapier3d::prelude::RigidBodyHandle;
 
-/// 속도 지터 [m/s].
-const EVAL_SPEED_JITTER_MPS: f64 = 0.15;
-/// 좌·우 yaw 지터 [deg].
-const EVAL_YAW_JITTER_DEG: f64 = 0.5;
-/// pitch 지터 [deg] — 네트 lift 이후 적용.
-const EVAL_PITCH_JITTER_DEG: f64 = 0.5;
-/// 네트 CCD 투과(물리 버그) 시 다른 지터 상태로 재시도하는 상한.
-const EVAL_NET_PASSTHROUGH_RETRIES: usize = 12;
-
-/// 존당 발사 수.
-pub const SHOTS_PER_ZONE: usize = 10;
-/// 전체 발사 수 (좌+중+우).
-pub const TOTAL_SHOTS: usize = SHOTS_PER_ZONE * 3;
-/// 만점.
-pub const MAX_SCORE: u32 = (TOTAL_SHOTS * 3) as u32;
-/// 통과: 45점을 **넘겨야** 함 (>45).
-pub const PASS_SCORE_EXCLUSIVE: u32 = 45;
+pub use crate::defaults::sim::{
+    EVAL_MAX_SCORE as MAX_SCORE, EVAL_NET_PASSTHROUGH_RETRIES, EVAL_PASS_SCORE_EXCLUSIVE as PASS_SCORE_EXCLUSIVE,
+    EVAL_PITCH_JITTER_DEG, EVAL_RACKET_REHIT_MIN_STEPS as RACKET_REHIT_MIN_STEPS,
+    EVAL_SHOTS_PER_ZONE as SHOTS_PER_ZONE, EVAL_SPEED_JITTER_MPS, EVAL_TOTAL_SHOTS as TOTAL_SHOTS,
+    EVAL_YAW_JITTER_DEG,
+};
 
 /// 평가 존 — 로봇이 테이블(+y)을 바라볼 때 기준.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -391,9 +380,7 @@ pub struct LiveShotObserver {
     finished: bool,
 }
 
-/// 접촉이 끊긴 뒤 이만큼 지나서 다시 닿아야 별개의 히트로 센다 (1 kHz 기준 30 ms).
-/// Rapier narrow-phase 접촉은 임팩트 한 번에도 몇 스텝 깜빡일 수 있다.
-const RACKET_REHIT_MIN_STEPS: u32 = 30;
+/// 접촉이 끊긴 뒤 다시 닿아야 별개 히트로 센다 — [`RACKET_REHIT_MIN_STEPS`].
 
 impl LiveShotObserver {
     pub fn new(world: &SimWorld) -> Self {
@@ -817,7 +804,7 @@ mod smoke {
         let robot = defaults::robot().expect("robot");
         let report = run_eval_protocol(
             &robot,
-            defaults::physics(),
+            defaults::PhysicsParams::default(),
             &EvalLaunchParams::default(),
             EvalMode::Block,
             None,

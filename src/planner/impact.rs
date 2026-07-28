@@ -13,7 +13,7 @@ use crate::error::SwingPlanError;
 /// 목표 바운드는 `(WIDTH/2, LENGTH*3/4, SURFACE+BALL_RADIUS)`이며,
 /// 무저항 중력 탄도의 경계값 문제를 풀어 `v_out`을 구한다.
 pub fn rally_return_velocity(impact: Point3, _v_in: Vector3<f64>) -> Vector3<f64> {
-    let impact_cfg = defaults::impact();
+    let impact_cfg = defaults::ImpactParams::default();
     let target = Vector3::new(
         table::WIDTH_X * 0.5,
         table::LENGTH_Y * 0.75,
@@ -117,7 +117,7 @@ pub fn verify_impact_model(
 /// 무저항 탄도로 네트 통과 높이를 검사한다.
 pub fn clears_net_ballistic(impact: Point3, v_out: Vector3<f64>) -> bool {
     let y_net = table::LENGTH_Y * 0.5;
-    let z_min = table::SURFACE_Z + table::NET_HEIGHT + defaults::impact().net_clearance * 0.5;
+    let z_min = table::SURFACE_Z + table::NET_HEIGHT + defaults::ImpactParams::default().net_clearance * 0.5;
     if v_out.y <= 1e-6 {
         return false;
     }
@@ -156,7 +156,7 @@ mod tests {
         let v_out = rally_return_velocity(impact, Vector3::new(0.2, -5.0, -0.7));
         let bounce_z = table::SURFACE_Z + crate::constants::BALL_RADIUS;
         assert!(v_out.y > 0.0);
-        let t = defaults::impact().rally_time_to_bounce;
+        let t = defaults::ImpactParams::default().rally_time_to_bounce;
         let z_at_bounce = impact.coords.z + v_out.z * t + 0.5 * G_Z * t * t;
         assert!((z_at_bounce - bounce_z).abs() < 1e-6);
     }
@@ -167,7 +167,7 @@ mod tests {
         let v_in = Vector3::new(0.1, -5.0, -0.5);
         let v_out = rally_return_velocity(impact, v_in);
         let normal = (v_out - v_in).normalize();
-        let e = defaults::impact().racket_effective_restitution;
+        let e = defaults::ImpactParams::default().racket_effective_restitution;
         let v_r = required_racket_velocity(v_in, v_out, normal, e).expect("v_r");
         assert!(verify_impact_model(v_in, v_out, v_r, normal, e));
     }
@@ -184,7 +184,7 @@ mod tests {
         let v_in = Vector3::new(0.8, -5.5, 0.5);
         let v_out = rally_return_velocity(impact, v_in);
         let normal = (v_out - v_in).normalize();
-        let e = defaults::impact().racket_effective_restitution;
+        let e = defaults::ImpactParams::default().racket_effective_restitution;
         let v_r = required_racket_velocity(v_in, v_out, normal, e).expect("v_r");
         let v_r_n = v_r.dot(&normal);
         let v_r_t = v_r - normal * v_r_n;

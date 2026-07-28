@@ -50,7 +50,7 @@ struct BounceSample {
 fn observe_bounce(velocity: Vector3<f64>, omega: Vector3<f64>) -> BounceSample {
     const DT: f64 = 1.0 / 1000.0;
     let robot = defaults::robot().expect("robot");
-    let mut world = SimWorld::with_physics(robot, defaults::physics());
+    let mut world = SimWorld::with_physics(robot, defaults::PhysicsParams::default());
     // 자동 스윙 없이 순수 탄도만 본다.
     world.set_use_ground_truth(false);
     // 라켓·네트에서 먼 미드코트 상공에서 시작.
@@ -92,7 +92,7 @@ fn observe_bounce(velocity: Vector3<f64>, omega: Vector3<f64>) -> BounceSample {
 
 #[test]
 fn table_bounce_kernel_matches_rapier_contact() {
-    let physics = defaults::physics();
+    let physics = defaults::PhysicsParams::default();
     // (입사속도, 입사 스핀) — eval 슈터가 실제로 만드는 범위.
     let cases = [
         (Vector3::new(0.0, -6.5, -2.5), Vector3::zeros()),
@@ -165,7 +165,7 @@ fn table_bounce_kernel_matches_rapier_contact() {
 #[test]
 fn hit_plane_prediction_matches_simulated_ball() {
     const DT: f64 = 1.0 / 1000.0;
-    let physics = defaults::physics();
+    let physics = defaults::PhysicsParams::default();
     let plane = HitPlane {
         y: table::DEFAULT_HIT_PLANE_Y,
     };
@@ -314,7 +314,7 @@ fn hit_plane_prediction_matches_simulated_ball() {
 fn table_bounce_kernel_models_spin_change() {
     let sample = observe_bounce(Vector3::new(0.0, -6.5, -2.5), Vector3::zeros());
     let spin_change = (sample.omega_after - sample.omega_before).norm();
-    let (_, kernel_w) = table_bounce(sample.v_before, sample.omega_before, &defaults::physics());
+    let (_, kernel_w) = table_bounce(sample.v_before, sample.omega_before, &defaults::PhysicsParams::default());
     let kernel_change = (kernel_w - sample.omega_before).norm();
     println!(
         "rapier |Δω|={spin_change:.1} rad/s, kernel |Δω|={kernel_change:.1} rad/s, R={:.3}",

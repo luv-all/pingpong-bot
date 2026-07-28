@@ -1,7 +1,7 @@
 # detect-appearance
 
 appearance 레이어만 **좌우 비교** — `colormask` | `contour`.  
-파라미터는 `defaults::colormask()` · `defaults::scorer()`.
+파라미터는 `ColormaskParams::default()` · `ScorerParams::default()`.
 
 fuse·ROI·motion은 [detect-full](../detect_full/README.md).
 

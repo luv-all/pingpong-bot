@@ -79,15 +79,15 @@ cargo run -p pingpong-bot -- --debug
 런타임 숫자·조립은 **여기만** 고친다 (SSOT). TOML 설정 파일은 없다.  
 규격·치수(ITTF, CAD, G)는 [`src/constants/`](src/constants/).
 
-| 모듈 | 팩토리 | 내용 |
-|------|--------|------|
-| `physics` | `physics()` | 반발·마찰·항력 |
-| `control` | `control()` | 스윙·관절 추종 |
-| `impact` | `impact()` | 랠리 리턴 휴리스틱 |
-| `estimator` | `estimator()` | EKF·탄도 |
-| `planner` | `intercept()` | 인터셉트 y 창 |
-| `vision` | `detector()` / `scorer()` / `colormask()` / `roi()` | fuse 조립 |
-| `hardware` | `dynamixel()` / `rail()` | 실기 버스·레일 |
+| 모듈 | Default / 팩토리 | 내용 |
+|------|----------------|------|
+| `physics` | `PhysicsParams::default()` | 반발·마찰·항력 |
+| `control` | `ControlParams::default()` | 스윙·관절 추종 |
+| `impact` | `ImpactParams::default()` | 랠리 리턴 휴리스틱 |
+| `estimator` | `EstimatorParams::default()` | EKF·탄도 |
+| `planner` | `InterceptWindow::default()` | 인터셉트 y 창 |
+| `vision` | `*Params::default()` / `detector()` | fuse 조립 |
+| `hardware` | `DynamixelConfig` / `RailConfig::default()` | 실기 버스·레일 |
 | `robot` | `robot()` | **지금 쓰는** `Robot` (바꾸려면 이 함수 본문만) |
 
 CLI 덮어쓰기는 포트 정도만:
@@ -97,13 +97,13 @@ cargo run -p pingpong-bot -- --mode sim
 cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
 ```
 
-물리계수 측정 툴은 stdout에 `defaults::physics()` 붙여넣기용 스니펫을 낸다  
+물리계수 측정 툴은 stdout에 `PhysicsParams::default()` 붙여넣기용 스니펫을 낸다  
 ([measure_restitution](tools/measure_restitution/README.md) · [measure_friction](tools/measure_friction/README.md)).  
 무엇을 재고 `e_eff`가 뭔지는 [docs/measure-physics.md](docs/measure-physics.md).
 
 ### Dynamixel · AXL (Windows)
 
-값은 `defaults::dynamixel()` / `rail()`. 포트 기본은 `dynamixel().port`, 덮어쓰기는 `--dxl-port`.  
+값은 `DynamixelConfig::default()` / `RailConfig::default()`. 포트 기본은 `DynamixelConfig::default().port`, 덮어쓰기는 `--dxl-port`.  
 각도는 모터 절대각이 아니라 **URDF 관절각**. 상세·REPL은 [jog](tools/jog/README.md).
 
 ```bash

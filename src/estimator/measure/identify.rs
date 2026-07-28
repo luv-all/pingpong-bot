@@ -122,14 +122,14 @@ fn mean_clamped(xs: &[f64], lo: f64, hi: f64) -> Option<f64> {
     return Some(ok.iter().sum::<f64>() / ok.len() as f64);
 }
 
-/// 측정값을 `defaults::physics()` 붙여넣기용 스니펫으로 포맷.
+/// 측정값을 `PhysicsParams::default()` 붙여넣기용 스니펫으로 포맷.
 pub fn format_physics_for_defaults(
     restitution: Option<f64>,
     friction: Option<f64>,
     drag: Option<f64>,
 ) -> String {
     let mut lines = vec![
-        "// measure_* → paste into defaults::physics()".to_string(),
+        "// measure_* → paste into PhysicsParams::default()".to_string(),
         "PhysicsParams {".to_string(),
     ];
     if let Some(e) = restitution {

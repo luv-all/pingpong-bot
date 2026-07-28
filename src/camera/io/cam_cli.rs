@@ -1,8 +1,6 @@
-//! 카메라 CLI SSOT — 모든 툴이 같은 `--cam` / 스트림 기본값을 쓴다.
+//! 카메라 CLI — clap 스키마·캡처 오케스트레이션.
 //!
-//! - 역할: [`CameraRole`] (`--cam left` / `--cam left,right`)
-//! - device 번호: [`CamRigConfig`] 내부 (CLI 비노출)
-//! - 스트림·렌즈: [`crate::camera::arducam_b0332`]
+//! 앱 프리셋 [`Default`]는 [`crate::defaults::calib`]에 있다.
 
 use clap::Parser;
 
@@ -10,25 +8,19 @@ use super::capture::{CaptureBackend, OpenCvCapture};
 use super::rig::{CamRigConfig, CameraRole};
 use super::threaded::ThreadedCapture;
 use super::FrameSource;
-use crate::camera::arducam_b0332;
 use crate::CameraId;
+use crate::defaults::calib::{DEFAULT_CAM_ROLES, DEFAULT_STEREO_CAM_ROLES};
 
-/// [`arducam_b0332::WIDTH`]
-pub const DEFAULT_STREAM_WIDTH: i32 = arducam_b0332::WIDTH;
-/// [`arducam_b0332::HEIGHT`]
-pub const DEFAULT_STREAM_HEIGHT: i32 = arducam_b0332::HEIGHT;
-/// [`arducam_b0332::FPS_MJPG`]
-pub const DEFAULT_STREAM_FPS: f64 = arducam_b0332::FPS_MJPG;
-/// [`arducam_b0332::FOURCC_MJPG`]
-pub const DEFAULT_STREAM_FOURCC: &str = arducam_b0332::FOURCC_MJPG;
-/// table-PnP 등 K 근사 기본 — [`arducam_b0332::VFOV_DEG`]
-pub const DEFAULT_FOV_Y_DEG: f64 = arducam_b0332::VFOV_DEG;
+pub use crate::defaults::calib::{
+    DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
+    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH,
+};
 
 /// 공통 스트림 요청 (`--backend --width --height --fps --fourcc [--threaded]`).
 #[derive(Parser, Debug, Clone)]
 pub struct CamStreamArgs {
     /// OpenCV 백엔드: any|dshow|msmf|v4l2|avfoundation|recommended
-    #[arg(long, default_value = "recommended")]
+    #[arg(long, default_value = DEFAULT_STREAM_BACKEND)]
     pub backend: String,
 
     #[arg(long, default_value_t = DEFAULT_STREAM_WIDTH)]
@@ -44,21 +36,8 @@ pub struct CamStreamArgs {
     pub fourcc: String,
 
     /// 백그라운드 grab 스레드 (UI와 캡처 분리)
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = DEFAULT_STREAM_THREADED)]
     pub threaded: bool,
-}
-
-impl Default for CamStreamArgs {
-    fn default() -> Self {
-        return Self {
-            backend: "recommended".into(),
-            width: DEFAULT_STREAM_WIDTH,
-            height: DEFAULT_STREAM_HEIGHT,
-            fps: DEFAULT_STREAM_FPS,
-            fourcc: DEFAULT_STREAM_FOURCC.into(),
-            threaded: false,
-        };
-    }
 }
 
 impl CamStreamArgs {
@@ -97,21 +76,12 @@ pub struct CamCliArgs {
         long = "cam",
         value_enum,
         value_delimiter = ',',
-        default_values_t = [CameraRole::Left]
+        default_values_t = DEFAULT_CAM_ROLES
     )]
     pub cam: Vec<CameraRole>,
 
     #[command(flatten)]
     pub stream: CamStreamArgs,
-}
-
-impl Default for CamCliArgs {
-    fn default() -> Self {
-        return Self {
-            cam: vec![CameraRole::Left],
-            stream: CamStreamArgs::default(),
-        };
-    }
 }
 
 /// 스테레오/멀티 기본 (`left,right`). `cam_preview` · `measure_*` 용.
@@ -122,7 +92,7 @@ pub struct StereoCamCliArgs {
         long = "cam",
         value_enum,
         value_delimiter = ',',
-        default_values_t = [CameraRole::Left, CameraRole::Right]
+        default_values_t = DEFAULT_STEREO_CAM_ROLES
     )]
     pub cam: Vec<CameraRole>,
 

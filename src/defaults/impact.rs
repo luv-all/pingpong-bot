@@ -29,14 +29,15 @@ impl ImpactParams {
     }
 }
 
-pub fn impact() -> ImpactParams {
-    return ImpactParams {
-        net_clearance: 0.08,
-        rally_time_to_bounce: 0.55,
-        // Rapier 라켓도 동일 값(+Min combine). 예전 0.42는 테이블 e와
-        // 어긋난 시뮬을 보정하는 역산 전용 펌지였다.
-        racket_effective_restitution: 0.55,
-        racket_friction: 0.5,
-        max_return_speed: 6.0,
-    };
+impl Default for ImpactParams {
+    fn default() -> Self {
+        return Self {
+            net_clearance: 0.08,
+            rally_time_to_bounce: 0.55,
+            racket_effective_restitution: 0.55,
+            racket_friction: 0.5,
+            max_return_speed: 6.0,
+        };
+    }
 }
+

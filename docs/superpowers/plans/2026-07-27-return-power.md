@@ -213,7 +213,7 @@ base_y   height   feasible    mean ratio
 반드시 **세트**로:
 
 1. `defaults::rail_frame()` — behind 0.24~0.30
-2. `defaults::intercept()` — 접수창 y 재산출
+2. `InterceptWindow::default()` — 접수창 y 재산출
 3. `READY_JOINTS_4DOF` — `shot_tune --rest-pose-search`로 재산출
 4. 슈터 기본값 — A와 함께
 

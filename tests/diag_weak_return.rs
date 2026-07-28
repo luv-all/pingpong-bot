@@ -105,7 +105,7 @@ fn run_shot(index: usize, settings: &BallShooterSettings) -> ShotDiag {
     const MAX_STEPS: usize = 4_000;
 
     let robot = defaults::robot().expect("robot");
-    let physics = defaults::physics();
+    let physics = defaults::PhysicsParams::default();
     let mut world = SimWorld::with_physics(robot, physics);
     world.set_use_ground_truth(true);
     world.shoot_ball(settings);
@@ -204,7 +204,7 @@ fn diag_swing_timeseries() {
         let (zone, index_in_zone) = schedule[pick];
         let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
         let robot = defaults::robot().expect("robot");
-        let mut world = SimWorld::with_physics(robot, defaults::physics());
+        let mut world = SimWorld::with_physics(robot, defaults::PhysicsParams::default());
         world.set_use_ground_truth(true);
         world.shoot_ball(&settings);
 
@@ -284,7 +284,7 @@ fn diag_motor_tracking() {
     let launch = pingpong_bot::sim::EvalLaunchParams::default();
     let settings =
         settings_for_zone_shot(&launch, pingpong_bot::sim::eval_protocol::EvalZone::Left, 9);
-    let mut world = SimWorld::with_physics(defaults::robot().expect("robot"), defaults::physics());
+    let mut world = SimWorld::with_physics(defaults::robot().expect("robot"), defaults::PhysicsParams::default());
     world.set_use_ground_truth(true);
     world.shoot_ball(&settings);
 
@@ -376,7 +376,7 @@ fn diag_incoming_trajectory() {
     ] {
         let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
         let mut world =
-            SimWorld::with_physics(defaults::robot().expect("robot"), defaults::physics());
+            SimWorld::with_physics(defaults::robot().expect("robot"), defaults::PhysicsParams::default());
         world.set_use_ground_truth(true);
         world.shoot_ball(&settings);
 
@@ -450,7 +450,7 @@ fn diag_miss_cause() {
     for (i, (zone, index_in_zone)) in shot_schedule(EvalMode::Block).into_iter().enumerate() {
         let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
         let mut world =
-            SimWorld::with_physics(defaults::robot().expect("robot"), defaults::physics());
+            SimWorld::with_physics(defaults::robot().expect("robot"), defaults::PhysicsParams::default());
         world.set_use_ground_truth(true);
         world.shoot_ball(&settings);
 
@@ -518,7 +518,7 @@ fn diag_miss_cause() {
 #[ignore = "진단 전용"]
 fn diag_eval_flags_deterministic() {
     let launch = pingpong_bot::sim::EvalLaunchParams::default();
-    let physics = defaults::physics();
+    let physics = defaults::PhysicsParams::default();
     let robot = defaults::robot().expect("robot");
     let mut contact = 0;
     for (i, (zone, index_in_zone)) in shot_schedule(EvalMode::Block).into_iter().enumerate() {
@@ -550,7 +550,7 @@ fn diag_eval_flags_deterministic() {
 #[test]
 #[ignore = "진단 전용"]
 fn diag_weak_return() {
-    let e = defaults::impact().racket_effective_restitution;
+    let e = defaults::ImpactParams::default().racket_effective_restitution;
     let launch = pingpong_bot::sim::EvalLaunchParams::default();
     let net_top = table::SURFACE_Z + table::NET_HEIGHT + BALL_RADIUS;
 

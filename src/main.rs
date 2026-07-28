@@ -14,10 +14,12 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 #[cfg(feature = "real")]
-use pingpong_bot::{Hardware, RealHardware, detector, dynamixel, rail};
 use pingpong_bot::{
-    SimRuntimeControls, SimSession, SimSessionConfig, init_tracing, intercept, new_shutdown_flag,
-    physics, robot,
+    DynamixelConfig, Hardware, RailConfig, RealHardware, detector,
+};
+use pingpong_bot::{
+    InterceptWindow, PhysicsParams, SimRuntimeControls, SimSession, SimSessionConfig, init_tracing,
+    new_shutdown_flag, robot,
 };
 #[cfg(feature = "gui")]
 use pingpong_bot::{SimViewerOptions, run_sim_viewer};
@@ -38,7 +40,7 @@ struct Args {
     /// sim | real
     #[arg(long, value_enum, default_value = "sim")]
     mode: ModeArg,
-    /// Dynamixel 포트 오버라이드 (`defaults::dynamixel().port`보다 우선).
+    /// Dynamixel 포트 오버라이드 (`DynamixelConfig::default().port`보다 우선).
     #[arg(long)]
     dxl_port: Option<String>,
     /// debug 로그 (샷별 계획·하드웨어 상세).
@@ -61,7 +63,7 @@ fn main() -> Result<()> {
 }
 
 fn run_sim_entry() -> Result<()> {
-    let physics = physics();
+    let physics = PhysicsParams::default();
     let robot = robot().context("defaults::robot")?;
     info!(
         mode = "sim",
@@ -85,7 +87,7 @@ fn run_sim_entry() -> Result<()> {
     {
         let world_arc = session.world();
         let mut world = world_arc.lock().expect("sim 월드");
-        world.set_intercept_window(intercept());
+        world.set_intercept_window(InterceptWindow::default());
         world.set_use_ground_truth(true);
     }
     info!("sim kiss3d");
@@ -109,13 +111,14 @@ fn run_sim_entry() -> Result<()> {
 
 #[cfg(feature = "real")]
 fn run_real_entry(args: &Args) -> Result<()> {
-    let mut dxl = dynamixel();
+    let mut dxl = DynamixelConfig::default();
     if let Some(port) = &args.dxl_port {
         dxl.port = port.clone();
     }
     info!(port = %dxl.port, "defaults real Dynamixel (mirror ID1↔ID2)");
     let arm = robot().context("defaults::robot")?.arm;
-    let mut hardware = RealHardware::new(dxl, Some(rail()), arm).context("RealHardware")?;
+    let mut hardware =
+        RealHardware::new(dxl, Some(RailConfig::default()), arm).context("RealHardware")?;
     let pose = hardware.read_pose().context("read pose")?;
     info!(joints = ?pose.joints.values, "pose");
     let _ = detector();

@@ -1,6 +1,6 @@
 //! 테이블 위 롤로 마찰계수 μ를 측정 (plan §3.4).
 //!
-//! 산출물: stdout에 `defaults::physics()` 붙여넣기 스니펫.
+//! 산출물: stdout에 `PhysicsParams::default()` 붙여넣기 스니펫.
 
 mod capture_loop;
 
@@ -10,12 +10,14 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
-use pingpong_bot::{StereoCamCliArgs, format_physics_for_defaults, friction_from_tangential_speeds};
+use pingpong_bot::{
+    PhysicsParams, StereoCamCliArgs, format_physics_for_defaults, friction_from_tangential_speeds,
+};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "measure_friction",
-    about = "테이블 마찰 μ 측정 → defaults::physics() 스니펫. 영상 멀티캠 또는 수동 숫자"
+    about = "테이블 마찰 μ 측정 → PhysicsParams::default() 스니펫. 영상 멀티캠 또는 수동 숫자"
 )]
 struct Args {
     /// Calibration JSON (캡처 모드 필수)
@@ -107,7 +109,7 @@ fn main() -> Result<()> {
         let mu = measure_mu_in_sim(args.drop_height, args.horiz_speed)?;
         println!(
             "friction μ = {mu:.6}  (sim; configured physics.friction={})",
-            pingpong_bot::physics().friction
+            PhysicsParams::default().friction
         );
         patch.friction = Some(mu);
     }

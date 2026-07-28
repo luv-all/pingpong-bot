@@ -247,7 +247,7 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
    sim 자동 스윙은 이 에러 시 **이번 공 즉시 포기** (모터 보호; IK 실패와 달리 재시도하지 않음). Rapier 다물체 mass와 **다른 SSOT**.
 2. **sim HUD**에 peak/now \(\tau\) [N·m] 표시 (초과·포기 사유).
 3. **FF** = Current-based Position + Goal Current (real) / RNEA effort 상한 갱신 (sim).  
-   `defaults::control().torque_feedforward` 기본 **true**. 끄려면 `false`.
+   `ControlParams::default().torque_feedforward` 기본 **true**. 끄려면 `false`.
 
 스펙: [`superpowers/specs/2026-07-26-manipulator-dynamics-design.md`](superpowers/specs/2026-07-26-manipulator-dynamics-design.md).
 

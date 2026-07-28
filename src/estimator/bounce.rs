@@ -82,7 +82,7 @@ mod tests {
 
     #[test]
     fn normal_uses_restitution() {
-        let p = defaults::physics();
+        let p = defaults::PhysicsParams::default();
         let v = Vector3::new(0.0, -6.5, -3.0);
         let (v2, _) = table_bounce(v, Vector3::zeros(), &p);
         assert!((v2.z - (-v.z * p.restitution)).abs() < 1e-12);
@@ -92,7 +92,7 @@ mod tests {
     fn shallow_impact_slips_and_keeps_most_tangential_speed() {
         // 얕은 입사(접선 ≫ 법선): 마찰 임펄스가 μ·J_n으로 제한되어
         // 접선속도는 조금만 줄어든다. 예전 (1-μ) 모델은 40%를 깎았다.
-        let p = defaults::physics();
+        let p = defaults::PhysicsParams::default();
         let v = Vector3::new(0.0, -6.5, -3.0);
         let (v2, w2) = table_bounce(v, Vector3::zeros(), &p);
         let mu = table_ball_mu(&p);
@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn steep_impact_reaches_rolling_and_caps_tangential_loss() {
         // 가파른 입사: μ·J_n이 충분히 커서 접촉점 슬립이 0이 된다(구름).
-        let p = defaults::physics();
+        let p = defaults::PhysicsParams::default();
         let v = Vector3::new(0.0, -2.0, -6.0);
         let (v2, w2) = table_bounce(v, Vector3::zeros(), &p);
         let contact_after = v2.y + (-ball::RADIUS) * -w2.x;
@@ -128,7 +128,7 @@ mod tests {
     fn slipping_tangential_change_is_spin_independent_but_spin_is_not() {
         // 완전 슬립이면 접선 임펄스 = μ·J_n 으로 고정 — 슬립 크기(=스핀)와 무관.
         // 이게 Coulomb의 서명이고, 예전 (1-μ)v_t 모델과 갈리는 지점이다.
-        let p = defaults::physics();
+        let p = defaults::PhysicsParams::default();
         let v = Vector3::new(0.0, -6.0, -3.0);
         let (none_v, none_w) = table_bounce(v, Vector3::zeros(), &p);
         let (back_v, back_w) = table_bounce(v, Vector3::new(-40.0, 0.0, 0.0), &p);
@@ -148,7 +148,7 @@ mod tests {
     fn strong_topspin_reverses_friction_and_speeds_ball_up() {
         // 접촉점이 진행방향으로 미끄러질 만큼 톱스핀이 강하면 마찰이
         // 공을 오히려 밀어준다 (v_y가 더 음수 = 더 빠름).
-        let p = defaults::physics();
+        let p = defaults::PhysicsParams::default();
         let v = Vector3::new(0.0, -6.0, -3.0);
         let none = table_bounce(v, Vector3::zeros(), &p).0;
         let spun = table_bounce(v, Vector3::new(400.0, 0.0, 0.0), &p).0;
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn kernel_mu_matches_rapier_effective_mu() {
-        let p = defaults::physics();
+        let p = defaults::PhysicsParams::default();
         assert!((table_ball_mu(&p) - rapier_table_ball_mu(&p)).abs() < 1e-15);
         assert!((table_ball_mu(&p) - 0.3).abs() < 1e-15);
     }

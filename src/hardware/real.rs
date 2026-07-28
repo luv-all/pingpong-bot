@@ -34,7 +34,7 @@ impl RealHardware {
     ) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::open(config)?;
-        let ff = defaults::control().torque_feedforward;
+        let ff = defaults::ControlParams::default().torque_feedforward;
         if ff {
             bus.set_current_based_position_mode()?;
         }
@@ -69,7 +69,7 @@ impl RealHardware {
         let mut bus = DynamixelBus::dry_run(config).map_err(|e| HwError::InvalidConfig {
             reason: e.to_string(),
         })?;
-        let ff = defaults::control().torque_feedforward;
+        let ff = defaults::ControlParams::default().torque_feedforward;
         if ff {
             bus.set_current_based_position_mode()?;
         }
@@ -259,7 +259,7 @@ mod tests {
     use super::*;
     use crate::Joints;
     use crate::RailMotion;
-    use crate::defaults::dynamixel;
+    use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
 
     fn test_rail() -> RailConfig {
@@ -274,7 +274,7 @@ mod tests {
     fn dry_run_read_pose_uses_rail_position() {
         let dynamixel = DynamixelConfig {
             stream_hz: 500.0,
-            ..dynamixel()
+            ..DynamixelConfig::default()
         };
         let mut hardware =
             RealHardware::dry_run(dynamixel, Some(test_rail())).expect("dry-run hardware");
@@ -286,7 +286,7 @@ mod tests {
     fn dry_run_executes_trajectory_and_reports_busy_state() {
         let config = DynamixelConfig {
             stream_hz: 500.0,
-            ..crate::defaults::dynamixel()
+            ..DynamixelConfig::default()
         };
         let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
         let trajectory = SwingTrajectory::new(
@@ -314,7 +314,7 @@ mod tests {
     fn dry_run_syncs_rail_with_joint_trajectory() {
         let config = DynamixelConfig {
             stream_hz: 500.0,
-            ..crate::defaults::dynamixel()
+            ..DynamixelConfig::default()
         };
         let mut hardware =
             RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
@@ -347,7 +347,7 @@ mod tests {
     fn drop_cancels_long_running_trajectory_promptly() {
         let config = DynamixelConfig {
             stream_hz: 500.0,
-            ..crate::defaults::dynamixel()
+            ..DynamixelConfig::default()
         };
         let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
         let trajectory = SwingTrajectory::new(

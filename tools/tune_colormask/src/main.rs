@@ -176,7 +176,7 @@ fn space_label(space: ColorSpace) -> &'static str {
 fn print_params(space: ColorSpace, range: ChannelRange) {
     let p = range.to_params(space);
     let axes = space_label(space);
-    println!("// paste into defaults::colormask() — space={space} ({axes})");
+    println!("// paste into ColormaskParams::default() — space={space} ({axes})");
     println!("ColormaskParams {{");
     println!(
         "    space: ColorSpace::{},",

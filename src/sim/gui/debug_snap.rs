@@ -153,7 +153,7 @@ impl SimDebugSnapshot {
 
     pub fn set_committed_path(&mut self, arm: &Arm, trajectory: &SwingTrajectory) {
         self.committed_racket_path = sample_racket_path(arm, trajectory, GHOST_SAMPLES);
-        let control = defaults::control();
+        let control = defaults::ControlParams::default();
         let duration = trajectory.duration_secs.max(f64::EPSILON);
         let samples = ((duration / 0.005).ceil() as usize).max(24);
         let n = arm.joint_count();
@@ -293,7 +293,7 @@ fn sample_predicted_arc(
     plane_y: f64,
     max_samples: usize,
 ) -> Vec<[f64; 3]> {
-    let est = defaults::estimator();
+    let est = defaults::EstimatorParams::default();
     let mut out = Vec::with_capacity(max_samples);
     out.push([pos.x, pos.y, pos.z]);
     let mut t = 0.0;

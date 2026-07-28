@@ -1,7 +1,7 @@
 # 물리 계수 측정 가이드
 
 보드에서 잠글 값 · 측정 방법 · `e_eff` 정의.  
-산출물은 stdout 스니펫 → `defaults::physics()` / `defaults::impact()`에 붙여넣기.
+산출물은 stdout 스니펫 → `PhysicsParams::default()` / `ImpactParams::default()`에 붙여넣기.
 
 관련 툴: [measure-restitution](../tools/measure_restitution/README.md) · [measure-friction](../tools/measure_friction/README.md).  
 의도·이력: [decisions.md](decisions.md) A4 · E3.
@@ -36,7 +36,7 @@ v_{\mathrm{out}}\cdot n = (1+e)\,v_r\cdot n - e\,v_{\mathrm{in}}\cdot n
 - **권장:** 장착된 라켓(고정 또는 스윙)에 공을 맞혀 법선 속도비 \(e = |v_n'|/|v_n|\) (라켓 면 좌표계, 가능하면 \(v_r\) 보정)
 - **비권장(참고만):** 러버 시편만 강판/테이블에 떨어뜨린 COR → `e_eff`와 정의가 다름
 
-전용 CLI는 아직 없다. 멀티캠 궤적 + 임팩트 구간 법선 성분을 뽑아 `defaults::impact().racket_effective_restitution`에 넣는다.
+전용 CLI는 아직 없다. 멀티캠 궤적 + 임팩트 구간 법선 성분을 뽑아 `ImpactParams::default().racket_effective_restitution`에 넣는다.
 
 ---
 
@@ -90,7 +90,7 @@ cargo run -p measure-restitution -- --heights 0.40,0.29,0.21
 cargo run -p measure-restitution -- --sim   # 시뮬 회귀용
 ```
 
-stdout의 `restitution:` → `defaults::physics()`.
+stdout의 `restitution:` → `PhysicsParams::default()`.
 
 ### 2. 테이블 \(\mu\) — `measure-friction`
 
@@ -101,7 +101,7 @@ cargo run -p measure-friction -- --calibration calibration.json
 cargo run -p measure-friction -- --sim
 ```
 
-stdout의 `friction:` → `defaults::physics()`.
+stdout의 `friction:` → `PhysicsParams::default()`.
 
 ### 3. 라켓 \(e_{\mathrm{eff}}\) — 스윙/장착 면 (수동·스크립트)
 
@@ -156,7 +156,7 @@ Rapier는 매 스텝 이 토크를 내고 `motor_max_force`(= RNEA \(\tau\))로 
 5. \(t_r\)에서 고유진동수 \(\omega_n \approx 1.8 / t_r\)를 얻는다.
 6. 관절 유효 관성 \(I\)(`control().joint_inertia` ≈ 0.015)로 환산한다.
    \(k = I\,\omega_n^2\), \(d = 2\zeta\sqrt{kI}\).
-7. `defaults::sim_motor()`에 넣는다.
+7. `SimMotorParams::default()`에 넣는다.
 
 교차 검증: 같은 계단 입력을 시뮬에 주고 \(t_r\)·\(M_p\)가 실물과 맞는지 본다.
 스윙 중 추종 오차는 `tests/diag_weak_return.rs`의 `diag_motor_tracking`으로

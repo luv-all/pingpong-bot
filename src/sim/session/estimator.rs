@@ -130,7 +130,7 @@ mod tests {
             snap.velocity,
             snap.omega,
             plane,
-            &crate::defaults::physics(),
+            &crate::defaults::PhysicsParams::default(),
         )
         .expect("슈터 기본 샷 예측");
         assert!(
@@ -198,7 +198,7 @@ mod tests {
     /// 솔버·Coulomb 잔차로 Z가 남을 수 있어 상한을 문서화한다.
     #[test]
     fn post_bounce_hit_plane_jump_bounded() {
-        let physics = crate::defaults::physics();
+        let physics = crate::defaults::PhysicsParams::default();
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
@@ -208,7 +208,7 @@ mod tests {
                 .expect("발사 직후 예측");
 
         // (1) ballistics 자기정합: 커널로 바운스까지 적분 후 재예측 ≈ 발사 예측
-        let est = crate::defaults::estimator();
+        let est = crate::defaults::EstimatorParams::default();
         let mut pos = snap.position;
         let mut vel = snap.velocity;
         let mut omega = snap.omega;
@@ -292,7 +292,7 @@ mod tests {
                 velocity,
                 Vector3::zeros(),
                 plane,
-                &crate::defaults::physics(),
+                &crate::defaults::PhysicsParams::default(),
             )
             .is_none(),
             "네트 미달 낮은 pitch 샷은 예측 None이어야 함"

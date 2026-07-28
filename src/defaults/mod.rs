@@ -1,72 +1,109 @@
-//! 앱 기본 배선 SSOT.
+//! 앱 기본 배선·휴리스틱 SSOT.
 //!
-//! 도메인 타입에는 프리셋을 두지 않는다. 숫자·조립은 여기만.
-//! 규격·치수(ITTF, CAD, G)는 [`crate::constants`].
+//! 도메인 타입에는 프리셋을 두지 않는다. **[`Default`] 조립은 여기만**.
+//! 규격·datasheet(ITTF, CAD, G, B0332, DXL stall)는 [`crate::constants`].
 //!
-//! 패턴: `Type` + 동명 팩토리 (`physics()`, `control()`, …).
+//! 패턴:
+//! - `impl Default for Params|Config|CliArgs` — 앱 프리셋
+//! - `pub const` — clap `default_value_t`·임계값
+//! - [`detector`] / [`robot`] — 조립이 `Result`이거나 파이프라인인 팩토리만 예외
 //!
-//! 이름 규칙:
-//! - `*Params` — 숫자·휴리스틱 가방 (`PhysicsParams`, `ScorerParams`, …)
-//! - `*Config` — 드라이버/버스 배선 (`DynamixelConfig`, `RailConfig`)
-//!
-//! | 모듈 | 팩토리 |
+//! | 모듈 | Default |
 //! |------|--------|
-//! | [`physics`] | [`physics`] |
-//! | [`control`] | [`control`] |
-//! | [`impact`] | [`impact`] |
-//! | [`estimator`] | [`estimator`] |
-//! | [`robot`] | [`robot`] / [`primitive_4dof`] / [`shared_robot`] / [`rail_frame`] / [`urdf_4dof`] |
-//! | [`vision`] | [`detector`] / [`scorer`] / [`colormask`] / [`roi`] |
-//! | [`hardware`] | [`dynamixel`] / [`rail`] |
-//! | [`planner`] | [`intercept`] |
-//! | [`sim_motor`] | [`sim_motor`] (시뮬 전용 — 실물 서보 미반영) |
+//! | [`physics`] | `PhysicsParams` |
+//! | [`control`] | `ControlParams` |
+//! | [`impact`] | `ImpactParams` |
+//! | [`estimator`] | `EstimatorParams` |
+//! | [`robot`] | URDF·primitive (`Result`) |
+//! | [`vision`] | Scorer/Colormask/Roi + [`detector`] |
+//! | [`calib`] | Cam* / Charuco / Rig |
+//! | [`hardware`] | DynamixelConfig / RailConfig |
+//! | [`dxl_limits`] | derate·속도·토크 배열 |
+//! | [`planner`] | InterceptWindow + bang-bang consts |
+//! | [`sim`] | BallShooterSettings + 랜덤/eval consts |
+//! | [`sim_motor`] | `SimMotorParams` |
 //!
 //! 활성 로봇을 바꾸려면 [`robot`] 본문만 고친다.
 
+pub mod calib;
 mod control;
+pub mod dxl_limits;
 mod estimator;
 mod hardware;
 mod impact;
 mod physics;
-mod planner;
+pub mod planner;
 mod robot;
+pub mod sim;
 mod sim_motor;
-mod vision;
+pub mod vision;
 
-pub use control::{ControlParams, control};
-pub use estimator::{EstimatorParams, estimator};
-pub use hardware::{dynamixel, rail};
-pub use impact::{ImpactParams, impact};
-pub use physics::{PhysicsParams, physics};
-pub use planner::intercept;
+pub use calib::{
+    CHARUCO_MARKER_LENGTH_M, CHARUCO_SQUARE_LENGTH_M, CHARUCO_SQUARES_X, CHARUCO_SQUARES_Y,
+    DEFAULT_CAM_ROLES, DEFAULT_FOV_Y_DEG, DEFAULT_STEREO_CAM_ROLES, DEFAULT_STREAM_BACKEND,
+    DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_THREADED,
+    DEFAULT_STREAM_WIDTH, LEFT_CAMERA_ID, LEFT_DEVICE, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS,
+    RIGHT_CAMERA_ID, RIGHT_DEVICE,
+};
+pub use control::ControlParams;
+pub use dxl_limits::{
+    CONTINUOUS_TORQUE_DERATE, DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, JOINT_SPEED_DERATE,
+    joint_torque_limits_4dof, joint_torque_limits_4dof_array,
+};
+pub use estimator::EstimatorParams;
+pub use impact::ImpactParams;
+pub use physics::PhysicsParams;
+pub use planner::{
+    JACOBIAN_DAMPING, JDOT_STEP, MAGNUS_OMEGA_MAX, MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS,
+    MIN_TIME_TO_GO_SECS, PLAN_DT_SECS, POSITION_TOLERANCE_RAD_OR_M, RACKET_DIRECTION_TOLERANCE_DEG,
+    RACKET_SPEED_RATIO_TOLERANCE, RAIL_ACCEL_M_S2, RETURN_TO_CENTER_GROWTH,
+    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS, TIME_TO_GO_BIAS,
+};
 pub use robot::{
     RAIL_MAX_SPEED, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount, rail_frame,
     robot, shared_robot, urdf_4dof, urdf_test,
 };
-pub use sim_motor::{SimMotorParams, sim_motor};
-pub use vision::{colormask, detector, roi, scorer};
+pub use sim::{
+    EVAL_MAX_SCORE, EVAL_NET_PASSTHROUGH_RETRIES, EVAL_PASS_SCORE_EXCLUSIVE, EVAL_PITCH_JITTER_DEG,
+    EVAL_RACKET_REHIT_MIN_STEPS, EVAL_SHOTS_PER_ZONE, EVAL_SPEED_JITTER_MPS, EVAL_TOTAL_SHOTS,
+    EVAL_YAW_JITTER_DEG, RANDOM_SHOT_HEIGHT_MAX_M, RANDOM_SHOT_HEIGHT_MIN_M,
+    RANDOM_SHOT_LATERAL_MAX_M, RANDOM_SHOT_LATERAL_MIN_M, RANDOM_SHOT_NET_GATE_MAX_TRIES,
+    RANDOM_SHOT_PITCH_MAX_DEG, RANDOM_SHOT_PITCH_MIN_DEG, RANDOM_SHOT_ROLL_MAX_DEG,
+    RANDOM_SHOT_ROLL_MIN_DEG, RANDOM_SHOT_SIDESPIN_MAX, RANDOM_SHOT_SIDESPIN_MIN,
+    RANDOM_SHOT_SPEED_MAX_MPS, RANDOM_SHOT_SPEED_MIN_MPS, RANDOM_SHOT_TARGET_PADDING_M,
+    RANDOM_SHOT_TOPSPIN_MAX, RANDOM_SHOT_TOPSPIN_MIN,
+};
+pub use sim_motor::SimMotorParams;
+pub use vision::{
+    MOTION_DIFF_THRESH, MOTION_WEIGHT, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, detector,
+};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hardware::dynamixel::DynamixelConfig;
+    use crate::hardware::rail::RailConfig;
+    use crate::planner::InterceptWindow;
+    use crate::detector::{ColormaskParams, RoiParams, ScorerParams};
 
     #[test]
     fn presets_validate() {
-        physics().validate().unwrap();
-        control().validate().unwrap();
-        impact().validate().unwrap();
-        estimator().validate().unwrap();
-        intercept().validate().unwrap();
-        scorer().validate().unwrap();
-        colormask().validate().unwrap();
-        roi().validate().unwrap();
-        dynamixel().validate().unwrap();
-        rail().validate().unwrap();
-        assert!((control().max_joint_torques[0] - 6.0).abs() < 1e-12);
-        assert!((control().max_joint_torques[1] - 3.0).abs() < 1e-12);
-        assert!((control().max_joint_torques[2] - 1.25).abs() < 1e-12);
-        assert!((control().max_joint_torques[3] - 1.25).abs() < 1e-12);
-        assert!((impact().max_return_speed - 6.0).abs() < 1e-12);
+        PhysicsParams::default().validate().unwrap();
+        ControlParams::default().validate().unwrap();
+        ImpactParams::default().validate().unwrap();
+        EstimatorParams::default().validate().unwrap();
+        InterceptWindow::default().validate().unwrap();
+        ScorerParams::default().validate().unwrap();
+        ColormaskParams::default().validate().unwrap();
+        RoiParams::default().validate().unwrap();
+        DynamixelConfig::default().validate().unwrap();
+        RailConfig::default().validate().unwrap();
+        let c = ControlParams::default();
+        assert!((c.max_joint_torques[0] - 6.0).abs() < 1e-12);
+        assert!((c.max_joint_torques[1] - 3.0).abs() < 1e-12);
+        assert!((c.max_joint_torques[2] - 1.25).abs() < 1e-12);
+        assert!((c.max_joint_torques[3] - 1.25).abs() < 1e-12);
+        assert!((ImpactParams::default().max_return_speed - 6.0).abs() < 1e-12);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! 검출 파라미터 타입. 앱 조립 SSOT는 [`crate::defaults`].
+//! 검출 파라미터 타입. 앱 [`Default`]는 [`crate::defaults::vision`].
 
 use anyhow::{Result, ensure};
 
@@ -13,18 +13,6 @@ pub struct RoiParams {
     pub m: f64,
     pub half_min: i32,
     pub half_max: i32,
-}
-
-impl Default for RoiParams {
-    fn default() -> Self {
-        return Self {
-            k: 3.5,
-            pad: 24,
-            m: 1.0,
-            half_min: 48,
-            half_max: 240,
-        };
-    }
 }
 
 impl From<i32> for RoiParams {
@@ -77,16 +65,6 @@ pub struct ScorerParams {
     pub min_area_px: f64,
     pub max_area_px: f64,
     pub min_circularity: f64,
-}
-
-impl Default for ScorerParams {
-    fn default() -> Self {
-        return Self {
-            min_area_px: 20.0,
-            max_area_px: 20_000.0,
-            min_circularity: 0.55,
-        };
-    }
 }
 
 impl ScorerParams {

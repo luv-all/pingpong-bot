@@ -111,7 +111,7 @@
 
 설계: [`docs/superpowers/specs/2026-07-17-real-hardware-dynamixel-design.md`](docs/superpowers/specs/2026-07-17-real-hardware-dynamixel-design.md)  
 레일: [`docs/superpowers/specs/2026-07-22-axl-rail-design.md`](docs/superpowers/specs/2026-07-22-axl-rail-design.md)  
-SSOT: `defaults::dynamixel()` / `rail()` (ID·signs·tick·`x_max_m`).
+SSOT: `DynamixelConfig::default()` / `rail()` (ID·signs·tick·`x_max_m`).
 
 - [x] `rustypot` + Dynamixel → `RealHardware` (`read_pose` / `command`)
 - [x] `SwingExecutor` — quintic `sample_at` → SyncWrite goal (200 Hz, `is_busy`)
@@ -164,7 +164,7 @@ SSOT: `defaults::dynamixel()` / `rail()` (ID·signs·tick·`x_max_m`).
 - [ ] 공 추적 MD → `docs/spin-tracking.md` (또는 동등)로 저장
 - [x] README — defaults SSOT·툴 표 반영 (어긋나면 다시 맞춤)
 - [x] [`docs/measure-physics.md`](docs/measure-physics.md) — 측정·`e_eff` 가이드
-- [ ] A4 \(e\)·마찰·drag **실측값**으로 `defaults::physics()` / `impact()` 갱신 (보드 준비 후)
+- [ ] A4 \(e\)·마찰·drag **실측값**으로 `PhysicsParams::default()` / `impact()` 갱신 (보드 준비 후)
 
 ---
 

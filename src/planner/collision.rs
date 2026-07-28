@@ -126,7 +126,7 @@ pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
     let wrist = wrist_index
         .and_then(|index| joints.values.get(index))
         .copied()
-        .unwrap_or(crate::defaults::control().racket_open_pitch);
+        .unwrap_or(crate::defaults::ControlParams::default().racket_open_pitch);
 
     for _ in 0..TABLE_CLAMP_ITERS {
         let depth = table_penetration(arm, rail_x, &current);

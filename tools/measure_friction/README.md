@@ -1,7 +1,7 @@
 # measure-friction
 
 테이블 위 **롤**에서 $\mu$를 측정한다.  
-파일은 건드리지 않는다 — stdout에 `defaults::physics()` 붙여넣기용 Rust 스니펫만 출력.
+파일은 건드리지 않는다 — stdout에 `PhysicsParams::default()` 붙여넣기용 Rust 스니펫만 출력.
 
 ## 영상 (권장)
 

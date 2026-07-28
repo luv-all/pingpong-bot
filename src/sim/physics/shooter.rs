@@ -14,49 +14,14 @@ use rapier3d::prelude::{
 
 use super::arm_bodies::{NET_HALF_THICKNESS_M, ball_collision_groups, static_collision_groups};
 
-/// GUI `randomized`가 네트 미달 샘플을 버리는 최대 재시도 횟수.
-const RANDOM_SHOT_NET_GATE_MAX_TRIES: usize = 48;
-
-/// `BallShooterSettings::randomized`가 뽑는 좌우 발사 위치(`lateral_offset_m`) 범위 [m].
-/// `random_shot_lateral_range_stays_within_table`이 이 전체 범위에서
-/// 바운스가 테이블 안에 들어옴을 검증한다.
-pub const RANDOM_SHOT_LATERAL_MIN_M: f64 = -0.5;
-pub const RANDOM_SHOT_LATERAL_MAX_M: f64 = 0.5;
-
-/// 랜덤 조준 목표를 로봇쪽 테이블 가장자리(y=0) 양 끝에서 이만큼 안쪽으로
-/// 제한한다.
-///
-/// padding↓ → yaw 폭↑(가장자리 조준). 0.25 ≈ 조준 폭 1.03m (중앙±0.51).
-/// GUI/리치 SSOT는 `urdf_4dof` 격자(`random_shot_fine_grid_*`)다.
-pub const RANDOM_SHOT_TARGET_PADDING_M: f64 = 0.25;
-
-/// `BallShooterSettings::randomized`가 뽑는 속도 범위 [m/s].
-///
-/// `tools/shot_tune` — 실기 관절속도(~2.88 rad/s)에서 commit이 연속 유지되는
-/// Default/Eval 기본 6.0 m/s 근처. 시중 슈터 초보~중급 피딩 하단.
-pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 5.7;
-pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 6.3;
-
-/// 랜덤 발사구 높이 오프셋 [m] (`height_offset_m`, 슈터 로컬 up).
-///
-/// pitch≈−4° 대역에서 Rapier 네트 비접촉에 필요한 대략적 하한은 ~0.24
-/// (`height=0.17`은 ballistics 게이트만 통과하고 실기 Rapier에서는 네트에 맞음).
-pub const RANDOM_SHOT_HEIGHT_MIN_M: f64 = 0.22;
-pub const RANDOM_SHOT_HEIGHT_MAX_M: f64 = 0.28;
-
-/// 랜덤 topspin [rad/s] (+=topspin).
-pub const RANDOM_SHOT_TOPSPIN_MIN: f64 = -20.0;
-pub const RANDOM_SHOT_TOPSPIN_MAX: f64 = 20.0;
-/// 랜덤 sidespin [rad/s].
-pub const RANDOM_SHOT_SIDESPIN_MIN: f64 = -15.0;
-pub const RANDOM_SHOT_SIDESPIN_MAX: f64 = 15.0;
-
-/// 랜덤 pitch [deg] (+=위). shot_tune −4° 근처이되, 네트 여유를 위해 −3°까지.
-pub const RANDOM_SHOT_PITCH_MIN_DEG: f64 = -4.0;
-pub const RANDOM_SHOT_PITCH_MAX_DEG: f64 = -2.0;
-/// 랜덤 roll [deg] (발사축 기준).
-pub const RANDOM_SHOT_ROLL_MIN_DEG: f64 = -15.0;
-pub const RANDOM_SHOT_ROLL_MAX_DEG: f64 = 15.0;
+pub use crate::defaults::sim::{
+    RANDOM_SHOT_HEIGHT_MAX_M, RANDOM_SHOT_HEIGHT_MIN_M, RANDOM_SHOT_LATERAL_MAX_M,
+    RANDOM_SHOT_LATERAL_MIN_M, RANDOM_SHOT_NET_GATE_MAX_TRIES, RANDOM_SHOT_PITCH_MAX_DEG,
+    RANDOM_SHOT_PITCH_MIN_DEG, RANDOM_SHOT_ROLL_MAX_DEG, RANDOM_SHOT_ROLL_MIN_DEG,
+    RANDOM_SHOT_SIDESPIN_MAX, RANDOM_SHOT_SIDESPIN_MIN, RANDOM_SHOT_SPEED_MAX_MPS,
+    RANDOM_SHOT_SPEED_MIN_MPS, RANDOM_SHOT_TARGET_PADDING_M, RANDOM_SHOT_TOPSPIN_MAX,
+    RANDOM_SHOT_TOPSPIN_MIN,
+};
 
 /// 슈터 설치 위치 (월드 좌표, Z-up).
 pub struct ShooterLayout;
@@ -101,29 +66,6 @@ pub struct BallShooterSettings {
     pub sidespin_rad_s: f64,
     /// drill spin [rad/s] — 슈터 로컬 forward 축 (총구 축 회전)
     pub drill_spin_rad_s: f64,
-}
-
-impl Default for BallShooterSettings {
-    fn default() -> Self {
-        // speed 6.0: 시중 탁구 슈터 초보~중급 피딩(대략 4~10 m/s)의 하단.
-        // 5.0은 낙하가 커서 가혹했고, 예전 7.1은 입사 에너지가 커서 블록
-        // 리턴이 과장되어 보였다.
-        // height 0.24 / pitch −1.0: Rapier·ballistics 네트 통과 최소값.
-        return Self {
-            speed_mps: 6.0,
-            yaw_deg: 0.0,
-            pitch_deg: -1.0,
-            roll_deg: 0.0,
-            pos_offset_x_m: 0.0,
-            pos_offset_y_m: 0.0,
-            pos_offset_z_m: 0.0,
-            lateral_offset_m: 0.0,
-            height_offset_m: 0.24,
-            topspin_rad_s: 0.0,
-            sidespin_rad_s: 0.0,
-            drill_spin_rad_s: 0.0,
-        };
-    }
 }
 
 impl BallShooterSettings {
@@ -268,7 +210,7 @@ impl BallShooterSettings {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        return predict_hit_plane(position, velocity, spin, plane, &defaults::physics()).is_some();
+        return predict_hit_plane(position, velocity, spin, plane, &defaults::PhysicsParams::default()).is_some();
     }
 
     /// 테이블·네트·공만 있는 가벼운 Rapier로, 수신 탄도가 **네트 collider에
@@ -338,7 +280,7 @@ fn apply_aero_force(body: &mut rapier3d::prelude::RigidBody, physics: &crate::Ph
 
 /// 테이블+네트+공만으로 수신 탄도의 네트 접촉 여부 (팔/라켓 없음).
 fn contacts_incoming_rapier_net(settings: &BallShooterSettings) -> bool {
-    let physics = defaults::physics();
+    let physics = defaults::PhysicsParams::default();
     let mut bodies = RigidBodySet::new();
     let mut colliders = ColliderSet::new();
     let mut impulse_joints = ImpulseJointSet::new();

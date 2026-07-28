@@ -95,7 +95,7 @@ impl SimSession {
             robot,
             controls,
             shutdown,
-            crate::defaults::physics(),
+            crate::defaults::PhysicsParams::default(),
         );
     }
 

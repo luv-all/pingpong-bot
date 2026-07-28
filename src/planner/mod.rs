@@ -33,7 +33,7 @@ pub struct InterceptWindow {
     pub sample_step: f64,
 }
 
-pub const MAX_INTERCEPT_SAMPLES: usize = 1_024;
+pub use crate::defaults::planner::MAX_INTERCEPT_SAMPLES;
 
 impl InterceptWindow {
     pub fn validate(&self) -> Result<()> {

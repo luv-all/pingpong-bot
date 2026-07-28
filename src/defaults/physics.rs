@@ -45,20 +45,20 @@ impl PhysicsParams {
     }
 }
 
-pub fn physics() -> PhysicsParams {
-    return PhysicsParams {
-        // ITTF 테이블: 30 cm 낙하 → ~23 cm 반발 → e≈√(23/30)≈0.88.
-        // (강판 규격 305→240–260 mm면 0.89–0.92. 목재 테이블은 약간 낮다.)
-        restitution: 0.88,
-        // 예측기 바운스 μ = friction (0.4). Rapier 테이블–공은
-        // Average(friction, ball_friction)≈0.3 — 갭은 `rapier_table_ball_mu` 테스트로
-        // 고정. 재료/Max combine 정렬은 시뮬 그리드 재튜닝과 함께 (스펙 E3b 후속).
-        friction: 0.4,
-        ball_friction: 0.2,
-        // soft 네트: 거의 죽어서 떨어지되 살짝 튕김 (sensor 관통 대신).
-        net_restitution: 0.05,
-        drag: 0.0,
-        // C_m ρ R³ / m ≈ 1.2 * (0.02)^3 / 0.0027
-        magnus: 0.00356,
-    };
+impl Default for PhysicsParams {
+    fn default() -> Self {
+        return Self {
+            // ITTF 테이블: 30 cm 낙하 → ~23 cm 반발 → e≈√(23/30)≈0.88.
+            restitution: 0.88,
+            // 예측기 바운스 μ = friction (0.4). Rapier 테이블–공은
+            // Average(friction, ball_friction)≈0.3.
+            friction: 0.4,
+            ball_friction: 0.2,
+            net_restitution: 0.05,
+            drag: 0.0,
+            // C_m ρ R³ / m ≈ 1.2 * (0.02)^3 / 0.0027
+            magnus: 0.00356,
+        };
+    }
 }
+

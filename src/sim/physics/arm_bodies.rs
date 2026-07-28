@@ -14,7 +14,7 @@ use crate::robot::{Arm, Joints};
 /// 위치 추종 게인 — τ 여유 있을 때 명령각에 가깝게, 포화 시에만 지연.
 /// 값은 [`defaults::sim_motor`] SSOT (시뮬 전용 — 실물 서보에는 안 나감).
 fn motor_gains() -> (f32, f32) {
-    let motor = defaults::sim_motor();
+    let motor = defaults::SimMotorParams::default();
     return (
         motor.position_stiffness as f32,
         motor.position_damping as f32,
@@ -105,7 +105,7 @@ impl ArmMultibody {
         initial: &Joints,
         restitution: f32,
     ) -> Self {
-        let torques = defaults::control().max_joint_torques;
+        let torques = defaults::ControlParams::default().max_joint_torques;
         let (stiffness, damping) = motor_gains();
         let n = arm.joint_count().min(initial.values.len());
         let mount_iso = arm.chain.mount_isometry(mount);
@@ -181,7 +181,7 @@ impl ArmMultibody {
             .restitution(restitution)
             // 공 e(테이블용)보다 작을 때 Average면 중간값이 됨 → Min으로 e_eff 유지.
             .restitution_combine_rule(CoefficientCombineRule::Min)
-            .friction(defaults::impact().racket_friction as f32)
+            .friction(defaults::ImpactParams::default().racket_friction as f32)
             // density>0 이면 COM이 ee_from_link 쪽으로 밀려 body.position()≠링크원점 → FK 불일치.
             .mass(0.0)
             .build();
@@ -374,7 +374,7 @@ mod tests {
     }
 
     fn racket_e() -> f32 {
-        return defaults::impact().racket_effective_restitution as f32;
+        return defaults::ImpactParams::default().racket_effective_restitution as f32;
     }
 
     fn spawn_test_arm(
@@ -407,10 +407,10 @@ mod tests {
     fn spawns_four_joints_dual_yaw_torque_from_entry() {
         let (_arm, _b, _c, _j, mb) = spawn_test_arm(true);
         assert_eq!(mb.joint_count(), 4);
-        assert_eq!(defaults::control().max_joint_torques[0], 6.0);
-        assert_eq!(defaults::control().max_joint_torques[1], 3.0);
-        assert_eq!(defaults::control().max_joint_torques[2], 1.25);
-        assert_eq!(defaults::control().max_joint_torques[3], 1.25);
+        assert_eq!(defaults::ControlParams::default().max_joint_torques[0], 6.0);
+        assert_eq!(defaults::ControlParams::default().max_joint_torques[1], 3.0);
+        assert_eq!(defaults::ControlParams::default().max_joint_torques[2], 1.25);
+        assert_eq!(defaults::ControlParams::default().max_joint_torques[3], 1.25);
     }
 
     #[test]

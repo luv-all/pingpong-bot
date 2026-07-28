@@ -6,8 +6,7 @@ use opencv::prelude::*;
 
 use super::candidate::Candidate;
 use crate::camera::Frame;
-
-const DEFAULT_DIFF_THRESH: f64 = 25.0;
+use crate::defaults::vision::MOTION_DIFF_THRESH;
 
 /// 연속 프레임 absdiff → 이진 마스크. soft motion score에 쓴다.
 pub struct MotionPrior {
@@ -19,7 +18,7 @@ impl MotionPrior {
     pub fn new() -> Self {
         return Self {
             previous: None,
-            diff_thresh: DEFAULT_DIFF_THRESH,
+            diff_thresh: MOTION_DIFF_THRESH,
         };
     }
 

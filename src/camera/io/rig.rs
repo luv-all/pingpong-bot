@@ -1,6 +1,7 @@
 //! 로봇 기준 카메라 역할 ↔ OS device / CameraId 매핑.
 //!
-//! USB 장치 번호는 CLI에 노출하지 않는다. 순서가 바뀌면 [`CamRigConfig`]만 고친다.
+//! USB 장치 번호는 CLI에 노출하지 않는다.
+//! [`Default`]·벤치 숫자는 [`crate::defaults::calib`].
 
 use clap::ValueEnum;
 
@@ -30,24 +31,13 @@ impl std::fmt::Display for CameraRole {
     }
 }
 
-/// 역할 → device 인덱스 / 논리 `CameraId`. USB 순서가 바뀌면 **여기만** 고친다.
+/// 역할 → device 인덱스 / 논리 `CameraId`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CamRigConfig {
     pub left_device: i32,
     pub right_device: i32,
     pub left_id: CameraId,
     pub right_id: CameraId,
-}
-
-impl Default for CamRigConfig {
-    fn default() -> Self {
-        return Self {
-            left_device: 0,
-            right_device: 1,
-            left_id: CameraId(0),
-            right_id: CameraId(1),
-        };
-    }
 }
 
 impl CamRigConfig {

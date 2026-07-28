@@ -3,7 +3,7 @@
 //! - [`calib`] — `Calibration` / ChArUco / 탁구대 PnP
 //! - [`tri`] — DLT · OpenCV `triangulatePoints`
 //! - [`io`] — 캡처 · 프리뷰 · 투영 · 시뮬 카메라
-//! - [`arducam_b0332`] — B0332(OV9281) 스트림·렌즈 SSOT
+//! - [`arducam_b0332`] — B0332 datasheet (`constants::camera` re-export)
 
 use std::fmt;
 use std::time::Instant;

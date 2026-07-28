@@ -6,11 +6,8 @@
 use crate::Point3;
 use crate::constants::table;
 
-/// 권장 랜드마크 개수 (4 corners + 3 interior on centerline + robot-side mid).
-pub const TABLE_LANDMARK_COUNT: usize = 8;
-
-/// 재투영 RMSE 합격 상한 [px]. 플랜: ≤ 2~3.
-pub const MAX_REPROJ_RMSE_PX: f64 = 15.0;
+pub use crate::constants::camera::TABLE_LANDMARK_COUNT;
+pub use crate::defaults::calib::MAX_REPROJ_RMSE_PX;
 
 /// 고정 월드 랜드마크 하나.
 #[derive(Debug, Clone, Copy, PartialEq)]

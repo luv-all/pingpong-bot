@@ -2,7 +2,7 @@
 
 use anyhow::{Result, ensure};
 
-use crate::hardware::dynamixel::joint_torque_limits_4dof_array;
+use crate::defaults::dxl_limits::joint_torque_limits_4dof_array;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ControlParams {
@@ -44,17 +44,20 @@ impl ControlParams {
     }
 }
 
-pub fn control() -> ControlParams {
-    return ControlParams {
-        min_swing_secs: 0.08,
-        swing_commit_max_secs: 0.35,
-        swing_follow_through_secs: 0.06,
-        swing_commit_max_ball_y_frac: 0.55,
-        ekf_meas_jump_m: 0.6,
-        max_joint_accel: 400.0,
-        max_joint_torques: joint_torque_limits_4dof_array(),
-        joint_inertia: 0.015,
-        racket_open_pitch: 0.45,
-        torque_feedforward: true,
-    };
+impl Default for ControlParams {
+    fn default() -> Self {
+        return Self {
+            min_swing_secs: 0.08,
+            swing_commit_max_secs: 0.35,
+            swing_follow_through_secs: 0.06,
+            swing_commit_max_ball_y_frac: 0.55,
+            ekf_meas_jump_m: 0.6,
+            max_joint_accel: 400.0,
+            max_joint_torques: joint_torque_limits_4dof_array(),
+            joint_inertia: 0.015,
+            racket_open_pitch: 0.45,
+            torque_feedforward: true,
+        };
+    }
 }
+

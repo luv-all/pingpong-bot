@@ -16,7 +16,7 @@ pub struct SoftLimitArgs {
 
 /// AXL 리니어 레일 설정.
 ///
-/// 앱 벤치 값은 [`crate::defaults::rail`]. 여기 `Default`는 비활성 골격이다.
+/// 앱 벤치 값은 [`crate::defaults::hardware`]의 `Default`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RailConfig {
     pub enabled: bool,
@@ -46,38 +46,6 @@ pub struct RailConfig {
     pub limit_stop_mode: u32,
     pub pos_end_limit_level: u32,
     pub neg_end_limit_level: u32,
-}
-
-impl Default for RailConfig {
-    fn default() -> Self {
-        return Self {
-            enabled: false,
-            dll_path: PathBuf::new(),
-            axis: 0,
-            irq_no: 7,
-            pulses_per_meter: 2_500_000,
-            reverse: false,
-            x_min_m: -0.20,
-            x_max_m: 0.50,
-            vel: 0.3,
-            accel: 1.0,
-            decel: 1.0,
-            min_vel: 0.001,
-            max_vel: 1.0,
-            pulse_out_method: 4,
-            enc_input_method: 3,
-            abs_rel_mode: 0,
-            profile_mode: 3,
-            accel_unit: 0,
-            soft_limit_stop_mode: 0,
-            soft_limit_selection: 0,
-            inposition_use: 1,
-            alarm_use: 0,
-            limit_stop_mode: 0,
-            pos_end_limit_level: 2,
-            neg_end_limit_level: 2,
-        };
-    }
 }
 
 /// 레일 설정 검증 실패.

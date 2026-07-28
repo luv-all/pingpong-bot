@@ -21,7 +21,7 @@ pub fn clears_net_gate(
     omega: Vector3<f64>,
     physics: &PhysicsParams,
 ) -> bool {
-    let est = defaults::estimator();
+    let est = defaults::EstimatorParams::default();
     let net_y = table::LENGTH_Y * 0.5;
     let net_clear_z = table::SURFACE_Z + table::NET_HEIGHT + ball::RADIUS;
     const NET_GATE_SLACK_M: f64 = 0.012;
@@ -67,7 +67,7 @@ pub fn predict_hit_plane(
     plane: HitPlane,
     physics: &PhysicsParams,
 ) -> Option<Prediction> {
-    let est = defaults::estimator();
+    let est = defaults::EstimatorParams::default();
     let vy = velocity.y;
     if vy > -est.min_approach_speed_y {
         return None;
@@ -149,7 +149,7 @@ fn rest_height() -> f64 {
 
 /// 테이블에 붙어 느리게 구르는 상태 (비행/바운스 중이면 false).
 fn is_table_rolling(position: Vector3<f64>, velocity: Vector3<f64>) -> bool {
-    let on_table = position.z <= rest_height() + defaults::estimator().min_strike_clearance;
+    let on_table = position.z <= rest_height() + defaults::EstimatorParams::default().min_strike_clearance;
     let flat = velocity.z.abs() < 0.5;
     return on_table && flat;
 }
@@ -197,11 +197,11 @@ mod tests {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        let physics = defaults::physics();
+        let physics = defaults::PhysicsParams::default();
         let pred =
             predict_hit_plane(position, velocity, Vector3::zeros(), plane, &physics).expect("예측");
         assert!((pred.impact_position.coords.y - plane.y).abs() < 1e-5);
-        assert!(pred.time_to_impact_secs > defaults::estimator().min_lead);
+        assert!(pred.time_to_impact_secs > defaults::EstimatorParams::default().min_lead);
         assert!(pred.incoming_velocity.y < 0.0);
     }
 
@@ -222,7 +222,7 @@ mod tests {
                 velocity,
                 Vector3::zeros(),
                 plane,
-                &defaults::physics()
+                &defaults::PhysicsParams::default()
             )
             .is_none()
         );
@@ -240,7 +240,7 @@ mod tests {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        let physics = defaults::physics();
+        let physics = defaults::PhysicsParams::default();
         assert!(
             predict_hit_plane(position, velocity, Vector3::zeros(), plane, &physics).is_none(),
             "네트 미달 탄도는 None"
@@ -253,7 +253,7 @@ mod tests {
 
     #[test]
     fn topspin_drops_relative_to_backspin() {
-        let physics = defaults::physics();
+        let physics = defaults::PhysicsParams::default();
         let position = Vector3::new(
             table::WIDTH_X * 0.5,
             table::LENGTH_Y - 0.2,

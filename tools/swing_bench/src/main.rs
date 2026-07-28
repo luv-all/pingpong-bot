@@ -333,7 +333,7 @@ fn compute_target(
         v_in,
         v_out,
         pose.normal,
-        defaults::impact().racket_effective_restitution,
+        defaults::ImpactParams::default().racket_effective_restitution,
     )
     .map_err(|e| anyhow!("목표 라켓 속도 계산 실패: {e}"))?;
     let (rail_velocity, joint_velocities) = arm

@@ -1,7 +1,7 @@
 # tune-colormask
 
 탁구공 위 픽셀을 클릭해 **YCrCb / HSV** `inRange` 범위를 뽑는다.  
-파일은 건드리지 않는다 — 콘솔에 `defaults::colormask()`에 붙여넣을 Rust 조각만 출력.
+파일은 건드리지 않는다 — 콘솔에 `ColormaskParams::default()`에 붙여넣을 Rust 조각만 출력.
 
 ## 화면
 

@@ -35,9 +35,8 @@ pub use camera::{
     triangulate_views, upsert_camera,
 };
 pub use defaults::{
-    ControlParams, EstimatorParams, ImpactParams, PhysicsParams, colormask, control, detector,
-    dynamixel, estimator, impact, intercept, physics, primitive_4dof, rail, rail_frame, robot, roi,
-    scorer, shared_robot, urdf_4dof, urdf_test,
+    ControlParams, EstimatorParams, ImpactParams, PhysicsParams, SimMotorParams, detector,
+    primitive_4dof, rail_frame, robot, shared_robot, urdf_4dof, urdf_test,
 };
 pub use detector::{
     BallDetector, Candidate, CandidateGenerator, ColorContourCascade, ColorSpace,
@@ -52,9 +51,11 @@ pub use estimator::{
     friction_from_tangential_speeds, mean_bounce_e, mean_roll_mu, predict_hit_plane,
     restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
+pub use hardware::{Hardware, SimHardware};
+pub use hardware::dynamixel::DynamixelConfig;
+pub use hardware::rail::RailConfig;
 #[cfg(feature = "real")]
 pub use hardware::RealHardware;
-pub use hardware::{Hardware, SimHardware};
 pub use logging::init_tracing;
 pub use pipeline::{CameraFeed, PipelineConfig, PipelineError, PipelineThread, run};
 pub use planner::{

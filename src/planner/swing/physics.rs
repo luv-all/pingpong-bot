@@ -4,6 +4,9 @@ use nalgebra::Vector3;
 
 use crate::constants::{G, table};
 use crate::defaults;
+use crate::defaults::planner::{
+    RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
+};
 use crate::error::{DomainError, SwingPlanError};
 use crate::planner::impact::{rally_return_velocity, required_racket_velocity};
 use crate::robot::Arm;
@@ -21,7 +24,7 @@ pub struct PlannedIntercept {
 ///
 /// 테이블 바운스 마찰이 Rapier에서 비현실적으로 큰 ω를 만들 수 있어
 /// Magnus에 쓰는 |ω|는 [`MAGNUS_OMEGA_MAX`]로 클립한다.
-pub const MAGNUS_OMEGA_MAX: f64 = 80.0;
+pub use crate::defaults::planner::MAGNUS_OMEGA_MAX;
 
 pub fn aero_accel(
     velocity: Vector3<f64>,
@@ -56,13 +59,13 @@ pub fn accel(
 ///
 /// 창보다 이르면 대기(발사 직후 긴 궤적 금지), 짧으면 `InsufficientTime`.
 pub fn in_swing_commit_window(time_to_impact_secs: f64) -> bool {
-    return (defaults::control().min_swing_secs..=defaults::control().swing_commit_max_secs)
+    return (defaults::ControlParams::default().min_swing_secs..=defaults::ControlParams::default().swing_commit_max_secs)
         .contains(&time_to_impact_secs);
 }
 
 /// 네트 통과 후인지 - ground truth/EKF control 공통 commit 게이트.
 pub fn ball_past_midcourt_for_commit(ball_y: f64) -> bool {
-    return ball_y <= table::LENGTH_Y * defaults::control().swing_commit_max_ball_y_frac;
+    return ball_y <= table::LENGTH_Y * defaults::ControlParams::default().swing_commit_max_ball_y_frac;
 }
 
 /// IK로 역산한 목표 관절속도가 실제 한계의 이 배수를 넘으면 "특이점 근처"로
@@ -178,7 +181,7 @@ fn best_impact_candidate(
             v_in,
             v_out,
             pose.normal,
-            defaults::impact().racket_effective_restitution,
+            defaults::ImpactParams::default().racket_effective_restitution,
         ) {
             Ok(v_r) => v_r,
             Err(error) => {
@@ -319,11 +322,11 @@ pub fn plan_swing(
     start: &RobotPose,
 ) -> Result<SwingTrajectory, DomainError> {
     let time_to_impact = prediction.time_to_impact_secs;
-    if time_to_impact < defaults::control().min_swing_secs {
+    if time_to_impact < defaults::ControlParams::default().min_swing_secs {
         return Err(DomainError::InfeasibleSwing(
             SwingPlanError::InsufficientTime {
                 time_to_impact_secs: time_to_impact,
-                min_swing_secs: defaults::control().min_swing_secs,
+                min_swing_secs: defaults::ControlParams::default().min_swing_secs,
             },
         ));
     }
@@ -465,13 +468,6 @@ pub fn plan_coarse_track(arm: &Arm, predictions: &[Prediction]) -> Option<RobotP
         .inverse_pose_with_rail(reachable, desired_normal, &hint)
         .ok();
 }
-
-/// 스윙 뒤 항상 시도할 최소 복귀 시간 [s].
-const RETURN_TO_CENTER_MIN_SECS: f64 = 0.3;
-/// 이 시간까지 늘려도 실현 가능한 궤적이 없으면 포기한다.
-const RETURN_TO_CENTER_MAX_SECS: f64 = 3.0;
-/// 실패할 때마다 소요 시간을 이 배수로 늘린다.
-const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
 
 /// 스윙(혹은 랠리) 뒤 로봇을 중앙 포즈(관절 `default_joints`, 레일 `default_x`
 /// = 테이블 폭 중앙)로 되돌리는 궤적을 계획한다.
@@ -635,7 +631,7 @@ fn trajectory_with_follow_through(
     impact_time: f64,
     rail: RailMotion,
 ) -> SwingTrajectory {
-    let follow_time = defaults::control().swing_follow_through_secs;
+    let follow_time = defaults::ControlParams::default().swing_follow_through_secs;
     let mut end_values = impact.values.clone();
     for (index, (value, velocity)) in end_values
         .iter_mut()
@@ -756,7 +752,7 @@ fn kinematic_limit_violation(arm: &Arm, trajectory: &SwingTrajectory) -> Option<
     if trajectory.peak_joint_speed() > arm.max_joint_speed {
         return Some("관절 속도");
     }
-    if trajectory.peak_joint_acceleration() > defaults::control().max_joint_accel {
+    if trajectory.peak_joint_acceleration() > defaults::ControlParams::default().max_joint_accel {
         return Some("관절 각가속도");
     }
     if arm
@@ -817,8 +813,8 @@ fn fit_end_velocity(
         } else {
             1.0
         };
-        let accel_scale = if peak_accel > defaults::control().max_joint_accel {
-            defaults::control().max_joint_accel / peak_accel * 0.95
+        let accel_scale = if peak_accel > defaults::ControlParams::default().max_joint_accel {
+            defaults::ControlParams::default().max_joint_accel / peak_accel * 0.95
         } else {
             1.0
         };
@@ -900,16 +896,16 @@ mod tests {
         assert!(!in_swing_commit_window(0.05));
         assert!(in_swing_commit_window(0.12));
         assert!(in_swing_commit_window(
-            defaults::control().swing_commit_max_secs
+            defaults::ControlParams::default().swing_commit_max_secs
         ));
         assert!(!in_swing_commit_window(
-            defaults::control().swing_commit_max_secs + 0.01
+            defaults::ControlParams::default().swing_commit_max_secs + 0.01
         ));
     }
 
     #[test]
     fn midcourt_gate_matches_fraction() {
-        let limit = table::LENGTH_Y * defaults::control().swing_commit_max_ball_y_frac;
+        let limit = table::LENGTH_Y * defaults::ControlParams::default().swing_commit_max_ball_y_frac;
         assert!(!ball_past_midcourt_for_commit(limit + 0.01));
         assert!(ball_past_midcourt_for_commit(limit));
         assert!(ball_past_midcourt_for_commit(0.3));
@@ -961,7 +957,7 @@ mod tests {
             prediction.incoming_velocity,
             rally_return_velocity(prediction.impact_position, prediction.incoming_velocity),
             pose.normal,
-            defaults::impact().racket_effective_restitution,
+            defaults::ImpactParams::default().racket_effective_restitution,
         )
         .expect("required racket velocity");
         // 이 샷은 실제 per-joint 토크 한계(derated MX stall) 아래에서는 완전한
@@ -1078,7 +1074,7 @@ mod tests {
             panic!("InsufficientTime 기대");
         };
         assert!((time_to_impact_secs - 0.05).abs() < f64::EPSILON);
-        assert!((min_swing_secs - defaults::control().min_swing_secs).abs() < f64::EPSILON);
+        assert!((min_swing_secs - defaults::ControlParams::default().min_swing_secs).abs() < f64::EPSILON);
     }
 
     #[test]

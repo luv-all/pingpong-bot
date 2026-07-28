@@ -16,7 +16,7 @@
 - **`[` `]`**: `k` (±0.25)
 - **`,` `.`**: `m` (±0.25)
 - **`-` `=`**: `pad` (±4)
-- **`p`**: `defaults::roi()` paste 스니펫
+- **`p`**: `RoiParams::default()` paste 스니펫
 - **`q` / ESC**: 종료
 
 SSOT: `src/defaults/vision.rs` → `detector()` / `roi()` / `colormask()` / `scorer()`

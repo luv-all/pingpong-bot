@@ -39,7 +39,7 @@ pub struct PipelineConfig {
 impl Default for PipelineConfig {
     fn default() -> Self {
         return Self {
-            intercept: crate::defaults::intercept(),
+            intercept: InterceptWindow::default(),
             control_hz: CONTROL_HZ,
             robot: shared_robot(),
             calibration: Calibration::sim(3),

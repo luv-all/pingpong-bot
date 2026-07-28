@@ -356,10 +356,8 @@ pub fn draw_cam_label(img: &mut Mat, label: &str, color: Scalar) -> CvResult<()>
     return Ok(());
 }
 
-/// 픽셀 정밀 찍기용 loupe — 고정 8×, 지름 120px 원형.
-pub const PIXEL_LOUPE_ZOOM: i32 = 8;
-/// 소스 반경(px). 한 변 = `2 * half + 1` → 확대 후 120px.
-pub const PIXEL_LOUPE_SRC_HALF: i32 = 7;
+/// 픽셀 정밀 찍기용 loupe — [`crate::defaults::vision`].
+pub use crate::defaults::vision::{PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM};
 
 /// highgui 마우스: LMB 클릭 큐 + Shift-hold loupe 호버.
 #[derive(Debug, Default, Clone)]

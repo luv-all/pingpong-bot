@@ -147,7 +147,7 @@ impl StatusSnapshot {
             .into_iter()
             .map(|p| [p.x as f32, p.y as f32, p.z as f32])
             .collect();
-        let control = defaults::control();
+        let control = defaults::ControlParams::default();
         let joint_q = joints.values.clone();
         let joint_q_min: Vec<Option<f64>> = (0..arm.joint_count())
             .map(|i| arm.joint_limit(i).map(|l| l.min))
@@ -1118,7 +1118,7 @@ fn draw_signed_bar(ui: &mut egui::Ui, min: f64, cur: f64, max: f64, hot: bool) {
 }
 
 fn draw_commit_bar(ui: &mut egui::Ui, status: &StatusSnapshot) {
-    let control = defaults::control();
+    let control = defaults::ControlParams::default();
     let min_s = control.min_swing_secs;
     let max_s = control.swing_commit_max_secs;
     let tti = status

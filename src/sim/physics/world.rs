@@ -125,7 +125,7 @@ impl SimWorld {
     ///
     /// 제어·Rapier 라켓·URDF 뷰어는 같은 관절 순서와 기구학을 사용한다.
     pub fn new(robot: crate::robot::Robot) -> Self {
-        return Self::with_physics(robot, crate::defaults::physics());
+        return Self::with_physics(robot, crate::defaults::PhysicsParams::default());
     }
 
     /// config `[physics]` 반발 등을 Rapier collider에 반영한다.
@@ -194,7 +194,7 @@ impl SimWorld {
             mount,
             robot.joints(),
             // 라켓 e ≠ 테이블 e. combine Min → 공–라켓 접촉이 e_eff.
-            crate::defaults::impact().racket_effective_restitution as f32,
+            crate::defaults::ImpactParams::default().racket_effective_restitution as f32,
         );
         let racket_handle = arm_bodies
             .racket_handle()
@@ -248,7 +248,7 @@ impl SimWorld {
             ball_state: BallState::Parked,
             last_shooter_settings: default_shooter.clone(),
             debug_prediction: None,
-            intercept: crate::defaults::intercept(),
+            intercept: InterceptWindow::default(),
             use_ground_truth: true,
             use_bang_bang_swing: false,
             swing_committed: false,
@@ -556,7 +556,7 @@ impl SimWorld {
             return;
         }
 
-        let min_swing = crate::defaults::control().min_swing_secs;
+        let min_swing = crate::defaults::ControlParams::default().min_swing_secs;
         let soonest_tti = predictions
             .iter()
             .map(|p| p.time_to_impact_secs)
@@ -985,8 +985,8 @@ impl SimWorld {
         let targets = self.robot.targets().clone();
         self.arm_bodies
             .set_motor_targets(&mut self.multibody_joint_set, &targets);
-        if crate::defaults::control().torque_feedforward {
-            let limits = crate::defaults::control().max_joint_torques;
+        if crate::defaults::ControlParams::default().torque_feedforward {
+            let limits = crate::defaults::ControlParams::default().max_joint_torques;
             let n = self.arm.joint_count().min(limits.len());
             let mut forces = limits.to_vec();
             let now = &self.debug_snap.torque_now_nm;
@@ -1003,7 +1003,7 @@ impl SimWorld {
     /// 테스트: yaw 모터 max_force를 덮어쓴다.
     #[cfg(test)]
     pub fn set_yaw_motor_max_force_for_test(&mut self, tau0: f64) {
-        let mut torques = crate::defaults::control().max_joint_torques;
+        let mut torques = crate::defaults::ControlParams::default().max_joint_torques;
         torques[0] = tau0;
         self.arm_bodies
             .set_motor_max_forces(&mut self.multibody_joint_set, &torques);
@@ -1077,7 +1077,7 @@ mod tests {
         // tti < min_swing이 되면 포기 (억지 commit 없음).
         let mut world = SimWorld::new(fourdof_robot());
         world.set_use_ground_truth(true);
-        world.set_intercept_window(crate::defaults::intercept());
+        world.set_intercept_window(InterceptWindow::default());
         let settings = BallShooterSettings {
             lateral_offset_m: 0.5,
             yaw_deg: -28.0,
@@ -1114,7 +1114,7 @@ mod tests {
     fn default_shot_still_commits_when_reachable() {
         let mut world = SimWorld::new(fourdof_robot());
         world.set_use_ground_truth(true);
-        world.set_intercept_window(crate::defaults::intercept());
+        world.set_intercept_window(InterceptWindow::default());
         world.shoot_ball(&BallShooterSettings::default());
         for _ in 0..8_000 {
             world.step(1.0 / 1000.0, None);
@@ -1316,7 +1316,7 @@ mod tests {
         let arm = test_robot();
         let mut world = SimWorld::new(arm);
         world.set_use_ground_truth(true);
-        world.set_intercept_window(crate::defaults::intercept());
+        world.set_intercept_window(InterceptWindow::default());
 
         let collider_for_body = |body_handle| {
             world

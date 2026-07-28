@@ -1,6 +1,6 @@
 //! 공 낙하 바운스 전후 속도비로 반발계수 e를 측정 (plan §3.4).
 //!
-//! 산출물: stdout에 `defaults::physics()` 붙여넣기 스니펫.
+//! 산출물: stdout에 `PhysicsParams::default()` 붙여넣기 스니펫.
 
 mod capture_loop;
 
@@ -13,14 +13,14 @@ use nalgebra::Vector3;
 use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{
-    drag_from_trajectory, format_physics_for_defaults, restitution_from_bounce_heights,
-    restitution_from_normal_speeds, StereoCamCliArgs,
+    PhysicsParams, StereoCamCliArgs, drag_from_trajectory, format_physics_for_defaults,
+    restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
 
 #[derive(Parser, Debug)]
 #[command(
     name = "measure_restitution",
-    about = "반발계수 e 측정 → defaults::physics() 스니펫. 영상 멀티캠 또는 수동 숫자"
+    about = "반발계수 e 측정 → PhysicsParams::default() 스니펫. 영상 멀티캠 또는 수동 숫자"
 )]
 struct Args {
     /// Calibration JSON (캡처 모드 필수)
@@ -136,7 +136,7 @@ fn main() -> Result<()> {
         let e = measure_e_ballistics(args.drop_height)?;
         println!(
             "restitution e = {e:.6}  (ballistics; configured={})",
-            pingpong_bot::physics().restitution
+            PhysicsParams::default().restitution
         );
         patch.restitution = Some(e);
     }
@@ -145,7 +145,7 @@ fn main() -> Result<()> {
         let e = measure_e_in_sim(args.drop_height)?;
         println!(
             "restitution e = {e:.6}  (sim drop; configured physics.restitution={})",
-            pingpong_bot::physics().restitution
+            PhysicsParams::default().restitution
         );
         patch.restitution = Some(e);
     }
@@ -169,10 +169,9 @@ fn main() -> Result<()> {
 }
 
 fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
-    use pingpong_bot::defaults;
     use pingpong_bot::estimator::ballistics::semi_implicit_euler;
 
-    let physics = defaults::physics();
+    let physics = PhysicsParams::default();
     let floor = table::SURFACE_Z + ball::RADIUS;
     let mut pos = Vector3::new(
         table::WIDTH_X * 0.5,
