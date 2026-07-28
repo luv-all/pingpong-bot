@@ -286,6 +286,7 @@ cargo run -p pingpong-bot
 |-------|--------|
 | `cam-list` | [cam_list](tools/cam_list/README.md) — OpenCV device 인덱스 프로브 |
 | `cam-preview` | [cam_preview](tools/cam_preview/README.md) |
+| `record-stereo` | [record_stereo](tools/record_stereo/README.md) — 프리롤 스테레오 → `data/clips/` (LFS) |
 | `calib-charuco` | [calib_charuco](tools/calib_charuco/README.md) |
 | `calib-table-pnp` | [calib_table_pnp](tools/calib_table_pnp/README.md) — 8점 PnP + 월드 격자 검증 |
 | `verify-stereo` | [verify_stereo](tools/verify_stereo/README.md) — 스테레오 격자·공 3D·sim |
