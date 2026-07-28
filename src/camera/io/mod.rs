@@ -1,11 +1,18 @@
 //! 카메라 입출력 — 캡처·프리뷰·투영·시뮬 카메라.
 
+mod cam_cli;
 mod capture;
 pub mod preview;
 mod projection;
+mod rig;
 mod sim;
 mod threaded;
 
+pub use cam_cli::{
+    CamCliArgs, CamStreamArgs, DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
+    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH, ResolvedCam, StereoCamCliArgs, parse_fourcc,
+    resolve_cams,
+};
 pub use capture::{
     CaptureBackend, ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture,
 };
@@ -15,5 +22,6 @@ pub use preview::{
     draw_world_velocity, hstack_bgr, show_bgr,
 };
 pub use projection::CameraView;
+pub use rig::{CamRigConfig, CameraRole};
 pub use sim::SimCamera;
 pub use threaded::ThreadedCapture;

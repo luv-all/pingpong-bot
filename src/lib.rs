@@ -21,15 +21,18 @@ pub mod telemetry;
 pub type Point3 = nalgebra::Point3<f64>;
 
 pub use camera::{
-    BallObservation, Calibration, CameraId, CameraParams, CaptureBackend, CharucoBoardSpec,
-    CharucoCalibReport, CharucoFrameDetect, ExposureReadout, Frame, FrameSource, HintSource,
-    ImageDirSource, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, OpenCvCapture, PixelPickMouse,
-    PixelPoint, PreviewAction, SimCamera, TABLE_LANDMARK_COUNT, TableLandmark, TablePnpResult,
-    ThreadedCapture, arducam_b0332, calibrate_charuco, calibrate_table_pnp, destroy_window,
-    detect_and_draw_charuco, dlt_triangulate, draw_cam_label, draw_circle_px, draw_debug_lines,
-    draw_help_lines, draw_pixel_loupe, draw_world_velocity, ensure_reproj_below, ensure_reproj_ok,
-    hstack_bgr, sample_at, show_bgr, table_landmark_mesh_edges, table_landmarks,
-    triangulate_projections, triangulate_synced, triangulate_views, upsert_camera,
+    BallObservation, Calibration, CamCliArgs, CamRigConfig, CamStreamArgs, CameraId, CameraParams,
+    CameraRole, CaptureBackend, CharucoBoardSpec, CharucoCalibReport, CharucoFrameDetect,
+    DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT,
+    DEFAULT_STREAM_WIDTH, ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource,
+    MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, OpenCvCapture, PixelPickMouse, PixelPoint,
+    PreviewAction, ResolvedCam, SimCamera, StereoCamCliArgs, TABLE_LANDMARK_COUNT, TableLandmark,
+    TablePnpResult, ThreadedCapture, arducam_b0332, calibrate_charuco, calibrate_table_pnp,
+    destroy_window, detect_and_draw_charuco, dlt_triangulate, draw_cam_label, draw_circle_px,
+    draw_debug_lines, draw_help_lines, draw_pixel_loupe, draw_world_velocity, ensure_reproj_below,
+    ensure_reproj_ok, hstack_bgr, parse_fourcc, resolve_cams, sample_at, show_bgr,
+    table_landmark_mesh_edges, table_landmarks, triangulate_projections, triangulate_synced,
+    triangulate_views, upsert_camera,
 };
 pub use defaults::{
     ControlParams, EstimatorParams, ImpactParams, PhysicsParams, colormask, control, detector,
