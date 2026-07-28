@@ -2,7 +2,6 @@
 
 mod arm_from_urdf;
 mod fk;
-mod inertial;
 mod mount;
 mod visual;
 

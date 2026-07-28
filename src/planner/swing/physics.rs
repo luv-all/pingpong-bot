@@ -704,7 +704,7 @@ fn peak_torque_utilization(arm: &Arm, trajectory: &SwingTrajectory) -> f64 {
     let mut velocities = vec![0.0; n];
     let mut accelerations = vec![0.0; n];
     // 스크래치·출력 버퍼를 한 번만 만들어 모든 샘플에서 재사용(힙 할당 회피).
-    let mut scratch = crate::planner::dynamics::RneaScratch::new();
+    let mut scratch = crate::robot::dynamics::RneaScratch::new();
     let mut torques = vec![0.0; n];
     let mut worst = 0.0_f64;
     for index in 0..=samples {
@@ -722,7 +722,7 @@ fn peak_torque_utilization(arm: &Arm, trajectory: &SwingTrajectory) -> f64 {
             velocities[i] = qd;
             accelerations[i] = qdd;
         }
-        crate::planner::dynamics::required_joint_torques_into(
+        crate::robot::dynamics::required_joint_torques_into(
             arm,
             &joints,
             &velocities,

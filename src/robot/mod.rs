@@ -18,7 +18,7 @@ mod tests;
 use nalgebra::{DMatrix, DVector, Isometry3, Matrix3, UnitQuaternion, Vector3};
 
 pub use build::{ArmBuildError, ArmBuilder, MountPreset, Robot, RobotBuildError, RobotBuilder};
-pub use dynamics::{LinkInertia, is_feasible, required_torque};
+pub use dynamics::{is_feasible, required_torque};
 pub use rail::{LinearRail, RailFrame};
 pub use serial::{SerialChain, SerialChainError, SerialJoint};
 pub use state::RobotState;
@@ -163,8 +163,6 @@ pub struct Arm {
     pub max_joint_speed: f64,
     /// FK/IK 구현. URDF 로봇은 원본 고정 변환과 축을 보존한 직렬 체인을 쓴다.
     pub(crate) chain: SerialChain,
-    /// revolute 링크 합산 관성 (URDF). 없으면 RNEA 불가 → 플래너 대각 폴백.
-    pub inertias: Option<Vec<dynamics::LinkInertia>>,
 }
 
 /// 월드 좌표계 라켓 자세 - sim/real 동일 표현.
@@ -253,25 +251,7 @@ impl Arm {
             default_joints,
             max_joint_speed,
             chain,
-            inertias: None,
         });
-    }
-
-    /// URDF 등에서 로드한 링크 관성을 붙인다 (길이는 관절 수와 같아야 함).
-    pub fn with_inertias(
-        mut self,
-        inertias: Vec<dynamics::LinkInertia>,
-    ) -> Result<Self, ArmBuildError> {
-        if inertias.len() != self.joint_count() {
-            return Err(ArmBuildError::KinematicsJointCountMismatch {
-                chain: self.joint_count(),
-                limits: self.limits.len(),
-                link_inertials: inertias.len(),
-                defaults: self.default_joints.values.len(),
-            });
-        }
-        self.inertias = Some(inertias);
-        return Ok(self);
     }
 
     fn arm_length(&self) -> f64 {
@@ -858,7 +838,7 @@ impl Arm {
     /// 라켓 위치(x,y,z) 3제약만의 수치미분 자코비안 - `(레일 유무 포함) x 관절수`.
     /// [`linear_velocities_for_racket_velocity`]와 그 조작성 평가(특이값 등)가
     /// 공유하는 빌더.
-    fn position_jacobian_fd(&self, pose: &RobotPose) -> Option<DMatrix<f64>> {
+    pub(crate) fn position_jacobian_fd(&self, pose: &RobotPose) -> Option<DMatrix<f64>> {
         const STEP: f64 = 1e-6;
         if pose.joints.values.len() != self.joint_count() {
             return None;

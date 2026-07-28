@@ -55,17 +55,18 @@ pub use logging::init_tracing;
 pub use pipeline::{CameraFeed, PipelineConfig, PipelineError, PipelineThread, run};
 pub use planner::{
     BangBangTrajectory, InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox,
-    PlannedBangBangIntercept, RailMotion, SwingFeasibility, SwingTrajectory, accel, aero_accel,
-    ball_past_midcourt_for_commit, clamp_above_table, in_swing_commit_window, plan_bang_bang_swing,
-    plan_best_swing, plan_coarse_track, plan_return_to_center, plan_swing, rally_return_velocity,
-    required_racket_velocity, robot_obbs, swing_feasibility, table_penetration,
-    verify_impact_model,
+    PlannedBangBangIntercept, RacketGuidanceScratch, RacketGuidanceStep, RailMotion,
+    SwingFeasibility, SwingTrajectory, accel, aero_accel, ball_past_midcourt_for_commit,
+    clamp_above_table, in_swing_commit_window, plan_bang_bang_swing, plan_best_swing,
+    plan_coarse_track, plan_return_to_center, plan_swing, rally_return_velocity,
+    required_racket_velocity, robot_obbs, step_racket_guidance, swing_feasibility,
+    table_penetration, verify_impact_model,
 };
 pub use robot::{
-    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, LinkInertia, LinkInertial,
-    MountPreset, RacketPose, RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose,
-    RobotState, SerialChain, SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual,
-    UrdfLoadError, UrdfModel, is_feasible, required_torque,
+    Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, LinkInertial, MountPreset,
+    RacketPose, RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose, RobotState,
+    SerialChain, SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual, UrdfLoadError,
+    UrdfModel, is_feasible, required_torque,
 };
 pub use sim::{
     BallShooterSettings, BallState, ShooterLayout, SimBallEstimator, SimRuntimeControls,

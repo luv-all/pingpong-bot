@@ -2,11 +2,13 @@
 
 pub mod bang_bang;
 pub mod collision;
-pub mod dynamics;
 pub mod impact;
 pub mod swing;
 
-pub use bang_bang::{BangBangTrajectory, PlannedBangBangIntercept, plan_bang_bang_swing};
+pub use bang_bang::{
+    BangBangTrajectory, PlannedBangBangIntercept, RacketGuidanceScratch, RacketGuidanceStep,
+    plan_bang_bang_swing, step_racket_guidance,
+};
 pub use collision::{OrientedBox, clamp_above_table, robot_obbs, table_penetration};
 pub use impact::{rally_return_velocity, required_racket_velocity, verify_impact_model};
 /// 하위 호환: `planner::physics::…`

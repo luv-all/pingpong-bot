@@ -72,6 +72,9 @@ pub struct SimDebugSnapshot {
     pub net_gate_ok: Option<bool>,
     pub commit_phase: CommitPhase,
     pub omega: [f64; 3],
+    /// `set_torque_now`용 RNEA 스크래치 — 매 틱(최대 1kHz) 재할당을 피하려고
+    /// 재사용한다 (`src/planner/swing/physics.rs`의 스크래치 재사용 패턴과 동일).
+    torque_scratch: crate::robot::dynamics::RneaScratch,
 }
 
 /// 뷰어용 OBB (중심·half extents·축).
@@ -154,30 +157,20 @@ impl SimDebugSnapshot {
         let duration = trajectory.duration_secs.max(f64::EPSILON);
         let samples = ((duration / 0.005).ceil() as usize).max(24);
         let n = arm.joint_count();
+        // aggregated_inertials는 primitive·URDF 프리셋 모두 필수로 채워져
+        // required_torque가 항상 RNEA로 계산된다 — 관성 데이터가 없어 스칼라
+        // 근사(joint_inertia * alpha)로 폴백하던 옛 경로는 이제 없다.
         let mut peaks = vec![0.0_f64; n];
-        let mut have_rnea = arm.inertias.is_some();
-        if have_rnea {
-            for k in 0..=samples {
-                let t = duration * k as f64 / samples as f64;
-                let q = trajectory.sample_at(t);
-                let qd = trajectory.sample_velocity_at(t);
-                let qdd = trajectory.sample_acceleration_at(t);
-                if let Some(tau) = crate::robot::required_torque(arm, &q.values, &qd, &qdd) {
-                    for i in 0..n {
-                        peaks[i] = f64::max(peaks[i], tau[i].abs());
-                    }
-                } else {
-                    have_rnea = false;
-                    break;
+        for k in 0..=samples {
+            let t = duration * k as f64 / samples as f64;
+            let q = trajectory.sample_at(t);
+            let qd = trajectory.sample_velocity_at(t);
+            let qdd = trajectory.sample_acceleration_at(t);
+            if let Some(tau) = crate::robot::required_torque(arm, &q.values, &qd, &qdd) {
+                for i in 0..n {
+                    peaks[i] = f64::max(peaks[i], tau[i].abs());
                 }
             }
-        }
-        if !have_rnea {
-            let alphas = trajectory.peak_joint_accelerations();
-            peaks = alphas
-                .iter()
-                .map(|&alpha| control.joint_inertia * alpha)
-                .collect();
         }
         self.torque_peak_nm = peaks.clone();
         self.torque_over = peaks
@@ -192,10 +185,24 @@ impl SimDebugSnapshot {
     }
 
     /// 스윙 재생 중이면 궤적 샘플, 아니면 현재 자세(중력)로 τ를 채운다.
+    ///
+    /// 매 물리 틱(최대 1kHz) 호출되므로 스크래치·출력 버퍼를 재사용해
+    /// (`required_joint_torques_into`) 힙 할당을 피한다 — 길이가 안 맞으면
+    /// `required_torque`처럼 조용히 스킵(기존 값 유지).
     pub fn set_torque_now(&mut self, arm: &Arm, q: &[f64], qd: &[f64], qdd: &[f64]) {
-        if let Some(tau) = crate::robot::required_torque(arm, q, qd, qdd) {
-            self.torque_now_nm = tau;
+        let n = arm.joint_count();
+        if q.len() != n || qd.len() != n || qdd.len() != n {
+            return;
         }
+        let joints = Joints::from_slice(q);
+        crate::robot::dynamics::required_joint_torques_into(
+            arm,
+            &joints,
+            qd,
+            qdd,
+            &mut self.torque_scratch,
+            &mut self.torque_now_nm,
+        );
     }
 
     /// 매 스텝: 관절·관통·ω·진실/예측 탄도.

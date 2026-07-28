@@ -245,6 +245,12 @@ impl RobotState {
     ///
     /// 관절 속도 상태 `ω`를 두고 `|α| ≤ τ_max/I`로 적분한다. 위치만 클램프하면
     /// 궤적 초반에 포화되지 않아 듀얼/단일이 같아 보인다.
+    ///
+    /// **시뮬 런타임은 이 경로를 쓰지 않는다** — `sim/physics/world.rs`는
+    /// [`Self::step_commands`](Rapier 다물체 측정 폐루프)로 간다. 이 메서드는
+    /// `dual_yaw_torque_tracks_farther_than_single` 단위테스트에서만 호출되는,
+    /// 듀얼 yaw 모터 토크 예산이 단일보다 실제로 유리하다는 설계 가정을 검증하는
+    /// 독립 회귀테스트다 — 프로덕션 경로에 연결이 빠진 게 아니라 의도된 상태.
     pub fn advance_swing_torque_limited(
         &mut self,
         _arm: &Arm,

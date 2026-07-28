@@ -148,7 +148,7 @@ pub fn primitive_4dof_with_mount(mount_y: f64, mount_z: f64) -> Result<Robot, Ro
 /// (질량 [kg], 질량중심 xyz [m], 관성텐서 ixx/ixy/ixz/iyy/iyz/izz [kg*m^2];
 /// 전부 rpy=0). 둘째 값은 그 child link + 다음 revolute 관절까지의 fixed
 /// 하위 링크(모터 몸체/브래킷/패들)를 평행축 정리로 합친 "실제로 움직이는
-/// 강체"로, Newton-Euler 역동역학([`crate::planner::dynamics`])이 이 쪽을 쓴다.
+/// 강체"로, Newton-Euler 역동역학([`crate::robot::dynamics`])이 이 쪽을 쓴다.
 /// 배치 변환은 URDF의 fixed joint(`Rigid N`) origin을 관절 child link
 /// 프레임부터 누적한 값(전부 rpy=0이라 순수 평행이동).
 fn primitive_4dof_inertials() -> (Vec<LinkInertial>, Vec<LinkInertial>) {
