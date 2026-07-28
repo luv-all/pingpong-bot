@@ -23,7 +23,7 @@ cargo run -p tune-colormask -- --path clip.mp4
 | 키 | 동작 |
 |----|------|
 | LMB / Enter | 공 픽셀 샘플 추가 (좌측 original만, aim 위치) |
-| `←↑→↓` | aim 1px (마우스 이동 시 즉시 재동기화) |
+| `←↑→↓` / `hjkl` | aim 1px (마우스 이동 시 재동기화; nudge 중 loupe 유지) |
 | `Shift`+이동 | 8× 원형 loupe (좌측 original, 중심 픽셀 정밀 정렬) |
 | `z` / Backspace | 마지막 샘플 취소 |
 | `c` | 샘플 전체 삭제 |

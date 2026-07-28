@@ -450,7 +450,7 @@ fn main() -> Result<()> {
     );
     hint_existing(cam_id);
     println!(
-        "LMB/Enter=pick  arrows=1px  Shift+move=loupe  z=undo  c=clear  Space=freeze  s=space  p=save+print  q=quit"
+        "LMB/Enter=pick  arrows|hjkl=1px  Shift+move=loupe  z=undo  c=clear  Space=freeze  s=space  p=save+print  q=quit"
     );
 
     loop {
@@ -564,7 +564,7 @@ fn main() -> Result<()> {
             &mut mosaic,
             &[
                 "LMB/Enter pick",
-                "arrows 1px  Shift loupe",
+                "arrows|hjkl 1px  Shift loupe",
                 "z undo  c clear",
                 "Space freeze",
                 "s ycrcb|hsv",

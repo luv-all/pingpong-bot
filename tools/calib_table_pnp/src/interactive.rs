@@ -76,7 +76,7 @@ pub fn run(args: &Args) -> Result<()> {
     );
     cli::hint_pending_if_exists(args, cam_id);
     println!(
-        "Space=freeze  LMB/Enter=click  arrows=1px  Shift+move=loupe  z=undo  c=clear  s=promote  n=live  q=quit"
+        "Space=freeze  LMB/Enter=click  arrows|hjkl=1px  Shift+move=loupe  z=undo  c=clear  s=promote  n=live  q=quit"
     );
     println!(
         "(accepted → pending; s promotes → {})",
@@ -175,7 +175,7 @@ pub fn run(args: &Args) -> Result<()> {
                         &mut panel,
                         &[
                             "+/- xy  [] layers  ., z",
-                            "arrows 1px  Shift loupe",
+                            "arrows|hjkl 1px  Shift loupe",
                             "LMB/Enter  z/c  s promote",
                             "n live  q quit",
                         ],
@@ -194,7 +194,7 @@ pub fn run(args: &Args) -> Result<()> {
                         &mut panel,
                         &[
                             "yellow = residual",
-                            "arrows 1px  Shift loupe",
+                            "arrows|hjkl 1px  Shift loupe",
                             "LMB/Enter  z/c",
                             "n live  q quit",
                         ],
@@ -218,7 +218,7 @@ pub fn run(args: &Args) -> Result<()> {
                     &mut panel,
                     &[
                         "LMB/Enter click",
-                        "arrows 1px  Shift loupe",
+                        "arrows|hjkl 1px  Shift loupe",
                         "z undo  c clear",
                         "n live  q quit",
                     ],
