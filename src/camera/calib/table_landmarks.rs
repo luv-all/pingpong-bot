@@ -72,12 +72,13 @@ pub fn table_landmarks() -> [TableLandmark; TABLE_LANDMARK_COUNT] {
 }
 
 /// 화면에 그릴 메시 선분 (랜드마크 인덱스 쌍).
-/// 양 끝점이 모두 클릭됐을 때만 그린다.
+/// 양 끝점이 모두 준비됐을 때만 그린다 (클릭·재투영 공통).
 ///
-/// - 0..=3: 탁구대 둘레
-/// - 4(center)↔꼭짓점: 스포크
-/// - 5–6: 중앙선 내부 (robot-half · far-half)
-/// - 7(mid_robot)↔로봇쪽 변 · inner_robot
+/// 8점 모두 연결:
+/// - 0..=3 둘레
+/// - 4(center)↔4꼭짓점 스포크
+/// - 중앙선 7–5–4–6
+/// - 로봇변 7↔0,1 / 원쪽 6↔2,3
 pub fn table_landmark_mesh_edges() -> &'static [(usize, usize)] {
     return &[
         // perimeter
@@ -90,13 +91,16 @@ pub fn table_landmark_mesh_edges() -> &'static [(usize, usize)] {
         (4, 1),
         (4, 2),
         (4, 3),
-        // centerline interior chain: mid_robot - inner_robot - center - inner_far
+        // centerline: mid_robot - inner_robot - center - inner_far
         (7, 5),
         (5, 4),
         (4, 6),
-        // robot mid-edge to corners
+        // robot mid-edge to near corners
         (7, 0),
         (7, 1),
+        // far inner to far corners (대칭)
+        (6, 2),
+        (6, 3),
     ];
 }
 

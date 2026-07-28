@@ -1,15 +1,16 @@
-//! `--validate` / `--from-pixels` / merge·저장.
+//! `--validate` / `--from-pixels` / merge·저장 · pending 사이드카.
 
 use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use pingpong_bot::{
-    Calibration, CameraId, PixelPoint, calibrate_table_pnp, ensure_reproj_below, upsert_camera,
+    Calibration, CameraId, CameraParams, PixelPoint, calibrate_table_pnp, ensure_reproj_below,
+    upsert_camera,
 };
 use serde::Deserialize;
 
-use crate::args::{Args, resolve_camera_id, resolve_output};
+use crate::args::{Args, pending_path, resolve_camera_id, resolve_output};
 
 #[derive(Debug, Deserialize)]
 struct PixelsFile {
@@ -74,13 +75,135 @@ pub fn from_pixels(path: &PathBuf, args: &Args) -> Result<()> {
     return write_result(args, result.params, result.reproj_rmse, result.candidates);
 }
 
+/// 시작 시 pending이 있으면 안내 (본파일은 안 건드림).
+pub fn hint_pending_if_exists(args: &Args, cam_id: CameraId) {
+    let path = pending_path(args);
+    let Some(calib) = read_pending_file(&path) else {
+        return;
+    };
+    if calib.cameras.is_empty() {
+        return;
+    }
+    let ids: Vec<String> = calib
+        .cameras
+        .iter()
+        .map(|c| c.camera_id.0.to_string())
+        .collect();
+    let has_this = calib.params(cam_id).is_some();
+    println!(
+        "pending exists: {} (cams=[{}]) — s promotes cam{} → {}, or ignore",
+        path.display(),
+        ids.join(","),
+        cam_id.0,
+        resolve_output(args, cam_id).display()
+    );
+    if !has_this {
+        println!("  (this session cam{} not in pending yet)", cam_id.0);
+    }
+}
+
+fn read_pending_file(path: &std::path::Path) -> Option<Calibration> {
+    if !path.is_file() {
+        return None;
+    }
+    let text = fs::read_to_string(path).ok()?;
+    return serde_json::from_str(&text).ok();
+}
+
+/// accepted 해를 공유 pending 번들에 upsert (`-o` / merge 미변경).
+pub fn write_pending(
+    args: &Args,
+    params: CameraParams,
+    rmse: f64,
+    candidates: usize,
+) -> Result<PathBuf> {
+    let cam_id = params.camera_id;
+    let path = pending_path(args);
+    let mut calib = read_pending_file(&path).unwrap_or_else(|| Calibration {
+        cameras: Vec::new(),
+    });
+    upsert_camera(&mut calib, params);
+    let json = serde_json::to_string_pretty(&calib)?;
+    fs::write(&path, json).with_context(|| format!("pending 쓰기: {}", path.display()))?;
+    println!(
+        "pending upsert → {} (cam={}, rmse={:.2}px, candidates={}, pending_cams={}) — s=promote, q=keep",
+        path.display(),
+        cam_id.0,
+        rmse,
+        candidates,
+        calib.camera_count()
+    );
+    return Ok(path);
+}
+
+/// pending 배열에서 해당 카메라만 제거. 비면 파일 삭제.
+pub fn clear_pending_camera(args: &Args, cam_id: CameraId) {
+    let path = pending_path(args);
+    let Some(mut calib) = read_pending_file(&path) else {
+        return;
+    };
+    let before = calib.cameras.len();
+    calib.cameras.retain(|c| c.camera_id != cam_id);
+    if calib.cameras.len() == before {
+        return;
+    }
+    if calib.cameras.is_empty() {
+        match fs::remove_file(&path) {
+            Ok(()) => println!("cleared pending {}", path.display()),
+            Err(e) => eprintln!("pending 삭제 실패 {}: {e}", path.display()),
+        }
+        return;
+    }
+    match serde_json::to_string_pretty(&calib) {
+        Ok(json) => match fs::write(&path, json) {
+            Ok(()) => println!(
+                "pending removed cam{} → {} ({} left)",
+                cam_id.0,
+                path.display(),
+                calib.camera_count()
+            ),
+            Err(e) => eprintln!("pending 쓰기 실패 {}: {e}", path.display()),
+        },
+        Err(e) => eprintln!("pending serialize 실패 {}: {e}", path.display()),
+    }
+}
+
+/// pending 파일에 이 카메라가 있으면 true.
+pub fn pending_has_camera(args: &Args, cam_id: CameraId) -> bool {
+    return read_pending_file(&pending_path(args))
+        .map(|c| c.params(cam_id).is_some())
+        .unwrap_or(false);
+}
+
+/// 디스크 pending → 본파일 promote (재클릭 없이 `s`).
+pub fn promote_pending(args: &Args, cam_id: CameraId) -> Result<()> {
+    let path = pending_path(args);
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("pending 읽기: {}", path.display()))?;
+    let calib: Calibration =
+        serde_json::from_str(&text).with_context(|| format!("pending JSON: {}", path.display()))?;
+    let Some(params) = calib.params(cam_id).cloned() else {
+        bail!("pending {} 에 cam {} 없음", path.display(), cam_id.0);
+    };
+    let rmse = rmse_from_label(params.label.as_deref()).unwrap_or(0.0);
+    return write_result(args, params, rmse, 0);
+}
+
+fn rmse_from_label(label: Option<&str>) -> Option<f64> {
+    let label = label?;
+    let rest = label.strip_prefix("table-pnp rmse=")?;
+    let num = rest.split("px").next()?;
+    return num.parse().ok();
+}
+
 pub fn write_result(
     args: &Args,
-    params: pingpong_bot::CameraParams,
+    params: CameraParams,
     rmse: f64,
     candidates: usize,
 ) -> Result<()> {
-    let output = resolve_output(args);
+    let cam_id = params.camera_id;
+    let output = resolve_output(args, cam_id);
     let mut calib = if let Some(merge) = &args.merge {
         let text = fs::read_to_string(merge)
             .with_context(|| format!("merge 읽기: {}", merge.display()))?;
@@ -107,7 +230,7 @@ pub fn write_result(
     upsert_camera(&mut calib, params);
     let json = serde_json::to_string_pretty(&calib)?;
     fs::write(&output, json).with_context(|| format!("쓰기 실패: {}", output.display()))?;
-    let cam_id = resolve_camera_id(args).unwrap_or(CameraId(0));
+    clear_pending_camera(args, cam_id);
     println!(
         "wrote table-PnP Calibration → {} (cam={}, rmse={:.2}px, candidates={}, cams={})",
         output.display(),

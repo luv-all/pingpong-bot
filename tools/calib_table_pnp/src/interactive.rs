@@ -8,13 +8,13 @@ use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CameraId, CameraParams, FrameSource, OpenCvCapture, PixelPickMouse, PixelPoint, PreviewAction,
-    TABLE_LANDMARK_COUNT, TableLandmark, calibrate_table_pnp, destroy_window, draw_debug_lines,
-    draw_help_lines, draw_pixel_loupe, show_bgr, table_landmark_mesh_edges, table_landmarks,
-    unscale_xy,
+    CameraId, CameraParams, FrameSource, OpenCvCapture, PixelPickMouse, PixelPoint, Point3,
+    PreviewAction, TABLE_LANDMARK_COUNT, TableLandmark, calibrate_table_pnp, destroy_window,
+    draw_debug_lines, draw_help_lines, draw_pixel_loupe, show_bgr, table_landmark_mesh_edges,
+    table_landmarks, unscale_xy,
 };
 
-use crate::args::{Args, resolve_camera_id};
+use crate::args::{Args, pending_path, resolve_camera_id, resolve_output};
 use crate::cli;
 use crate::world_grid::{WorldGridParams, apply_grid_key, draw_world_grid};
 
@@ -22,6 +22,8 @@ struct Solved {
     params: CameraParams,
     rmse: f64,
     candidates: usize,
+    /// `rmse <= max_rmse` 이면 저장 가능
+    accepted: bool,
 }
 
 pub fn run(args: &Args) -> Result<()> {
@@ -72,8 +74,12 @@ pub fn run(args: &Args) -> Result<()> {
         args.fov_y,
         args.max_rmse
     );
-    println!("Space=freeze  LMB=click  Shift+move=loupe  z=undo  c=clear  s=save  n=live  q=quit");
-    println!("(8 clicks → auto PnP + world grid; +/- [] ., adjust grid)");
+    cli::hint_pending_if_exists(args, cam_id);
+    println!("Space=freeze  LMB=click  Shift+move=loupe  z=undo  c=clear  s=promote  n=live  q=quit");
+    println!(
+        "(accepted → pending; s promotes → {})",
+        resolve_output(args, cam_id).display()
+    );
     for (i, m) in marks.iter().enumerate() {
         println!("  {}: {}", i + 1, m.prompt);
     }
@@ -143,29 +149,54 @@ pub fn run(args: &Args) -> Result<()> {
 
         if frozen {
             if let Some(ref s) = solved {
-                draw_world_grid(&mut panel, &s.params, grid)?;
+                if s.accepted {
+                    draw_world_grid(&mut panel, &s.params, grid)?;
+                }
+                // 클릭(녹) vs 이상 재투영(마젠타) + 잔차선
+                draw_reproj_overlay(&mut panel, &clicks, &marks, &s.params)?;
             }
             draw_clicks(&mut panel, &clicks, &marks)?;
 
             if let Some(ref s) = solved {
-                let lines = [
-                    format!("SOLVED rmse={:.2}px — check grid, s=save", s.rmse),
-                    format!(
-                        "xy={:.2} z={:.2} layers={}",
-                        grid.xy_step, grid.z_step, grid.z_layers
-                    ),
-                ];
-                draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 0.0, 0.0))?;
-                draw_help_lines(
-                    &mut panel,
-                    &[
-                        "+/- xy  [] layers  ., z",
-                        "Shift+move loupe",
-                        "z undo  c clear  s save",
-                        "n live  q quit",
-                    ],
-                    Scalar::new(0.0, 255.0, 80.0, 0.0),
-                )?;
+                if s.accepted {
+                    let lines = [
+                        format!("SOLVED rmse={:.2}px — pending saved, s=promote", s.rmse),
+                        format!(
+                            "xy={:.2} z={:.2} layers={}",
+                            grid.xy_step, grid.z_step, grid.z_layers
+                        ),
+                    ];
+                    draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 0.0, 0.0))?;
+                    draw_help_lines(
+                        &mut panel,
+                        &[
+                            "+/- xy  [] layers  ., z",
+                            "Shift+move loupe",
+                            "z undo  c clear  s promote",
+                            "n live  q quit",
+                        ],
+                        Scalar::new(0.0, 255.0, 80.0, 0.0),
+                    )?;
+                } else {
+                    let lines = [
+                        format!(
+                            "FAIL rmse={:.2} > {:.0} — green=click magenta=ideal",
+                            s.rmse, args.max_rmse
+                        ),
+                        "pull green toward magenta (z/c) or --fov-y".to_string(),
+                    ];
+                    draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 128.0, 255.0, 0.0))?;
+                    draw_help_lines(
+                        &mut panel,
+                        &[
+                            "yellow = residual",
+                            "Shift+move loupe",
+                            "z undo  c clear",
+                            "n live  q quit",
+                        ],
+                        Scalar::new(0.0, 255.0, 80.0, 0.0),
+                    )?;
+                }
             } else {
                 let next = if clicks.len() < TABLE_LANDMARK_COUNT {
                     marks[clicks.len()].prompt.to_string()
@@ -211,7 +242,13 @@ pub fn run(args: &Args) -> Result<()> {
         let shown = show_bgr(window, &panel, wait)?;
         display_scale = shown.scale;
         match shown.action {
-            PreviewAction::Quit => break,
+            PreviewAction::Quit => {
+                let pend = pending_path(args);
+                if pend.is_file() {
+                    println!("quit — pending kept at {}", pend.display());
+                }
+                break;
+            }
             PreviewAction::Continue => {}
             PreviewAction::Key(k) => {
                 let key = k & 0xff;
@@ -236,22 +273,32 @@ pub fn run(args: &Args) -> Result<()> {
                     clicks.clear();
                     solved = None;
                     last_fail_rmse = None;
-                } else if (key == i32::from(b's') || key == i32::from(b'S')) && frozen {
-                    let Some(ref s) = solved else {
-                        if clicks.len() != TABLE_LANDMARK_COUNT {
+                } else if key == i32::from(b's') || key == i32::from(b'S') {
+                    if let Some(ref s) = solved {
+                        if !s.accepted {
                             println!(
-                                "클릭 {}/{} - 모두 찍으세요 (8점 후 자동 PnP)",
-                                clicks.len(),
-                                TABLE_LANDMARK_COUNT
+                                "rmse {:.2} > {} — 저장 불가 (초록→마젠타로 맞추거나 --fov-y)",
+                                s.rmse, args.max_rmse
                             );
-                        } else {
-                            println!("PnP 미통과 — z/c로 다시 찍거나 --fov-y");
+                            continue;
                         }
-                        continue;
-                    };
-                    cli::write_result(args, s.params.clone(), s.rmse, s.candidates)?;
-                    break;
-                } else if solved.is_some() {
+                        cli::write_result(args, s.params.clone(), s.rmse, s.candidates)?;
+                        break;
+                    }
+                    if cli::pending_has_camera(args, cam_id) {
+                        cli::promote_pending(args, cam_id)?;
+                        break;
+                    }
+                    if clicks.len() != TABLE_LANDMARK_COUNT {
+                        println!(
+                            "클릭 {}/{} - 모두 찍으세요 (8점 후 자동 PnP)",
+                            clicks.len(),
+                            TABLE_LANDMARK_COUNT
+                        );
+                    } else {
+                        println!("PnP 미통과 — z/c로 다시 찍거나 --fov-y");
+                    }
+                } else if solved.as_ref().is_some_and(|s| s.accepted) {
                     apply_grid_key(&mut grid, key);
                 }
             }
@@ -283,33 +330,61 @@ fn try_solve(
         "PnP candidates={} rmse={:.2}px",
         result.candidates, result.reproj_rmse
     );
-    if result.reproj_rmse > args.max_rmse {
-        println!(
-            "FAIL rmse {:.2} > {} — 다시 클릭 (z/c) 또는 --fov-y",
-            result.reproj_rmse, args.max_rmse
-        );
-        *last_fail_rmse = Some(result.reproj_rmse);
-        return Ok(());
-    }
+    let accepted = result.reproj_rmse <= args.max_rmse;
+    // FAIL여도 params 보관 → 클릭 vs 이상점 오버레이
     *solved = Some(Solved {
         params: result.params,
         rmse: result.reproj_rmse,
         candidates: result.candidates,
+        accepted,
     });
-    println!("SOLVED — check rainbow grid, s=save, z/c=retry");
+    if !accepted {
+        println!(
+            "FAIL rmse {:.2} > {} — 초록(클릭)→마젠타(이상)로 맞추거나 --fov-y",
+            result.reproj_rmse, args.max_rmse
+        );
+        *last_fail_rmse = Some(result.reproj_rmse);
+        print_per_point_residuals(clicks, &solved.as_ref().expect("solved").params);
+        return Ok(());
+    }
+    print_per_point_residuals(clicks, &solved.as_ref().expect("solved").params);
+    let s = solved.as_ref().expect("solved");
+    cli::write_pending(args, s.params.clone(), s.rmse, s.candidates)?;
+    println!("SOLVED — green=click magenta=ideal, s=promote to output, q=keep pending");
     return Ok(());
 }
 
-fn draw_clicks(panel: &mut Mat, clicks: &[PixelPoint], marks: &[TableLandmark]) -> Result<()> {
-    let edge_color = Scalar::new(255.0, 128.0, 0.0, 0.0);
+fn print_per_point_residuals(clicks: &[PixelPoint], params: &CameraParams) {
+    let marks = table_landmarks();
+    let mut parts = Vec::with_capacity(TABLE_LANDMARK_COUNT);
+    for (i, click) in clicks.iter().enumerate() {
+        let Some(ideal) = project_unclipped(params, marks[i].world) else {
+            parts.push(format!("{}:?", marks[i].id));
+            continue;
+        };
+        let du = click.x - ideal.x;
+        let dv = click.y - ideal.y;
+        let err = (du * du + dv * dv).sqrt();
+        parts.push(format!("{}:{err:.1}", marks[i].id));
+    }
+    println!("  residuals[px] {}", parts.join(" "));
+}
+
+fn draw_mesh_edges(panel: &mut Mat, pts: &[PixelPoint], color: Scalar, thickness: i32) -> Result<()> {
     for &(a_i, b_i) in table_landmark_mesh_edges() {
-        if a_i >= clicks.len() || b_i >= clicks.len() {
+        if a_i >= pts.len() || b_i >= pts.len() {
             continue;
         }
-        let a = Point::new(clicks[a_i].x.round() as i32, clicks[a_i].y.round() as i32);
-        let b = Point::new(clicks[b_i].x.round() as i32, clicks[b_i].y.round() as i32);
-        imgproc::line(panel, a, b, edge_color, 1, imgproc::LINE_AA, 0)?;
+        let a = Point::new(pts[a_i].x.round() as i32, pts[a_i].y.round() as i32);
+        let b = Point::new(pts[b_i].x.round() as i32, pts[b_i].y.round() as i32);
+        imgproc::line(panel, a, b, color, thickness, imgproc::LINE_AA, 0)?;
     }
+    return Ok(());
+}
+
+/// 클릭 점(녹색) + 클릭 메시(주황).
+fn draw_clicks(panel: &mut Mat, clicks: &[PixelPoint], marks: &[TableLandmark]) -> Result<()> {
+    draw_mesh_edges(panel, clicks, Scalar::new(255.0, 128.0, 0.0, 0.0), 1)?;
 
     for (i, px) in clicks.iter().enumerate() {
         let p = Point::new(px.x.round() as i32, px.y.round() as i32);
@@ -334,6 +409,85 @@ fn draw_clicks(panel: &mut Mat, clicks: &[PixelPoint], marks: &[TableLandmark]) 
             imgproc::LINE_AA,
             false,
         )?;
+    }
+    return Ok(());
+}
+
+/// PnP 해의 이상 재투영(마젠타) + 클릭↔이상 잔차(노랑) + 이상 메시.
+fn draw_reproj_overlay(
+    panel: &mut Mat,
+    clicks: &[PixelPoint],
+    marks: &[TableLandmark],
+    params: &CameraParams,
+) -> Result<()> {
+    if clicks.len() != TABLE_LANDMARK_COUNT {
+        return Ok(());
+    }
+    // 이미지 밖이어도 잔차 표시용으로 투영 (project_world는 클램프해 None)
+    let ideals: Vec<Option<PixelPoint>> = marks
+        .iter()
+        .map(|m| project_unclipped(params, m.world))
+        .collect();
+    let Some(ideal_pts): Option<Vec<PixelPoint>> = ideals.iter().cloned().collect() else {
+        // 하나라도 카메라 뒤면 메시 스킵, 보이는 점만 잔차
+        draw_residuals_partial(panel, clicks, &ideals)?;
+        return Ok(());
+    };
+
+    draw_mesh_edges(panel, &ideal_pts, Scalar::new(255.0, 0.0, 255.0, 0.0), 2)?;
+    draw_residuals_partial(panel, clicks, &ideals)?;
+    return Ok(());
+}
+
+fn project_unclipped(params: &CameraParams, point: Point3) -> Option<PixelPoint> {
+    let x_cam = params.rotation * point.coords + params.translation;
+    if x_cam.z <= 0.05 {
+        return None;
+    }
+    let u = params.fx * (x_cam.x / x_cam.z) + params.cx;
+    let v = params.fy * (x_cam.y / x_cam.z) + params.cy;
+    return Some(PixelPoint::new(u, v));
+}
+
+fn draw_residuals_partial(
+    panel: &mut Mat,
+    clicks: &[PixelPoint],
+    ideals: &[Option<PixelPoint>],
+) -> Result<()> {
+    let residual = Scalar::new(0.0, 255.0, 255.0, 0.0); // yellow
+    let ideal_pt = Scalar::new(255.0, 0.0, 255.0, 0.0); // magenta
+    for (i, click) in clicks.iter().enumerate() {
+        let Some(ideal) = ideals[i] else {
+            continue;
+        };
+        let c = Point::new(click.x.round() as i32, click.y.round() as i32);
+        let p = Point::new(ideal.x.round() as i32, ideal.y.round() as i32);
+        imgproc::line(panel, c, p, residual, 1, imgproc::LINE_AA, 0)?;
+        imgproc::draw_marker(
+            panel,
+            p,
+            ideal_pt,
+            imgproc::MARKER_CROSS,
+            14,
+            2,
+            imgproc::LINE_AA,
+        )?;
+        let du = click.x - ideal.x;
+        let dv = click.y - ideal.y;
+        let err = (du * du + dv * dv).sqrt();
+        if err >= 1.5 {
+            imgproc::put_text(
+                panel,
+                &format!("{err:.1}"),
+                Point::new(p.x + 8, p.y + 14),
+                imgproc::FONT_HERSHEY_SIMPLEX,
+                0.4,
+                residual,
+                1,
+                imgproc::LINE_AA,
+                false,
+            )?;
+        }
     }
     return Ok(());
 }
