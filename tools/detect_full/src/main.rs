@@ -1,7 +1,7 @@
 //! fuse 본선 디버그 — floor-edge 마스크 + adaptive ROI + 누적 파이프라인 패널.
 //!
-//! 스텝: `0 floor-mask → 1 colormask → 2 +contour → 3 roi`
-//! track 중이면 1·2는 ROI 크롭에서만 계산(본선과 동일).
+//! 스텝: `0 raw → 1 floor-mask → 2 colormask → 3 +contour → 4 roi`
+//! track 중이면 2·3은 ROI 크롭에서만 계산(본선과 동일).
 //! 키: `r` ROI · `[` `]` k · `,` `.` m · `-` `=` pad · `p` paste · `q`/ESC
 
 mod cli;
@@ -169,7 +169,7 @@ fn main() -> Result<()> {
         ColorContourCascade::new(pingpong_bot::colormask_for(cam_id)?, &scorer_params);
 
     println!(
-        "{detector} (cam{} floor-mask → colormask → contour → ROI) area=[{:.0},{:.0}]",
+        "{detector} (cam{} raw → floor-mask → colormask → contour → ROI) area=[{:.0},{:.0}]",
         cam_id.0, scorer_params.min_area_px, scorer_params.max_area_px
     );
     println!("keys: r ROI  [ ] k  , . m  - = pad  p paste  q/ESC quit");
@@ -204,7 +204,7 @@ fn main() -> Result<()> {
             timestamp: frame.timestamp,
         };
 
-        // 본선이 이번 프레임에 쓴 영역과 동일하게 1·2 스텝을 돌린다.
+        // 본선이 이번 프레임에 쓴 영역과 동일하게 2·3 스텝을 돌린다.
         let step_roi = if detector.used_roi {
             detector.last_roi
         } else {
@@ -213,36 +213,21 @@ fn main() -> Result<()> {
         let (step_px, mut cm_panel, mut ct_panel) =
             cascade_steps(&mut cascade, &scorer, &masked_frame, step_roi)?;
 
-        let mut original = masked_img;
+        let mut raw = frame
+            .image
+            .try_clone()
+            .map_err(|e| anyhow::anyhow!("raw clone: {e}"))?;
+        let mut mask_panel = masked_img;
         detector
             .mask
-            .draw_edge_line(&mut original, Scalar::new(255.0, 255.0, 0.0, 0.0), 2)?;
+            .draw_edge_line(&mut mask_panel, Scalar::new(255.0, 255.0, 0.0, 0.0), 2)?;
 
         if let Some(r) = detector.last_roi {
-            imgproc::rectangle(
-                &mut original,
-                r,
-                Scalar::new(255.0, 255.0, 0.0, 0.0),
-                2,
-                imgproc::LINE_8,
-                0,
-            )?;
-            imgproc::rectangle(
-                &mut cm_panel,
-                r,
-                Scalar::new(255.0, 255.0, 0.0, 0.0),
-                1,
-                imgproc::LINE_8,
-                0,
-            )?;
-            imgproc::rectangle(
-                &mut ct_panel,
-                r,
-                Scalar::new(255.0, 255.0, 0.0, 0.0),
-                1,
-                imgproc::LINE_8,
-                0,
-            )?;
+            let cyan = Scalar::new(255.0, 255.0, 0.0, 0.0);
+            imgproc::rectangle(&mut raw, r, cyan, 2, imgproc::LINE_8, 0)?;
+            imgproc::rectangle(&mut mask_panel, r, cyan, 2, imgproc::LINE_8, 0)?;
+            imgproc::rectangle(&mut cm_panel, r, cyan, 1, imgproc::LINE_8, 0)?;
+            imgproc::rectangle(&mut ct_panel, r, cyan, 1, imgproc::LINE_8, 0)?;
         }
 
         if let Some(p) = pixel {
@@ -252,10 +237,12 @@ fn main() -> Result<()> {
                 "frame={n} {mode} half={} px=({:.1}, {:.1})",
                 detector.half_px, p.x, p.y
             );
-            draw_circle_px(&mut original, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
+            draw_circle_px(&mut raw, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
+            draw_circle_px(&mut mask_panel, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
             if let Some(prev) = prev_pixel {
+                draw_circle_px(&mut raw, prev, 6, Scalar::new(0.0, 200.0, 255.0, 0.0), 1)?;
                 draw_circle_px(
-                    &mut original,
+                    &mut mask_panel,
                     prev,
                     6,
                     Scalar::new(0.0, 200.0, 255.0, 0.0),
@@ -292,31 +279,32 @@ fn main() -> Result<()> {
                 draw_circle_px(&mut roi_panel, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
             }
         } else if let Some(p) = pixel {
-            original.copy_to(&mut roi_panel)?;
+            mask_panel.copy_to(&mut roi_panel)?;
             draw_circle_px(&mut roi_panel, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
         }
 
         let roi_label = if detector.used_roi {
-            "3 roi"
+            "4 roi"
         } else if detector.roi_enabled {
-            "3 acquire"
+            "4 acquire"
         } else {
-            "3 roi-off"
+            "4 roi-off"
         };
 
+        draw_cam_label(&mut raw, "0 raw", Scalar::new(255.0, 255.0, 255.0, 0.0))?;
         draw_cam_label(
-            &mut original,
-            "0 floor-mask",
-            Scalar::new(255.0, 255.0, 255.0, 0.0),
+            &mut mask_panel,
+            "1 floor-mask",
+            Scalar::new(255.0, 255.0, 0.0, 0.0),
         )?;
         draw_cam_label(
             &mut cm_panel,
-            "1 colormask",
+            "2 colormask",
             Scalar::new(0.0, 255.0, 0.0, 0.0),
         )?;
         draw_cam_label(
             &mut ct_panel,
-            "2 +contour",
+            "3 +contour",
             Scalar::new(255.0, 128.0, 0.0, 0.0),
         )?;
         draw_cam_label(
@@ -334,7 +322,7 @@ fn main() -> Result<()> {
             .last_area()
             .map(|a| (a / std::f64::consts::PI).sqrt())
             .unwrap_or(0.0);
-        // Hershey = ASCII only. 모자이크가 아니라 패널에 그려 스케일이 폭주하지 않게.
+        // Hershey = ASCII only. HUD는 첫 패널(raw)에만.
         let lines = [
             detector.to_string(),
             format!(
@@ -343,7 +331,7 @@ fn main() -> Result<()> {
             ),
             match pixel {
                 Some(p) => format!(
-                    "{}  px=({:.1},{:.1})  r~{:.0}  mask->cm->ct->roi",
+                    "{}  px=({:.1},{:.1})  r~{:.0}  raw->mask->cm->ct->roi",
                     if detector.used_roi { "roi" } else { "full" },
                     p.x,
                     p.y,
@@ -353,15 +341,15 @@ fn main() -> Result<()> {
             },
             format!("hits={hits}/{}  ({hit_rate:.0}%)", n + 1),
         ];
-        draw_debug_lines(&mut original, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        draw_debug_lines(&mut raw, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
         draw_help_lines(
-            &mut original,
+            &mut raw,
             &["r ROI | [/] k | ,/. m | -/= pad | p paste | q quit"],
             Scalar::new(0.0, 255.0, 80.0, 0.0),
         )?;
 
-        // 읽는 순서 = 파이프라인: 0->1 / 2->3
-        let top = hstack_bgr(&[original, cm_panel])?;
+        // 읽는 순서 = 파이프라인: 0→1→2 / 3→4
+        let top = hstack_bgr(&[raw, mask_panel, cm_panel])?;
         let bottom = hstack_bgr(&[ct_panel, roi_panel])?;
         let mosaic = vstack_bgr(&top, &bottom)?;
 
