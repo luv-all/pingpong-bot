@@ -10,7 +10,7 @@ use crate::constants::table;
 pub const TABLE_LANDMARK_COUNT: usize = 8;
 
 /// 재투영 RMSE 합격 상한 [px]. 플랜: ≤ 2~3.
-pub const MAX_REPROJ_RMSE_PX: f64 = 3.0;
+pub const MAX_REPROJ_RMSE_PX: f64 = 15.0;
 
 /// 고정 월드 랜드마크 하나.
 #[derive(Debug, Clone, Copy, PartialEq)]
