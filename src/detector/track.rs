@@ -60,11 +60,11 @@ impl std::fmt::Display for RoiTrack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return write!(
             f,
-            "track(half={}, k={:.1}, m={:.1}, pad={}, roi={})",
+            "track(half={}, radius_scale={:.1}, motion_scale={:.1}, padding={}, roi={})",
             self.half_px,
-            self.params.k,
-            self.params.m,
-            self.params.pad,
+            self.params.radius_scale,
+            self.params.motion_scale,
+            self.params.padding,
             if self.roi_enabled { "on" } else { "off" }
         );
     }
@@ -258,9 +258,9 @@ mod tests {
     fn adaptive_half_uses_area() {
         let frame = blob_frame();
         let params = RoiParams {
-            k: 2.0,
-            pad: 10,
-            m: 0.0,
+            radius_scale: 2.0,
+            padding: 10,
+            motion_scale: 0.0,
             half_min: 20,
             half_max: 200,
         };

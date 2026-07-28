@@ -32,9 +32,9 @@ impl Default for ScorerParams {
 impl Default for RoiParams {
     fn default() -> Self {
         return Self {
-            k: 3.5,
-            pad: 32,
-            m: 1.0,
+            radius_scale: 3.5,
+            padding: 32,
+            motion_scale: 1.0,
             half_min: 48,
             half_max: 320,
         };

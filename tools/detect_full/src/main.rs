@@ -2,7 +2,7 @@
 //!
 //! 스텝: `0 raw → 1 floor-mask → 2 colormask → 3 +contour → 4 roi`
 //! track 중이면 2·3은 ROI 크롭에서만 계산(본선과 동일).
-//! 키: `r` ROI · `[` `]` k · `,` `.` m · `-` `=` pad · `p` paste · `q`/ESC
+//! 키: `r` ROI · `[` `]` radius_scale · `,` `.` motion_scale · `-` `=` padding · `p` paste · `q`/ESC
 
 mod cli;
 
@@ -120,14 +120,17 @@ fn nonzero_bgr(bgr: &Mat) -> i32 {
     return opencv::core::count_non_zero(&gray).unwrap_or(0);
 }
 
-fn panel_debug(img: &mut Mat, lines: &[impl AsRef<str>], color: Scalar) -> Result<()> {
+fn draw_panel_hud(img: &mut Mat, lines: &[impl AsRef<str>], color: Scalar) -> Result<()> {
     draw_debug_lines(img, lines, color).map_err(Into::into)
 }
 
-fn px_line(tag: &str, pixel: Option<PixelPoint>, r_eq: f64) -> String {
+fn pixel_hud_line(label: &str, pixel: Option<PixelPoint>, equivalent_radius: f64) -> String {
     return match pixel {
-        Some(p) => format!("{tag}  px=({:.1},{:.1})  r~{:.0}", p.x, p.y, r_eq),
-        None => format!("{tag}  miss"),
+        Some(p) => format!(
+            "{label}  pixel=({:.1},{:.1})  radius~{:.0}",
+            p.x, p.y, equivalent_radius
+        ),
+        None => format!("{label}  miss"),
     };
 }
 
@@ -135,27 +138,27 @@ fn handle_tune_key(detector: &mut RoiTrack, key: i32) -> bool {
     let p = &mut detector.params;
     let handled = match key {
         k if k == i32::from(b'[') => {
-            p.k = (p.k - 0.25).max(0.0);
+            p.radius_scale = (p.radius_scale - 0.25).max(0.0);
             true
         }
         k if k == i32::from(b']') => {
-            p.k += 0.25;
+            p.radius_scale += 0.25;
             true
         }
         k if k == i32::from(b',') => {
-            p.m = (p.m - 0.25).max(0.0);
+            p.motion_scale = (p.motion_scale - 0.25).max(0.0);
             true
         }
         k if k == i32::from(b'.') => {
-            p.m += 0.25;
+            p.motion_scale += 0.25;
             true
         }
         k if k == i32::from(b'-') => {
-            p.pad = (p.pad - 4).max(0);
+            p.padding = (p.padding - 4).max(0);
             true
         }
         k if k == i32::from(b'=') => {
-            p.pad += 4;
+            p.padding += 4;
             true
         }
         k if k == i32::from(b'p') || k == i32::from(b'P') => {
@@ -197,7 +200,7 @@ fn main() -> Result<()> {
         "{detector} (cam{} raw → mask → color → contour → ROI) area=[{:.0},{:.0}]",
         cam_id.0, scorer_params.min_area_px, scorer_params.max_area_px
     );
-    println!("keys: r ROI  [ ] k  , . m  - = pad  p paste  q/ESC quit");
+    println!("keys: r ROI  [ ] radius_scale  , . motion_scale  - = padding  p paste  q/ESC quit");
 
     let window = "detect:full";
     let wait_ms = args
@@ -259,7 +262,7 @@ fn main() -> Result<()> {
             hits += 1;
             let mode = if detector.roi.used_roi { "roi" } else { "full" };
             println!(
-                "frame={n} {mode} half={} px=({:.1}, {:.1})",
+                "frame={n} {mode} half={} pixel=({:.1}, {:.1})",
                 detector.roi.half_px, p.x, p.y
             );
             draw_circle_px(&mut raw, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
@@ -321,7 +324,7 @@ fn main() -> Result<()> {
         } else {
             100.0 * hits as f64 / (n + 1) as f64
         };
-        let r_eq = detector
+        let equivalent_radius = detector
             .last_area()
             .map(|a| (a / std::f64::consts::PI).sqrt())
             .unwrap_or(0.0);
@@ -332,12 +335,12 @@ fn main() -> Result<()> {
         } else {
             "full"
         };
-        let mark = step_px.or(pixel);
-        let cm_nz = nonzero_bgr(&cm_panel);
-        let ct_nz = nonzero_bgr(&ct_panel);
-        let keep_nz = opencv::core::count_non_zero(&detector.mask.keep).unwrap_or(0);
-        let total_px = detector.mask.width.saturating_mul(detector.mask.height).max(1);
-        let cut_pct = 100.0 * f64::from(total_px - keep_nz) / f64::from(total_px);
+        let appearance_pixel = step_px.or(pixel);
+        let colormask_nonzero = nonzero_bgr(&cm_panel);
+        let contour_nonzero = nonzero_bgr(&ct_panel);
+        let keep_nonzero = opencv::core::count_non_zero(&detector.mask.keep).unwrap_or(0);
+        let total_pixels = detector.mask.width.saturating_mul(detector.mask.height).max(1);
+        let cut_percent = 100.0 * f64::from(total_pixels - keep_nonzero) / f64::from(total_pixels);
 
         // BGR: white / cyan / green / orange / yellow
         let white = Scalar::new(255.0, 255.0, 255.0, 0.0);
@@ -347,22 +350,22 @@ fn main() -> Result<()> {
         let yellow = Scalar::new(0.0, 255.0, 255.0, 0.0);
 
         // 패널별 HUD (좌상단). 키 안내는 raw만.
-        panel_debug(
+        draw_panel_hud(
             &mut raw,
             &[
                 format!("cam{}  {detector}", cam_id.0),
-                px_line(mode, pixel, r_eq),
+                pixel_hud_line(mode, pixel, equivalent_radius),
                 format!("hits={hits}/{}  ({hit_rate:.0}%)", n + 1),
             ],
             white,
         )?;
         draw_help_lines(
             &mut raw,
-            &["r ROI | [/] k | ,/. m | -/= pad | p paste | q quit"],
+            &["r ROI | [/] radius_scale | ,/. motion_scale | -/= padding | p paste | q quit"],
             Scalar::new(0.0, 255.0, 80.0, 0.0),
         )?;
 
-        panel_debug(
+        draw_panel_hud(
             &mut mask_panel,
             &[
                 "floor-edge keep".to_string(),
@@ -370,49 +373,51 @@ fn main() -> Result<()> {
                     "edge y=({:.0},{:.0})",
                     detector.mask.line_y_at_left, detector.mask.line_y_at_right
                 ),
-                format!("cut={cut_pct:.0}%  keep={keep_nz}/{total_px}"),
+                format!("cut={cut_percent:.0}%  keep={keep_nonzero}/{total_pixels}"),
             ],
             cyan,
         )?;
 
-        panel_debug(
+        draw_panel_hud(
             &mut cm_panel,
             &[
                 "color gate".to_string(),
-                format!("nz={cm_nz}"),
-                px_line("step", mark, r_eq),
+                format!("nonzero={colormask_nonzero}"),
+                pixel_hud_line("appearance", appearance_pixel, equivalent_radius),
             ],
             green,
         )?;
 
-        panel_debug(
+        draw_panel_hud(
             &mut ct_panel,
             &[
                 "color ^ edges".to_string(),
                 format!(
-                    "nz={ct_nz}  area=[{:.0},{:.0}]",
+                    "nonzero={contour_nonzero}  area=[{:.0},{:.0}]",
                     scorer_params.min_area_px, scorer_params.max_area_px
                 ),
-                format!("circ>={:.2}", scorer_params.min_circularity),
-                px_line("pick", mark, r_eq),
+                format!("circularity>={:.2}", scorer_params.min_circularity),
+                pixel_hud_line("contour pick", appearance_pixel, equivalent_radius),
             ],
             orange,
         )?;
 
-        let roi_hud = match detector.roi.last_roi {
+        let roi_box_hud = match detector.roi.last_roi {
             Some(r) => format!("box={}x{} @({},{})", r.width, r.height, r.x, r.y),
             None => "box=full-frame".to_string(),
         };
-        panel_debug(
+        draw_panel_hud(
             &mut roi_panel,
             &[
                 format!("{mode}  half={}", detector.roi.half_px),
                 format!(
-                    "k={:.1} m={:.1} pad={}",
-                    detector.roi.params.k, detector.roi.params.m, detector.roi.params.pad
+                    "radius_scale={:.1}  motion_scale={:.1}  padding={}",
+                    detector.roi.params.radius_scale,
+                    detector.roi.params.motion_scale,
+                    detector.roi.params.padding
                 ),
-                roi_hud,
-                px_line("det", pixel, r_eq),
+                roi_box_hud,
+                pixel_hud_line("detection", pixel, equivalent_radius),
             ],
             yellow,
         )?;

@@ -14,18 +14,18 @@
 | 3 +contour | 4 roi | |
 
 - **0**: 원본 BGR — hit rate / mode HUD + 키 안내
-- **1**: 캘리브 테이블 옆변(`x=0` / `x=W`) 투영 사다리꼴로 바닥 제거 + 변 선 — cut% HUD
-- **2→3**: 마스크된 프레임에서 appearance `.then` (color→contour) — nz / area / pick HUD
-- **4**: ROI 박스·half·k/m/pad HUD
+- **1**: 캘리브 테이블 옆변(`x=0` / `x=W`) 투영 사다리꼴로 바닥 제거 + 변 선 — cut% / keep HUD
+- **2→3**: 마스크된 프레임에서 appearance `.then` (color→contour) — nonzero / area / circularity HUD
+- **4**: ROI 박스·half·radius_scale / motion_scale / padding HUD
 - **track 중**: 2·3도 ROI 크롭에서 계산 (본선과 동일 영역)
 - Scorer `min/max_area`는 캘리브+`BALL_RADIUS`로 캠별 추정
 
 키:
 
 - **`r`**: ROI track on/off
-- **`[` `]`**: `k` (±0.25)
-- **`,` `.`**: `m` (±0.25)
-- **`-` `=`**: `pad` (±4)
+- **`[` `]`**: `radius_scale` (±0.25)
+- **`,` `.`**: `motion_scale` (±0.25)
+- **`-` `=`**: `padding` (±4)
 - **`p`**: `RoiParams::default()` paste 스니펫
 - **`q` / ESC**: 종료
 
