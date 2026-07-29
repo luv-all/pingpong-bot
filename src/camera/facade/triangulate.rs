@@ -21,7 +21,7 @@ impl Triangulate {
         observations_by_camera: &[(camera::Id, &[crate::ball::Observation])],
         sync_time: Instant,
         calibration: &Calibration,
-    ) -> Result<Point3, crate::DomainError> {
+    ) -> Result<Point3, crate::error::DomainError> {
         return crate::camera::tri::triangulate_synced(
             observations_by_camera,
             sync_time,

@@ -1088,7 +1088,7 @@ mod tests {
             .expect("robot 빌드 성공");
         let arm = (*robot.arm).clone();
 
-        let intercept = crate::InterceptWindow {
+        let intercept = crate::planner::InterceptWindow {
             y_min: 0.20,
             y_max: 0.55,
             sample_step: 0.05,
@@ -2087,7 +2087,7 @@ mod tests {
 
         let robot = crate::defaults::primitive_4dof_with_mount(-0.02, table::SURFACE_Z + 0.05)
             .expect("robot 빌드 성공");
-        let intercept = crate::InterceptWindow {
+        let intercept = crate::planner::InterceptWindow {
             y_min: 0.20,
             y_max: 0.55,
             sample_step: 0.05,
@@ -2208,7 +2208,7 @@ mod tests {
 
         let robot = crate::defaults::primitive_4dof_with_mount(-0.02, table::SURFACE_Z + 0.05)
             .expect("robot 빌드 성공");
-        let intercept = crate::InterceptWindow {
+        let intercept = crate::planner::InterceptWindow {
             y_min: 0.20,
             y_max: 0.55,
             sample_step: 0.05,
@@ -2327,7 +2327,7 @@ mod tests {
 
         let robot = crate::defaults::primitive_4dof_with_mount(-0.02, table::SURFACE_Z + 0.05)
             .expect("robot 빌드 성공");
-        let intercept = crate::InterceptWindow {
+        let intercept = crate::planner::InterceptWindow {
             y_min: 0.20,
             y_max: 0.55,
             sample_step: 0.05,

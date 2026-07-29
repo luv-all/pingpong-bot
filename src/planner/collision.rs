@@ -5,6 +5,7 @@
 
 use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
+use crate::Point3;
 use crate::constants::{
     geometry::{
         LINK_FOREARM_RADIUS, RACKET_HALF_X, RACKET_HALF_Y, RACKET_HALF_Z, TABLE_CLAMP_ITERS,
@@ -12,8 +13,8 @@ use crate::constants::{
     },
     table,
 };
+use crate::robot::Joints;
 use crate::robot::{Arm, RacketPose};
-use crate::{Joints, Point3};
 
 /// 월드 좌표계 oriented bounding box (중심 + 로컬 축 half-extents).
 #[derive(Debug, Clone, Copy)]

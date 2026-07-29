@@ -1,53 +1,18 @@
-//! Sync / Apply / Discard 상태머신 + 조그 앱 상태.
+//! 조그 앱 상태.
 
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
+use pingpong_bot::Point3;
 use pingpong_bot::ball;
-use pingpong_bot::robot;
+use pingpong_bot::hardware::{Hardware, RealHardware};
+use pingpong_bot::robot::{self, Arm};
 use pingpong_bot::swing;
-use pingpong_bot::{Arm, Hardware, Point3, RealHardware};
 
 use crate::motion::{self, MotionDraft, MotionKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Phase {
-    /// Sync 필요 (시작 직후 / Apply 후).
-    NeedsSync,
-    /// 미리보기 1회 가능.
-    Ready,
-    /// 스테이징됨 — Apply 또는 Discard.
-    Previewed,
-    /// Apply 직후 — 수동 Sync 필수.
-    AwaitingSync,
-}
-
-impl Phase {
-    pub fn label(self) -> &'static str {
-        return match self {
-            Self::NeedsSync => "동기화 필요",
-            Self::Ready => "준비",
-            Self::Previewed => "미리보기",
-            Self::AwaitingSync => "동기화 필요",
-        };
-    }
-
-    pub fn can_preview(self) -> bool {
-        return matches!(self, Self::Ready);
-    }
-
-    pub fn can_apply(self) -> bool {
-        return matches!(self, Self::Previewed);
-    }
-
-    pub fn can_discard(self) -> bool {
-        return matches!(self, Self::Previewed);
-    }
-
-    pub fn can_sync(self) -> bool {
-        return true;
-    }
-}
+use super::action::Action;
+use super::phase::Phase;
 
 pub struct JogApp {
     pub arm: Arc<Arm>,
@@ -227,12 +192,4 @@ pub fn try_action(app: &mut JogApp, action: Action) {
     if let Err(err) = result {
         app.set_error(format!("{err:#}"));
     }
-}
-
-#[derive(Clone, Copy)]
-pub enum Action {
-    Sync,
-    Discard,
-    Apply,
-    Preview,
 }

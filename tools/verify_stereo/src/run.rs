@@ -8,13 +8,14 @@ use opencv::core::{Mat, Point, Scalar};
 use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
+use pingpong_bot::Point3;
 use pingpong_bot::camera;
+use pingpong_bot::camera::{
+    Calibration, Frame, FrameSource, Preview, PreviewAction, Triangulate, WorldGridParams,
+};
 use pingpong_bot::defaults::calibration_path;
 use pingpong_bot::defaults::detector_for;
-use pingpong_bot::{
-    Calibration, Detector, Frame, FrameSource, Point3, Preview, PreviewAction, Triangulate,
-    WorldGridParams,
-};
+use pingpong_bot::detector::Detector;
 
 use crate::args::Args;
 

@@ -69,8 +69,8 @@ fn commanded_racket_velocity(world: &SimWorld, q: &[f64], qd: &[f64]) -> Option<
     const H: f64 = 1e-4;
     let arm = world.arm();
     let rail_x = world.robot().rail_x();
-    let j0 = pingpong_bot::Joints { values: q.to_vec() };
-    let j1 = pingpong_bot::Joints {
+    let j0 = pingpong_bot::robot::Joints { values: q.to_vec() };
+    let j1 = pingpong_bot::robot::Joints {
         values: q.iter().zip(qd).map(|(a, b)| a + b * H).collect(),
     };
     let p0 = arm
@@ -160,7 +160,7 @@ fn run_shot(index: usize, settings: &shooter::Settings) -> ShotDiag {
                     .arm()
                     .forward_kinematics_with_rail(
                         world.robot().rail_x(),
-                        &pingpong_bot::Joints { values: q },
+                        &pingpong_bot::robot::Joints { values: q },
                     )
                     .map(|p| p.normal);
             }

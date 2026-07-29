@@ -1,8 +1,9 @@
 //! [`Arm`] 조립용 빌더 - base + serial chain으로 조립한다.
 
+use crate::Point3;
+use crate::robot::Joints;
 use crate::robot::rail::LinearRail;
 use crate::robot::{Arm, JointLimit, LinkInertial, SerialChain};
-use crate::{Joints, Point3};
 
 use super::ArmBuildError;
 

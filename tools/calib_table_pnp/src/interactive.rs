@@ -7,11 +7,12 @@ use opencv::core::{Mat, Point, Rect, Scalar, Vec3b};
 use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
+use pingpong_bot::Point3;
 use pingpong_bot::camera;
 use pingpong_bot::camera::Landmark;
-use pingpong_bot::{
-    FrameSource, OpenCvCapture, PixelPickMouse, Point3, Preview, PreviewAction,
-    TABLE_LANDMARK_COUNT, TablePnp, WorldGridParams,
+use pingpong_bot::camera::{
+    FrameSource, OpenCvCapture, PixelPickMouse, Preview, PreviewAction, TABLE_LANDMARK_COUNT,
+    TablePnp, WorldGridParams,
 };
 
 use crate::args::{Args, pending_path, resolve_camera_id, resolve_output};

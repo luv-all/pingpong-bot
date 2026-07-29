@@ -2,6 +2,14 @@
 //!
 //! 캡처는 전용 스레드(L→R 순차 grab). 링 버퍼는 JPEG로 보관해 RAM을 줄인다.
 
+mod args;
+mod capture_cmd;
+mod capture_shared;
+mod clip_meta;
+mod pair_sample;
+mod preview_slot;
+mod scene;
+
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,134 +19,23 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use opencv::core::{Mat, Scalar, Size, Vector};
 use opencv::imgcodecs;
 use opencv::prelude::*;
 use opencv::videoio::{VideoWriter, VideoWriterTrait};
-use pingpong_bot::{FrameSource, OpenCvCapture, Preview, PreviewAction, StereoPairCliArgs};
-use serde::Serialize;
+use pingpong_bot::camera::{FrameSource, OpenCvCapture, Preview, PreviewAction};
+
+use args::Args;
+use capture_cmd::CaptureCmd;
+use capture_shared::CaptureShared;
+use clip_meta::ClipMeta;
+use pair_sample::PairSample;
+use preview_slot::PreviewSlot;
 
 const WINDOW: &str = "record_stereo";
 const JPEG_QUALITY: i32 = 85;
 const RING_MARGIN_SECS: f64 = 1.0;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum Scene {
-    Fly,
-    Roll,
-    Drop,
-}
-
-impl Scene {
-    fn as_str(self) -> &'static str {
-        return match self {
-            Self::Fly => "fly",
-            Self::Roll => "roll",
-            Self::Drop => "drop",
-        };
-    }
-}
-
-#[derive(Parser, Debug)]
-#[command(name = "record-stereo")]
-struct Args {
-    #[command(flatten)]
-    cam: StereoPairCliArgs,
-
-    /// 장면 태그 (클립 디렉터리 prefix). 실행 중 변경 없음.
-    #[arg(long, value_enum, default_value_t = Scene::Fly)]
-    scene: Scene,
-
-    /// 출력 루트
-    /// 클립 루트 (`data/clips/{scene}_{nn}/`)
-    #[arg(long, default_value = "data/clips")]
-    out: PathBuf,
-
-    /// Space 기준 과거 보관 초
-    #[arg(long, default_value_t = 10.0)]
-    preroll: f64,
-
-    /// Space 이후 추가 녹화 초
-    #[arg(long, default_value_t = 2.0)]
-    postroll: f64,
-}
-
-#[derive(Clone)]
-struct PairSample {
-    t: Instant,
-    left_jpeg: Vec<u8>,
-    right_jpeg: Vec<u8>,
-    width: i32,
-    height: i32,
-}
-
-struct PreviewSlot {
-    left: Mat,
-    right: Mat,
-    grab_fps: f64,
-    ring_secs: f64,
-    ring_pairs: usize,
-}
-
-impl PreviewSlot {
-    fn try_clone(&self) -> Result<Self> {
-        return Ok(Self {
-            left: self
-                .left
-                .try_clone()
-                .map_err(|e| anyhow::anyhow!("clone left: {e}"))?,
-            right: self
-                .right
-                .try_clone()
-                .map_err(|e| anyhow::anyhow!("clone right: {e}"))?,
-            grab_fps: self.grab_fps,
-            ring_secs: self.ring_secs,
-            ring_pairs: self.ring_pairs,
-        });
-    }
-}
-
-enum CaptureCmd {
-    /// trigger_at = Space 시각. postroll 끝난 뒤 클립 flush.
-    Save {
-        trigger_at: Instant,
-        preroll: Duration,
-        postroll: Duration,
-        dir: PathBuf,
-        scene: String,
-        request_fps: f64,
-        backend: String,
-        fourcc: String,
-        width: i32,
-        height: i32,
-    },
-    Stop,
-}
-
-#[derive(Default)]
-struct CaptureShared {
-    preview: Option<PreviewSlot>,
-    /// 마지막 저장 결과 메시지 (HUD/콘솔)
-    last_status: Option<String>,
-    error: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ClipMeta {
-    scene: String,
-    preroll_secs: f64,
-    postroll_secs: f64,
-    width: i32,
-    height: i32,
-    request_fps: f64,
-    meas_fps: f64,
-    writer_fps: f64,
-    fourcc: String,
-    backend: String,
-    frames: usize,
-    created_unix_secs: u64,
-}
 
 fn main() -> Result<()> {
     let args = Args::parse();

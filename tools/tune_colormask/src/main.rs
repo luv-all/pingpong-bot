@@ -2,7 +2,9 @@
 //!
 //! 레이아웃: (original | mask) / swatch / scatter+iso. `p`·종료 시 `data/colormask.json` upsert.
 
+mod channel_range;
 mod cli;
+mod sample;
 
 use std::sync::{Arc, Mutex};
 
@@ -12,97 +14,20 @@ use opencv::core::{Rect, Scalar, Vec3b, Vector};
 use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
-use pingpong_bot::camera;
-use pingpong_bot::defaults::colormask_path;
-use pingpong_bot::detector::{load_colormask_set_or_empty, save_colormask_set};
-use pingpong_bot::{
-    ColorSpace, ColormaskParams, FrameSource, ImageDirSource, PixelPickMouse, Preview,
-    PreviewAction,
+use pingpong_bot::camera::{
+    self, FrameSource, ImageDirSource, PixelPickMouse, Preview, PreviewAction,
 };
+use pingpong_bot::defaults::colormask_path;
+use pingpong_bot::detector::{ColorSpace, load_colormask_set_or_empty, save_colormask_set};
 
+use channel_range::ChannelRange;
 use cli::Args;
+use sample::Sample;
 
 const SWATCH_H: i32 = 36;
 const VIZ_H: i32 = 200;
 const SAMPLE_RADIUS: i32 = 2;
 const PLOT_PAD: i32 = 18;
-
-#[derive(Clone, Copy, Debug)]
-struct Sample {
-    x: i32,
-    y: i32,
-    bgr: [u8; 3],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ChannelRange {
-    c0_min: u8,
-    c0_max: u8,
-    c1_min: u8,
-    c1_max: u8,
-    c2_min: u8,
-    c2_max: u8,
-}
-
-/// 정렬된 채널 값에서 선형 보간 퍼센타일 (p ∈ [0, 100]).
-fn channel_percentile(sorted: &[u8], p: f64) -> u8 {
-    debug_assert!(!sorted.is_empty());
-    if sorted.len() == 1 {
-        return sorted[0];
-    }
-    let p = p.clamp(0.0, 100.0);
-    let rank = p / 100.0 * (sorted.len() - 1) as f64;
-    let lo = rank.floor() as usize;
-    let hi = rank.ceil() as usize;
-    if lo == hi {
-        return sorted[lo];
-    }
-    let t = rank - lo as f64;
-    return (f64::from(sorted[lo]) * (1.0 - t) + f64::from(sorted[hi]) * t).round() as u8;
-}
-
-impl ChannelRange {
-    /// `trim_pct`: 양꼬리 절단 % (0 → min/max, 10 → p10..p90). 0..=49로 clamp.
-    fn from_channels(chs: &[[u8; 3]], margin: u8, trim_pct: f64) -> Option<Self> {
-        if chs.is_empty() {
-            return None;
-        }
-        let trim = trim_pct.clamp(0.0, 49.0);
-        let p_lo = trim;
-        let p_hi = 100.0 - trim;
-        let mut lo = [0u8; 3];
-        let mut hi = [0u8; 3];
-        for i in 0..3 {
-            let mut vals: Vec<u8> = chs.iter().map(|c| c[i]).collect();
-            vals.sort_unstable();
-            lo[i] = channel_percentile(&vals, p_lo);
-            hi[i] = channel_percentile(&vals, p_hi);
-            if lo[i] > hi[i] {
-                std::mem::swap(&mut lo[i], &mut hi[i]);
-            }
-        }
-        return Some(Self {
-            c0_min: lo[0].saturating_sub(margin),
-            c0_max: hi[0].saturating_add(margin),
-            c1_min: lo[1].saturating_sub(margin),
-            c1_max: hi[1].saturating_add(margin),
-            c2_min: lo[2].saturating_sub(margin),
-            c2_max: hi[2].saturating_add(margin),
-        });
-    }
-
-    fn to_params(self, space: ColorSpace) -> ColormaskParams {
-        return ColormaskParams {
-            space,
-            c0_min: self.c0_min,
-            c0_max: self.c0_max,
-            c1_min: self.c1_min,
-            c1_max: self.c1_max,
-            c2_min: self.c2_min,
-            c2_max: self.c2_max,
-        };
-    }
-}
 
 fn open_source(args: &Args) -> Result<Box<dyn FrameSource>> {
     let cam_id = args.cam.camera_id().map_err(anyhow::Error::msg)?;

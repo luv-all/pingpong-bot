@@ -1,7 +1,7 @@
 //! clap — stereo cams · clip · sim child.
 
 use clap::Parser;
-use pingpong_bot::{StereoOfflineArgs, StereoPairCliArgs};
+use pingpong_bot::camera::{StereoOfflineArgs, StereoPairCliArgs};
 
 #[derive(Parser, Debug)]
 #[command(

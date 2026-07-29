@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use crate::Calibration;
-use crate::InterceptWindow;
-use crate::Robot;
+use crate::camera::Calibration;
 use crate::defaults::shared_robot;
+use crate::planner::InterceptWindow;
+use crate::robot::Robot;
 
 const CONTROL_HZ: f64 = 100.0;
 

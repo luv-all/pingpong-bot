@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 
 use urdf_rs::{JointType, Robot};
 
-use crate::{Arm, JointLimit, Joints, RacketPose};
+use crate::robot::Arm;
+use crate::robot::JointLimit;
+use crate::robot::Joints;
+use crate::robot::RacketPose;
 
 use super::UrdfLinkVisual;
 use super::UrdfLoadError;

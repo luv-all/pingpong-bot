@@ -1,4 +1,4 @@
-use crate::Joints;
+use crate::robot::Joints;
 
 use super::{
     DynamixelBus, DynamixelConfig, DynamixelConfigError, MotorMapping,

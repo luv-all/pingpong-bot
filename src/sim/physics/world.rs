@@ -6,11 +6,13 @@
 use crate::robot;
 use std::sync::Arc;
 
+use crate::constants::{ball, table};
+use crate::defaults::PhysicsParams;
+use crate::error::{DomainError, SwingPlanError};
+use crate::estimator::Prediction;
+use crate::planner::InterceptWindow;
+use crate::robot::Arm;
 use crate::swing;
-use crate::{
-    Arm, DomainError, InterceptWindow, PhysicsParams, Prediction, SwingPlanError,
-    constants::{ball, table},
-};
 use rapier3d::prelude::*;
 use tracing::{debug, info, warn};
 
@@ -130,7 +132,10 @@ impl SimWorld {
         return Self::with_physics(robot, crate::defaults::PhysicsParams::default());
     }
 
-    pub fn predict_impact(&self, plane: crate::HitPlane) -> Option<crate::Prediction> {
+    pub fn predict_impact(
+        &self,
+        plane: crate::estimator::HitPlane,
+    ) -> Option<crate::estimator::Prediction> {
         return crate::sim::session::predict_impact(self, plane);
     }
 
@@ -1535,7 +1540,7 @@ mod tests {
     }
 
     /// 진단용 — `defaults::urdf_4dof` (URDF + RobotBuilder).
-    fn fourdof_robot() -> crate::Robot {
+    fn fourdof_robot() -> crate::robot::Robot {
         return crate::defaults::urdf_4dof().expect("4-dof URDF");
     }
 
@@ -1769,7 +1774,7 @@ mod tests {
         let start = robot::Pose::new(rail_x, world.robot().joints().clone());
         let traj = swing::Planner::plan(
             &arm.arm,
-            crate::Prediction {
+            crate::estimator::Prediction {
                 time_to_impact_secs: 0.45,
                 impact_position: impact,
                 incoming_velocity: nalgebra::Vector3::new(0.0, -6.01, 1.51),
@@ -1786,7 +1791,7 @@ mod tests {
 
     #[test]
     fn quintic_swing_moves_robot_joints() {
-        use crate::HitPlane;
+        use crate::estimator::HitPlane;
         use crate::swing;
 
         let arm = test_robot();
@@ -1810,7 +1815,7 @@ mod tests {
         let start = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         let trajectory = swing::Planner::plan(
             &arm.arm,
-            crate::Prediction {
+            crate::estimator::Prediction {
                 time_to_impact_secs: t,
                 impact_position: impact,
                 incoming_velocity: nalgebra::Vector3::new(
@@ -1917,7 +1922,7 @@ mod tests {
         let mut world = SimWorld::new(built);
         let rail = world.robot().rail_x();
         *world.robot_mut() = robot::State::new(
-            crate::Joints {
+            crate::robot::Joints {
                 values: vec![0.11, 0.22, 0.33],
             },
             rail,

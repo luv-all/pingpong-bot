@@ -1,4 +1,5 @@
-use crate::{HwError, Joints};
+use crate::error::HwError;
+use crate::robot::Joints;
 
 use super::bus_backend::BusBackend;
 use super::dynamixel_config::DynamixelConfig;

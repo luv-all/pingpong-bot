@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::Arm;
+use crate::robot::Arm;
 use crate::robot::Joints;
 use crate::robot::urdf::UrdfModel;
 

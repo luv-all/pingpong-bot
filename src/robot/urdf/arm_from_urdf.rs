@@ -1,7 +1,10 @@
 //! URDF → domain `Arm` 일반 revolute 직렬 체인 변환.
 
 use crate::hardware::dynamixel::joint_torque_limits_4dof;
-use crate::{Arm, LinkInertial, SerialChain, SerialJoint};
+use crate::robot::Arm;
+use crate::robot::LinkInertial;
+use crate::robot::SerialChain;
+use crate::robot::SerialJoint;
 use nalgebra::{Isometry3, Matrix3, Vector3};
 use urdf_rs::JointType;
 
@@ -16,7 +19,7 @@ pub fn to_arm(urdf: &UrdfModel, max_joint_speed: f64) -> Result<Arm, UrdfLoadErr
     // 기존 한계 중점을 그대로 둔다.
     let mut defaults = urdf.default_joints();
     if defaults.values.len() == crate::defaults::READY_JOINTS_4DOF.len() {
-        defaults = crate::Joints::from_slice(&crate::defaults::READY_JOINTS_4DOF);
+        defaults = crate::robot::Joints::from_slice(&crate::defaults::READY_JOINTS_4DOF);
     }
     let limits = urdf.joint_limits();
     let template = crate::defaults::primitive_4dof().map_err(|e| UrdfLoadError::ArmConversion {

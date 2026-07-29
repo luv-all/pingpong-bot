@@ -6,8 +6,9 @@
 use crate::robot;
 use std::sync::{Arc, Mutex};
 
+use crate::error::HwError;
+use crate::hardware::Hardware;
 use crate::swing;
-use crate::{Hardware, HwError};
 use tracing::debug;
 
 use crate::sim::world::SimWorld;

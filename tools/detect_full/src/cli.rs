@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use pingpong_bot::{CamCliArgs, MonoOfflineArgs};
+use pingpong_bot::camera::{CamCliArgs, MonoOfflineArgs};
 
 #[derive(Parser, Debug)]
 #[command(about = "Detector 본선 — adaptive ROI 튜닝 + 단계 패널")]

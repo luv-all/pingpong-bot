@@ -55,7 +55,7 @@ impl SimSession {
         robot: Robot,
         controls: Arc<Mutex<SimRuntimeControls>>,
         shutdown: Arc<AtomicBool>,
-        physics: crate::PhysicsParams,
+        physics: crate::defaults::PhysicsParams,
     ) -> Self {
         let world = Arc::new(Mutex::new(SimWorld::with_physics(robot, physics)));
         let sim_time = Arc::new(Mutex::new(0.0_f64));

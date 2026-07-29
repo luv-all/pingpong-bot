@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use opencv::prelude::*;
 use pingpong_bot::camera;
-use pingpong_bot::{
+use pingpong_bot::camera::{
     CamRigConfig, CaptureBackend, FrameSource, OpenCvCapture, Preview, PreviewAction,
 };
 

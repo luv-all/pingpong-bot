@@ -7,91 +7,21 @@
 //! 모자이크는 `Preview::hstack_bgr` (최대 높이 + 패딩, 손실 없음).
 //! 표시만 모니터보다 클 때 downscale (`Preview::show_bgr`).
 
-use std::time::Instant;
+mod args;
+mod cam_slot;
+mod fps_meter;
+mod live_source;
 
 use anyhow::{Result, bail};
 use clap::Parser;
 use opencv::core::Scalar;
 use opencv::prelude::*;
-use pingpong_bot::{
-    FrameSource, OpenCvCapture, Preview, PreviewAction, StereoCamCliArgs, ThreadedCapture,
-};
+use pingpong_bot::camera::{OpenCvCapture, Preview, PreviewAction, ThreadedCapture};
 
-#[derive(Parser, Debug)]
-#[command(name = "cam-preview")]
-struct Args {
-    #[command(flatten)]
-    cam: StereoCamCliArgs,
-}
-
-struct FpsMeter {
-    last: Option<Instant>,
-    fps: f64,
-}
-
-impl FpsMeter {
-    fn new() -> Self {
-        return Self {
-            last: None,
-            fps: 0.0,
-        };
-    }
-
-    fn tick(&mut self) {
-        let now = Instant::now();
-        if let Some(prev) = self.last {
-            let dt = now.duration_since(prev).as_secs_f64();
-            if dt > 1e-4 {
-                let instant = 1.0 / dt;
-                self.fps = if self.fps <= 0.0 {
-                    instant
-                } else {
-                    self.fps * 0.85 + instant * 0.15
-                };
-            }
-        }
-        self.last = Some(now);
-    }
-}
-
-enum LiveSource {
-    Direct(OpenCvCapture),
-    Threaded(ThreadedCapture),
-}
-
-impl LiveSource {
-    fn next_frame(&mut self) -> Option<pingpong_bot::Frame> {
-        return match self {
-            Self::Direct(c) => c.next_frame(),
-            Self::Threaded(c) => c.next_frame(),
-        };
-    }
-
-    fn capture_fps(&self) -> Option<f64> {
-        return match self {
-            Self::Threaded(c) => Some(c.capture_fps()),
-            Self::Direct(_) => None,
-        };
-    }
-
-    fn as_capture_mut(&mut self) -> Option<&mut OpenCvCapture> {
-        return match self {
-            Self::Direct(c) => Some(c),
-            Self::Threaded(_) => None,
-        };
-    }
-}
-
-struct CamSlot {
-    label: String,
-    source: LiveSource,
-    fourcc_label: String,
-    reported_fps: Option<f64>,
-    reported_size: Option<(i32, i32)>,
-    exposure_backend: String,
-    meter: FpsMeter,
-    panel: Option<Mat>,
-}
+use args::Args;
+use cam_slot::CamSlot;
+use fps_meter::FpsMeter;
+use live_source::LiveSource;
 
 fn main() -> Result<()> {
     let args = Args::parse();

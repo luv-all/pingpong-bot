@@ -1,8 +1,8 @@
 //! 발사 파라미터.
 
-use crate::HitPlane;
 use crate::constants::{ball, table};
 use crate::defaults;
+use crate::estimator::HitPlane;
 use crate::shooter;
 use crate::swing;
 use nalgebra::Vector3;
@@ -252,7 +252,10 @@ impl Settings {
 ///
 /// `SimWorld::apply_ball_aero_forces`와 같은 식 — 게이트 미니월드와 본 시뮬의
 /// 탄도를 맞추기 위한 것이다.
-fn apply_aero_force(body: &mut rapier3d::prelude::RigidBody, physics: &crate::PhysicsParams) {
+fn apply_aero_force(
+    body: &mut rapier3d::prelude::RigidBody,
+    physics: &crate::defaults::PhysicsParams,
+) {
     body.reset_forces(true);
     let lin = body.linvel();
     let ang = body.angvel();

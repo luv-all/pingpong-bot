@@ -17,13 +17,13 @@ use super::panel;
 use super::robot_render::RobotRender;
 use super::urdf_visual_node::UrdfVisualNode;
 use crate::Point3;
-use crate::SwingPlanError;
 use crate::ball;
 use crate::constants::table;
 use crate::constants::viewer::{
     CAMERA_DIST_DEFAULT, CAMERA_DIST_MAX, CAMERA_DIST_MIN, HIT_PLANE_WALL_HEIGHT,
 };
 use crate::defaults::sim::RANDOM_SHOT_TARGET_PADDING_M;
+use crate::error::SwingPlanError;
 use crate::robot::urdf::{UrdfLinkVisual, UrdfModel};
 use crate::shooter;
 use crate::sim::physics::world::SimWorld;

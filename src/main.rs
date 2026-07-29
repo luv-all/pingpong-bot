@@ -17,15 +17,18 @@ use clap::{Parser, ValueEnum};
 use pingpong_bot::camera;
 #[cfg(feature = "real")]
 use pingpong_bot::defaults::detector_for;
-use pingpong_bot::defaults::robot;
+use pingpong_bot::defaults::{PhysicsParams, robot};
+#[cfg(feature = "real")]
+use pingpong_bot::hardware::dynamixel::DynamixelConfig;
+#[cfg(feature = "real")]
+use pingpong_bot::hardware::rail::RailConfig;
+#[cfg(feature = "real")]
+use pingpong_bot::hardware::{Hardware, RealHardware};
 use pingpong_bot::logging::init_tracing;
+use pingpong_bot::planner::InterceptWindow;
 #[cfg(feature = "gui")]
 use pingpong_bot::sim::gui::{SimViewer, SimViewerOptions};
-#[cfg(feature = "real")]
-use pingpong_bot::{DynamixelConfig, Hardware, RailConfig, RealHardware};
-use pingpong_bot::{
-    InterceptWindow, PhysicsParams, SimRuntimeControls, SimSession, SimSessionConfig,
-};
+use pingpong_bot::sim::{SimRuntimeControls, SimSession, SimSessionConfig};
 use tracing::info;
 #[cfg(not(feature = "gui"))]
 use tracing::warn;

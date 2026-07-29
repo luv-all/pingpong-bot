@@ -598,8 +598,8 @@ mod tests {
     use nalgebra::Vector3;
 
     use super::*;
-    use crate::Prediction;
     use crate::constants::table;
+    use crate::estimator::Prediction;
     use crate::robot::Arm;
 
     fn sample_three_dof_arm() -> Arm {

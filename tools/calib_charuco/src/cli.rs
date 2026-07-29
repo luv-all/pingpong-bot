@@ -6,8 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::args::{Args, board_spec, resolve_output};
-use pingpong_bot::Calibration;
-use pingpong_bot::Charuco;
+use pingpong_bot::camera::{Calibration, Charuco};
 use pingpong_bot::defaults::ensure_parent_dir;
 
 pub fn validate(path: &PathBuf) -> Result<()> {

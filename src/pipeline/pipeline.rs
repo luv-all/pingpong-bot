@@ -9,10 +9,13 @@ use crate::ball;
 use crate::camera;
 use crate::camera::Triangulate;
 use crate::detector::Detector;
+use crate::error::DomainError;
+use crate::error::SwingPlanError;
+use crate::estimator::Estimator;
+use crate::estimator::Prediction;
+use crate::hardware::Hardware;
 use crate::swing;
-use crate::{
-    DomainError, Estimator, Hardware, Prediction, SwingPlanError, Telemetry, TelemetryEvent,
-};
+use crate::telemetry::{Telemetry, TelemetryEvent};
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
 use tracing::{info, info_span, warn};

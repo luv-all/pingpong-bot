@@ -13,10 +13,10 @@ use opencv::imgcodecs;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::camera;
+use pingpong_bot::camera::{Frame, FrameSource, ImageDirSource, Preview, PreviewAction};
 use pingpong_bot::defaults::{colormask_for, detector_for};
-use pingpong_bot::{
-    AppearanceChain, ColormaskDetector, ContourDetector, Frame, FrameSource, ImageDirSource,
-    Preview, PreviewAction, RoiTrack, Scorer,
+use pingpong_bot::detector::{
+    AppearanceChain, ColormaskDetector, ContourDetector, RoiTrack, Scorer,
 };
 
 use cli::Args;

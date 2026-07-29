@@ -25,16 +25,25 @@
 //! (반드시 저장소 루트에서 실행 — `--robot`의 URDF 상대경로가 현재 디렉터리
 //! 기준이다, `config/*.toml`과 동일한 관례.)
 
-use std::path::PathBuf;
+mod args;
+mod report;
+mod scenario;
+mod target;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use nalgebra::Vector3;
+use pingpong_bot::Point3;
+use pingpong_bot::defaults;
+use pingpong_bot::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
 use pingpong_bot::planner::Impact;
-use pingpong_bot::robot;
+use pingpong_bot::robot::{self, Arm, Joints, MountPreset, RobotBuilder};
 use pingpong_bot::swing;
-use pingpong_bot::{Arm, Joints, MountPreset, Point3, RobotBuilder, defaults};
-use serde::{Deserialize, Serialize};
+
+use args::Args;
+use report::Report;
+use scenario::Scenario;
+use target::Target;
 
 /// 수렴 판정 허용 오차 — `robot::State::is_at_center`의 관례(1e-3)를 따른다.
 const POSITION_TOLERANCE_RAD_OR_M: f64 = 1e-3;
@@ -48,93 +57,6 @@ const POSITION_TOLERANCE_RAD_OR_M: f64 = 1e-3;
 const RACKET_SPEED_RATIO_TOLERANCE: f64 = 0.15;
 /// 라켓 속도 방향 허용오차 [deg].
 const RACKET_DIRECTION_TOLERANCE_DEG: f64 = 15.0;
-
-#[derive(Parser, Debug)]
-#[command(about = "quintic 스윙 모양 제약 없이 순수 토크 한계로 임팩트 도달 시간을 측정한다")]
-struct Args {
-    /// TOML 시나리오 파일. 여기 값들을 아래 CLI 플래그가 덮어쓴다.
-    #[arg(long)]
-    scenario: Option<PathBuf>,
-
-    /// 카탈로그 로봇 id (`competition` | `urdf-test` | `4-dof`).
-    #[arg(long)]
-    robot: Option<String>,
-
-    /// 시작 레일 x [m]. 생략하면 레일 중앙(`default_x()`).
-    #[arg(long)]
-    start_rail_x: Option<f64>,
-
-    #[arg(long, allow_hyphen_values = true)]
-    impact_x: Option<f64>,
-    #[arg(long, allow_hyphen_values = true)]
-    impact_y: Option<f64>,
-    #[arg(long, allow_hyphen_values = true)]
-    impact_z: Option<f64>,
-
-    #[arg(long, allow_hyphen_values = true)]
-    incoming_vx: Option<f64>,
-    #[arg(long, allow_hyphen_values = true)]
-    incoming_vy: Option<f64>,
-    #[arg(long, allow_hyphen_values = true)]
-    incoming_vz: Option<f64>,
-
-    /// 참고용 — 실제 예측이라면 이 안에 들어와야 할 여유 시간 [s]. 결과 판정에는
-    /// 안 쓰고, 리포트에서 achieved_time과 나란히 비교만 한다.
-    #[arg(long)]
-    time_budget_secs: Option<f64>,
-
-    /// 적분 스텝 [s].
-    #[arg(long, default_value_t = 0.001)]
-    dt: f64,
-
-    /// 수렴하지 않을 때 포기하는 최대 시뮬레이션 시간 [s].
-    #[arg(long, default_value_t = 2.0)]
-    max_time_secs: f64,
-
-    /// 사람이 읽는 표 대신 JSON으로 출력.
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Scenario {
-    robot: Option<String>,
-    start_rail_x: Option<f64>,
-    impact: Option<[f64; 3]>,
-    incoming_velocity: Option<[f64; 3]>,
-    time_budget_secs: Option<f64>,
-}
-
-#[derive(Debug, Serialize)]
-struct Report {
-    robot: String,
-    /// 목표 라켓 속도가 관절/레일 속도 한계를 넘어 실행 전에 잘렸는지.
-    /// true면 아래 결과는 "이상적인 리턴 파워"가 아니라 "낼 수 있는 최대
-    /// 속도로 한 번 자른 뒤" 기준이라는 뜻 — 조용히 숨기지 않는다.
-    target_speed_clamped: bool,
-    feasible: bool,
-    achieved_time_secs: f64,
-    /// 목표 관절속도까지는 못 맞춰도, 위치만 허용오차 안에 처음 들어온 시각
-    /// [s] — 라켓이 "제자리"에는 도착했는지(타점 자체는 맞았는지)를 목표
-    /// 속도 달성 여부와 분리해서 본다. 끝까지 도달 못 하면 `None`.
-    position_reached_time_secs: Option<f64>,
-    max_time_secs: f64,
-    time_budget_secs: Option<f64>,
-    within_time_budget: Option<bool>,
-    position_error: f64,
-    /// 종료 시점 실제 라켓 속도 크기 [m/s] (FK 유한차분 역산).
-    achieved_racket_speed_m_s: f64,
-    /// 목표 라켓 속도 크기 [m/s] (`target_speed_clamped`면 잘린 뒤 값).
-    target_racket_speed_m_s: f64,
-    /// 종료 시점 라켓 속도 방향과 목표 방향의 각도차 [deg].
-    racket_direction_error_deg: f64,
-    peak_joint_torque_utilization: Vec<f64>,
-    peak_joint_speed_rad_s: Vec<f64>,
-    peak_joint_speed_ratio_to_cap: Vec<f64>,
-    peak_rail_speed_m_s: f64,
-    peak_rail_speed_ratio_to_cap: f64,
-}
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -249,23 +171,10 @@ fn resolve_arm(robot_id: &str) -> Result<std::sync::Arc<Arm>> {
         .urdf(&path)
         .ee_link_opt(Some("pingpong_paddle_v5_1"))
         .mount_preset(MountPreset::Rep103AtTableEnd)
-        .max_joint_speed(pingpong_bot::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S)
+        .max_joint_speed(DYNAMIXEL_MAX_JOINT_SPEED_RAD_S)
         .build()
         .with_context(|| format!("로봇 빌드 실패: {}", path.display()))?;
     return Ok(built.arm);
-}
-
-struct Target {
-    rail_x: f64,
-    joints: Joints,
-    rail_velocity: f64,
-    joint_velocities: Vec<f64>,
-    /// 임팩트 순간 라켓이 실제로 내야 하는 속도(월드) — `required_racket_velocity`
-    /// 원본. 수렴 판정은 이걸 기준으로 한다(관절 공간 속도 벡터를 칼같이
-    /// 맞추면 불필요한 백스윙성 왕복이 "최적해"로 나올 수 있어서 — 관절
-    /// 속도는 여러 조합이 같은 라켓 속도를 낼 수 있는데 그중 하나만 목표로
-    /// 못박으면 과잉제약이다).
-    racket_velocity: Vector3<f64>,
 }
 
 /// 목표 관절/레일 속도가 실제 한계를 넘으면 그 한계로 자른다 — 하지만 이제

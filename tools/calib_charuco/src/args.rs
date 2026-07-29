@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use pingpong_bot::CamCliArgs;
 use pingpong_bot::camera;
+use pingpong_bot::camera::CamCliArgs;
 use pingpong_bot::defaults::calib::{
     CHARUCO_MARKER_LENGTH_M, CHARUCO_SQUARE_LENGTH_M, CHARUCO_SQUARES_X, CHARUCO_SQUARES_Y,
     DEFAULT_CALIBRATION_PATH,

@@ -8,10 +8,11 @@ use opencv::core::Scalar;
 use opencv::prelude::*;
 use pingpong_bot::ball;
 use pingpong_bot::camera;
-use pingpong_bot::defaults::detector_for;
-use pingpong_bot::{
-    Calibration, Detector, FrameSource, Preview, PreviewAction, StereoOfflineArgs, Triangulate,
+use pingpong_bot::camera::{
+    Calibration, FrameSource, Preview, PreviewAction, StereoOfflineArgs, Triangulate,
 };
+use pingpong_bot::defaults::detector_for;
+use pingpong_bot::detector::Detector;
 
 pub struct CaptureResult {
     pub traj: Vec<ball::TrajPoint>,
@@ -20,7 +21,7 @@ pub struct CaptureResult {
 }
 
 fn open_sources(
-    cam: &pingpong_bot::CamCliArgs,
+    cam: &camera::CamCliArgs,
     offline: &StereoOfflineArgs,
     timeline_fps: Option<f64>,
 ) -> Result<Vec<Box<dyn FrameSource>>> {
@@ -33,7 +34,7 @@ fn open_sources(
 /// OpenCV: open → read → detect/triangulate/draw → q 종료.
 pub fn run_capture(
     calibration: &Path,
-    cam: &pingpong_bot::CamCliArgs,
+    cam: &camera::CamCliArgs,
     offline: &StereoOfflineArgs,
     preview: bool,
     wait_ms: i32,

@@ -1,4 +1,4 @@
-use crate::HwError;
+use crate::error::HwError;
 
 use super::rail_config::RailConfig;
 

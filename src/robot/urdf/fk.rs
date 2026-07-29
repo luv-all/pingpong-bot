@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::Point3;
-use crate::RacketPose;
+use crate::robot::RacketPose;
 use nalgebra::{Isometry3, Quaternion, Translation3, UnitQuaternion, Vector3};
 use urdf_rs::{Joint, JointType, Robot};
 

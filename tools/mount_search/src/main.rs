@@ -15,14 +15,21 @@
 //! 사용법: cargo run -p mount-search --release
 //!         cargo run -p mount-search --release -- --json
 
+mod args;
+mod mount_result;
+mod scenario;
+
 use anyhow::Result;
 use clap::Parser;
-use nalgebra::Vector3;
 use pingpong_bot::constants::table;
+use pingpong_bot::defaults;
+use pingpong_bot::estimator::Prediction;
 use pingpong_bot::robot;
 use pingpong_bot::swing;
-use pingpong_bot::{Point3, Prediction, defaults};
-use serde::Serialize;
+
+use args::Args;
+use mount_result::MountResult;
+use scenario::{Scenario, build_scenarios};
 
 /// 실현 가능(NearSingularity 임계값과 별개, 실기 관절속도 한계 자체) 판정 기준.
 /// `planner::physics::NEAR_SINGULARITY_SPEED_RATIO`(2.5)와는 다른 목적 —
@@ -30,78 +37,6 @@ use serde::Serialize;
 /// 보수적으로 본다(피크가 한계에 딱 걸치면 토크 여유가 없어 불안정할 수
 /// 있음, `plan_swing`의 `fit_end_velocity` 안전계수 0.95와 같은 취지).
 const FEASIBLE_RATIO_THRESHOLD: f64 = 1.0;
-
-#[derive(Parser, Debug)]
-#[command(about = "레일 마운트 위치(테이블과의 거리·높이) 스윕으로 최적 위치를 찾는다")]
-struct Args {
-    /// 테이블과의 거리(y) 후보 최소값 [m] - `BASE_Y` 관례 좌표계.
-    #[arg(long, allow_hyphen_values = true, default_value_t = -0.05)]
-    base_y_min: f64,
-    #[arg(long, allow_hyphen_values = true, default_value_t = 0.10)]
-    base_y_max: f64,
-    #[arg(long, default_value_t = 7)]
-    base_y_steps: usize,
-
-    /// 테이블 면 대비 높이 오프셋 후보 [m] - 실기는 약 +0.03.
-    #[arg(long, allow_hyphen_values = true, default_value_t = -0.02)]
-    height_min: f64,
-    #[arg(long, allow_hyphen_values = true, default_value_t = 0.08)]
-    height_max: f64,
-    #[arg(long, default_value_t = 6)]
-    height_steps: usize,
-
-    #[arg(long)]
-    json: bool,
-
-    /// 상위 몇 개 후보를 출력할지.
-    #[arg(long, default_value_t = 5)]
-    top_n: usize,
-}
-
-struct Scenario {
-    impact: Point3,
-    incoming_velocity: Vector3<f64>,
-}
-
-/// 대표 랠리 시나리오 배터리 - 테이블 폭 전역 × 입사 높이(스킷/아크) ×
-/// 속도 × 하강각. 특정 슈터 조준 기하(사설 API)에 의존하지 않고, 이
-/// 팔이 실제로 마주칠 임팩트 위치/속도 범위를 직접 정의한다.
-///
-/// 속도·높이 범위는 2026-07-23 실측(사람이 실제로 치는 랠리 속도 연구 +
-/// `swing_feasibility` 스윕)에 맞춰 갱신 - 이전 [4.0,5.5] m/s는 실제 사람
-/// 랠리 속도(레크리에이션 12-14 m/s)보다 훨씬 느려 비현실적이었다. 높이도
-/// "임팩트 높이가 핵심 요인" 발견에 맞춰 정상 범위(테이블 위 10~30cm)로
-/// 좁혔다 - 5cm(스킷)·40cm(높은 로브)는 실측상 어떤 마운트로도 항상
-/// 불가능했다.
-fn build_scenarios() -> Vec<Scenario> {
-    [0.15, 0.35, 0.5, 0.65, 0.85]
-        .into_iter()
-        .flat_map(|x_frac| {
-            let impact_x = table::WIDTH_X * x_frac;
-            [0.10, 0.15, 0.20, 0.25, 0.30]
-                .into_iter()
-                .flat_map(move |z_offset| {
-                    let impact_z = table::SURFACE_Z + z_offset;
-                    [7.0, 8.5, 10.0].into_iter().flat_map(move |speed| {
-                        [0.10, 0.30].into_iter().map(move |descend_frac| Scenario {
-                            impact: Point3::new(impact_x, table::DEFAULT_HIT_PLANE_Y, impact_z),
-                            incoming_velocity: Vector3::new(0.0, -speed, -speed * descend_frac),
-                        })
-                    })
-                })
-        })
-        .collect()
-}
-
-#[derive(Debug, Serialize)]
-struct MountResult {
-    base_y: f64,
-    height_offset_m: f64,
-    feasible_count: usize,
-    total: usize,
-    mean_peak_ratio: f64,
-    worst_peak_ratio: f64,
-}
 
 fn linspace(min: f64, max: f64, steps: usize) -> Vec<f64> {
     if steps <= 1 {

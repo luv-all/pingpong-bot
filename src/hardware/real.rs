@@ -11,8 +11,11 @@ use tracing::{debug, error};
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::AxlRail;
 use super::rail::RailConfig;
+use crate::defaults;
+use crate::error::HwError;
+use crate::hardware::Hardware;
+use crate::robot::Arm;
 use crate::swing;
-use crate::{Arm, Hardware, HwError, defaults};
 
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
@@ -257,9 +260,9 @@ impl Drop for RealHardware {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Joints;
     use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
+    use crate::robot::Joints;
 
     fn test_rail() -> RailConfig {
         return RailConfig {

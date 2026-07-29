@@ -2,7 +2,9 @@
 //!
 //! 산출물: stdout에 `PhysicsParams::default()` 붙여넣기 스니펫.
 
+mod args;
 mod capture_loop;
+mod patch;
 
 use std::fs;
 use std::path::PathBuf;
@@ -10,57 +12,14 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use nalgebra::Vector3;
-use pingpong_bot::SimWorld;
 use pingpong_bot::ball;
 use pingpong_bot::constants::{self, table};
+use pingpong_bot::defaults::PhysicsParams;
 use pingpong_bot::defaults::{calibration_path, primitive_4dof};
-use pingpong_bot::{PhysicsParams, StereoOfflineArgs, StereoPairCliArgs};
+use pingpong_bot::sim::SimWorld;
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "measure_restitution",
-    about = "반발계수 e 측정 → PhysicsParams::default() 스니펫. 영상 멀티캠 또는 수동 숫자"
-)]
-struct Args {
-    #[command(flatten)]
-    offline: StereoOfflineArgs,
-    #[command(flatten)]
-    cam: StereoPairCliArgs,
-    #[arg(long)]
-    no_preview: bool,
-    #[arg(long, default_value_t = 33)]
-    wait_ms: i32,
-    #[arg(long, default_value_t = 10_000)]
-    max_frames: usize,
-    /// 파일 재생 타임라인 FPS (미지정 시 clip meta / 파일 메타)
-    #[arg(long)]
-    timeline_fps: Option<f64>,
-    #[arg(long, value_name = "H0,H1,...")]
-    heights: Option<String>,
-    #[arg(long, value_name = "VIN:VOUT,...")]
-    vz_pairs: Option<String>,
-    #[arg(long)]
-    sim: bool,
-    #[arg(long)]
-    sim_ballistics: bool,
-    #[arg(long, value_name = "PATH")]
-    drag_csv: Option<PathBuf>,
-    #[arg(long, default_value_t = 0.40)]
-    drop_height: f64,
-}
-
-#[derive(Default)]
-struct Patch {
-    restitution: Option<f64>,
-    friction: Option<f64>,
-    drag: Option<f64>,
-}
-
-impl Patch {
-    fn is_empty(&self) -> bool {
-        return self.restitution.is_none() && self.friction.is_none() && self.drag.is_none();
-    }
-}
+use args::Args;
+use patch::Patch;
 
 fn main() -> Result<()> {
     let args = Args::parse();

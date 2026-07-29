@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use crate::estimator::Prediction;
 use crate::robot;
-use crate::{Arm, Prediction};
+use crate::robot::Arm;
 
 pub(super) struct Request {
     pub(super) id: u64,

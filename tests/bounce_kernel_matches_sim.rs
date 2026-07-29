@@ -5,10 +5,10 @@
 
 use nalgebra::Vector3;
 
-use pingpong_bot::HitPlane;
 use pingpong_bot::ball;
 use pingpong_bot::constants::{self, table};
 use pingpong_bot::defaults;
+use pingpong_bot::estimator::HitPlane;
 use pingpong_bot::sim::SimWorld;
 use pingpong_bot::sim::eval_protocol::{Mode, Protocol};
 

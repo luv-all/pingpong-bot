@@ -46,7 +46,7 @@ pub const NET_HALF_THICKNESS_M: f32 = 0.005;
 
 /// soft-ish 네트 콜라이더 — 얇은 고정 판 + 낮은 e (`Min` combine).
 /// Rapier soft cloth는 없고, 뷰어 격자는 외관만.
-pub fn net_collider_builder(physics: &crate::PhysicsParams) -> ColliderBuilder {
+pub fn net_collider_builder(physics: &crate::defaults::PhysicsParams) -> ColliderBuilder {
     // 천 느낌으로 접선 속도도 빨리 죽인다.
     const NET_FRICTION: f32 = 0.55;
     return ColliderBuilder::cuboid(

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use rand::Rng;
 
-use crate::PhysicsParams;
+use crate::defaults::PhysicsParams;
 use crate::robot::Robot;
 use crate::shooter;
 use crate::sim::physics::world::SimWorld;

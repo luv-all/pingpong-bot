@@ -1,9 +1,10 @@
 use nalgebra::Vector3;
 
 use super::*;
+use crate::Point3;
 use crate::constants::table;
 use crate::error::SwingPlanError;
-use crate::{Joints, Point3};
+use crate::robot::Joints;
 
 fn sample_arm() -> Arm {
     return (*crate::defaults::primitive_4dof()

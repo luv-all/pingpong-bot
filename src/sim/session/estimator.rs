@@ -89,8 +89,8 @@ impl Estimator for SimBallEstimator {
 
 #[cfg(test)]
 mod tests {
-    use crate::HitPlane;
     use crate::constants::table;
+    use crate::estimator::HitPlane;
 
     use super::*;
     use crate::shooter;

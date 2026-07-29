@@ -1,8 +1,8 @@
 //! jog egui 패널.
 
 use kiss3d::egui::{self, Color32, RichText};
-use pingpong_bot::InterceptWindow;
 use pingpong_bot::constants::table;
+use pingpong_bot::planner::InterceptWindow;
 
 use crate::motion::{MotionKind, REACH_DELTA_M, joint_label, reach_ok};
 use crate::state::{Action, JogApp, try_action};
@@ -324,7 +324,7 @@ fn ranged(ui: &mut egui::Ui, label: &str, value: &mut f64, min: f64, max: f64, s
     );
 }
 
-fn joint_hw_deg_range(arm: &pingpong_bot::Arm, index: usize) -> (f64, f64) {
+fn joint_hw_deg_range(arm: &pingpong_bot::robot::Arm, index: usize) -> (f64, f64) {
     if let Some(limit) = arm.joint_limit(index) {
         return (limit.min.to_degrees(), limit.max.to_degrees());
     }
@@ -333,7 +333,7 @@ fn joint_hw_deg_range(arm: &pingpong_bot::Arm, index: usize) -> (f64, f64) {
 
 /// 관절 한계 ∩ (현재각 ± maxdelta). 슬라이더가 maxdelta 위반을 미리 막는다.
 fn joint_jog_deg_range(
-    arm: &pingpong_bot::Arm,
+    arm: &pingpong_bot::robot::Arm,
     index: usize,
     synced: Option<&pingpong_bot::robot::Pose>,
     max_delta_deg: f64,
@@ -355,7 +355,7 @@ fn joint_jog_deg_range(
     return (cur_deg, cur_deg);
 }
 
-fn rail_range(arm: &pingpong_bot::Arm) -> (f64, f64) {
+fn rail_range(arm: &pingpong_bot::robot::Arm) -> (f64, f64) {
     if let Some(rail) = arm.rail {
         return (rail.x_min, rail.x_max);
     }

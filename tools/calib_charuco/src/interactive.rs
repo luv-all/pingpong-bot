@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use opencv::core::{Mat, Scalar};
 use opencv::imgcodecs;
 use opencv::prelude::*;
-use pingpong_bot::{
+use pingpong_bot::camera::{
     Charuco, FrameSource, MIN_CHARUCO_CORNERS, OpenCvCapture, Preview, PreviewAction,
 };
 

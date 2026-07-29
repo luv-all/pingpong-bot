@@ -2,7 +2,9 @@
 
 use std::time::Instant;
 
-use crate::{DomainError, ObservationError, Point3};
+use crate::Point3;
+use crate::error::DomainError;
+use crate::error::ObservationError;
 use nalgebra::{DMatrix, Matrix3x4};
 
 use crate::ball;
@@ -134,8 +136,10 @@ pub fn triangulate_projections(
 mod tests {
     use std::time::{Duration, Instant};
 
+    use crate::Point3;
     use crate::constants::table;
-    use crate::{DomainError, ObservationError, Point3};
+    use crate::error::DomainError;
+    use crate::error::ObservationError;
 
     use super::*;
     use crate::ball;

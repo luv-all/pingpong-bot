@@ -1,10 +1,11 @@
 //! 시뮬 디버그용 월드 스냅샷.
 
-use crate::SwingPlanError;
 use crate::defaults;
+use crate::error::SwingPlanError;
 use crate::planner::collision::{robot_obbs, table_penetration};
+use crate::robot::Arm;
+use crate::robot::Joints;
 use crate::swing;
-use crate::{Arm, Joints};
 
 use super::commit_phase::CommitPhase;
 use super::obb::DebugObb;

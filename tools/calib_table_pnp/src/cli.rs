@@ -4,9 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use pingpong_bot::Calibration;
-use pingpong_bot::TablePnp;
-use pingpong_bot::camera;
+use pingpong_bot::camera::{self, Calibration, TablePnp};
 use serde::Deserialize;
 
 use crate::args::{Args, pending_path, resolve_camera_id, resolve_output};

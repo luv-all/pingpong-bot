@@ -1,41 +1,18 @@
 //! 조그 모션 조합 — 씬이 아닌 툴에서 `swing::Trajectory`를 만든다.
 
+mod draft;
+mod kind;
+
 use anyhow::{Context, Result, ensure};
 use nalgebra::{Rotation3, Vector3};
-use pingpong_bot::constants::table;
+use pingpong_bot::Point3;
+use pingpong_bot::defaults::{ControlParams, ImpactParams};
 use pingpong_bot::planner::Impact;
-use pingpong_bot::robot;
+use pingpong_bot::robot::{self, Arm, Joints, RacketPose};
 use pingpong_bot::swing;
-use pingpong_bot::{Arm, ControlParams, ImpactParams, Joints, Point3, RacketPose};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MotionKind {
-    Joint,
-    Angles,
-    RailAbs,
-    Ik,
-    Pose,
-    Swing,
-    /// 공 도달점으로 관절·레일만 이동 (스윙 없음).
-    AimBall,
-    /// 공 도달점 + 입사 속도 → 임팩트 역산 스윙.
-    SwingBall,
-}
-
-impl MotionKind {
-    pub fn label(self) -> &'static str {
-        return match self {
-            Self::Joint => "관절 하나",
-            Self::Angles => "관절 전부",
-            Self::RailAbs => "레일 절대 위치",
-            Self::Ik => "라켓 조금 옮기기",
-            Self::Pose => "라켓 옮기기+기울이기",
-            Self::Swing => "스윙 (속도 직접)",
-            Self::AimBall => "공 도달점 조준",
-            Self::SwingBall => "공 도달점 스윙",
-        };
-    }
-}
+pub use draft::MotionDraft;
+pub use kind::MotionKind;
 
 /// 4-dof 관절 표시 이름 — sim joint windows 오버레이와 동일 (`j0`…`j3`).
 pub const JOINT_LABELS: [&str; 4] = ["j0", "j1", "j2", "j3"];
@@ -48,48 +25,6 @@ pub fn joint_label(index: usize) -> String {
         .get(index)
         .map(|s| (*s).to_string())
         .unwrap_or_else(|| format!("j{index}"));
-}
-
-/// egui 입력 초안.
-#[derive(Debug, Clone)]
-pub struct MotionDraft {
-    pub kind: MotionKind,
-    pub joint_index: usize,
-    pub joint_deg: f64,
-    pub angles_deg: [f64; 4],
-    pub rail_x: f64,
-    /// IK / Pose / Swing 공통: 현재 라켓 위치 대비 Δ(좌우, 전후, 높이) [m].
-    pub reach_dxyz: [f64; 3],
-    /// Pose / Swing: 현재 법선 기준 기울기 [deg].
-    pub tilt_pitch_deg: f64,
-    pub tilt_yaw_deg: f64,
-    pub swing_speed: f64,
-    /// AimBall / SwingBall: 공 도달 월드 좌표 [m].
-    pub arrival_xyz: [f64; 3],
-    /// SwingBall: 공 입사 속도 [m/s].
-    pub ball_vin: [f64; 3],
-}
-
-impl Default for MotionDraft {
-    fn default() -> Self {
-        return Self {
-            kind: MotionKind::Joint,
-            joint_index: 0,
-            joint_deg: 0.0,
-            angles_deg: [0.0; 4],
-            rail_x: 0.0,
-            reach_dxyz: [0.0; 3],
-            tilt_pitch_deg: 0.0,
-            tilt_yaw_deg: 0.0,
-            swing_speed: 1.5,
-            arrival_xyz: [
-                table::WIDTH_X * 0.5,
-                table::DEFAULT_HIT_PLANE_Y,
-                table::SURFACE_Z + 0.18,
-            ],
-            ball_vin: [0.0, -6.0, -1.5],
-        };
-    }
 }
 
 pub fn compose(

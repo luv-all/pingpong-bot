@@ -6,8 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use anyhow::Result;
+use pingpong_bot::Point3;
 use pingpong_bot::ball;
-use pingpong_bot::{Point3, SimRuntimeControls, SimScene};
+use pingpong_bot::sim::{SimRuntimeControls, SimScene};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

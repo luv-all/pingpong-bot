@@ -1,6 +1,6 @@
 //! AXL 리니어 레일 dry-run 및 Windows 실물 어댑터.
 
-use crate::HwError;
+use crate::error::HwError;
 
 use super::rail_config::RailConfig;
 use super::rail_kind::RailKind;
@@ -182,7 +182,7 @@ mod tests {
 
         assert_eq!(
             error,
-            crate::HwError::InvalidConfig {
+            crate::error::HwError::InvalidConfig {
                 reason: "AXL AxmStatusGetActPos code=7; AxmStatusGetCmdPos code=9".into(),
             }
         );
@@ -195,7 +195,7 @@ mod tests {
 
         assert_eq!(
             error,
-            crate::HwError::InvalidConfig {
+            crate::error::HwError::InvalidConfig {
                 reason: "AXL AxmStatusReadInMotion timeout after 30s".into(),
             }
         );
