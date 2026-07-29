@@ -15,7 +15,7 @@ use rapier3d::prelude::*;
 use tracing::{debug, info, warn};
 
 use super::arm_bodies::ArmMultibody;
-use crate::shooter::Settings;
+use crate::shooter;
 use crate::sim::gui::debug_snap::{CommitPhase, SimDebugSnapshot};
 
 pub use super::step_input::SimStepInput;
@@ -72,7 +72,7 @@ pub struct SimWorld {
     /// 공 주차/비행
     pub ball_state: crate::ball::State,
     /// 마지막 발사 설정 (상태 표시용)
-    pub last_shooter_settings: Settings,
+    pub last_shooter_settings: shooter::Settings,
     /// 디버그 — 마지막 hit plane 예측 (뷰어 마커용)
     debug_prediction: Option<Prediction>,
     /// 동적으로 탐색할 접수 y 구간.
@@ -188,7 +188,7 @@ impl SimWorld {
         let shooter_body = RigidBodyBuilder::fixed().build();
         let shooter_handle = rigid_body_set.insert(shooter_body);
 
-        let default_shooter = Settings::default();
+        let default_shooter = shooter::Settings::default();
 
         // 다물체 암: SerialChain 정합 + EE 충돌 (키네마틱 라켓 없음).
         let mount = nalgebra::Vector3::new(robot.rail_x(), arm.base.coords.y, arm.base.coords.z);
@@ -497,7 +497,7 @@ impl SimWorld {
     }
 
     /// 슈터 본체 위치·회전을 설정에 맞춘다 (발사구가 전면에 오도록).
-    pub fn sync_shooter_pose(&mut self, settings: &Settings) {
+    pub fn sync_shooter_pose(&mut self, settings: &shooter::Settings) {
         let pos = settings.visual_position();
         let rot = settings.orientation();
         if let Some(body) = self.rigid_body_set.get_mut(self.shooter_handle) {
@@ -507,7 +507,7 @@ impl SimWorld {
     }
 
     /// 주차 중인 공을 발사구에 붙인다.
-    fn sync_parked_ball(&mut self, settings: &Settings) {
+    fn sync_parked_ball(&mut self, settings: &shooter::Settings) {
         let muzzle = settings.muzzle_position();
         if let Some(body) = self.rigid_body_set.get_mut(self.ball_handle) {
             body.set_translation(muzzle, true);
@@ -858,7 +858,7 @@ impl SimWorld {
     }
 
     /// 슈터에서 공을 발사한다.
-    pub fn shoot_ball(&mut self, settings: &Settings) {
+    pub fn shoot_ball(&mut self, settings: &shooter::Settings) {
         self.sync_shooter_pose(settings);
         self.last_shooter_settings = settings.clone();
         let muzzle = settings.muzzle_position();
@@ -934,7 +934,7 @@ impl SimWorld {
     /// 스윙/중앙 복귀 궤적은 유지한다 — 공 회수로 복귀를 끊으면
     /// (`cancel_swing`) 레일·관절이 스윙 끝에 멈춰 다음 샷이 깨진다.
     /// 새 발사(`launch_ball_at`)만 진행 중 스윙을 취소한다.
-    pub fn park_ball(&mut self, settings: &Settings) {
+    pub fn park_ball(&mut self, settings: &shooter::Settings) {
         self.debug_prediction = None;
         self.last_shooter_settings = settings.clone();
         self.sync_shooter_pose(settings);
@@ -1129,7 +1129,7 @@ impl SimWorld {
 mod tests {
     use super::*;
 
-    use crate::shooter::Settings;
+    use crate::shooter;
 
     use crate::constants::table;
 
@@ -1176,7 +1176,7 @@ mod tests {
     fn shoot_sends_ball_toward_robot_side() {
         let arm = test_robot();
         let mut world = SimWorld::new(arm);
-        let settings = Settings::default();
+        let settings = shooter::Settings::default();
         world.shoot_ball(&settings);
         let y0 = world.ball_position().y;
         for _ in 0..300 {
@@ -1193,11 +1193,11 @@ mod tests {
         let mut world = SimWorld::new(fourdof_robot());
         world.set_use_ground_truth(true);
         world.set_intercept_window(InterceptWindow::default());
-        let settings = Settings {
+        let settings = shooter::Settings {
             lateral_offset_m: 0.5,
             yaw_deg: -28.0,
             speed_mps: 5.7,
-            ..Settings::default()
+            ..shooter::Settings::default()
         };
         world.shoot_ball(&settings);
 
@@ -1230,7 +1230,7 @@ mod tests {
         let mut world = SimWorld::new(fourdof_robot());
         world.set_use_ground_truth(true);
         world.set_intercept_window(InterceptWindow::default());
-        world.shoot_ball(&Settings::default());
+        world.shoot_ball(&shooter::Settings::default());
         for _ in 0..8_000 {
             world.step(1.0 / 1000.0, None);
             if world.swing_committed() || world.robot().is_swinging() {
@@ -1253,7 +1253,7 @@ mod tests {
         let arm = test_robot();
         let mut world = SimWorld::new(arm.clone());
         world.set_use_ground_truth(true);
-        world.shoot_ball(&Settings::default());
+        world.shoot_ball(&shooter::Settings::default());
 
         let mut started = false;
         for _ in 0..800 {
@@ -1455,7 +1455,7 @@ mod tests {
             })
             .expect("table collider");
 
-        world.shoot_ball(&Settings::default());
+        world.shoot_ball(&shooter::Settings::default());
         let mut racket_contact = false;
         let mut returned = false;
         let mut net_clearance = None;
@@ -1551,7 +1551,7 @@ mod tests {
         world.set_use_ground_truth(false); // 스윙 없이 순수 탄도만 본다
 
         let net_top_z = table::SURFACE_Z + crate::constants::table::NET_HEIGHT;
-        world.shoot_ball(&Settings::default());
+        world.shoot_ball(&shooter::Settings::default());
 
         let net_y = (table::LENGTH_Y * 0.5) as f32;
         let mut previous_y = world.ball_position().y;
@@ -1603,7 +1603,7 @@ mod tests {
         let ball_collider = collider_for_body(world.ball_handle);
         let racket_collider = collider_for_body(world.racket_handle);
 
-        world.shoot_ball(&Settings::default());
+        world.shoot_ball(&shooter::Settings::default());
 
         let mut racket_contact = false;
         let mut returned = false;
@@ -1657,7 +1657,7 @@ mod tests {
         assert!(arm.arm.rail.is_some(), "테스트 arm은 리니어 포함");
         let mut world = SimWorld::new(arm);
         world.set_use_ground_truth(true);
-        let settings = Settings::default();
+        let settings = shooter::Settings::default();
         assert_eq!(world.robot().rail_x(), 0.0, "대기 위치 x=0");
         world.shoot_ball(&settings);
         assert!(
@@ -1702,7 +1702,7 @@ mod tests {
 
         let mut world = SimWorld::new(arm);
         world.set_use_ground_truth(true);
-        world.shoot_ball(&Settings::default());
+        world.shoot_ball(&shooter::Settings::default());
 
         let mut swing_started = false;
         for _ in 0..800 {
@@ -1791,7 +1791,7 @@ mod tests {
 
         let arm = test_robot();
         let mut world = SimWorld::new(arm.clone());
-        let settings = Settings::default();
+        let settings = shooter::Settings::default();
         world.shoot_ball(&settings);
 
         let hit_plane = HitPlane {
@@ -1857,7 +1857,7 @@ mod tests {
         let arm = test_robot();
         let mut world = SimWorld::new(arm);
         world.set_use_bang_bang_swing(true);
-        world.shoot_ball(&Settings::default());
+        world.shoot_ball(&shooter::Settings::default());
 
         let dt = 1.0 / 1000.0;
         // MAX_BALL_FLIGHT_SECS(4.0s)의 자동 park 안전장치보다 넉넉하게.
@@ -1962,9 +1962,9 @@ mod tests {
                 })
                 .expect("ball collider");
 
-            let settings = Settings {
+            let settings = shooter::Settings {
                 lateral_offset_m: lateral,
-                ..Settings::default()
+                ..shooter::Settings::default()
             };
             world.shoot_ball(&settings);
             let mut bounce_x = None;
@@ -1990,7 +1990,7 @@ mod tests {
         }
     }
 
-    /// `Settings::randomized`가 뽑을 수 있는 (lateral, yaw, speed) 공간의
+    /// `shooter::Settings::randomized`가 뽑을 수 있는 (lateral, yaw, speed) 공간의
     /// 코너(각 lateral의 yaw_min/yaw_max × speed_min/speed_max)를 모두 스윕해서,
     /// 어떤 랜덤 샷도 네트를 맞지 않고 라켓 접수·리턴까지 이어짐을 검증한다.
     ///
@@ -2021,7 +2021,7 @@ mod tests {
 
         let mut worst_step = std::time::Duration::ZERO;
         for round in 0..30 {
-            let settings = Settings::default().randomized_aim(&mut rng);
+            let settings = shooter::Settings::default().randomized_aim(&mut rng);
             world.shoot_ball(&settings);
 
             let mut reparked = false;
@@ -2071,12 +2071,12 @@ mod tests {
 
         // 한쪽으로 크게 치우친 느린 샷 — 예측 임팩트 x가 중앙에서 벗어나고,
         // 느려서 commit 전 추종 시간이 넉넉하다.
-        let (_yaw_min, yaw_max) = Settings::yaw_range_for_lateral_deg(0.5);
-        let settings = Settings {
+        let (_yaw_min, yaw_max) = shooter::Settings::yaw_range_for_lateral_deg(0.5);
+        let settings = shooter::Settings {
             lateral_offset_m: 0.5,
             yaw_deg: yaw_max,
             speed_mps: crate::defaults::sim::RANDOM_SHOT_SPEED_MIN_MPS,
-            ..Settings::default()
+            ..shooter::Settings::default()
         };
         world.shoot_ball(&settings);
 
@@ -2135,17 +2135,17 @@ mod tests {
         // (1) 스윙·접수하거나 (2) 도달 불능이면 명시적으로 포기해야 한다.
         // 금지: 공만 날아가고 commit/abandon 없이 팔이 아무 결정도 안 함.
         for lateral in [-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
-            let (yaw_min, yaw_max) = Settings::yaw_range_for_lateral_deg(lateral);
+            let (yaw_min, yaw_max) = shooter::Settings::yaw_range_for_lateral_deg(lateral);
             for yaw in [yaw_min, yaw_max] {
                 for speed in [
                     crate::defaults::sim::RANDOM_SHOT_SPEED_MIN_MPS,
                     crate::defaults::sim::RANDOM_SHOT_SPEED_MAX_MPS,
                 ] {
-                    let settings = Settings {
+                    let settings = shooter::Settings {
                         lateral_offset_m: lateral,
                         yaw_deg: yaw,
                         speed_mps: speed,
-                        ..Settings::default()
+                        ..shooter::Settings::default()
                     };
 
                     let arm = test_robot();
@@ -2242,7 +2242,7 @@ mod tests {
 
         // 스핀·높이·pitch/roll 랜덤은 GUI용. 접수 회귀는 기본 자세로
         // 조준(lateral/yaw/speed)만 흔든다.
-        let defaults = Settings::default();
+        let defaults = shooter::Settings::default();
         for round in 0..15 {
             let settings = defaults.randomized_aim(&mut rng);
             world.shoot_ball(&settings);
@@ -2299,18 +2299,18 @@ mod tests {
     #[ignore = "realistic joint speed + main rail_frame mount needs shot_tune retune; see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn random_shot_fine_grid_clears_net_and_returns_for_fourdof_robot() {
         for lateral in [-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
-            let (yaw_min, yaw_max) = Settings::yaw_range_for_lateral_deg(lateral);
+            let (yaw_min, yaw_max) = shooter::Settings::yaw_range_for_lateral_deg(lateral);
             for frac in [0.0_f64, 0.25, 0.5, 0.75, 1.0] {
                 let yaw = yaw_min + (yaw_max - yaw_min) * frac;
                 for speed in [
                     crate::defaults::sim::RANDOM_SHOT_SPEED_MIN_MPS,
                     crate::defaults::sim::RANDOM_SHOT_SPEED_MAX_MPS,
                 ] {
-                    let settings = Settings {
+                    let settings = shooter::Settings {
                         lateral_offset_m: lateral,
                         yaw_deg: yaw,
                         speed_mps: speed,
-                        ..Settings::default()
+                        ..shooter::Settings::default()
                     };
                     let robot = fourdof_robot();
                     let mut world = SimWorld::new(robot);
@@ -2380,7 +2380,7 @@ mod tests {
             world.set_use_ground_truth(true);
 
             // 1구: 평범한 Shoot.
-            world.shoot_ball(&Settings::default());
+            world.shoot_ball(&shooter::Settings::default());
             let mut settled = false;
             for _ in 0..8_000 {
                 world.step(1.0 / 1000.0, None);
@@ -2393,7 +2393,7 @@ mod tests {
 
             // 2구: Random Shoot (조준만 — 높이/스핀/pitch/roll은 리치 회귀에서 제외).
             let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-            let settings = Settings::default().randomized_aim(&mut rng);
+            let settings = shooter::Settings::default().randomized_aim(&mut rng);
             world.shoot_ball(&settings);
 
             let ball_collider = world
@@ -2450,7 +2450,7 @@ mod tests {
             let mut world = SimWorld::new(arm);
             world.set_use_ground_truth(true);
 
-            let defaults = Settings::default();
+            let defaults = shooter::Settings::default();
             let first = defaults.randomized_aim(&mut rng);
             world.shoot_ball(&first);
             let mut committed = false;
@@ -2482,7 +2482,7 @@ mod tests {
 
             // 3구: 방해 없이 평범하게 쏜다 — 앞선 끼어들기로 로봇이
             // 영구적으로 망가지지 않았다면 이번엔 정상적으로 접수해야 한다.
-            world.shoot_ball(&Settings::default());
+            world.shoot_ball(&shooter::Settings::default());
             let mut racket_contact = false;
             for _ in 0..5_000 {
                 world.step(1.0 / 1000.0, None);
@@ -2509,17 +2509,17 @@ mod tests {
     #[ignore = "realistic joint speed + main rail_frame mount needs shot_tune retune; see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn random_shot_grid_clears_net_and_returns() {
         for lateral in [-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
-            let (yaw_min, yaw_max) = Settings::yaw_range_for_lateral_deg(lateral);
+            let (yaw_min, yaw_max) = shooter::Settings::yaw_range_for_lateral_deg(lateral);
             for yaw in [yaw_min, yaw_max] {
                 for speed in [
                     crate::defaults::sim::RANDOM_SHOT_SPEED_MIN_MPS,
                     crate::defaults::sim::RANDOM_SHOT_SPEED_MAX_MPS,
                 ] {
-                    let settings = Settings {
+                    let settings = shooter::Settings {
                         lateral_offset_m: lateral,
                         yaw_deg: yaw,
                         speed_mps: speed,
-                        ..Settings::default()
+                        ..shooter::Settings::default()
                     };
 
                     let mut world = SimWorld::new(fourdof_robot());

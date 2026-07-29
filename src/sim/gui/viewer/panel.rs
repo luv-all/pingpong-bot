@@ -13,9 +13,7 @@ use super::super::debug::overlays::DebugOverlays;
 use super::eval_live_run::EvalLiveRun;
 use crate::constants::viewer::{CAMERA_DIST_MAX, CAMERA_DIST_MIN};
 use crate::defaults;
-use crate::eval::{
-    LiveObserver, MAX_SCORE, Mode, PASS_SCORE_EXCLUSIVE, Progress, TOTAL_SHOTS, Zone,
-};
+use crate::eval;
 use crate::robot::Robot;
 use crate::sim::physics::world::SimWorld;
 use crate::sim::session::controls::SimRuntimeControls;
@@ -71,7 +69,7 @@ pub fn draw(
     let mut random_shoot = false;
     let mut park = false;
     let mut start_eval = false;
-    let mut start_eval_mode = Mode::Block;
+    let mut start_eval_mode = eval::Mode::Block;
     let mut start_live_shot: Option<usize> = None;
 
     // 레이아웃: 좌측 Shooter→Eval, 우측 Status→View.
@@ -169,12 +167,16 @@ pub fn draw(
             ui.add_enabled_ui(!running, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Mode");
-                    ui.selectable_value(&mut ui_state.eval_mode, Mode::Block, "Block");
-                    ui.selectable_value(&mut ui_state.eval_mode, Mode::Alternating, "Alternating");
+                    ui.selectable_value(&mut ui_state.eval_mode, eval::Mode::Block, "Block");
+                    ui.selectable_value(
+                        &mut ui_state.eval_mode,
+                        eval::Mode::Alternating,
+                        "Alternating",
+                    );
                 });
                 ui.weak(match ui_state.eval_mode {
-                    Mode::Block => "Left → Center → Right · 10 each",
-                    Mode::Alternating => "L → C → R → C · … · 10 each",
+                    eval::Mode::Block => "Left → Center → Right · 10 each",
+                    eval::Mode::Alternating => "L → C → R → C · … · 10 each",
                 });
                 ui.add_space(4.0);
                 ui.add(
@@ -275,7 +277,7 @@ fn begin_eval_live_shot(
     controls: &Arc<Mutex<SimRuntimeControls>>,
     shot_number: usize,
 ) {
-    if !(1..=TOTAL_SHOTS).contains(&shot_number) {
+    if !(1..=eval::TOTAL_SHOTS).contains(&shot_number) {
         return;
     }
     let settings = {
@@ -292,7 +294,7 @@ fn begin_eval_live_shot(
     let Ok(world_guard) = world.lock() else {
         return;
     };
-    let observer = LiveObserver::new(&world_guard);
+    let observer = eval::LiveObserver::new(&world_guard);
     drop(world_guard);
 
     ui_state.shooter = settings.0.clone();
@@ -460,8 +462,8 @@ fn draw_eval_status(
     };
     ui.horizontal(|ui| {
         ui.colored_label(color, egui::RichText::new(verdict).strong());
-        ui.monospace(format!("{}/{}", report.total, MAX_SCORE));
-        ui.weak(format!("need >{PASS_SCORE_EXCLUSIVE}"));
+        ui.monospace(format!("{}/{}", report.total, eval::MAX_SCORE));
+        ui.weak(format!("need >{}", eval::PASS_SCORE_EXCLUSIVE));
     });
 
     ui.add_space(2.0);
@@ -482,7 +484,7 @@ fn draw_eval_status(
             }
             ui.end_row();
 
-            for zone in Zone::ALL {
+            for zone in eval::Zone::ALL {
                 let z = report.zone_score(zone);
                 ui.label(zone.label());
                 for c in z.counts {
@@ -495,9 +497,9 @@ fn draw_eval_status(
     ui.add_space(2.0);
     ui.weak(format!(
         "zone totals  R {} · C {} · L {}",
-        report.zone_score(Zone::Right).total,
-        report.zone_score(Zone::Center).total,
-        report.zone_score(Zone::Left).total,
+        report.zone_score(eval::Zone::Right).total,
+        report.zone_score(eval::Zone::Center).total,
+        report.zone_score(eval::Zone::Left).total,
     ));
 
     ui.add_space(6.0);
@@ -508,7 +510,7 @@ fn draw_eval_status(
         .num_columns(10)
         .spacing([2.0, 2.0])
         .show(ui, |ui| {
-            for n in 1..=TOTAL_SHOTS {
+            for n in 1..=eval::TOTAL_SHOTS {
                 let shot = &report.shots[n - 1];
                 let fill = points_color(shot.points);
                 let mut button = egui::Button::new(format!("{n}")).fill(fill);
@@ -573,7 +575,7 @@ fn points_color(points: u8) -> egui::Color32 {
     };
 }
 
-fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mode: Mode) {
+fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mode: eval::Mode) {
     if ui_state
         .eval_running
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
@@ -594,7 +596,7 @@ fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mo
 
     {
         let mut p = ui_state.eval.lock().expect("eval progress");
-        *p = Progress::default();
+        *p = eval::Progress::default();
     }
 
     let progress = Arc::clone(&ui_state.eval);

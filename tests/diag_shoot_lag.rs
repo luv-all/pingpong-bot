@@ -13,9 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use pingpong_bot::ball::State;
+use pingpong_bot::ball;
 use pingpong_bot::defaults;
-use pingpong_bot::shooter::Settings;
+use pingpong_bot::shooter;
 use pingpong_bot::sim::SimWorld;
 use pingpong_bot::sim::gui::{SimViewer, WORLD_LOCK_WAIT};
 use pingpong_bot::sim::world::SimStepInput;
@@ -74,7 +74,7 @@ fn sample(world: &SimWorld, t_ms: f64, step_us: f64) -> Tick {
 fn diag_shoot_lag_tick_cost() {
     let mut world = SimWorld::new(defaults::primitive_4dof().expect("4dof"));
     world.set_use_ground_truth(true);
-    let shooter = Settings::default();
+    let shooter = shooter::Settings::default();
     world.sync_shooter_pose(&shooter);
 
     // (A) 기준선: 공이 주차된(=idle) 상태의 틱 비용.
@@ -100,7 +100,7 @@ fn diag_shoot_lag_tick_cost() {
     let mut worst: Vec<Tick> = Vec::new();
 
     for i in 0..3_000 {
-        if world.ball_state != State::InFlight {
+        if world.ball_state != ball::State::InFlight {
             break;
         }
         let t = std::time::Instant::now();
@@ -340,7 +340,7 @@ fn run_judder_probe(mode: Acquire, batch_lock: bool) -> (RenderSample, RenderSam
     let physics_shutdown = Arc::clone(&shutdown);
     let physics_shoot = Arc::clone(&shoot_flag);
     let physics = std::thread::spawn(move || {
-        let shooter = Settings::default();
+        let shooter = shooter::Settings::default();
         let mut last_wall = Instant::now();
         let mut sim_debt = 0.0_f64;
         let mut total_steps = 0u64;

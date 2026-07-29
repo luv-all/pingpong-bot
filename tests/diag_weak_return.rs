@@ -10,12 +10,12 @@
 
 use nalgebra::Vector3;
 
-use pingpong_bot::ball::State;
+use pingpong_bot::ball;
 use pingpong_bot::constants::{BALL_RADIUS, table};
 use pingpong_bot::defaults;
-use pingpong_bot::eval::{Mode, Protocol};
+use pingpong_bot::eval;
 use pingpong_bot::planner::Impact;
-use pingpong_bot::shooter::Settings;
+use pingpong_bot::shooter;
 use pingpong_bot::sim::SimWorld;
 
 fn v3(v: rapier3d::prelude::Vector) -> Vector3<f64> {
@@ -101,7 +101,7 @@ struct ShotDiag {
     swung: bool,
 }
 
-fn run_shot(index: usize, settings: &Settings) -> ShotDiag {
+fn run_shot(index: usize, settings: &shooter::Settings) -> ShotDiag {
     const DT: f64 = 1.0 / 1000.0;
     const MAX_STEPS: usize = 4_000;
 
@@ -180,10 +180,10 @@ fn run_shot(index: usize, settings: &Settings) -> ShotDiag {
         prev_v = v;
         prev_p = p;
 
-        if contact_done && world.ball_state == State::Parked {
+        if contact_done && world.ball_state == ball::State::Parked {
             break;
         }
-        if world.ball_state == State::Parked && diag.swung {
+        if world.ball_state == ball::State::Parked && diag.swung {
             break;
         }
     }
@@ -200,10 +200,10 @@ fn diag_swing_timeseries() {
         .without_time()
         .try_init();
     let launch = pingpong_bot::eval::LaunchParams::default();
-    let schedule = Protocol::shot_schedule(Mode::Block);
+    let schedule = eval::Protocol::shot_schedule(eval::Mode::Block);
     for pick in [0_usize, 20] {
         let (zone, index_in_zone) = schedule[pick];
-        let settings = Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
+        let settings = eval::Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let robot = defaults::robot().expect("robot");
         let mut world = SimWorld::with_physics(robot, defaults::PhysicsParams::default());
         world.set_use_ground_truth(true);
@@ -283,8 +283,11 @@ fn diag_swing_timeseries() {
 fn diag_motor_tracking() {
     const DT: f64 = 1.0 / 1000.0;
     let launch = pingpong_bot::eval::LaunchParams::default();
-    let settings =
-        Protocol::settings_for_zone_shot(&launch, pingpong_bot::sim::eval_protocol::Zone::Left, 9);
+    let settings = eval::Protocol::settings_for_zone_shot(
+        &launch,
+        pingpong_bot::sim::eval_protocol::Zone::Left,
+        9,
+    );
     let mut world = SimWorld::with_physics(
         defaults::robot().expect("robot"),
         defaults::PhysicsParams::default(),
@@ -345,7 +348,7 @@ fn diag_motor_tracking() {
             }
         }
         prev_measured = Some(measured);
-        if world.ball_state == State::Parked && step > 100 {
+        if world.ball_state == ball::State::Parked && step > 100 {
             break;
         }
     }
@@ -378,7 +381,7 @@ fn diag_incoming_trajectory() {
             2,
         ),
     ] {
-        let settings = Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
+        let settings = eval::Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let mut world = SimWorld::with_physics(
             defaults::robot().expect("robot"),
             defaults::PhysicsParams::default(),
@@ -418,7 +421,7 @@ fn diag_incoming_trajectory() {
             }
             prev = p;
             prev_vz = vz;
-            if world.ball_state == State::Parked {
+            if world.ball_state == ball::State::Parked {
                 println!(
                     "  parked @ step {step} pos=[{:.3} {:.3} {:.3}]",
                     p.x, p.y, p.z
@@ -453,8 +456,11 @@ fn diag_miss_cause() {
         "ball @ min_d",
         "racket @ min_d"
     );
-    for (i, (zone, index_in_zone)) in Protocol::shot_schedule(Mode::Block).into_iter().enumerate() {
-        let settings = Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
+    for (i, (zone, index_in_zone)) in eval::Protocol::shot_schedule(eval::Mode::Block)
+        .into_iter()
+        .enumerate()
+    {
+        let settings = eval::Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let mut world = SimWorld::with_physics(
             defaults::robot().expect("robot"),
             defaults::PhysicsParams::default(),
@@ -494,7 +500,7 @@ fn diag_miss_cause() {
                 touched = true;
             }
             prev_y = ball.y;
-            if world.ball_state == State::Parked {
+            if world.ball_state == ball::State::Parked {
                 break;
             }
         }
@@ -529,9 +535,12 @@ fn diag_eval_flags_deterministic() {
     let physics = defaults::PhysicsParams::default();
     let robot = defaults::robot().expect("robot");
     let mut contact = 0;
-    for (i, (zone, index_in_zone)) in Protocol::shot_schedule(Mode::Block).into_iter().enumerate() {
-        let settings = Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
-        let (flags, passthrough) = Protocol::run_shot(&robot, physics, &settings);
+    for (i, (zone, index_in_zone)) in eval::Protocol::shot_schedule(eval::Mode::Block)
+        .into_iter()
+        .enumerate()
+    {
+        let settings = eval::Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
+        let (flags, passthrough) = eval::Protocol::run_shot(&robot, physics, &settings);
         if flags.contact {
             contact += 1;
         }
@@ -576,8 +585,11 @@ fn diag_weak_return() {
     );
     let mut cleared = 0;
     let mut contacted = 0;
-    for (i, (zone, index_in_zone)) in Protocol::shot_schedule(Mode::Block).into_iter().enumerate() {
-        let settings = Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
+    for (i, (zone, index_in_zone)) in eval::Protocol::shot_schedule(eval::Mode::Block)
+        .into_iter()
+        .enumerate()
+    {
+        let settings = eval::Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let d = run_shot(i + 1, &settings);
         if !d.contact {
             println!(

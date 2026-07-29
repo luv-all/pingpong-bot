@@ -453,7 +453,7 @@ mod tests {
 mod smoke {
     use super::*;
     use crate::defaults;
-    use crate::eval::MAX_SCORE;
+    use crate::eval;
 
     #[test]
     fn protocol_runs_and_prints_score() {
@@ -468,7 +468,7 @@ mod smoke {
         eprintln!(
             "EVAL total={}/{} pass={} counts={:?} zones={:?}",
             report.total,
-            MAX_SCORE,
+            eval::MAX_SCORE,
             report.passed(),
             report.counts,
             report.by_zone.map(|z| z.total),

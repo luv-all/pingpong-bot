@@ -93,10 +93,10 @@ mod tests {
     use crate::constants::table;
 
     use super::*;
-    use crate::shooter::Settings;
+    use crate::shooter;
 
     fn launch_snapshot() -> ball::Snapshot {
-        let settings = Settings::default();
+        let settings = shooter::Settings::default();
         let muzzle = settings.muzzle_position();
         let vel = settings.launch_velocity();
         let omega = settings.launch_angular_velocity();
@@ -148,7 +148,7 @@ mod tests {
     fn rapier_hit_plane_z_matches_predict_within_5cm() {
         let mut world = SimWorld::new(crate::defaults::primitive_4dof().expect("4dof"));
         world.set_use_ground_truth(false);
-        world.shoot_ball(&Settings::default());
+        world.shoot_ball(&shooter::Settings::default());
 
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
@@ -228,7 +228,7 @@ mod tests {
         // (2) Rapier 잔차: GT 상태로 발사 예측 vs 실제 Rapier 바운스 직후 재예측
         let mut world = SimWorld::new(crate::defaults::primitive_4dof().expect("4dof"));
         world.set_use_ground_truth(true);
-        world.shoot_ball(&Settings::default());
+        world.shoot_ball(&shooter::Settings::default());
         let at_launch_gt = predict_impact(&world, plane).expect("GT 발사 예측");
         let mut prev_vz = world.ball_velocity().z;
         let mut after_bounce = None;
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn low_pitch_shot_rejected_by_net_gate() {
-        let mut settings = Settings::default();
+        let mut settings = shooter::Settings::default();
         // 네트 아래로 스치는 낮은 pitch — 접수 예측이 나오면 안 됨.
         settings.pitch_deg = -25.0;
         settings.height_offset_m = 0.0;
