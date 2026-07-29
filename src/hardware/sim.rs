@@ -1,12 +1,13 @@
 //! Rapier sim `Hardware` 어댑터.
 //!
-//! `Hardware` 포트 구현 — 명령·관절 읽기는 domain `RobotState`에 위임하고,
+//! `Hardware` 포트 구현 — 명령·관절 읽기는 domain `robot::State`에 위임하고,
 //! Rapier collider 동기화는 물리 스레드(`SimWorld::step`)가 FK로 처리한다.
 
+use crate::robot;
 use std::sync::{Arc, Mutex};
 
 use crate::swing;
-use crate::{Hardware, HwError, RobotPose};
+use crate::{Hardware, HwError};
 use tracing::debug;
 
 use crate::sim::world::SimWorld;
@@ -78,10 +79,10 @@ impl Hardware for SimHardware {
         return Ok(());
     }
 
-    fn read_pose(&mut self) -> Result<RobotPose, HwError> {
+    fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
         let world = self.world.lock().expect("sim 월드");
         let robot = world.robot();
-        return Ok(RobotPose::new(robot.rail_x(), robot.joints().clone()));
+        return Ok(robot::Pose::new(robot.rail_x(), robot.joints().clone()));
     }
 
     fn is_busy(&mut self) -> bool {

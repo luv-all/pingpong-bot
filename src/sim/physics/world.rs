@@ -3,12 +3,12 @@
 //! 탁구대·로봇(-x) · 슈터(+x) · 공. 공은 슈터에 주차되어 있다가
 //! GUI 트리거로 발사되고, 로봇이 라켓으로 받는다.
 
+use crate::robot;
 use std::sync::Arc;
 
 use crate::swing;
 use crate::{
-    Arm, DomainError, InterceptWindow, PhysicsParams, Prediction, RobotPose, RobotState,
-    SwingPlanError,
+    Arm, DomainError, InterceptWindow, PhysicsParams, Prediction, SwingPlanError,
     constants::{ball, table},
 };
 use rapier3d::prelude::*;
@@ -74,7 +74,7 @@ pub struct SimWorld {
     /// URDF 기반 FK·뷰어 (선택)
     pub urdf: Option<Arc<crate::robot::urdf::UrdfModel>>,
     /// 런타임 관절 상태 (명령 / 플래너)
-    pub robot: RobotState,
+    pub robot: robot::State,
     /// sim 경과 시간 [s]
     pub sim_time: f64,
     /// 공 주차/비행
@@ -314,7 +314,7 @@ impl SimWorld {
     }
 
     /// 로봇 상태·다물체를 같은 포즈로 즉시 맞춤 (Sync / Discard).
-    pub fn snap_robot_pose(&mut self, pose: crate::RobotPose) {
+    pub fn snap_robot_pose(&mut self, pose: crate::robot::Pose) {
         self.robot.snap_to_pose(pose);
         self.sync_robot_bodies_to_state();
     }
@@ -392,7 +392,7 @@ impl SimWorld {
             return;
         }
 
-        // B: 명령(궤적→모터 목표) → 물리 → 측정 관절각을 RobotState에 반영.
+        // B: 명령(궤적→모터 목표) → 물리 → 측정 관절각을 robot::State에 반영.
         self.robot.step_commands(&self.arm, dt);
         let t_swing = std::time::Instant::now();
         self.try_auto_swing();
@@ -668,7 +668,7 @@ impl SimWorld {
             return;
         }
         self.last_swing_attempt_at = self.sim_time;
-        let start = RobotPose::new(self.robot.rail_x(), self.robot.joints().clone());
+        let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
         let planned = match swing::Planner::plan_best(&self.arm, &predictions, &start) {
             Ok(planned) => {
                 self.hard_fail_streak = 0;
@@ -775,7 +775,7 @@ impl SimWorld {
     /// 매 틱 논블로킹으로 결과를 확인한다 — 계산이 진행되는 동안에도 이
     /// 함수는 즉시 리턴해 공 물리가 정상적으로 전진한다. 결과가 도착하면
     /// "요청한 시각부터 지금까지 흐른 sim 시간"만큼 재생 시작 지점을 앞으로
-    /// 당겨(`RobotState::replace_bang_bang_swing_at`) 계산 지연을 보정한다 —
+    /// 당겨(`robot::State::replace_bang_bang_swing_at`) 계산 지연을 보정한다 —
     /// 계획 자체는 "요청 시점부터 Tg 안에 도달"을 가정하므로, 그 가정이
     /// 실제로 성립하도록 커밋 시점의 시간 차를 메워주는 것.
     fn poll_and_advance_bang_bang(&mut self, predictions: &[Prediction]) {
@@ -835,7 +835,7 @@ impl SimWorld {
             return;
         }
         self.last_swing_attempt_at = self.sim_time;
-        let start = RobotPose::new(self.robot.rail_x(), self.robot.joints().clone());
+        let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
         self.bang_bang_worker.submit(
             self.sim_time,
             Arc::clone(&self.arm),
@@ -1057,12 +1057,12 @@ impl SimWorld {
     }
 
     /// 읽기 전용 로봇 상태.
-    pub fn robot(&self) -> &RobotState {
+    pub fn robot(&self) -> &robot::State {
         return &self.robot;
     }
 
     /// 변경 가능한 로봇 상태.
-    pub fn robot_mut(&mut self) -> &mut RobotState {
+    pub fn robot_mut(&mut self) -> &mut robot::State {
         return &mut self.robot;
     }
 
@@ -1139,7 +1139,7 @@ mod tests {
 
     use crate::sim::BallShooterSettings;
 
-    use crate::{RobotPose, constants::table};
+    use crate::constants::table;
 
     fn test_robot() -> crate::robot::Robot {
         return crate::defaults::primitive_4dof().expect("테스트용 4DOF robot");
@@ -1723,7 +1723,7 @@ mod tests {
         assert!(swing_started, "스윙이 시작되어야 함");
 
         // 타격 스윙이 끝나면 로봇이 곧바로 복귀 궤적을 이어서 시작하므로
-        // (`RobotState::step_toward_targets`), `is_swinging()`은 타격+팔로스루
+        // (`robot::State::step_toward_targets`), `is_swinging()`은 타격+팔로스루
         // +복귀 전체를 하나의 연속 동작으로 본다 — "다 끝났다"는 신호는
         // `is_swinging()`이 다시 false가 되는 순간 하나뿐이고, 그 시점에는
         // 이미 중앙 복귀까지 끝나 있어야 한다.
@@ -1774,7 +1774,7 @@ mod tests {
             table::DEFAULT_HIT_PLANE_Y,
             reachable_z,
         );
-        let start = RobotPose::new(rail_x, world.robot().joints().clone());
+        let start = robot::Pose::new(rail_x, world.robot().joints().clone());
         let traj = swing::Planner::plan(
             &arm.arm,
             crate::Prediction {
@@ -1815,7 +1815,7 @@ mod tests {
             .forward_kinematics_with_rail(world.robot().rail_x(), world.robot().joints())
             .expect("FK");
         let impact = crate::Point3::new(impact_x, hit_plane.y, reachable.position.coords.z);
-        let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
+        let start = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         let trajectory = swing::Planner::plan(
             &arm.arm,
             crate::Prediction {
@@ -1898,7 +1898,7 @@ mod tests {
         let mut world = SimWorld::new(crate::defaults::primitive_4dof().expect("arm"));
         let x = 0.42;
         let joints = world.robot().joints().clone();
-        *world.robot_mut() = RobotState::new(joints, x);
+        *world.robot_mut() = robot::State::new(joints, x);
         let mount = world.effective_sim_mount();
         assert!((mount.position[0] - x).abs() < 1e-9);
     }
@@ -1924,7 +1924,7 @@ mod tests {
             .expect("robot");
         let mut world = SimWorld::new(built);
         let rail = world.robot().rail_x();
-        *world.robot_mut() = RobotState::new(
+        *world.robot_mut() = robot::State::new(
             crate::Joints {
                 values: vec![0.11, 0.22, 0.33],
             },
@@ -2075,7 +2075,7 @@ mod tests {
         let center_rail_x = robot.arm.rail.as_ref().expect("리니어").default_x();
         let mut world = SimWorld::new(robot.clone());
         world.set_use_ground_truth(true);
-        *world.robot_mut() = RobotState::new(robot.arm.default_joints.clone(), center_rail_x);
+        *world.robot_mut() = robot::State::new(robot.arm.default_joints.clone(), center_rail_x);
 
         // 한쪽으로 크게 치우친 느린 샷 — 예측 임팩트 x가 중앙에서 벗어나고,
         // 느려서 commit 전 추종 시간이 넉넉하다.
@@ -2168,7 +2168,7 @@ mod tests {
                         y_max: 0.55,
                         sample_step: 0.05,
                     });
-                    *world.robot_mut() = RobotState::new(center_joints, center_rail_x);
+                    *world.robot_mut() = robot::State::new(center_joints, center_rail_x);
 
                     let collider_for_body = |world: &SimWorld, body_handle| {
                         world

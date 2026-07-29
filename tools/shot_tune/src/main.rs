@@ -10,7 +10,7 @@
 //!
 //! 이 도구는 그 간극을 없앤다: `SimWorld`를 ground-truth 자동 스윙 모드로
 //! 그대로 돌려서(= GUI 앱과 완전히 같은 경로: `predict_impact` →
-//! `plan_best_swing` → `RobotState` 추종) 실제로 라켓에 맞고 네트를 넘겨
+//! `plan_best_swing` → `robot::State` 추종) 실제로 라켓에 맞고 네트를 넘겨
 //! 리턴하는지를 센다. 중간 모델 없이 최종 사용자 관점 성공률이 곧 점수다.
 //!
 //! 사용법 (반드시 저장소 루트에서 — URDF 상대경로가 cwd 기준):
@@ -19,9 +19,10 @@
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use pingpong_bot::robot;
 use pingpong_bot::sim::{BallShooterSettings, SimWorld};
 use pingpong_bot::swing;
-use pingpong_bot::{Arm, MountPreset, Robot, RobotBuilder, RobotPose, defaults};
+use pingpong_bot::{Arm, MountPreset, Robot, RobotBuilder, defaults};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use serde::Serialize;
@@ -299,7 +300,7 @@ fn run_shot(
             && world.ball_state == pingpong_bot::BallState::InFlight
             && swing::Planner::past_midcourt(f64::from(position.y))
         {
-            let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
+            let start = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
             for plane in intercept.hit_planes() {
                 let Some(prediction) = world.predict_impact(plane) else {
                     continue;
@@ -496,7 +497,7 @@ fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
             .into_iter()
             .filter_map(|plane| world.predict_impact(plane))
             .collect();
-        let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
+        let start = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         // 평면별로 "시간 창(`in_swing_commit_window`)"과 "관절속도 비율
         // (`NEAR_SINGULARITY_SPEED_RATIO`)" 중 무엇이 실제 병목인지 나눠 본다.
         let per_plane: Vec<String> = predictions

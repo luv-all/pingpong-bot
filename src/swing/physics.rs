@@ -11,7 +11,7 @@ use crate::error::{DomainError, SwingPlanError};
 use crate::estimator::Prediction;
 use crate::planner::Impact;
 use crate::robot::Arm;
-use crate::robot::{Joints, RobotPose};
+use crate::robot::{self, Joints};
 
 use super::impact_target::solve_impact_target;
 use super::planned_intercept::PlannedIntercept;
@@ -74,7 +74,7 @@ pub fn ball_past_midcourt_for_commit(ball_y: f64) -> bool {
 pub fn plan_swing(
     arm: &Arm,
     prediction: Prediction,
-    start: &RobotPose,
+    start: &robot::Pose,
 ) -> Result<Trajectory, DomainError> {
     let time_to_impact = prediction.time_to_impact_secs;
     if time_to_impact < defaults::ControlParams::default().min_swing_secs {
@@ -111,7 +111,7 @@ pub fn plan_swing(
 pub fn plan_best_swing(
     arm: &Arm,
     predictions: &[Prediction],
-    start: &RobotPose,
+    start: &robot::Pose,
 ) -> Result<PlannedIntercept, DomainError> {
     const MAX_CONTACT_ERROR: f64 = 0.005;
     let current_position = if arm.rail.is_some() {
@@ -179,7 +179,7 @@ pub fn plan_best_swing(
 /// 가장 임박한(time_to_impact 최소) 예측 하나만 골라 단일 IK 호출
 /// (`inverse_pose_with_rail`)로 rough 포즈를 구한다. IK가 수렴 못 하면 `None`
 /// — 확정 스윙이 아니라 rough 목표라 실패는 에러가 아니라 "이번 틱 스킵"이다.
-pub fn plan_coarse_track(arm: &Arm, predictions: &[Prediction]) -> Option<RobotPose> {
+pub fn plan_coarse_track(arm: &Arm, predictions: &[Prediction]) -> Option<robot::Pose> {
     // 예측 hit plane들 중 로봇에 가장 가까운(= 가장 도달 가능성 높은) 하나를
     // 고른다. 가장 먼 평면은 공이 아직 높이 떠 있어 팔 도달권 밖이라, rough
     // 추종엔 base에 제일 가까운 임팩트가 "가장 관련 있는" 목표다. 레일이 x를
@@ -218,7 +218,7 @@ pub fn plan_coarse_track(arm: &Arm, predictions: &[Prediction]) -> Option<RobotP
     let rail = arm.rail.as_ref()?;
     let (_rail_x, reachable) = arm.clamp_impact_for_rail(rail, racket_center);
     // 기본 중앙 포즈를 힌트로 단일 IK. 실제 이동은 rate-limited 추종 루프가 함.
-    let hint = RobotPose::new(rail.default_x(), arm.default_joints.clone());
+    let hint = robot::Pose::new(rail.default_x(), arm.default_joints.clone());
     return arm
         .inverse_pose_with_rail(reachable, desired_normal, &hint)
         .ok();
@@ -235,7 +235,7 @@ pub fn plan_coarse_track(arm: &Arm, predictions: &[Prediction]) -> Option<RobotP
 /// 없으므로 `plan_swing`과 달리 목표 소요 시간이 정해져 있지 않다 — 관절·
 /// 레일 속도/가속/토크 한계(`kinematic_limit_violation`·`peak_torque_utilization`)를 만족할 때까지
 /// 소요 시간을 점진적으로 늘려가며 찾는다.
-pub fn plan_return_to_center(arm: &Arm, start: &RobotPose) -> Result<Trajectory, DomainError> {
+pub fn plan_return_to_center(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
     let center_joints = arm.default_joints.clone();
     let center_rail_x = arm
         .rail
@@ -613,9 +613,9 @@ mod tests {
             .clone();
     }
 
-    fn sample_start(arm: &Arm) -> RobotPose {
+    fn sample_start(arm: &Arm) -> robot::Pose {
         let rail_x = arm.rail.as_ref().map(|r| r.default_x()).unwrap_or(0.0);
-        return RobotPose::new(rail_x, arm.default_joints.clone());
+        return robot::Pose::new(rail_x, arm.default_joints.clone());
     }
 
     /// 대표 임팩트 높이 [m] — 탁구대 면 위. 1차 조사가 찾아낸 "실현 가능
@@ -770,7 +770,7 @@ mod tests {
     #[ignore = "realistic joint speed + main rail_frame/hit-plane need shot_tune retune; see .omc/research/known-regressions-realistic-joint-speed.md"]
     fn plan_swing_moves_rail_to_impact_x() {
         let arm = sample_three_dof_arm();
-        let start = RobotPose::new(0.1, arm.default_joints.clone());
+        let start = robot::Pose::new(0.1, arm.default_joints.clone());
         // 레일 목표를 0.8 → 0.5 배로 낮췄다: 5.0 m/s 실기 레일 속도로 재보정한
         // 뒤(이전 12.0 m/s 근거 없는 리터럴), 0.1→1.22m(0.8배)를 0.3초 안에 도는
         // 건 진짜로 실현 불가능해졌다(quintic peak 속도가 5.0 m/s 한계를 넘음).
@@ -847,7 +847,7 @@ mod tests {
             .forward_kinematics_with_rail(rail_x, &arm.default_joints)
             .expect("FK")
             .position;
-        let start = RobotPose::new(rail_x, arm.default_joints.clone());
+        let start = robot::Pose::new(rail_x, arm.default_joints.clone());
         let prediction = Prediction {
             time_to_impact_secs: 0.22,
             impact_position: far_impact,
@@ -879,7 +879,7 @@ mod tests {
             .forward_kinematics_with_rail(rail_x, &arm.default_joints)
             .expect("FK")
             .position;
-        let start = RobotPose::new(rail_x, arm.default_joints.clone());
+        let start = robot::Pose::new(rail_x, arm.default_joints.clone());
         let prediction = Prediction {
             time_to_impact_secs: 0.22,
             impact_position: impact,

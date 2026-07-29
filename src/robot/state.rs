@@ -1,12 +1,14 @@
 //! 런타임 관절 상태 - sim/real encoder 읽기가 같은 타입을 채운다.
 
+use super::playback_trajectory::PlaybackTrajectory;
+use super::swing_playback::SwingPlayback;
 use super::{Arm, RacketPose};
 use crate::robot::Joints;
 use crate::swing;
 
-/// 런타임 관절 상태 - sim `RobotState`/real encoder 읽기가 같은 타입을 채운다.
+/// 런타임 관절 상태 - sim/real encoder 읽기가 같은 타입을 채운다.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RobotState {
+pub struct State {
     /// 리니어 레일 x [m]
     rail_x: f64,
     /// 리니어 목표 x [m]
@@ -21,62 +23,7 @@ pub struct RobotState {
     auto_return_to_center: bool,
 }
 
-/// 재생 중인 스윙 궤적 - quintic(`plan_swing`)과 순수 토크 bang-bang
-/// (`plan_bang_bang_swing`)을 같은 재생 루프(`advance_swing`)로 다루기 위한
-/// 얇은 래퍼. GUI 토글로 어느 쪽을 커밋할지 고르지만, 재생 쪽 코드는
-/// 궤적 "모양"을 몰라도 되게 한다.
-#[derive(Debug, Clone, PartialEq)]
-enum PlaybackTrajectory {
-    Quintic(swing::Trajectory),
-    BangBang(swing::bang_bang::Trajectory),
-}
-
-impl PlaybackTrajectory {
-    fn duration_secs(&self) -> f64 {
-        return match self {
-            Self::Quintic(trajectory) => trajectory.duration_secs,
-            Self::BangBang(trajectory) => trajectory.duration_secs(),
-        };
-    }
-
-    fn sample_at(&self, t: f64) -> Joints {
-        return match self {
-            Self::Quintic(trajectory) => trajectory.sample_at(t),
-            Self::BangBang(trajectory) => trajectory.sample_at(t),
-        };
-    }
-
-    fn sample_rail_at(&self, t: f64) -> f64 {
-        return match self {
-            Self::Quintic(trajectory) => trajectory.sample_rail_at(t),
-            Self::BangBang(trajectory) => trajectory.sample_rail_at(t),
-        };
-    }
-
-    fn sample_velocity_at(&self, t: f64) -> Vec<f64> {
-        return match self {
-            Self::Quintic(trajectory) => trajectory.sample_velocity_at(t),
-            Self::BangBang(trajectory) => trajectory.sample_velocity_at(t),
-        };
-    }
-
-    fn follow_through_rail_x(&self) -> f64 {
-        return match self {
-            Self::Quintic(trajectory) => trajectory.follow_through_rail_x,
-            Self::BangBang(trajectory) => trajectory.follow_through_rail_x(),
-        };
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct SwingPlayback {
-    trajectory: PlaybackTrajectory,
-    elapsed: f64,
-    /// `advance_swing_torque_limited`용 관절 각속도 [rad/s].
-    joint_vel: Vec<f64>,
-}
-
-impl RobotState {
+impl State {
     /// 초기 관절각/레일 x로 상태를 만든다.
     pub fn new(initial: Joints, rail_x: f64) -> Self {
         return Self {
@@ -99,7 +46,7 @@ impl RobotState {
     }
 
     /// 스윙 취소 후 관절·레일을 즉시 스냅 (플래그 유지).
-    pub fn snap_to_pose(&mut self, pose: crate::RobotPose) {
+    pub fn snap_to_pose(&mut self, pose: crate::robot::Pose) {
         self.active_swing = None;
         self.rail_x = pose.rail_x;
         self.rail_target = pose.rail_x;
@@ -221,7 +168,7 @@ impl RobotState {
         if self.active_swing.is_some() {
             let finished = self.advance_swing_commands(dt);
             if finished && self.auto_return_to_center && !self.is_at_center(arm) {
-                let start = crate::RobotPose::new(self.rail_x, self.angles.clone());
+                let start = crate::robot::Pose::new(self.rail_x, self.angles.clone());
                 if let Ok(trajectory) = swing::Planner::return_to_center(arm, &start) {
                     self.replace_swing(trajectory);
                 }
@@ -341,7 +288,7 @@ impl RobotState {
         if self.active_swing.is_some() {
             let finished = self.advance_swing(arm, dt);
             if finished && self.auto_return_to_center && !self.is_at_center(arm) {
-                let start = crate::RobotPose::new(self.rail_x, self.angles.clone());
+                let start = crate::robot::Pose::new(self.rail_x, self.angles.clone());
                 if let Ok(trajectory) = swing::Planner::return_to_center(arm, &start) {
                     self.replace_swing(trajectory);
                 }

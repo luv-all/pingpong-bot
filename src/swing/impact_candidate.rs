@@ -6,7 +6,7 @@ use crate::defaults;
 use crate::error::SwingPlanError;
 use crate::estimator::Prediction;
 use crate::planner::Impact;
-use crate::robot::{Arm, Joints, RobotPose};
+use crate::robot::{self, Arm, Joints};
 
 /// `hint`를 어깨/팔꿈치 한계 구간 중점 기준으로 반사한 대안 시드들을
 /// 만든다 — 수치 IK가 같은 목표 자세에 도달하는 다른 관절 조합(다른
@@ -42,7 +42,7 @@ pub(crate) fn candidate_ik_hints(arm: &Arm, hint: &Joints) -> Vec<Joints> {
 /// 후보 IK 해 하나의 평가 결과 - 목표 방향에 대한 관절속도 조작성 비교용.
 pub(crate) struct ImpactCandidate {
     pub(crate) peak_joint_speed_ratio: f64,
-    pub(crate) pose: RobotPose,
+    pub(crate) pose: robot::Pose,
     pub(crate) racket_velocity: Vector3<f64>,
     pub(crate) rail_velocity: f64,
     pub(crate) joint_velocities: Vec<f64>,
@@ -58,7 +58,7 @@ pub(crate) struct ImpactCandidate {
 pub(crate) fn best_impact_candidate(
     arm: &Arm,
     prediction: &Prediction,
-    start: &RobotPose,
+    start: &robot::Pose,
 ) -> Result<ImpactCandidate, SwingPlanError> {
     let impact_position = prediction.impact_position;
     let v_in = prediction.incoming_velocity;
@@ -78,7 +78,7 @@ pub(crate) fn best_impact_candidate(
         let solved = match arm.inverse_pose_with_rail(
             racket_center,
             desired_normal,
-            &RobotPose::new(start.rail_x, hint),
+            &robot::Pose::new(start.rail_x, hint),
         ) {
             Ok(solved) => solved,
             Err(error) => {

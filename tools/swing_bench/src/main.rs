@@ -31,11 +31,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::planner::Impact;
+use pingpong_bot::robot;
 use pingpong_bot::swing;
-use pingpong_bot::{Arm, Joints, MountPreset, Point3, RobotBuilder, RobotPose, defaults};
+use pingpong_bot::{Arm, Joints, MountPreset, Point3, RobotBuilder, defaults};
 use serde::{Deserialize, Serialize};
 
-/// 수렴 판정 허용 오차 — `RobotState::is_at_center`의 관례(1e-3)를 따른다.
+/// 수렴 판정 허용 오차 — `robot::State::is_at_center`의 관례(1e-3)를 따른다.
 const POSITION_TOLERANCE_RAD_OR_M: f64 = 1e-3;
 /// 라켓 속도 크기 허용오차(목표 대비 비율) — 목표의 [1-tol, 1+tol] 안이면 OK.
 ///
@@ -195,7 +196,7 @@ fn main() -> Result<()> {
     })?;
     let start_rail_x = start_rail_x_override.unwrap_or_else(|| rail.default_x());
 
-    let start = RobotPose::new(start_rail_x, arm.default_joints.clone());
+    let start = robot::Pose::new(start_rail_x, arm.default_joints.clone());
     let target = compute_target(
         &arm,
         &start,
@@ -300,7 +301,7 @@ fn clamp_target_to_speed_caps(arm: &Arm, target: &mut Target) -> bool {
 /// 도달 시간 자체를 구한다.
 fn compute_target(
     arm: &Arm,
-    start: &RobotPose,
+    start: &robot::Pose,
     impact: Point3,
     incoming_velocity: Vector3<f64>,
 ) -> Result<Target> {
@@ -321,7 +322,7 @@ fn compute_target(
         .inverse_pose_with_rail(
             racket_center,
             desired_normal,
-            &RobotPose::new(start.rail_x, ik_hint),
+            &robot::Pose::new(start.rail_x, ik_hint),
         )
         .map_err(|e| anyhow!("임팩트 IK 실패: {e}"))?;
     let pose = arm
@@ -376,7 +377,7 @@ fn racket_velocity_estimate(
 
 fn simulate(
     arm: &Arm,
-    start: &RobotPose,
+    start: &robot::Pose,
     target: &Target,
     dt: f64,
     max_time_secs: f64,

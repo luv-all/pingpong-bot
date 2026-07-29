@@ -19,8 +19,9 @@ use anyhow::Result;
 use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::constants::table;
+use pingpong_bot::robot;
 use pingpong_bot::swing;
-use pingpong_bot::{Point3, Prediction, RobotPose, defaults};
+use pingpong_bot::{Point3, Prediction, defaults};
 use serde::Serialize;
 
 /// 실현 가능(NearSingularity 임계값과 별개, 실기 관절속도 한계 자체) 판정 기준.
@@ -121,7 +122,7 @@ fn evaluate_mount(
         defaults::primitive_4dof_with_mount(base_y, table::SURFACE_Z + height_offset_m).ok()?;
     let arm = robot.arm;
     let start = arm.initial_state();
-    let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+    let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
     let ratios: Vec<f64> = scenarios
         .iter()

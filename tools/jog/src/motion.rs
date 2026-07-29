@@ -4,8 +4,9 @@ use anyhow::{Context, Result, ensure};
 use nalgebra::{Rotation3, Vector3};
 use pingpong_bot::constants::table;
 use pingpong_bot::planner::Impact;
+use pingpong_bot::robot;
 use pingpong_bot::swing;
-use pingpong_bot::{Arm, ControlParams, ImpactParams, Joints, Point3, RacketPose, RobotPose};
+use pingpong_bot::{Arm, ControlParams, ImpactParams, Joints, Point3, RacketPose};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MotionKind {
@@ -93,7 +94,7 @@ impl Default for MotionDraft {
 
 pub fn compose(
     arm: &Arm,
-    start: &RobotPose,
+    start: &robot::Pose,
     draft: &MotionDraft,
     duration_secs: f64,
     max_delta_deg: f64,
@@ -197,7 +198,7 @@ pub fn compose(
 }
 
 /// 미리보기용: 상대 목표가 IK로 풀리는지.
-pub fn reach_ok(arm: &Arm, start: &RobotPose, draft: &MotionDraft) -> bool {
+pub fn reach_ok(arm: &Arm, start: &robot::Pose, draft: &MotionDraft) -> bool {
     return match draft.kind {
         MotionKind::Ik => {
             let Ok(target) = reach_target(arm, start, draft.reach_dxyz) else {
@@ -233,7 +234,7 @@ pub fn reach_ok(arm: &Arm, start: &RobotPose, draft: &MotionDraft) -> bool {
 
 fn swing_ball_traj(
     arm: &Arm,
-    start: &RobotPose,
+    start: &robot::Pose,
     draft: &MotionDraft,
     duration_secs: f64,
     max_delta_deg: f64,
@@ -270,7 +271,7 @@ fn swing_ball_traj(
 
 fn swing_traj(
     arm: &Arm,
-    start: &RobotPose,
+    start: &robot::Pose,
     draft: &MotionDraft,
     duration_secs: f64,
     max_delta_deg: f64,
@@ -304,8 +305,8 @@ fn swing_traj(
 }
 
 fn build_follow_through_swing(
-    start: &RobotPose,
-    impact: &RobotPose,
+    start: &robot::Pose,
+    impact: &robot::Pose,
     joint_impact_vel: Vec<f64>,
     rail_impact_vel: f64,
     duration_secs: f64,
@@ -347,7 +348,7 @@ fn build_follow_through_swing(
 /// 도달점 + (입사 반대 / 현재 법선) 기울기.
 fn ball_aim_target(
     arm: &Arm,
-    start: &RobotPose,
+    start: &robot::Pose,
     draft: &MotionDraft,
 ) -> Result<(Point3, Vector3<f64>)> {
     let target = point3(draft.arrival_xyz)?;
@@ -365,13 +366,13 @@ fn ball_aim_target(
     return Ok((target, normal));
 }
 
-fn current_racket(arm: &Arm, start: &RobotPose) -> Result<RacketPose> {
+fn current_racket(arm: &Arm, start: &robot::Pose) -> Result<RacketPose> {
     return arm
         .forward_kinematics_with_rail(start.rail_x, &start.joints)
         .context("현재 라켓 FK");
 }
 
-fn reach_target(arm: &Arm, start: &RobotPose, dxyz: [f64; 3]) -> Result<Point3> {
+fn reach_target(arm: &Arm, start: &robot::Pose, dxyz: [f64; 3]) -> Result<Point3> {
     for v in dxyz {
         ensure!(v.is_finite(), "finite");
     }
@@ -382,7 +383,7 @@ fn reach_target(arm: &Arm, start: &RobotPose, dxyz: [f64; 3]) -> Result<Point3> 
 
 fn reach_pose_target(
     arm: &Arm,
-    start: &RobotPose,
+    start: &robot::Pose,
     draft: &MotionDraft,
 ) -> Result<(Point3, Vector3<f64>)> {
     let racket = current_racket(arm, start)?;
@@ -412,7 +413,7 @@ fn tilt_normal(base: Vector3<f64>, pitch_deg: f64, yaw_deg: f64) -> Result<Vecto
 
 fn move_traj(
     arm: &Arm,
-    start: &RobotPose,
+    start: &robot::Pose,
     target_joints: Joints,
     target_rail: f64,
     duration_secs: f64,
@@ -484,22 +485,22 @@ mod tests {
 
     #[test]
     fn joint_preview_respects_maxdelta() {
-        let robot = defaults::robot().expect("robot");
-        let start = RobotPose::new(0.0, robot.arm.default_joints.clone());
+        let built = defaults::robot().expect("robot");
+        let start = robot::Pose::new(0.0, built.arm.default_joints.clone());
         let mut draft = MotionDraft::default();
         draft.kind = MotionKind::Joint;
         draft.joint_index = 0;
         draft.joint_deg = start.joints.values[0].to_degrees() + 40.0;
-        let err = compose(&robot.arm, &start, &draft, 1.0, 15.0).unwrap_err();
+        let err = compose(&built.arm, &start, &draft, 1.0, 15.0).unwrap_err();
         assert!(format!("{err:#}").contains("maxdelta"));
     }
 
     #[test]
     fn zero_reach_delta_is_reachable() {
-        let robot = defaults::robot().expect("robot");
-        let start = RobotPose::new(0.0, robot.arm.default_joints.clone());
+        let built = defaults::robot().expect("robot");
+        let start = robot::Pose::new(0.0, built.arm.default_joints.clone());
         let mut draft = MotionDraft::default();
         draft.kind = MotionKind::Ik;
-        assert!(reach_ok(&robot.arm, &start, &draft));
+        assert!(reach_ok(&built.arm, &start, &draft));
     }
 }

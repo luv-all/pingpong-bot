@@ -1,5 +1,6 @@
 //! Dynamixel 4축 실물 하드웨어 어댑터와 선택적 AXL 레일 동기 재생.
 
+use crate::robot;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -11,7 +12,7 @@ use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::AxlRail;
 use super::rail::RailConfig;
 use crate::swing;
-use crate::{Arm, Hardware, HwError, RobotPose, defaults};
+use crate::{Arm, Hardware, HwError, defaults};
 
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
@@ -228,7 +229,7 @@ impl Hardware for RealHardware {
         return Ok(());
     }
 
-    fn read_pose(&mut self) -> Result<RobotPose, HwError> {
+    fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
         self.reap_executor();
         let joints = self
             .bus
@@ -237,7 +238,7 @@ impl Hardware for RealHardware {
                 reason: "Dynamixel bus mutex poisoned".into(),
             })?
             .read_joints()?;
-        return Ok(RobotPose::new(self.read_rail_x_m()?, joints));
+        return Ok(robot::Pose::new(self.read_rail_x_m()?, joints));
     }
 
     fn is_busy(&mut self) -> bool {

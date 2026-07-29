@@ -56,9 +56,8 @@ pub use pipeline::{CameraFeed, Pipeline, PipelineConfig, PipelineError, Pipeline
 pub use planner::{Impact, InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox};
 pub use robot::{
     Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, LinkInertial, MountPreset,
-    RacketPose, RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose, RobotState,
-    SerialChain, SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual, UrdfLoadError,
-    UrdfModel,
+    RacketPose, RailFrame, Robot, RobotBuildError, RobotBuilder, SerialChain, SerialChainError,
+    SerialJoint, UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfModel,
 };
 #[cfg(feature = "gui")]
 pub use sim::{

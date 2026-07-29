@@ -3,8 +3,9 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
+use pingpong_bot::robot;
 use pingpong_bot::swing;
-use pingpong_bot::{Arm, BallHandle, Hardware, Point3, RealHardware, RobotHandle, RobotPose};
+use pingpong_bot::{Arm, BallHandle, Hardware, Point3, RealHardware, RobotHandle};
 
 use crate::motion::{self, MotionDraft, MotionKind};
 
@@ -55,7 +56,7 @@ pub struct JogApp {
     pub dry_run: bool,
     pub phase: Phase,
     /// Sync 시점 포즈 — 미리보기 시작점·Discard 복원.
-    pub synced_pose: Option<RobotPose>,
+    pub synced_pose: Option<robot::Pose>,
     pub staged: Option<swing::Trajectory>,
     pub duration_secs: f64,
     pub max_delta_deg: f64,
@@ -132,7 +133,7 @@ impl JogApp {
         return Ok(());
     }
 
-    fn fill_draft_from_pose(&mut self, pose: &RobotPose) {
+    fn fill_draft_from_pose(&mut self, pose: &robot::Pose) {
         for (i, rad) in pose.joints.values.iter().enumerate() {
             if let Some(slot) = self.draft.angles_deg.get_mut(i) {
                 *slot = rad.to_degrees();
@@ -205,7 +206,7 @@ impl JogApp {
         self.error = Some(err.to_string());
     }
 
-    pub fn live_pose(&self) -> Option<RobotPose> {
+    pub fn live_pose(&self) -> Option<robot::Pose> {
         return self.robot.as_ref().map(|r| r.pose());
     }
 

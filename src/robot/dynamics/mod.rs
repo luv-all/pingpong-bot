@@ -15,39 +15,16 @@
 //! 그러면 각 링크 질량중심 가속도에 중력 반작용이 포함돼 별도 중력 항 없이
 //! 정적 중력 토크가 자연히 나온다.
 
-use nalgebra::{DMatrix, DVector, Isometry3, Matrix3, Translation3, UnitQuaternion, Vector3};
+use nalgebra::{DMatrix, DVector, Isometry3, Translation3, UnitQuaternion, Vector3};
 
 use crate::constants::physics::G;
 use crate::robot::{Arm, Joints};
 
-/// Newton-Euler 재귀에 필요한 per-joint 스크래치 버퍼.
-///
-/// 궤적을 여러 시점에서 반복 평가할 때(토크 이용률 샘플링) 매 호출마다 힙
-/// 할당하지 않도록 버퍼를 한 번 만들어 재사용한다. `resize`로 관절 개수에 맞춘다.
-#[derive(Debug, Default, Clone)]
-pub struct RneaScratch {
-    origin: Vec<Vector3<f64>>,        // 관절 축 원점 (월드)
-    axis: Vec<Vector3<f64>>,          // 관절 축 단위벡터 (월드)
-    com_world: Vec<Vector3<f64>>,     // 합성 강체 질량중심 (월드)
-    inertia_world: Vec<Matrix3<f64>>, // 질량중심 기준 관성 (월드축)
-    force: Vec<Vector3<f64>>,         // F_i = m a_c
-    moment: Vec<Vector3<f64>>,        // N_i (질량중심 기준)
-}
+mod mass_matrix_scratch;
+mod rnea_scratch;
 
-impl RneaScratch {
-    pub fn new() -> Self {
-        return Self::default();
-    }
-
-    fn resize(&mut self, n: usize) {
-        self.origin.resize(n, Vector3::zeros());
-        self.axis.resize(n, Vector3::zeros());
-        self.com_world.resize(n, Vector3::zeros());
-        self.inertia_world.resize(n, Matrix3::zeros());
-        self.force.resize(n, Vector3::zeros());
-        self.moment.resize(n, Vector3::zeros());
-    }
-}
+pub use mass_matrix_scratch::MassMatrixScratch;
+pub use rnea_scratch::RneaScratch;
 
 /// 주어진 관절 상태를 실현하는 데 필요한 관절 토크 [N*m]를 반환한다.
 ///
@@ -225,33 +202,6 @@ pub fn mass_matrix(arm: &Arm, joints: &Joints) -> DMatrix<f64> {
     return m;
 }
 
-/// [`mass_matrix_into`]가 매 스텝 재계산할 때 쓰는 스크래치 버퍼 모음 —
-/// 영가속도/단위가속도/토크 임시 벡터를 매 호출 새로 할당하지 않도록 호출부가
-/// 소유해 재사용한다(`RneaScratch`와 별개로, `mass_matrix`가 RNEA를 n+1회
-/// 도는 데 필요한 관절 개수짜리 작은 벡터들).
-#[derive(Debug, Default, Clone)]
-pub struct MassMatrixScratch {
-    zero_accel: Vec<f64>,
-    unit_accel: Vec<f64>,
-    bias: Vec<f64>,
-    tau: Vec<f64>,
-}
-
-impl MassMatrixScratch {
-    pub fn new() -> Self {
-        return Self::default();
-    }
-
-    fn resize(&mut self, n: usize) {
-        self.zero_accel.clear();
-        self.zero_accel.resize(n, 0.0);
-        self.unit_accel.clear();
-        self.unit_accel.resize(n, 0.0);
-        self.bias.resize(n, 0.0);
-        self.tau.resize(n, 0.0);
-    }
-}
-
 /// [`mass_matrix`]의 버퍼 재사용 버전. `rnea`(RNEA 스크래치)와 `scratch`(이
 /// 함수 전용 작은 벡터들), `m_out`(결과, 크기가 맞으면 재할당하지 않고
 /// 그대로 덮어씀)을 호출부가 소유해 매 스텝 재계산하는 루프에서 힙 할당을
@@ -325,6 +275,7 @@ mod tests {
     use crate::Point3;
     use crate::constants::table;
     use crate::robot::{Arm, JointLimit, Joints, LinkInertial, SerialChain, SerialJoint};
+    use nalgebra::Matrix3;
 
     const G_MAG: f64 = 9.81;
 

@@ -335,7 +335,7 @@ fn joint_hw_deg_range(arm: &pingpong_bot::Arm, index: usize) -> (f64, f64) {
 fn joint_jog_deg_range(
     arm: &pingpong_bot::Arm,
     index: usize,
-    synced: Option<&pingpong_bot::RobotPose>,
+    synced: Option<&pingpong_bot::robot::Pose>,
     max_delta_deg: f64,
 ) -> (f64, f64) {
     let (hw_lo, hw_hi) = joint_hw_deg_range(arm, index);

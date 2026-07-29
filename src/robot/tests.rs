@@ -111,11 +111,11 @@ fn inverse_kinematics_round_trips_forward_kinematics() {
 #[test]
 fn pose_ik_round_trips_position_and_face_normal_with_rail() {
     let arm = crate::defaults::primitive_4dof().expect("arm").arm;
-    let expected = RobotPose::new(0.62, Joints::from_slice(&[0.08, 0.12, -0.55, -0.28]));
+    let expected = Pose::new(0.62, Joints::from_slice(&[0.08, 0.12, -0.55, -0.28]));
     let target = arm
         .forward_kinematics_with_rail(expected.rail_x, &expected.joints)
         .expect("target FK");
-    let hint = RobotPose::new(0.35, arm.default_joints.clone());
+    let hint = Pose::new(0.35, arm.default_joints.clone());
 
     let solved = arm
         .inverse_pose_with_rail(target.position, target.normal, &hint)
@@ -130,7 +130,7 @@ fn pose_ik_round_trips_position_and_face_normal_with_rail() {
 #[test]
 fn generalized_velocity_ik_moves_center_without_rotating_face() {
     let arm = crate::defaults::primitive_4dof().expect("arm").arm;
-    let pose = RobotPose::new(0.62, Joints::from_slice(&[0.08, 0.12, -0.55, -0.28]));
+    let pose = Pose::new(0.62, Joints::from_slice(&[0.08, 0.12, -0.55, -0.28]));
     let before = arm
         .forward_kinematics_with_rail(pose.rail_x, &pose.joints)
         .expect("before FK");
@@ -139,7 +139,7 @@ fn generalized_velocity_ik_moves_center_without_rotating_face() {
         .velocities_for_racket_velocity(&pose, desired)
         .expect("velocity IK");
     let dt = 1e-5;
-    let after_pose = RobotPose::new(
+    let after_pose = Pose::new(
         pose.rail_x + rail_velocity * dt,
         Joints {
             values: pose
@@ -164,7 +164,7 @@ fn generalized_velocity_ik_moves_center_without_rotating_face() {
 fn generalized_velocity_ik_can_move_inward_from_rail_max() {
     let arm = crate::defaults::primitive_4dof().expect("arm").arm;
     let rail = arm.rail.expect("rail");
-    let pose = RobotPose::new(rail.x_max, arm.default_joints.clone());
+    let pose = Pose::new(rail.x_max, arm.default_joints.clone());
     let (rail_velocity, _) = arm
         .velocities_for_racket_velocity(&pose, Vector3::new(-0.1, 0.0, 0.0))
         .expect("boundary velocity IK");

@@ -12,8 +12,9 @@
 //! (블로킹 없이) 결과를 매 틱 논블로킹으로 폴링한다. 계산이 진행되는
 //! 동안에도 공은 매 틱 정상적으로 전진한다. 결과가 도착하면 호출부가
 //! "요청 시각 대비 지금까지 흐른 sim 시간"만큼 재생 시작 지점을 앞으로
-//! 당겨(`RobotState::replace_bang_bang_swing_at`) 보정한다.
+//! 당겨(`robot::State::replace_bang_bang_swing_at`) 보정한다.
 
+use crate::robot;
 use std::sync::Arc;
 use std::thread;
 
@@ -21,13 +22,13 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 
 use crate::error::DomainError;
 use crate::swing;
-use crate::{Arm, Prediction, RobotPose};
+use crate::{Arm, Prediction};
 
 struct Request {
     id: u64,
     arm: Arc<Arm>,
     predictions: Vec<Prediction>,
-    start: RobotPose,
+    start: robot::Pose,
 }
 
 struct Response {
@@ -94,7 +95,7 @@ impl BangBangWorker {
         sim_time: f64,
         arm: Arc<Arm>,
         predictions: Vec<Prediction>,
-        start: RobotPose,
+        start: robot::Pose,
     ) -> bool {
         if self.inflight.is_some() {
             return false;
@@ -162,11 +163,11 @@ mod tests {
 
     use super::*;
 
-    fn sample_request_pieces() -> (Arc<Arm>, Vec<Prediction>, RobotPose) {
+    fn sample_request_pieces() -> (Arc<Arm>, Vec<Prediction>, robot::Pose) {
         let robot = crate::defaults::primitive_4dof().expect("4dof robot");
         let arm = robot.arm;
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
         let prediction = Prediction {
             time_to_impact_secs: 0.3,
             impact_position: crate::Point3::new(

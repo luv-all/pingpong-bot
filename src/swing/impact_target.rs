@@ -4,7 +4,7 @@ use nalgebra::Vector3;
 
 use crate::error::DomainError;
 use crate::estimator::Prediction;
-use crate::robot::{Arm, RobotPose};
+use crate::robot::{self, Arm};
 
 use super::impact_candidate::best_impact_candidate;
 
@@ -15,7 +15,7 @@ const NEAR_SINGULARITY_SPEED_RATIO: f64 = 2.5;
 /// (순수 토크 적분, `planner::bang_bang`)이 같은 임팩트 설정을 공유한다 —
 /// 갈라지는 지점은 이 목표를 어떤 궤적 "모양"에 넣느냐뿐이다.
 pub(crate) struct ImpactTarget {
-    pub(crate) pose: RobotPose,
+    pub(crate) pose: robot::Pose,
     pub(crate) joint_velocities: Vec<f64>,
     pub(crate) rail_velocity: f64,
     pub(crate) racket_velocity: Vector3<f64>,
@@ -24,7 +24,7 @@ pub(crate) struct ImpactTarget {
 pub(crate) fn solve_impact_target(
     arm: &Arm,
     prediction: &Prediction,
-    start: &RobotPose,
+    start: &robot::Pose,
 ) -> Result<ImpactTarget, DomainError> {
     let candidate =
         best_impact_candidate(arm, prediction, start).map_err(DomainError::InfeasibleSwing)?;

@@ -1,7 +1,7 @@
 //! 마운트 튜닝용 임팩트 실현 가능성.
 
 use crate::estimator::Prediction;
-use crate::robot::{Arm, RobotPose};
+use crate::robot::{self, Arm};
 
 use super::impact_candidate::best_impact_candidate;
 
@@ -24,7 +24,7 @@ pub struct Feasibility {
 /// 재사용하되, quintic/토크 궤적 생성 없이 "이 임팩트를 낼 수 있는가"만
 /// 본다 - 마운트 후보를 대량으로 스윕할 때 매번 전체 궤적을 만들 필요는
 /// 없어서 훨씬 가볍다.
-pub fn feasibility(arm: &Arm, prediction: &Prediction, start: &RobotPose) -> Option<Feasibility> {
+pub fn feasibility(arm: &Arm, prediction: &Prediction, start: &robot::Pose) -> Option<Feasibility> {
     let candidate = best_impact_candidate(arm, prediction, start).ok()?;
     let peak_rail_speed_ratio = arm
         .rail

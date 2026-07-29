@@ -2,7 +2,7 @@
 
 use crate::error::{DomainError, SwingPlanError};
 use crate::estimator::Prediction;
-use crate::robot::{Arm, RobotPose};
+use crate::robot::{self, Arm};
 
 use super::super::physics::in_swing_commit_window;
 use super::guidance::plan_bang_bang_for;
@@ -21,7 +21,7 @@ pub struct PlannedIntercept {
 pub fn plan_bang_bang_swing(
     arm: &Arm,
     predictions: &[Prediction],
-    start: &RobotPose,
+    start: &robot::Pose,
 ) -> Result<PlannedIntercept, DomainError> {
     let current_position = if arm.rail.is_some() {
         arm.forward_kinematics_with_rail(start.rail_x, &start.joints)

@@ -58,7 +58,7 @@ use crate::estimator::Prediction;
 use crate::planner::collision::{clamp_above_table, table_penetration};
 use crate::robot::Arm;
 use crate::robot::dynamics::{bias_torques_into, mass_matrix_into};
-use crate::robot::{Joints, RobotPose};
+use crate::robot::{self, Joints};
 
 use super::racket_guidance_scratch::RacketGuidanceScratch;
 use super::racket_guidance_step::RacketGuidanceStep;
@@ -156,7 +156,7 @@ pub fn step_racket_guidance(
     let rail_offset = usize::from(has_rail);
     let rail_max_speed = arm.rail.as_ref().map_or(f64::INFINITY, |r| r.max_speed);
 
-    let pose = RobotPose::new(*rail_x, Joints::from_slice(q));
+    let pose = robot::Pose::new(*rail_x, Joints::from_slice(q));
     let jacobian = arm.position_jacobian_fd(&pose)?;
     let current_pose = arm.forward_kinematics_with_rail(*rail_x, &Joints::from_slice(q))?;
     let racket_velocity = racket_velocity_estimate(arm, *rail_x, *rail_v, q, qdot)?;
@@ -235,7 +235,7 @@ pub fn step_racket_guidance(
         .zip(qdot.iter())
         .map(|(qi, vi)| qi + vi * JDOT_STEP)
         .collect();
-    let perturbed_pose = RobotPose::new(perturbed_rail_x, Joints::from_slice(&perturbed_q));
+    let perturbed_pose = robot::Pose::new(perturbed_rail_x, Joints::from_slice(&perturbed_q));
     let jdot_qdot = match arm.position_jacobian_fd(&perturbed_pose) {
         Some(jacobian_perturbed) => {
             let jdot = (jacobian_perturbed - &jacobian) / JDOT_STEP;
@@ -339,7 +339,7 @@ pub fn step_racket_guidance(
 pub(crate) fn plan_bang_bang_for(
     arm: &Arm,
     prediction: &Prediction,
-    start: &RobotPose,
+    start: &robot::Pose,
 ) -> Result<Trajectory, DomainError> {
     let target = solve_impact_target(arm, prediction, start)?;
     // 관절이 아니라 라켓(3D)이 목표 상태 — `target.racket_velocity`는
@@ -647,7 +647,7 @@ mod tests {
     fn diag_measure_synchronous_wall_clock_cost() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
         let prediction = sample_prediction(0.3);
 
         const RUNS: usize = 20;
@@ -683,7 +683,7 @@ mod tests {
     fn diag_measure_quintic_wall_clock_cost() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
         let prediction = sample_prediction(0.3);
 
         const RUNS: usize = 20;
@@ -714,7 +714,7 @@ mod tests {
     fn diag_quintic_velocity_solve_prefers_base_joints() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
         let prediction = sample_prediction(0.3);
         let target = solve_impact_target(&arm, &prediction, &start_pose).expect("target 계산");
 
@@ -799,7 +799,7 @@ mod tests {
         // 스위칭 곡선 버그와는 무관한, 이 테스트 자체의 사전 결함이었다.
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
         let planned = super::super::planned_intercept::plan_bang_bang_swing(
             &arm,
             &[sample_prediction(0.3)],
@@ -827,7 +827,7 @@ mod tests {
 
     fn kinematic_ceiling(
         arm: &Arm,
-        start: &RobotPose,
+        start: &robot::Pose,
         prediction: &Prediction,
     ) -> Option<KinematicCeiling> {
         let target = solve_impact_target(arm, prediction, start).ok()?;
@@ -897,7 +897,7 @@ mod tests {
     fn print_feasibility_ceiling(
         label: &str,
         arm: &Arm,
-        start: &RobotPose,
+        start: &robot::Pose,
         prediction: &Prediction,
     ) {
         let ceiling = kinematic_ceiling(arm, start, prediction).expect("임팩트 목표 계산 성공");
@@ -957,7 +957,7 @@ mod tests {
     fn diag_kinematic_feasibility_ceiling() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
         print_feasibility_ceiling(
             "원래 hard fixture (impact z=0.932, incoming (0,-6.01,1.51), tti=0.3)",
@@ -1132,8 +1132,10 @@ mod tests {
                     .filter(|p| crate::swing::Planner::in_commit_window(p.time_to_impact_secs))
                     .copied()
                     .max_by(|a, b| {
-                        let start =
-                            RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
+                        let start = robot::Pose::new(
+                            world.robot().rail_x(),
+                            world.robot().joints().clone(),
+                        );
                         let ratio_a = kinematic_ceiling(&arm, &start, a)
                             .map_or(f64::NEG_INFINITY, |c| c.v_max_kinematic / c.target_speed);
                         let ratio_b = kinematic_ceiling(&arm, &start, b)
@@ -1144,7 +1146,7 @@ mod tests {
                     });
                 if let Some(p) = best_in_window {
                     let start =
-                        RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
+                        robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
                     found = Some((p, start));
                     break;
                 }
@@ -1193,7 +1195,7 @@ mod tests {
     fn print_joint_usage_by_weight_exponent(
         label: &str,
         arm: &Arm,
-        start: &RobotPose,
+        start: &robot::Pose,
         prediction: &Prediction,
     ) {
         let Ok(target) = solve_impact_target(arm, prediction, start) else {
@@ -1278,7 +1280,7 @@ mod tests {
     fn diag_torque_weighted_pinv_prefers_base_joints() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
         print_joint_usage_by_weight_exponent(
             "hard fixture (impact z=0.932, incoming (0,-6.01,1.51))",
@@ -1343,7 +1345,7 @@ mod tests {
     fn diag_long_tg_vs_real_deadline_pos_err() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
         let prediction = sample_prediction(0.3);
 
         let target = solve_impact_target(&arm, &prediction, &start_pose).expect("target");
@@ -1424,7 +1426,7 @@ mod tests {
     fn diag_table_penetration_along_trajectory() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
         let prediction = sample_prediction(0.3);
 
         let home_penetration = crate::planner::collision::table_penetration(
@@ -1535,7 +1537,7 @@ mod tests {
     fn diag_position_tolerance_tradeoff() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
         let prediction = sample_prediction(0.3);
 
         let target = solve_impact_target(&arm, &prediction, &start_pose).expect("target");
@@ -1651,7 +1653,7 @@ mod tests {
     fn diag_feasibility_boundary_exists() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
         let prediction = sample_prediction(0.3);
 
         let target = solve_impact_target(&arm, &prediction, &start_pose).expect("target");
@@ -1740,7 +1742,7 @@ mod tests {
     fn diag_trivial_case_trace() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
         let prediction = sample_prediction(0.3);
 
         let target = solve_impact_target(&arm, &prediction, &start_pose).expect("target");
@@ -1835,7 +1837,7 @@ mod tests {
     fn diag_easy_scenarios_still_fail_to_converge() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
         for (label, impact, incoming, tti) in [
             (
@@ -1911,7 +1913,7 @@ mod tests {
     fn diag_home_pose_swing_is_monotonic_in_joint_space() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
         eprintln!("home(READY_JOINTS_4DOF)={:?}", start.joints().values);
 
         // diag_ball_speed_feasibility_sweep 실측 시나리오들 — 목표 라켓속도
@@ -2070,7 +2072,7 @@ mod tests {
     fn diag_coverage_baseline_bang_bang() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
         use crate::sim::{BallShooterSettings, BallState, SimWorld};
         const DT: f64 = 1.0 / 1000.0;
@@ -2189,7 +2191,7 @@ mod tests {
     fn diag_why_realistic_shots_fail_ik() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
         use crate::sim::{BallShooterSettings, BallState, SimWorld};
         const DT: f64 = 1.0 / 1000.0;
@@ -2306,7 +2308,7 @@ mod tests {
     fn diag_does_reordering_by_feasibility_help() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
         use crate::sim::{BallShooterSettings, BallState, SimWorld};
         const DT: f64 = 1.0 / 1000.0;
@@ -2414,7 +2416,7 @@ mod tests {
     fn diag_capability_vs_requirement_along_trajectory() {
         let arm = competition_arm();
         let start = arm.initial_state();
-        let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
+        let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
         use crate::estimator::HitPlane;
         use crate::sim::{BallShooterSettings, BallState, SimWorld};

@@ -2,11 +2,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::robot::{Joints, RacketPose, RobotPose};
+use crate::robot::{self, Joints, RacketPose};
 use crate::sim::physics::world::SimWorld;
 use crate::swing;
 
-/// 로봇 원시 R/W — `SimWorld`의 [`RobotState`]에 위임.
+/// 로봇 원시 R/W — `SimWorld`의 [`robot::State`]에 위임.
 ///
 /// jog 툴은 IK/궤적을 **밖에서** 만든 뒤 [`Self::play`] / [`Self::set_pose`]만 호출한다.
 #[derive(Clone)]
@@ -19,10 +19,10 @@ impl RobotHandle {
         return Self { world };
     }
 
-    pub fn pose(&self) -> RobotPose {
+    pub fn pose(&self) -> robot::Pose {
         let world = self.world.lock().expect("sim 월드");
         let robot = world.robot();
-        return RobotPose::new(robot.rail_x(), robot.joints().clone());
+        return robot::Pose::new(robot.rail_x(), robot.joints().clone());
     }
 
     pub fn racket_pose(&self) -> Option<RacketPose> {
@@ -36,7 +36,7 @@ impl RobotHandle {
     }
 
     /// Sync용: 스윙 취소 후 관절·레일을 즉시 스냅 (다물체 포함).
-    pub fn set_pose(&self, pose: RobotPose) {
+    pub fn set_pose(&self, pose: robot::Pose) {
         let mut world = self.world.lock().expect("sim 월드");
         world.snap_robot_pose(pose);
     }
@@ -113,7 +113,7 @@ mod tests {
         robot.cancel();
         assert!(!robot.is_busy());
 
-        let snapped = RobotPose::new(pose.rail_x + 0.01, pose.joints);
+        let snapped = robot::Pose::new(pose.rail_x + 0.01, pose.joints);
         robot.set_pose(snapped.clone());
         let got = robot.pose();
         assert!((got.rail_x - snapped.rail_x).abs() < 1e-9);
