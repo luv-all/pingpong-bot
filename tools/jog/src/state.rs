@@ -3,9 +3,8 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
-use pingpong_bot::{
-    Arm, BallHandle, Hardware, Point3, RealHardware, RobotHandle, RobotPose, SwingTrajectory,
-};
+use pingpong_bot::swing;
+use pingpong_bot::{Arm, BallHandle, Hardware, Point3, RealHardware, RobotHandle, RobotPose};
 
 use crate::motion::{self, MotionDraft, MotionKind};
 
@@ -57,7 +56,7 @@ pub struct JogApp {
     pub phase: Phase,
     /// Sync 시점 포즈 — 미리보기 시작점·Discard 복원.
     pub synced_pose: Option<RobotPose>,
-    pub staged: Option<SwingTrajectory>,
+    pub staged: Option<swing::Trajectory>,
     pub duration_secs: f64,
     pub max_delta_deg: f64,
     pub draft: MotionDraft,

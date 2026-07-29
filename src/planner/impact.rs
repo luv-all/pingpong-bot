@@ -8,6 +8,49 @@ use crate::constants::table;
 use crate::defaults;
 use crate::error::SwingPlanError;
 
+/// 임팩트 역산의 공개 진입점.
+pub struct Impact;
+
+impl Impact {
+    pub fn rally_return(impact: Point3, incoming_velocity: Vector3<f64>) -> Vector3<f64> {
+        return rally_return_velocity(impact, incoming_velocity);
+    }
+
+    pub fn required_racket_velocity(
+        incoming_velocity: Vector3<f64>,
+        outgoing_velocity: Vector3<f64>,
+        normal: Vector3<f64>,
+        restitution: f64,
+    ) -> Result<Vector3<f64>, SwingPlanError> {
+        return compute_required_racket_velocity(
+            incoming_velocity,
+            outgoing_velocity,
+            normal,
+            restitution,
+        );
+    }
+
+    pub fn verify(
+        incoming_velocity: Vector3<f64>,
+        outgoing_velocity: Vector3<f64>,
+        racket_velocity: Vector3<f64>,
+        normal: Vector3<f64>,
+        restitution: f64,
+    ) -> bool {
+        return verify_impact_model(
+            incoming_velocity,
+            outgoing_velocity,
+            racket_velocity,
+            normal,
+            restitution,
+        );
+    }
+
+    pub fn clears_net(impact: Point3, outgoing_velocity: Vector3<f64>) -> bool {
+        return clears_net_ballistic(impact, outgoing_velocity);
+    }
+}
+
 /// 네트를 넘고 상대 코트 중앙에 바운드하는 출사 속도.
 ///
 /// 목표 바운드는 `(WIDTH/2, LENGTH*3/4, SURFACE+BALL_RADIUS)`이며,
@@ -89,7 +132,7 @@ pub fn required_racket_velocity_parts(
 
 /// [`required_racket_velocity_parts`]의 두 성분 합 — 예산을 나눠 쓸 필요가
 /// 없는 호출부(검증·진단·테스트)용.
-pub fn required_racket_velocity(
+fn compute_required_racket_velocity(
     v_in: Vector3<f64>,
     v_out: Vector3<f64>,
     normal: Vector3<f64>,
@@ -170,7 +213,7 @@ mod tests {
         let v_out = rally_return_velocity(impact, v_in);
         let normal = (v_out - v_in).normalize();
         let e = defaults::ImpactParams::default().racket_effective_restitution;
-        let v_r = required_racket_velocity(v_in, v_out, normal, e).expect("v_r");
+        let v_r = compute_required_racket_velocity(v_in, v_out, normal, e).expect("v_r");
         assert!(verify_impact_model(v_in, v_out, v_r, normal, e));
     }
 
@@ -187,7 +230,7 @@ mod tests {
         let v_out = rally_return_velocity(impact, v_in);
         let normal = (v_out - v_in).normalize();
         let e = defaults::ImpactParams::default().racket_effective_restitution;
-        let v_r = required_racket_velocity(v_in, v_out, normal, e).expect("v_r");
+        let v_r = compute_required_racket_velocity(v_in, v_out, normal, e).expect("v_r");
         let v_r_n = v_r.dot(&normal);
         let v_r_t = v_r - normal * v_r_n;
         let sticky_t = v_out - normal * v_out.dot(&normal);

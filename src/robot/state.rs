@@ -1,8 +1,8 @@
 //! 런타임 관절 상태 - sim/real encoder 읽기가 같은 타입을 채운다.
 
 use super::{Arm, RacketPose};
-use crate::planner::SwingPlanner;
-use crate::{BangBangTrajectory, Joints};
+use crate::robot::Joints;
+use crate::swing;
 
 /// 런타임 관절 상태 - sim `RobotState`/real encoder 읽기가 같은 타입을 채운다.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,8 +27,8 @@ pub struct RobotState {
 /// 궤적 "모양"을 몰라도 되게 한다.
 #[derive(Debug, Clone, PartialEq)]
 enum PlaybackTrajectory {
-    Quintic(crate::SwingTrajectory),
-    BangBang(BangBangTrajectory),
+    Quintic(swing::Trajectory),
+    BangBang(swing::bang_bang::Trajectory),
 }
 
 impl PlaybackTrajectory {
@@ -157,7 +157,7 @@ impl RobotState {
     }
 
     /// quintic 스윙 궤적을 시작한다 (이미 스윙 중이면 무시).
-    pub fn begin_swing(&mut self, trajectory: crate::SwingTrajectory) {
+    pub fn begin_swing(&mut self, trajectory: swing::Trajectory) {
         if self.active_swing.is_some() {
             return;
         }
@@ -165,14 +165,14 @@ impl RobotState {
     }
 
     /// 스윙을 현재 포즈 기준 새 quintic 궤적으로 교체한다 (elapsed=0).
-    pub fn replace_swing(&mut self, trajectory: crate::SwingTrajectory) {
+    pub fn replace_swing(&mut self, trajectory: swing::Trajectory) {
         self.replace_playback(PlaybackTrajectory::Quintic(trajectory), 0.0);
     }
 
     /// 스윙을 현재 포즈 기준 새 순수 토크 bang-bang 궤적으로 교체한다
     /// (elapsed=0) - GUI "bang-bang swing" 토글이 켜졌을 때 `replace_swing`
     /// 대신 쓴다.
-    pub fn replace_bang_bang_swing(&mut self, trajectory: BangBangTrajectory) {
+    pub fn replace_bang_bang_swing(&mut self, trajectory: swing::bang_bang::Trajectory) {
         self.replace_playback(PlaybackTrajectory::BangBang(trajectory), 0.0);
     }
 
@@ -182,7 +182,11 @@ impl RobotState {
     /// 순간부터 `Tg` 안에 도달"을 가정하는데, 계산이 끝나 커밋되는 시점은
     /// 그보다 늦으므로 `elapsed=0`으로 재생을 시작하면 이미 지나간 시간만큼
     /// 뒤로 밀려 실제 공 도착보다 늦게 움직이는 것처럼 보인다.
-    pub fn replace_bang_bang_swing_at(&mut self, trajectory: BangBangTrajectory, elapsed: f64) {
+    pub fn replace_bang_bang_swing_at(
+        &mut self,
+        trajectory: swing::bang_bang::Trajectory,
+        elapsed: f64,
+    ) {
         self.replace_playback(PlaybackTrajectory::BangBang(trajectory), elapsed);
     }
 
@@ -200,7 +204,7 @@ impl RobotState {
     }
 
     /// 재생 중인 quintic 스윙 궤적 (없거나 bang-bang이면 `None`).
-    pub fn active_trajectory(&self) -> Option<&crate::SwingTrajectory> {
+    pub fn active_trajectory(&self) -> Option<&swing::Trajectory> {
         return match self.active_swing.as_ref().map(|s| &s.trajectory) {
             Some(PlaybackTrajectory::Quintic(trajectory)) => Some(trajectory),
             _ => None,
@@ -218,7 +222,7 @@ impl RobotState {
             let finished = self.advance_swing_commands(dt);
             if finished && self.auto_return_to_center && !self.is_at_center(arm) {
                 let start = crate::RobotPose::new(self.rail_x, self.angles.clone());
-                if let Ok(trajectory) = SwingPlanner::return_to_center(arm, &start) {
+                if let Ok(trajectory) = swing::Planner::return_to_center(arm, &start) {
                     self.replace_swing(trajectory);
                 }
             }
@@ -338,7 +342,7 @@ impl RobotState {
             let finished = self.advance_swing(arm, dt);
             if finished && self.auto_return_to_center && !self.is_at_center(arm) {
                 let start = crate::RobotPose::new(self.rail_x, self.angles.clone());
-                if let Ok(trajectory) = SwingPlanner::return_to_center(arm, &start) {
+                if let Ok(trajectory) = swing::Planner::return_to_center(arm, &start) {
                     self.replace_swing(trajectory);
                 }
             }
@@ -398,7 +402,7 @@ impl RobotState {
 #[cfg(test)]
 mod tests {
     use crate::defaults::ControlParams;
-    use crate::{RailMotion, SwingTrajectory};
+    use crate::swing;
 
     #[test]
     fn playback_targets_and_reaches_follow_through_end() {
@@ -408,7 +412,7 @@ mod tests {
         impact.values[0] += 0.01;
         let mut end = impact.clone();
         end.values[0] += 0.01;
-        let trajectory = SwingTrajectory::with_follow_through(
+        let trajectory = swing::Trajectory::with_follow_through(
             start.joints().clone(),
             impact,
             end.clone(),
@@ -417,7 +421,7 @@ mod tests {
             vec![0.0; end.values.len()],
             0.20,
             0.26,
-            RailMotion::fixed(start.rail_x()),
+            swing::RailMotion::fixed(start.rail_x()),
             start.rail_x(),
             0.0,
         );
@@ -438,7 +442,7 @@ mod tests {
         let mut impact = start.joints().clone();
         impact.values[0] += 0.5;
         let end = impact.clone();
-        let trajectory = SwingTrajectory::with_follow_through(
+        let trajectory = swing::Trajectory::with_follow_through(
             start.joints().clone(),
             impact,
             end,
@@ -447,7 +451,7 @@ mod tests {
             vec![0.0; 4],
             0.05,
             0.08,
-            RailMotion::fixed(start.rail_x()),
+            swing::RailMotion::fixed(start.rail_x()),
             start.rail_x(),
             0.0,
         );

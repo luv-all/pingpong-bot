@@ -19,6 +19,7 @@ pub mod pipeline;
 pub mod planner;
 pub mod robot;
 pub mod sim;
+pub mod swing;
 pub mod telemetry;
 
 /// 월드 좌표 점 [m] — `nalgebra::Point3<f64>`.
@@ -52,11 +53,7 @@ pub use hardware::dynamixel::DynamixelConfig;
 pub use hardware::rail::RailConfig;
 pub use hardware::{Hardware, SimHardware};
 pub use pipeline::{CameraFeed, Pipeline, PipelineConfig, PipelineError, PipelineThread};
-pub use planner::{
-    BangBangTrajectory, Impact, InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox,
-    PlannedBangBangIntercept, RacketGuidanceScratch, RacketGuidanceStep, RailMotion,
-    SwingFeasibility, SwingPlanner, SwingTrajectory,
-};
+pub use planner::{Impact, InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox};
 pub use robot::{
     Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, LinkInertial, MountPreset,
     RacketPose, RailFrame, Robot, RobotBuildError, RobotBuilder, RobotPose, RobotState,

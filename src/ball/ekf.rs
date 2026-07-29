@@ -228,7 +228,7 @@ mod tests {
     use crate::ball;
     use crate::constants::table;
     use crate::estimator::HitPlane;
-    use crate::planner::SwingPlanner;
+    use crate::swing;
 
     #[test]
     fn ekf_predicts_hit_plane_from_state() {
@@ -314,7 +314,7 @@ mod tests {
             let time = t0 + dt * i;
             ekf.update_position(Point3::from(pos), time);
             if let Some(pred) = ekf.predict_to(plane) {
-                if SwingPlanner::in_commit_window(pred.time_to_impact_secs)
+                if swing::Planner::in_commit_window(pred.time_to_impact_secs)
                     && pos.y
                         <= table::LENGTH_Y
                             * defaults::ControlParams::default().swing_commit_max_ball_y_frac

@@ -14,7 +14,7 @@ use crate::Calibration;
 use crate::camera::Triangulate;
 use crate::camera::{FrameSource, HintSource};
 use crate::detector::Detector;
-use crate::planner::SwingPlanner;
+use crate::swing;
 use crate::{
     DomainError, Estimator, Hardware, InterceptWindow, Prediction, Robot, SwingPlanError,
     Telemetry, TelemetryEvent,
@@ -224,7 +224,7 @@ pub fn run(
                             continue;
                         }
                     };
-                    match SwingPlanner::plan_best(&arm, &candidates, &start) {
+                    match swing::Planner::plan_best(&arm, &candidates, &start) {
                         Ok(planned) => {
                             let trajectory = planned.trajectory;
                             telemetry_control.log(TelemetryEvent::SwingCommand(trajectory.clone()));

@@ -20,8 +20,8 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
 use crate::error::DomainError;
-use crate::planner::SwingPlanner;
-use crate::{Arm, PlannedBangBangIntercept, Prediction, RobotPose};
+use crate::swing;
+use crate::{Arm, Prediction, RobotPose};
 
 struct Request {
     id: u64,
@@ -32,7 +32,7 @@ struct Request {
 
 struct Response {
     id: u64,
-    result: Result<PlannedBangBangIntercept, DomainError>,
+    result: Result<swing::bang_bang::PlannedIntercept, DomainError>,
 }
 
 /// 진행 중인 요청 하나의 메타데이터 — 응답이 오면 이 시각 기준으로
@@ -56,7 +56,7 @@ impl BangBangWorker {
         let (res_tx, res_rx) = unbounded::<Response>();
         thread::spawn(move || {
             for request in req_rx.iter() {
-                let result = SwingPlanner::plan_bang_bang(
+                let result = swing::Planner::plan_bang_bang(
                     &request.arm,
                     &request.predictions,
                     &request.start,
@@ -125,7 +125,9 @@ impl BangBangWorker {
     /// `(요청 시각, 결과)`. 호출부가 `sim_time - 요청 시각`으로 재생 시작
     /// 지점을 보정한다. `cancel_inflight` 이후 늦게 도착한 오래된 응답은
     /// 추적 중인 id와 안 맞으므로 조용히 버려진다.
-    pub fn poll(&mut self) -> Option<(f64, Result<PlannedBangBangIntercept, DomainError>)> {
+    pub fn poll(
+        &mut self,
+    ) -> Option<(f64, Result<swing::bang_bang::PlannedIntercept, DomainError>)> {
         let mut latest = None;
         // 이론상 한 번에 응답이 하나만 있어야 하지만, 방어적으로 채널을
         // 전부 드레인하며 지금 추적 중인 id와 일치하는 마지막 것만 취한다.

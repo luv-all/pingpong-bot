@@ -19,7 +19,7 @@ use anyhow::Result;
 use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::constants::table;
-use pingpong_bot::planner::SwingPlanner;
+use pingpong_bot::swing;
 use pingpong_bot::{Point3, Prediction, RobotPose, defaults};
 use serde::Serialize;
 
@@ -134,7 +134,7 @@ fn evaluate_mount(
                 impact_position: scenario.impact,
                 incoming_velocity: scenario.incoming_velocity,
             };
-            SwingPlanner::feasibility(&arm, &prediction, &start_pose)
+            swing::Planner::feasibility(&arm, &prediction, &start_pose)
                 .map(|f| f.peak_joint_speed_ratio)
                 .unwrap_or(f64::INFINITY)
         })

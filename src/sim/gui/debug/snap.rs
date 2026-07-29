@@ -3,7 +3,8 @@
 use crate::SwingPlanError;
 use crate::defaults;
 use crate::planner::collision::{OrientedBox, robot_obbs, table_penetration};
-use crate::{Arm, Joints, SwingTrajectory};
+use crate::swing;
+use crate::{Arm, Joints};
 
 /// 스윙 commit 게이트 단계.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -150,7 +151,7 @@ impl SimDebugSnapshot {
         self.commit_phase = CommitPhase::Committed;
     }
 
-    pub fn set_committed_path(&mut self, arm: &Arm, trajectory: &SwingTrajectory) {
+    pub fn set_committed_path(&mut self, arm: &Arm, trajectory: &swing::Trajectory) {
         self.committed_racket_path = sample_racket_path(arm, trajectory, GHOST_SAMPLES);
         let control = defaults::ControlParams::default();
         let duration = trajectory.duration_secs.max(f64::EPSILON);
@@ -269,7 +270,7 @@ impl SimDebugSnapshot {
     }
 }
 
-fn sample_racket_path(arm: &Arm, trajectory: &SwingTrajectory, samples: usize) -> Vec<[f64; 3]> {
+fn sample_racket_path(arm: &Arm, trajectory: &swing::Trajectory, samples: usize) -> Vec<[f64; 3]> {
     let n = samples.max(2);
     let mut out = Vec::with_capacity(n + 1);
     for i in 0..=n {

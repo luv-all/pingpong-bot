@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::planner::SwingPlanner;
+use crate::swing;
 use crate::{
     Arm, DomainError, InterceptWindow, PhysicsParams, Prediction, RobotPose, RobotState,
     SwingPlanError,
@@ -492,7 +492,7 @@ impl SimWorld {
         let ang = body.angvel();
         let velocity = nalgebra::Vector3::new(f64::from(lin.x), f64::from(lin.y), f64::from(lin.z));
         let omega = nalgebra::Vector3::new(f64::from(ang.x), f64::from(ang.y), f64::from(ang.z));
-        let a = SwingPlanner::aero_accel(velocity, omega, self.physics.drag, self.physics.magnus);
+        let a = swing::Planner::aero_accel(velocity, omega, self.physics.drag, self.physics.magnus);
         let mass = f64::from(body.mass());
         if mass <= 1e-12 {
             return;
@@ -588,12 +588,12 @@ impl SimWorld {
         // 이동은 rate-limited·table-clamped 추종 루프(step_toward_targets)가
         // 처리하므로 max_joint_speed/rail.max_speed·충돌 안전을 자동 상속한다.
         let ball_y = f64::from(self.ball_position().y);
-        if !SwingPlanner::past_midcourt(ball_y) {
+        if !swing::Planner::past_midcourt(ball_y) {
             self.debug_snap.commit_phase = CommitPhase::WaitMidcourt;
             if let Some(prediction) = predictions.first() {
                 self.set_debug_prediction(Some(prediction.clone()));
             }
-            if let Some(pose) = SwingPlanner::plan_coarse_track(&self.arm, &predictions) {
+            if let Some(pose) = swing::Planner::plan_coarse_track(&self.arm, &predictions) {
                 // 레일(느리고 이동거리 긴 lateral 축)과 **팔 관절**을 모두 예측
                 // 임팩트 쪽으로 미리 옮긴다. 실제 이동은 rate-limited·범위
                 // 클램프된 추종 루프(`step_toward_targets`)가 하므로
@@ -639,7 +639,7 @@ impl SimWorld {
         // commit 창 밖(너무 이름)이면 계획하지 않고 대기.
         let any_in_window = predictions
             .iter()
-            .any(|p| SwingPlanner::in_commit_window(p.time_to_impact_secs));
+            .any(|p| swing::Planner::in_commit_window(p.time_to_impact_secs));
         if !any_in_window {
             self.debug_snap.commit_phase = CommitPhase::WaitWindow;
             if let Some(prediction) = predictions.first() {
@@ -669,7 +669,7 @@ impl SimWorld {
         }
         self.last_swing_attempt_at = self.sim_time;
         let start = RobotPose::new(self.robot.rail_x(), self.robot.joints().clone());
-        let planned = match SwingPlanner::plan_best(&self.arm, &predictions, &start) {
+        let planned = match swing::Planner::plan_best(&self.arm, &predictions, &start) {
             Ok(planned) => {
                 self.hard_fail_streak = 0;
                 planned
@@ -1352,13 +1352,13 @@ mod tests {
         let mut impact = start.clone();
         impact.values[1] += 0.2;
         impact.values[2] -= 0.3;
-        let traj = crate::SwingTrajectory::new(
+        let traj = crate::swing::Trajectory::new(
             start,
             impact,
             vec![0.0; 4],
             vec![0.0; 4],
             0.25,
-            crate::RailMotion::fixed(world.robot().rail_x()),
+            crate::swing::RailMotion::fixed(world.robot().rail_x()),
         );
         world.robot_mut().begin_swing(traj);
         let mut max_err = 0.0_f64;
@@ -1756,7 +1756,7 @@ mod tests {
 
     #[test]
     fn auto_swing_plans_with_strike_velocity() {
-        use crate::planner::SwingPlanner;
+        use crate::swing;
 
         let arm = test_robot();
         let world = SimWorld::new(arm.clone());
@@ -1775,7 +1775,7 @@ mod tests {
             reachable_z,
         );
         let start = RobotPose::new(rail_x, world.robot().joints().clone());
-        let traj = SwingPlanner::plan(
+        let traj = swing::Planner::plan(
             &arm.arm,
             crate::Prediction {
                 time_to_impact_secs: 0.45,
@@ -1795,7 +1795,7 @@ mod tests {
     #[test]
     fn quintic_swing_moves_robot_joints() {
         use crate::HitPlane;
-        use crate::planner::SwingPlanner;
+        use crate::swing;
 
         let arm = test_robot();
         let mut world = SimWorld::new(arm.clone());
@@ -1816,7 +1816,7 @@ mod tests {
             .expect("FK");
         let impact = crate::Point3::new(impact_x, hit_plane.y, reachable.position.coords.z);
         let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
-        let trajectory = SwingPlanner::plan(
+        let trajectory = swing::Planner::plan(
             &arm.arm,
             crate::Prediction {
                 time_to_impact_secs: t,
@@ -2092,7 +2092,7 @@ mod tests {
         let mut stepped_precommit = false;
         for _ in 0..5_000 {
             let ball_y = f64::from(world.ball_position().y);
-            if SwingPlanner::past_midcourt(ball_y) {
+            if swing::Planner::past_midcourt(ball_y) {
                 break; // commit 단계 진입 — pre-commit 이동만 관찰한다
             }
             // 이 시점의 coarse 목표(있으면)를 기록해 기대 이동 방향으로 삼는다.
@@ -2102,7 +2102,7 @@ mod tests {
                 .into_iter()
                 .filter_map(|plane| world.predict_impact(plane))
                 .collect();
-            if let Some(pose) = SwingPlanner::plan_coarse_track(&world.arm, &predictions) {
+            if let Some(pose) = swing::Planner::plan_coarse_track(&world.arm, &predictions) {
                 target_rail_x = Some(pose.rail_x);
             }
             world.step(1.0 / 1000.0, None);

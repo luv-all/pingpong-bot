@@ -1,13 +1,11 @@
-//! 조그 모션 조합 — 씬이 아닌 툴에서 `SwingTrajectory`를 만든다.
+//! 조그 모션 조합 — 씬이 아닌 툴에서 `swing::Trajectory`를 만든다.
 
 use anyhow::{Context, Result, ensure};
 use nalgebra::{Rotation3, Vector3};
 use pingpong_bot::constants::table;
 use pingpong_bot::planner::Impact;
-use pingpong_bot::{
-    Arm, ControlParams, ImpactParams, Joints, Point3, RacketPose, RailMotion, RobotPose,
-    SwingTrajectory,
-};
+use pingpong_bot::swing;
+use pingpong_bot::{Arm, ControlParams, ImpactParams, Joints, Point3, RacketPose, RobotPose};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MotionKind {
@@ -99,7 +97,7 @@ pub fn compose(
     draft: &MotionDraft,
     duration_secs: f64,
     max_delta_deg: f64,
-) -> Result<SwingTrajectory> {
+) -> Result<swing::Trajectory> {
     return match draft.kind {
         MotionKind::Joint => {
             ensure!(
@@ -239,7 +237,7 @@ fn swing_ball_traj(
     draft: &MotionDraft,
     duration_secs: f64,
     max_delta_deg: f64,
-) -> Result<SwingTrajectory> {
+) -> Result<swing::Trajectory> {
     let (target, aim_normal) = ball_aim_target(arm, start, draft)?;
     let v_in = vec3(draft.ball_vin)?;
     ensure!(v_in.norm() > 1e-3, "공 속도가 너무 작음");
@@ -276,7 +274,7 @@ fn swing_traj(
     draft: &MotionDraft,
     duration_secs: f64,
     max_delta_deg: f64,
-) -> Result<SwingTrajectory> {
+) -> Result<swing::Trajectory> {
     ensure!(
         draft.swing_speed.is_finite() && draft.swing_speed > 0.0,
         "speed > 0"
@@ -311,7 +309,7 @@ fn build_follow_through_swing(
     joint_impact_vel: Vec<f64>,
     rail_impact_vel: f64,
     duration_secs: f64,
-) -> Result<SwingTrajectory> {
+) -> Result<swing::Trajectory> {
     let follow = ControlParams::default().swing_follow_through_secs.max(0.02);
     let approach = duration_secs.max(follow + 0.05);
     let impact_time = (approach - follow).max(0.05);
@@ -326,7 +324,7 @@ fn build_follow_through_swing(
     let start_vel = vec![0.0; n];
     let follow_vel = vec![0.0; n];
 
-    return Ok(SwingTrajectory::with_follow_through(
+    return Ok(swing::Trajectory::with_follow_through(
         start.joints.clone(),
         impact.joints.clone(),
         Joints::from_slice(&follow_joints),
@@ -335,7 +333,7 @@ fn build_follow_through_swing(
         follow_vel,
         impact_time,
         duration,
-        RailMotion {
+        swing::RailMotion {
             start: start.rail_x,
             end: impact.rail_x,
             start_velocity: 0.0,
@@ -419,17 +417,17 @@ fn move_traj(
     target_rail: f64,
     duration_secs: f64,
     max_delta_deg: f64,
-) -> Result<SwingTrajectory> {
+) -> Result<swing::Trajectory> {
     ensure_rail_in_range(arm, target_rail)?;
     ensure_max_delta(&start.joints, &target_joints, max_delta_deg)?;
     let n = target_joints.values.len();
-    return Ok(SwingTrajectory::new(
+    return Ok(swing::Trajectory::new(
         start.joints.clone(),
         target_joints,
         vec![0.0; n],
         vec![0.0; n],
         duration_secs,
-        RailMotion {
+        swing::RailMotion {
             start: start.rail_x,
             end: target_rail,
             start_velocity: 0.0,

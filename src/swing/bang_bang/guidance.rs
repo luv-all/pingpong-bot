@@ -47,191 +47,29 @@
 
 use nalgebra::{DMatrix, DVector, Vector3};
 
-use super::collision::{clamp_above_table, table_penetration};
-use super::swing::physics::{in_swing_commit_window, solve_impact_target};
+use super::super::impact_target::solve_impact_target;
 use crate::defaults::planner::{
     JACOBIAN_DAMPING, JDOT_STEP, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
     POSITION_TOLERANCE_RAD_OR_M, RACKET_DIRECTION_TOLERANCE_DEG, RACKET_SPEED_RATIO_TOLERANCE,
     RAIL_ACCEL_M_S2, TIME_TO_GO_BIAS,
 };
 use crate::error::{DomainError, SwingPlanError};
+use crate::estimator::Prediction;
+use crate::planner::collision::{clamp_above_table, table_penetration};
 use crate::robot::Arm;
-use crate::robot::dynamics::{MassMatrixScratch, RneaScratch, bias_torques_into, mass_matrix_into};
-use crate::{Joints, Prediction, RobotPose};
+use crate::robot::dynamics::{bias_torques_into, mass_matrix_into};
+use crate::robot::{Joints, RobotPose};
 
-/// "코스팅 함정"(위치항 `-6x/Tg²`이 속도오차항을 우연히 상쇄해 속도가 목표의
-/// 22~25%에서 오래 정체하다 마감 직전 폭발하는 현상 — `diag_trivial_case_trace`
-/// 실측: home 방향 그대로에 d=0.02m, v=0.05m/s인 사실상 트리비얼한 목표조차
-/// 이 함정에 걸려 실패) 방지용 — 속도 관련 두 항(`-4v/Tg`, `-2·target_v/Tg`)
-/// 에만 곱하는 추가 긴급도 배율. `TIME_TO_GO_BIAS`(위치·속도 항을 똑같은
-/// 비율로 급하게 만듦)로는 이 함정을 못 깬다 — 위치항과 속도항이 유지하는
-/// 상쇄 "비율" 자체는 Tg를 균일하게 줄여도 그대로 보존되기 때문(실측:
-/// TIME_TO_GO_BIAS=0.3 시도는 위치수렴만 깨뜨리고 속도 정체는 그대로였음).
-/// 속도 항만 따로 더 급하게 만들면, 상쇄에 필요한 `|x|`가 커지는데 코스팅
-/// 동역학은 `x`를 계속 줄이므로 그 관계를 유지하기 어려워져 함정을 벗어난다.
-/// 엄밀한 최소-제어-노력 최적해에서는 벗어나지만, 토크/속도 한계가 있는
-/// 실기에서는 이쪽이 로버스트하다(사용자 지시: 완벽함이 아니라 커버리지).
+use super::racket_guidance_scratch::RacketGuidanceScratch;
+use super::racket_guidance_step::RacketGuidanceStep;
+use super::trajectory::Trajectory;
+
+/// 속도 항 긴급도 배율 — ZEM/ZEV 코스팅 함정 방지.
 const VELOCITY_URGENCY_GAIN: f64 = 2.0;
-/// 관절이 `max_joint_speed`에 가까워질수록 가중 최소노름 역산에서 그 관절을
-/// "비싸게" 만드는 지수 — [`step_racket_guidance`] 속도-헤드룸 항 문서 참고.
+/// 관절 속도 헤드룸 preference 지수.
 const SPEED_HEADROOM_EXPONENT: f64 = 2.0;
-/// 속도 헤드룸 비율의 하한 — 관절이 캡에 완전히 닿아도 `preference`가 0으로
-/// 떨어져 그 관절이 자코비안 역산에서 영구히 배제되는 걸 막는다(질량행렬
-/// 특이화 방지와 같은 이유로 0을 피함).
+/// 속도 헤드룸 비율 하한.
 const SPEED_HEADROOM_FLOOR: f64 = 0.05;
-
-/// bang-bang 적분으로 얻은 샘플 기반 궤적. quintic처럼 닫힌 형태 계수가
-/// 아니라 매 스텝 실제 좌표를 그대로 담는다 — `sample_at`/`sample_rail_at`은
-/// 가장 가까운 두 샘플을 선형보간한다.
-#[derive(Debug, Clone, PartialEq)]
-pub struct BangBangTrajectory {
-    dt: f64,
-    joint_samples: Vec<Joints>,
-    rail_samples: Vec<f64>,
-}
-
-impl BangBangTrajectory {
-    pub fn duration_secs(&self) -> f64 {
-        return (self.joint_samples.len().saturating_sub(1)) as f64 * self.dt;
-    }
-
-    fn sample_index(&self, t: f64) -> (usize, usize, f64) {
-        let clamped = t.clamp(0.0, self.duration_secs());
-        let raw = clamped / self.dt;
-        let lo = (raw.floor() as usize).min(self.joint_samples.len() - 1);
-        let hi = (lo + 1).min(self.joint_samples.len() - 1);
-        let frac = if hi == lo { 0.0 } else { raw - lo as f64 };
-        return (lo, hi, frac);
-    }
-
-    pub fn sample_at(&self, t: f64) -> Joints {
-        let (lo, hi, frac) = self.sample_index(t);
-        let a = &self.joint_samples[lo];
-        let b = &self.joint_samples[hi];
-        let values = a
-            .values
-            .iter()
-            .zip(&b.values)
-            .map(|(x, y)| x + (y - x) * frac)
-            .collect();
-        return Joints { values };
-    }
-
-    pub fn sample_rail_at(&self, t: f64) -> f64 {
-        let (lo, hi, frac) = self.sample_index(t);
-        return self.rail_samples[lo] + (self.rail_samples[hi] - self.rail_samples[lo]) * frac;
-    }
-
-    /// `t` [s]에서 관절 각속도 [rad/s].
-    ///
-    /// 닫힌 형태 계수가 없어 인접 샘플 차분으로 근사한다 — 적분 스텝이
-    /// [`PLAN_DT_SECS`](1 ms)라 quintic의 해석 미분과 같은 수준으로 매끄럽다.
-    pub fn sample_velocity_at(&self, t: f64) -> Vec<f64> {
-        let (lo, hi, _) = self.sample_index(t);
-        if hi == lo {
-            return vec![0.0; self.joint_samples[lo].values.len()];
-        }
-        return self.joint_samples[lo]
-            .values
-            .iter()
-            .zip(&self.joint_samples[hi].values)
-            .map(|(a, b)| (b - a) / self.dt)
-            .collect();
-    }
-
-    pub fn end_joints(&self) -> &Joints {
-        return self.joint_samples.last().expect("최소 1개 샘플");
-    }
-
-    pub fn follow_through_rail_x(&self) -> f64 {
-        return *self.rail_samples.last().expect("최소 1개 샘플");
-    }
-}
-
-/// `predictions` 중 IK가 풀리는 첫 후보로 bang-bang 궤적을 계획한다.
-/// 선택 순서는 `plan_best_swing`과 같은 "현재 라켓 위치에 가까운 순".
-/// `plan_bang_bang_swing`이 실제로 고른 예측 + 궤적 - `PlannedIntercept`
-/// (quintic)와 대응. GUI가 "어떤 hit-plane을 겨냥했는지" 디버그 표시에 쓴다.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlannedBangBangIntercept {
-    pub prediction: Prediction,
-    pub trajectory: BangBangTrajectory,
-}
-
-pub fn plan_bang_bang_swing(
-    arm: &Arm,
-    predictions: &[Prediction],
-    start: &RobotPose,
-) -> Result<PlannedBangBangIntercept, DomainError> {
-    let current_position = if arm.rail.is_some() {
-        arm.forward_kinematics_with_rail(start.rail_x, &start.joints)
-    } else {
-        arm.forward_kinematics(&start.joints)
-    }
-    .map(|pose| pose.position.coords)
-    .unwrap_or_default();
-    let mut ranked: Vec<Prediction> = predictions
-        .iter()
-        .copied()
-        .filter(|prediction| in_swing_commit_window(prediction.time_to_impact_secs))
-        .collect();
-    ranked.sort_by(|left, right| {
-        let left_cost = (left.impact_position.coords - current_position).norm();
-        let right_cost = (right.impact_position.coords - current_position).norm();
-        left_cost
-            .partial_cmp(&right_cost)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut last_error = None;
-    for prediction in ranked {
-        match plan_bang_bang_for(arm, &prediction, start) {
-            Ok(trajectory) => {
-                return Ok(PlannedBangBangIntercept {
-                    prediction,
-                    trajectory,
-                });
-            }
-            Err(error) => last_error = Some(error),
-        }
-    }
-    return Err(last_error.unwrap_or(DomainError::InfeasibleSwing(
-        SwingPlanError::InsufficientTime {
-            time_to_impact_secs: 0.0,
-            min_swing_secs: 0.0,
-        },
-    )));
-}
-
-/// [`step_racket_guidance`]가 매 스텝 재사용하는 스크래치 버퍼 모음 — 호출부
-/// (`plan_bang_bang_for`, `tools/swing_bench`)가 루프 밖에서 한 번만 만들어
-/// 반복 재사용한다. 안 그러면 스텝마다 `mass_matrix`(RNEA n+1회) +
-/// `bias_torques`(RNEA 1회)가 각자 새 버퍼를 할당한다.
-pub struct RacketGuidanceScratch {
-    rnea: RneaScratch,
-    mass_matrix: MassMatrixScratch,
-    mass: DMatrix<f64>,
-    bias_zero_accel: Vec<f64>,
-    bias: Vec<f64>,
-}
-
-impl RacketGuidanceScratch {
-    pub fn new(joint_count: usize) -> Self {
-        return Self {
-            rnea: RneaScratch::new(),
-            mass_matrix: MassMatrixScratch::new(),
-            mass: DMatrix::zeros(joint_count, joint_count),
-            bias_zero_accel: vec![0.0; joint_count],
-            bias: vec![0.0; joint_count],
-        };
-    }
-}
-
-/// [`step_racket_guidance`] 한 스텝의 결과 — 호출부가 진단/리포트에 쓴다.
-pub struct RacketGuidanceStep {
-    pub racket_accel_desired: Vector3<f64>,
-    pub torque_cmd: Vec<f64>,
-}
 
 /// 라켓(3D) task-space ZEM/ZEV 유도 + 토크 가중 자코비안 역산으로 한 스텝
 /// (`dt`) 적분한다. `q`/`qdot`/`rail_x`/`rail_v`를 제자리에서 전진시킨다.
@@ -498,11 +336,11 @@ pub fn step_racket_guidance(
     });
 }
 
-fn plan_bang_bang_for(
+pub(crate) fn plan_bang_bang_for(
     arm: &Arm,
     prediction: &Prediction,
     start: &RobotPose,
-) -> Result<BangBangTrajectory, DomainError> {
+) -> Result<Trajectory, DomainError> {
     let target = solve_impact_target(arm, prediction, start)?;
     // 관절이 아니라 라켓(3D)이 목표 상태 — `target.racket_velocity`는
     // `solve_impact_target`이 공 물리(`required_racket_velocity`)로 직접 낸
@@ -633,7 +471,7 @@ fn plan_bang_bang_for(
         ));
     }
 
-    return Ok(BangBangTrajectory {
+    return Ok(Trajectory {
         dt: PLAN_DT_SECS,
         joint_samples,
         rail_samples,
@@ -788,6 +626,7 @@ mod tests {
     use crate::constants::table;
     use crate::estimator::Prediction;
     use crate::robot::Arm;
+    use crate::robot::dynamics::{MassMatrixScratch, RneaScratch, mass_matrix_into};
 
     /// 피처 브랜치가 실기 관절속도(~2.88 rad/s)로 검증한 마운트.
     fn competition_arm() -> Arm {
@@ -816,7 +655,11 @@ mod tests {
         let mut worst = std::time::Duration::ZERO;
         for _ in 0..RUNS {
             let t0 = std::time::Instant::now();
-            let _ = plan_bang_bang_swing(&arm, &[prediction], &start_pose);
+            let _ = super::super::planned_intercept::plan_bang_bang_swing(
+                &arm,
+                &[prediction],
+                &start_pose,
+            );
             let elapsed = t0.elapsed();
             total += elapsed;
             worst = worst.max(elapsed);
@@ -848,7 +691,7 @@ mod tests {
         let mut worst = std::time::Duration::ZERO;
         for _ in 0..RUNS {
             let t0 = std::time::Instant::now();
-            let _ = crate::planner::SwingPlanner::plan(&arm, prediction, &start_pose);
+            let _ = crate::swing::Planner::plan(&arm, prediction, &start_pose);
             let elapsed = t0.elapsed();
             total += elapsed;
             worst = worst.max(elapsed);
@@ -957,8 +800,12 @@ mod tests {
         let arm = competition_arm();
         let start = arm.initial_state();
         let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
-        let planned = plan_bang_bang_swing(&arm, &[sample_prediction(0.3)], &start_pose)
-            .expect("bang-bang 계획 성공");
+        let planned = super::super::planned_intercept::plan_bang_bang_swing(
+            &arm,
+            &[sample_prediction(0.3)],
+            &start_pose,
+        )
+        .expect("bang-bang 계획 성공");
         assert!(planned.trajectory.duration_secs() > 0.0);
         let end = planned.trajectory.end_joints();
         assert_eq!(end.values.len(), arm.joint_count());
@@ -1075,7 +922,7 @@ mod tests {
             ceiling.jt_d,
         );
 
-        match plan_bang_bang_swing(arm, &[*prediction], start) {
+        match super::super::planned_intercept::plan_bang_bang_swing(arm, &[*prediction], start) {
             Ok(planned) => {
                 let end = planned.trajectory.end_joints();
                 let end_qdot = planned
@@ -1269,7 +1116,7 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::planner::SwingPlanner::past_midcourt(ball_y) {
+                if !crate::swing::Planner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
@@ -1282,9 +1129,7 @@ mod tests {
                 // 좋은(가장 여유 있는) 후보를 골라 "최선의 경우"로 비교한다.
                 let best_in_window = predictions
                     .iter()
-                    .filter(|p| {
-                        crate::planner::SwingPlanner::in_commit_window(p.time_to_impact_secs)
-                    })
+                    .filter(|p| crate::swing::Planner::in_commit_window(p.time_to_impact_secs))
                     .copied()
                     .max_by(|a, b| {
                         let start =
@@ -2023,7 +1868,11 @@ mod tests {
                 impact_position: crate::Point3::new(impact.0, impact.1, impact.2),
                 incoming_velocity: Vector3::new(incoming.0, incoming.1, incoming.2),
             };
-            match plan_bang_bang_swing(&arm, &[prediction], &start_pose) {
+            match super::super::planned_intercept::plan_bang_bang_swing(
+                &arm,
+                &[prediction],
+                &start_pose,
+            ) {
                 Ok(planned) => {
                     let end = planned.trajectory.end_joints();
                     let end_qdot = planned
@@ -2111,7 +1960,7 @@ mod tests {
                 impact_position: crate::Point3::new(impact.0, impact.1, impact.2),
                 incoming_velocity: Vector3::new(incoming.0, incoming.1, incoming.2),
             };
-            match crate::planner::SwingPlanner::plan(&arm, prediction, &start_pose) {
+            match crate::swing::Planner::plan(&arm, prediction, &start_pose) {
                 Ok(trajectory) => {
                     eprintln!("사용한 시나리오: {label} (quintic 계획 성공)");
                     chosen = Some(trajectory);
@@ -2268,7 +2117,7 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::planner::SwingPlanner::past_midcourt(ball_y) {
+                if !crate::swing::Planner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
@@ -2278,9 +2127,7 @@ mod tests {
                     .collect();
                 let in_window: Vec<_> = predictions
                     .into_iter()
-                    .filter(|p| {
-                        crate::planner::SwingPlanner::in_commit_window(p.time_to_impact_secs)
-                    })
+                    .filter(|p| crate::swing::Planner::in_commit_window(p.time_to_impact_secs))
                     .collect();
                 if !in_window.is_empty() {
                     found = Some(in_window);
@@ -2295,7 +2142,11 @@ mod tests {
                 continue;
             };
 
-            match plan_bang_bang_swing(&arm, &predictions, &start_pose) {
+            match super::super::planned_intercept::plan_bang_bang_swing(
+                &arm,
+                &predictions,
+                &start_pose,
+            ) {
                 Ok(_) => {
                     eprintln!("speed={speed:.1} pitch={pitch_deg:.1} -> 수렴 성공");
                     converged += 1;
@@ -2372,7 +2223,7 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::planner::SwingPlanner::past_midcourt(ball_y) {
+                if !crate::swing::Planner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
@@ -2382,9 +2233,7 @@ mod tests {
                     .collect();
                 let in_window: Vec<_> = predictions
                     .into_iter()
-                    .filter(|p| {
-                        crate::planner::SwingPlanner::in_commit_window(p.time_to_impact_secs)
-                    })
+                    .filter(|p| crate::swing::Planner::in_commit_window(p.time_to_impact_secs))
                     .collect();
                 if !in_window.is_empty() {
                     predictions_at_window = Some(in_window);
@@ -2408,7 +2257,7 @@ mod tests {
                         .position
                         .coords)
                     .norm();
-                match crate::planner::SwingPlanner::feasibility(&arm, p, &start_pose) {
+                match crate::swing::Planner::feasibility(&arm, p, &start_pose) {
                     Some(f) => {
                         eprintln!(
                             "  impact=({:.3},{:.3},{:.3}) tti={:.3} dist_from_home={:.3}m -> \
@@ -2491,7 +2340,7 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::planner::SwingPlanner::past_midcourt(ball_y) {
+                if !crate::swing::Planner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
@@ -2501,9 +2350,7 @@ mod tests {
                     .collect();
                 let in_window: Vec<_> = predictions
                     .into_iter()
-                    .filter(|p| {
-                        crate::planner::SwingPlanner::in_commit_window(p.time_to_impact_secs)
-                    })
+                    .filter(|p| crate::swing::Planner::in_commit_window(p.time_to_impact_secs))
                     .collect();
                 if !in_window.is_empty() {
                     predictions_at_window = Some(in_window);
@@ -2521,10 +2368,14 @@ mod tests {
             );
             let mut any_succeeded_alone = false;
             for p in &predictions {
-                let feasibility = crate::planner::SwingPlanner::feasibility(&arm, p, &start_pose)
+                let feasibility = crate::swing::Planner::feasibility(&arm, p, &start_pose)
                     .map(|f| format!("peak_ratio={:.2}", f.peak_joint_speed_ratio))
                     .unwrap_or_else(|| "IK 실패".to_string());
-                match plan_bang_bang_swing(&arm, std::slice::from_ref(p), &start_pose) {
+                match super::super::planned_intercept::plan_bang_bang_swing(
+                    &arm,
+                    std::slice::from_ref(p),
+                    &start_pose,
+                ) {
                     Ok(_) => {
                         any_succeeded_alone = true;
                         eprintln!(
@@ -2594,7 +2445,7 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::planner::SwingPlanner::past_midcourt(ball_y) {
+                if !crate::swing::Planner::past_midcourt(ball_y) {
                     continue;
                 }
 
@@ -2609,9 +2460,7 @@ mod tests {
                     let Some(prediction) = world.predict_impact(HitPlane { y }) else {
                         continue;
                     };
-                    if !crate::planner::SwingPlanner::in_commit_window(
-                        prediction.time_to_impact_secs,
-                    ) {
+                    if !crate::swing::Planner::in_commit_window(prediction.time_to_impact_secs) {
                         continue;
                     }
                     if let Some(ceiling) = kinematic_ceiling(&arm, &start_pose, &prediction) {
@@ -2643,7 +2492,11 @@ mod tests {
                 );
                 let best_prediction = world.predict_impact(HitPlane { y: best_y });
                 if let Some(prediction) = best_prediction {
-                    match plan_bang_bang_swing(&arm, &[prediction], &start_pose) {
+                    match super::super::planned_intercept::plan_bang_bang_swing(
+                        &arm,
+                        &[prediction],
+                        &start_pose,
+                    ) {
                         Ok(_) => eprintln!("  => 이 최고점에서 실제로 수렴 성공!"),
                         Err(err) => eprintln!("  => 이 최고점도 실제로는 수렴 실패: {err}"),
                     }
@@ -2764,7 +2617,7 @@ mod tests {
 
     #[test]
     fn sample_at_interpolates_between_recorded_samples() {
-        let trajectory = BangBangTrajectory {
+        let trajectory = Trajectory {
             dt: 0.1,
             joint_samples: vec![Joints::from_slice(&[0.0]), Joints::from_slice(&[1.0])],
             rail_samples: vec![0.0, 2.0],

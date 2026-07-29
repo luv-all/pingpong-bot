@@ -8,15 +8,15 @@ use crate::defaults::planner::{
     RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
+use crate::estimator::Prediction;
 use crate::planner::Impact;
 use crate::robot::Arm;
-use crate::{Joints, Prediction, RailMotion, RobotPose, SwingTrajectory};
+use crate::robot::{Joints, RobotPose};
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlannedIntercept {
-    pub prediction: Prediction,
-    pub trajectory: SwingTrajectory,
-}
+use super::impact_target::solve_impact_target;
+use super::planned_intercept::PlannedIntercept;
+use super::rail_motion::RailMotion;
+use super::trajectory::Trajectory;
 
 /// 비행 중 공기력만 (중력 제외) [m/s^2].
 ///
@@ -70,259 +70,12 @@ pub fn ball_past_midcourt_for_commit(ball_y: f64) -> bool {
         <= table::LENGTH_Y * defaults::ControlParams::default().swing_commit_max_ball_y_frac;
 }
 
-/// IK로 역산한 목표 관절속도가 실제 한계의 이 배수를 넘으면 "특이점 근처"로
-/// 본다.
-///
-/// 근거(2026-07-23, GUI bang-bang 조사 중 실측): 재보정된 `max_joint_speed`
-/// (~2.88 rad/s) 아래서, 손목이 거의 다 펴지거나 접힌 자세 근처(reach
-/// 경계)의 IK 해는 목표 라켓속도(2 m/s 수준의 평범한 값)를 관절속도로
-/// 역산하면 한 축이 한계의 6배 이상(17.5 rad/s) 튀어나오는 걸 확인했다.
-/// `fit_end_velocity`는 모든 관절에 같은 스케일 계수를 곱하므로, 이 한
-/// 축을 한계 안으로 누르면 나머지 멀쩡한 관절 속도까지 같은 비율로
-/// 뭉개져 라켓이 사실상 정지 상태로 "임팩트"하게 된다(측정: 목표 라켓
-/// 속도 2.0 m/s → 실제 피크 0.332 m/s). 이 임계값을 넘는 IK 해는 아예
-/// 이 config(hit-plane candidate)를 버리고 `plan_best_swing`이 다음
-/// 후보를 시도하게 한다 — 조용히 저속 스윙으로 "성공"한 척하지 않는다.
-const NEAR_SINGULARITY_SPEED_RATIO: f64 = 2.5;
-
-/// 임팩트 IK·목표 속도 역산 결과. `plan_swing`(quintic)과 `plan_bang_bang_swing`
-/// (순수 토크 적분, `planner::bang_bang`)이 같은 임팩트 설정을 공유한다 —
-/// 갈라지는 지점은 이 목표를 어떤 궤적 "모양"에 넣느냐뿐이다.
-pub(crate) struct ImpactTarget {
-    pub(crate) pose: RobotPose,
-    pub(crate) joint_velocities: Vec<f64>,
-    pub(crate) rail_velocity: f64,
-    pub(crate) racket_velocity: Vector3<f64>,
-}
-
-/// `hint`를 어깨/팔꿈치 한계 구간 중점 기준으로 반사한 대안 시드들을
-/// 만든다 — 수치 IK가 같은 목표 자세에 도달하는 다른 관절 조합(다른
-/// elbow-up/down류 basin)으로 수렴하도록 시드를 다양화한다. 이 배열의
-/// 첫 항목은 항상 원본 `hint` 그대로.
-///
-/// 근거(2026-07-23): 같은 목표 위치·법선에 도달하는 IK 해가 어떤 관절
-/// 조합을 쓰느냐에 따라, 특정 리턴 방향에 대한 자코비안 조작성이 최대
-/// 7배 이상 차이 남을 실측 확인 — 시드 하나만 쓰면 우연히 최악
-/// 조작성(특이점 근접) 자세로 수렴할 수 있다.
-fn candidate_ik_hints(arm: &Arm, hint: &Joints) -> Vec<Joints> {
-    let mut hints = vec![hint.clone()];
-    let reflect = |joint_index: usize, joints: &Joints| -> Option<Joints> {
-        let limit = arm.joint_limit(joint_index)?;
-        let mid = (limit.min + limit.max) * 0.5;
-        let mut reflected = joints.clone();
-        reflected.values[joint_index] =
-            (2.0 * mid - joints.values[joint_index]).clamp(limit.min, limit.max);
-        return Some(reflected);
-    };
-    if let Some(shoulder_reflected) = reflect(1, hint) {
-        hints.push(shoulder_reflected.clone());
-        if let Some(both_reflected) = reflect(2, &shoulder_reflected) {
-            hints.push(both_reflected);
-        }
-    }
-    if let Some(elbow_reflected) = reflect(2, hint) {
-        hints.push(elbow_reflected);
-    }
-    return hints;
-}
-
-/// 후보 IK 해 하나의 평가 결과 - 목표 방향에 대한 관절속도 조작성 비교용.
-struct ImpactCandidate {
-    peak_joint_speed_ratio: f64,
-    pose: RobotPose,
-    racket_velocity: Vector3<f64>,
-    rail_velocity: f64,
-    joint_velocities: Vec<f64>,
-}
-
-/// 여러 IK 시드를 시도해 목표 리턴 방향에 대해 관절속도 조작성이 가장
-/// 좋은(피크 관절속도 비율이 가장 낮은) 해를 고른다 - `inverse_pose_with_rail`
-/// 하나만 부르면 첫 수렴 시드에 안주해 우연히 특이점 근접 자세를 고를 수
-/// 있다(2026-07-23 실측: 같은 목표를 반사 시드로 재시도하면 관절 조합이
-/// 달라져 조작성이 크게 개선될 수 있음을 확인). `plan_swing`/`plan_bang_bang_swing`
-/// (내부용, [`solve_impact_target`])과 마운트 위치 튜닝 도구
-/// ([`swing_feasibility`], 외부 공개용)가 이 탐색을 공유한다.
-fn best_impact_candidate(
-    arm: &Arm,
-    prediction: &Prediction,
-    start: &RobotPose,
-) -> Result<ImpactCandidate, SwingPlanError> {
-    let impact_position = prediction.impact_position;
-    let v_in = prediction.incoming_velocity;
-    let v_out = Impact::rally_return(impact_position, v_in);
-    let desired_normal = (v_out - v_in).normalize();
-
-    let base_hint = arm.with_wrist_open(&start.joints, Arm::wrist_open_for_return(v_out - v_in))?;
-    let racket_center = crate::Point3::from(
-        impact_position.coords
-            - desired_normal
-                * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z),
-    );
-
-    let mut best: Option<ImpactCandidate> = None;
-    let mut last_error = None;
-    for hint in candidate_ik_hints(arm, &base_hint) {
-        let solved = match arm.inverse_pose_with_rail(
-            racket_center,
-            desired_normal,
-            &RobotPose::new(start.rail_x, hint),
-        ) {
-            Ok(solved) => solved,
-            Err(error) => {
-                last_error = Some(error);
-                continue;
-            }
-        };
-        if crate::planner::collision::table_penetration(arm, solved.rail_x, &solved.joints) > 1e-3 {
-            continue;
-        }
-        let Some(pose) = arm.forward_kinematics_with_rail(solved.rail_x, &solved.joints) else {
-            continue;
-        };
-        let v_r = match Impact::required_racket_velocity(
-            v_in,
-            v_out,
-            pose.normal,
-            defaults::ImpactParams::default().racket_effective_restitution,
-        ) {
-            Ok(v_r) => v_r,
-            Err(error) => {
-                last_error = Some(error);
-                continue;
-            }
-        };
-        // 위치 3제약만의 최소노름 해 - 순간 라켓 방향 고정은 강제하지
-        // 않는다(실제 스윙도 접촉 순간 라켓이 계속 회전 중이라 물리적으로
-        // 과잉제약이었다, 2026-07-23 실측).
-        let (rail_velocity, joint_velocities) =
-            match arm.linear_velocities_for_racket_velocity(&solved, v_r) {
-                Ok(result) => result,
-                Err(error) => {
-                    last_error = Some(error);
-                    continue;
-                }
-            };
-        let peak_joint_speed_ratio = joint_velocities
-            .iter()
-            .map(|v| v.abs())
-            .fold(0.0_f64, f64::max)
-            / arm.max_joint_speed;
-        if best
-            .as_ref()
-            .is_none_or(|candidate| peak_joint_speed_ratio < candidate.peak_joint_speed_ratio)
-        {
-            best = Some(ImpactCandidate {
-                peak_joint_speed_ratio,
-                pose: solved,
-                racket_velocity: v_r,
-                rail_velocity,
-                joint_velocities,
-            });
-        }
-    }
-
-    return best.ok_or_else(|| {
-        last_error.unwrap_or(SwingPlanError::InverseKinematicsNoSolution {
-            target_x: impact_position.coords.x,
-            target_y: impact_position.coords.y,
-            target_z: impact_position.coords.z,
-        })
-    });
-}
-
-pub(crate) fn solve_impact_target(
-    arm: &Arm,
-    prediction: &Prediction,
-    start: &RobotPose,
-) -> Result<ImpactTarget, DomainError> {
-    let candidate =
-        best_impact_candidate(arm, prediction, start).map_err(DomainError::InfeasibleSwing)?;
-
-    if candidate.peak_joint_speed_ratio > NEAR_SINGULARITY_SPEED_RATIO {
-        let (joint_index, required_speed) = candidate
-            .joint_velocities
-            .iter()
-            .enumerate()
-            .map(|(i, v)| (i, v.abs()))
-            .fold(
-                (0, 0.0_f64),
-                |acc, cur| if cur.1 > acc.1 { cur } else { acc },
-            );
-        // 예전엔 여기서 NearSingularity로 하드 거절했다. 실기 관절속도(~2.88)
-        // + 현재 마운트/슈터에서는 거의 모든 샷이 걸려 **스윙이 한 번도
-        // commit되지 않았다**(시뮬 로그: streak→tti 포기). 목표 관절속도만
-        // 한계로 스케일해 약한 스윙이라도 나가게 한다 — fit_end_velocity가
-        // quintic peak도 추가로 깎는다.
-        let scale = 1.0 / candidate.peak_joint_speed_ratio;
-        tracing::warn!(
-            joint_index,
-            required_speed,
-            speed_limit = arm.max_joint_speed,
-            scale,
-            "impact 관절속도가 한계 초과 — 끝속도를 {scale:.2}×로 스케일 (약한 스윙)"
-        );
-        let joint_velocities: Vec<f64> = candidate
-            .joint_velocities
-            .iter()
-            .map(|v| v * scale)
-            .collect();
-        return Ok(ImpactTarget {
-            pose: candidate.pose,
-            joint_velocities,
-            rail_velocity: candidate.rail_velocity * scale,
-            racket_velocity: candidate.racket_velocity * scale,
-        });
-    }
-
-    return Ok(ImpactTarget {
-        pose: candidate.pose,
-        joint_velocities: candidate.joint_velocities,
-        rail_velocity: candidate.rail_velocity,
-        racket_velocity: candidate.racket_velocity,
-    });
-}
-
-/// 특정 임팩트 예측을 이 팔이 얼마나 여유 있게 실행할 수 있는지 - 마운트
-/// 위치(높이·테이블과의 거리) 튜닝, 벤치마크 등 외부 연구용 공개 API.
-///
-/// `plan_swing`이 실제로 쓰는 것과 같은 다중 IK 시드 탐색([`best_impact_candidate`])
-/// 결과를 그대로 노출한다. IK/속도 역산 자체가 실패하면 `None`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SwingFeasibility {
-    /// 관절 중 필요 속도/한계 비율이 가장 큰 값. 1.0 이하면 실기 관절속도
-    /// 한계 안에서 실행 가능, 클수록 특이점 근접(비현실적 소요속도).
-    pub peak_joint_speed_ratio: f64,
-    /// 레일 필요속도/한계 비율. 레일이 없는 팔이면 0.0.
-    pub peak_rail_speed_ratio: f64,
-}
-
-/// [`SwingFeasibility`] 계산 - 마운트 위치 스윕(`tools/mount_search` 등) 전용
-/// 공개 API. `plan_swing`/`plan_bang_bang_swing`과 같은 다중 IK 시드 탐색을
-/// 재사용하되, quintic/토크 궤적 생성 없이 "이 임팩트를 낼 수 있는가"만
-/// 본다 - 마운트 후보를 대량으로 스윕할 때 매번 전체 궤적을 만들 필요는
-/// 없어서 훨씬 가볍다.
-pub fn swing_feasibility(
-    arm: &Arm,
-    prediction: &Prediction,
-    start: &RobotPose,
-) -> Option<SwingFeasibility> {
-    let candidate = best_impact_candidate(arm, prediction, start).ok()?;
-    let peak_rail_speed_ratio = arm
-        .rail
-        .as_ref()
-        .map_or(0.0, |rail| candidate.rail_velocity.abs() / rail.max_speed);
-    return Some(SwingFeasibility {
-        peak_joint_speed_ratio: candidate.peak_joint_speed_ratio,
-        peak_rail_speed_ratio,
-    });
-}
-
 /// 예측/현재 포즈로 quintic 스윙 궤적을 계획한다.
 pub fn plan_swing(
     arm: &Arm,
     prediction: Prediction,
     start: &RobotPose,
-) -> Result<SwingTrajectory, DomainError> {
+) -> Result<Trajectory, DomainError> {
     let time_to_impact = prediction.time_to_impact_secs;
     if time_to_impact < defaults::ControlParams::default().min_swing_secs {
         return Err(DomainError::InfeasibleSwing(
@@ -482,7 +235,7 @@ pub fn plan_coarse_track(arm: &Arm, predictions: &[Prediction]) -> Option<RobotP
 /// 없으므로 `plan_swing`과 달리 목표 소요 시간이 정해져 있지 않다 — 관절·
 /// 레일 속도/가속/토크 한계(`kinematic_limit_violation`·`peak_torque_utilization`)를 만족할 때까지
 /// 소요 시간을 점진적으로 늘려가며 찾는다.
-pub fn plan_return_to_center(arm: &Arm, start: &RobotPose) -> Result<SwingTrajectory, DomainError> {
+pub fn plan_return_to_center(arm: &Arm, start: &RobotPose) -> Result<Trajectory, DomainError> {
     let center_joints = arm.default_joints.clone();
     let center_rail_x = arm
         .rail
@@ -566,7 +319,7 @@ fn build_feasible_trajectory(
     end_velocity: Vec<f64>,
     duration: f64,
     rail: RailMotion,
-) -> Result<SwingTrajectory, SwingPlanError> {
+) -> Result<Trajectory, SwingPlanError> {
     let (fitted, fitted_rail) = fit_end_velocity(
         arm,
         start,
@@ -632,7 +385,7 @@ fn trajectory_with_follow_through(
     impact_velocity: Vec<f64>,
     impact_time: f64,
     rail: RailMotion,
-) -> SwingTrajectory {
+) -> Trajectory {
     let follow_time = defaults::ControlParams::default().swing_follow_through_secs;
     let mut end_values = impact.values.clone();
     for (index, (value, velocity)) in end_values
@@ -648,7 +401,7 @@ fn trajectory_with_follow_through(
     let follow_rail_x = arm.rail.as_ref().map_or(rail.end, |linear| {
         linear.clamp_x(rail.end + rail.end_velocity * follow_time * 0.5)
     });
-    return SwingTrajectory::with_follow_through(
+    return Trajectory::with_follow_through(
         start.clone(),
         impact.clone(),
         Joints { values: end_values },
@@ -663,7 +416,7 @@ fn trajectory_with_follow_through(
     );
 }
 
-fn trajectory_collision_free(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
+fn trajectory_collision_free(arm: &Arm, trajectory: &Trajectory) -> bool {
     let samples = (trajectory.duration_secs / 0.005).ceil() as usize;
     for index in 0..=samples.max(1) {
         let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
@@ -681,7 +434,7 @@ fn trajectory_collision_free(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
 /// Newton-Euler 역동역학으로 관절 토크를 계산하고, per-joint 연속 토크 한계
 /// (`Arm::joint_torque_limits`) 대비 이용률을 본다. 반환값 `<= 1.0` 이면 모든
 /// 관절이 토크 한계 안. 한계가 무한(`f64::INFINITY`)인 관절은 무시한다.
-fn peak_torque_utilization(arm: &Arm, trajectory: &SwingTrajectory) -> f64 {
+fn peak_torque_utilization(arm: &Arm, trajectory: &Trajectory) -> f64 {
     // 토크 한계가 전부 무한(무제한)이면 동역학을 돌릴 필요가 없다.
     if arm
         .joint_torque_limits
@@ -740,7 +493,7 @@ fn peak_torque_utilization(arm: &Arm, trajectory: &SwingTrajectory) -> f64 {
 /// 토크를 제외한 기구학 한계(관절 속도/가속/각도 범위, 레일 속도/범위)만 본다.
 /// 토크 샘플링(Newton-Euler)이 상대적으로 비싸서, 토크 이용률을 이미 따로
 /// 계산한 호출부(`fit_end_velocity`)가 중복 계산을 피하도록 분리했다.
-fn kinematic_limits_ok(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
+fn kinematic_limits_ok(arm: &Arm, trajectory: &Trajectory) -> bool {
     return kinematic_limit_violation(arm, trajectory).is_none();
 }
 
@@ -750,7 +503,7 @@ fn kinematic_limits_ok(arm: &Arm, trajectory: &SwingTrajectory) -> bool {
 /// 튜닝으로 고칠 수 있는 문제인지(관절 각도·레일 범위) 아니면 시간
 /// 예산 문제인지(속도·가속) 구분이 안 된다. 실제로 이 구분이 없어서
 /// 2026-07-23 조사가 한동안 엉뚱한 축(리치/관절속도 재보정)을 팠다.
-fn kinematic_limit_violation(arm: &Arm, trajectory: &SwingTrajectory) -> Option<&'static str> {
+fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'static str> {
     if trajectory.peak_joint_speed() > arm.max_joint_speed {
         return Some("관절 속도");
     }

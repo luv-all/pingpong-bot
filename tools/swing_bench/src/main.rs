@@ -30,10 +30,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use nalgebra::Vector3;
-use pingpong_bot::planner::{Impact, SwingPlanner};
-use pingpong_bot::{
-    Arm, Joints, MountPreset, Point3, RacketGuidanceScratch, RobotBuilder, RobotPose, defaults,
-};
+use pingpong_bot::planner::Impact;
+use pingpong_bot::swing;
+use pingpong_bot::{Arm, Joints, MountPreset, Point3, RobotBuilder, RobotPose, defaults};
 use serde::{Deserialize, Serialize};
 
 /// 수렴 판정 허용 오차 — `RobotState::is_at_center`의 관례(1e-3)를 따른다.
@@ -399,7 +398,7 @@ fn simulate(
         .expect("target FK — compute_target이 이미 IK로 검증한 자세")
         .position
         .coords;
-    let mut scratch = RacketGuidanceScratch::new(n);
+    let mut scratch = swing::RacketGuidanceScratch::new(n);
 
     let mut peak_util: Vec<f64> = vec![0.0; n];
     let mut peak_speed: Vec<f64> = vec![0.0; n];
@@ -417,7 +416,7 @@ fn simulate(
         // ZEM/ZEV의 `Tg`(목표 도달까지 남은 시간)로 이 시뮬레이션 자체의
         // 예산(`max_time_secs`)을 쓴다 — 모듈 문서 참고.
         let remaining_secs = max_time_secs - t;
-        let Some(step) = SwingPlanner::step_racket_guidance(
+        let Some(step) = swing::Planner::step_racket_guidance(
             arm,
             &mut q,
             &mut qdot,

@@ -1,14 +1,14 @@
 //! 텔레메트리. 본선은 [`TracingTelemetry`].
 
 use crate::estimator::Prediction;
-use crate::planner::SwingTrajectory;
+use crate::swing;
 use tracing::{debug, info_span};
 
 /// 텔레메트리 이벤트.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TelemetryEvent {
     Prediction(Prediction),
-    SwingCommand(SwingTrajectory),
+    SwingCommand(swing::Trajectory),
 }
 
 /// 시각화와 로깅 출력.
