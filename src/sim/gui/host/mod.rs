@@ -237,7 +237,11 @@ async fn run_lightweight(options: SceneHostOptions) -> Result<(), String> {
         .as_ref()
         .map(|_| BallVisual::spawn(&mut scene));
 
-    let _ = (&options.layers.robot, &options.layers.shooter, &options.world);
+    let _ = (
+        &options.layers.robot,
+        &options.layers.shooter,
+        &options.world,
+    );
 
     while window.render_3d(&mut scene, &mut camera).await {
         if options.shutdown.load(Ordering::Acquire) {

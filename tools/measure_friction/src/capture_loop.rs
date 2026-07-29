@@ -7,10 +7,9 @@ use anyhow::{Context, Result, bail};
 use opencv::core::Scalar;
 use opencv::prelude::*;
 use pingpong_bot::{
-    Calibration, CameraId, Detector, FrameSource, OpenCvCapture, PixelPoint, Point3,
-    PreviewAction, RollEvent, TrajPoint, destroy_window, detect_rolls, draw_cam_label,
-    draw_circle_px, draw_debug_lines, draw_help_lines, hstack_bgr, mean_roll_mu, show_bgr,
-    triangulate_views,
+    Calibration, CameraId, Detector, FrameSource, OpenCvCapture, PixelPoint, Point3, PreviewAction,
+    RollEvent, TrajPoint, destroy_window, detect_rolls, draw_cam_label, draw_circle_px,
+    draw_debug_lines, draw_help_lines, hstack_bgr, mean_roll_mu, show_bgr, triangulate_views,
 };
 
 pub struct CaptureResult {

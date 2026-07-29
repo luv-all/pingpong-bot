@@ -229,11 +229,7 @@ mod tests {
 
     fn color_track(half: impl Into<RoiParams>) -> RoiTrack {
         let appearance = AppearanceChain::new().then(ColormaskDetector::new(loose_color()));
-        return track(
-            appearance,
-            Scorer::shape(20.0, 20_000.0, 0.55),
-            half,
-        );
+        return track(appearance, Scorer::shape(20.0, 20_000.0, 0.55), half);
     }
 
     #[test]

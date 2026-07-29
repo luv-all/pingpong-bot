@@ -4,8 +4,8 @@ use opencv::core::{Point, Vector};
 use opencv::imgproc;
 use opencv::prelude::*;
 
-use super::super::scoring::candidate::{Candidate, candidates_from_contours};
 use super::super::motion::draw_candidate_contour;
+use super::super::scoring::candidate::{Candidate, candidates_from_contours};
 use super::super::scoring::params::ScorerParams;
 use super::super::scoring::scorer::Scorer;
 use crate::PixelPoint;

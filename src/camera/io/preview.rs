@@ -746,10 +746,7 @@ impl PixelPickMouse {
         let Some((x, y)) = self.aim_img else {
             return;
         };
-        self.aim_img = Some((
-            (x + dx).clamp(0, img_w - 1),
-            (y + dy).clamp(0, img_h - 1),
-        ));
+        self.aim_img = Some(((x + dx).clamp(0, img_w - 1), (y + dy).clamp(0, img_h - 1)));
         self.nudged = true;
         self.hover = self.aim_img;
     }

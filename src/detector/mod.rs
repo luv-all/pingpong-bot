@@ -11,9 +11,9 @@
 pub mod appearance;
 pub mod builder;
 pub mod motion;
+mod roi_params;
 pub mod scoring;
 pub mod spatial;
-mod roi_params;
 mod track;
 mod undistort;
 

@@ -47,8 +47,7 @@ impl RoiParams {
             .map(|a| (a / std::f64::consts::PI).sqrt())
             .unwrap_or(0.0);
         let delta = delta_px.max(0.0);
-        let raw =
-            self.radius_scale * r + f64::from(self.padding) + self.motion_scale * delta;
+        let raw = self.radius_scale * r + f64::from(self.padding) + self.motion_scale * delta;
         return (raw.round() as i32).clamp(self.half_min, self.half_max);
     }
 

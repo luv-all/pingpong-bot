@@ -9,9 +9,9 @@ use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
     CameraId, CameraParams, FrameSource, OpenCvCapture, PixelPickMouse, PixelPoint, Point3,
-    PreviewAction, TABLE_LANDMARK_COUNT, TableLandmark, WorldGridParams, apply_grid_key, arrow_delta,
-    calibrate_table_pnp, destroy_window, draw_debug_lines, draw_help_lines, draw_pixel_loupe,
-    draw_world_grid, show_bgr, table_landmark_mesh_edges, table_landmarks,
+    PreviewAction, TABLE_LANDMARK_COUNT, TableLandmark, WorldGridParams, apply_grid_key,
+    arrow_delta, calibrate_table_pnp, destroy_window, draw_debug_lines, draw_help_lines,
+    draw_pixel_loupe, draw_world_grid, show_bgr, table_landmark_mesh_edges, table_landmarks,
 };
 
 use crate::args::{Args, pending_path, resolve_camera_id, resolve_output};
@@ -83,7 +83,11 @@ pub fn run(args: &Args) -> Result<()> {
             src.display()
         );
     } else {
-        println!("no baseline for cam{} in {}", cam_id.0, resolve_output(args).display());
+        println!(
+            "no baseline for cam{} in {}",
+            cam_id.0,
+            resolve_output(args).display()
+        );
     }
     cli::hint_pending_if_exists(args, cam_id);
     println!(
@@ -175,7 +179,11 @@ pub fn run(args: &Args) -> Result<()> {
         };
         // loupe 샘플용 (오버레이 없는 패딩 캔버스)
         let loupe_src = if frozen && pad > 0 {
-            Some(panel.try_clone().map_err(|e| anyhow::anyhow!("clone: {e}"))?)
+            Some(
+                panel
+                    .try_clone()
+                    .map_err(|e| anyhow::anyhow!("clone: {e}"))?,
+            )
         } else {
             None
         };
@@ -489,9 +497,7 @@ fn to_canvas_pts(pts: &[PixelPoint], pad: i32) -> Vec<PixelPoint> {
 /// Review용: 회색 체크 패딩 + 프레임. `pad==0`이면 프레임 복제.
 fn make_padded_canvas(frame: &Mat, pad: i32) -> Result<Mat> {
     if pad <= 0 {
-        return frame
-            .try_clone()
-            .map_err(|e| anyhow::anyhow!("clone: {e}"));
+        return frame.try_clone().map_err(|e| anyhow::anyhow!("clone: {e}"));
     }
     let fw = frame.cols();
     let fh = frame.rows();

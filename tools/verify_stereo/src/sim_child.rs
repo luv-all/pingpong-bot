@@ -1,8 +1,8 @@
 //! SimScene 자식 — stdin JSON 한 줄 → BallHandle.
 
 use std::io::{BufRead, BufReader};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use anyhow::Result;

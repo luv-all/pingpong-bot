@@ -153,13 +153,15 @@ fn main() -> Result<()> {
     let backend = cam.stream.backend().map_err(anyhow::Error::msg)?;
     let resolved = cam.resolve().map_err(anyhow::Error::msg)?;
     if resolved.len() != 2 {
-        bail!("record-stereo는 left+right 두 대 필요 (got {})", resolved.len());
+        bail!(
+            "record-stereo는 left+right 두 대 필요 (got {})",
+            resolved.len()
+        );
     }
     let left_r = resolved[0];
     let right_r = resolved[1];
 
-    fs::create_dir_all(&args.out)
-        .with_context(|| format!("create {}", args.out.display()))?;
+    fs::create_dir_all(&args.out).with_context(|| format!("create {}", args.out.display()))?;
 
     let mut left_cap =
         OpenCvCapture::from_device_with_backend(left_r.camera_id, left_r.device, backend)
@@ -167,8 +169,12 @@ fn main() -> Result<()> {
     let mut right_cap =
         OpenCvCapture::from_device_with_backend(right_r.camera_id, right_r.device, backend)
             .map_err(anyhow::Error::msg)?;
-    cam.stream.apply(&mut left_cap).map_err(anyhow::Error::msg)?;
-    cam.stream.apply(&mut right_cap).map_err(anyhow::Error::msg)?;
+    cam.stream
+        .apply(&mut left_cap)
+        .map_err(anyhow::Error::msg)?;
+    cam.stream
+        .apply(&mut right_cap)
+        .map_err(anyhow::Error::msg)?;
 
     let (req_w, req_h) = cam.stream.resolved_size();
     let request_fps = cam.stream.fps;
@@ -185,14 +191,7 @@ fn main() -> Result<()> {
     let ring_keep = Duration::from_secs_f64(args.preroll + args.postroll + RING_MARGIN_SECS);
 
     let grab: JoinHandle<()> = thread::spawn(move || {
-        grab_loop(
-            left_cap,
-            right_cap,
-            shared_t,
-            cmd_t,
-            stop_t,
-            ring_keep,
-        );
+        grab_loop(left_cap, right_cap, shared_t, cmd_t, stop_t, ring_keep);
     });
 
     let (sw, sh) = cam.stream.resolved_size();
@@ -227,11 +226,7 @@ fn main() -> Result<()> {
                 thread::sleep(Duration::from_millis(20));
                 continue;
             };
-            let preview = g
-                .preview
-                .as_ref()
-                .map(|p| p.try_clone())
-                .transpose()?;
+            let preview = g.preview.as_ref().map(|p| p.try_clone()).transpose()?;
             (preview, g.last_status.clone())
         };
 
@@ -259,7 +254,11 @@ fn main() -> Result<()> {
             format!("scene {}", args.scene.as_str()),
         ];
         draw_debug_lines(&mut left, &left_lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-        draw_debug_lines(&mut right, &right_lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        draw_debug_lines(
+            &mut right,
+            &right_lines,
+            Scalar::new(0.0, 255.0, 255.0, 0.0),
+        )?;
         draw_cam_label(
             &mut left,
             left_r.role.as_str(),
@@ -290,8 +289,7 @@ fn main() -> Result<()> {
                     continue;
                 }
                 let dir = next_clip_dir(&args.out, args.scene.as_str())?;
-                fs::create_dir_all(&dir)
-                    .with_context(|| format!("create {}", dir.display()))?;
+                fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
                 if let Ok(mut g) = shared.lock() {
                     g.last_status = None;
                 }
@@ -469,7 +467,10 @@ fn grab_loop(
                         meta.frames,
                         meta.meas_fps
                     );
-                    format!("saved {}", dir.file_name().and_then(|s| s.to_str()).unwrap_or("?"))
+                    format!(
+                        "saved {}",
+                        dir.file_name().and_then(|s| s.to_str()).unwrap_or("?")
+                    )
                 }
                 Err(e) => {
                     eprintln!("save failed {}: {e:#}", dir.display());
@@ -591,8 +592,8 @@ fn write_clip(
 
     let left_path = dir.join("left.avi");
     let right_path = dir.join("right.avi");
-    let fourcc = VideoWriter::fourcc('M', 'J', 'P', 'G')
-        .map_err(|e| anyhow::anyhow!("fourcc: {e}"))?;
+    let fourcc =
+        VideoWriter::fourcc('M', 'J', 'P', 'G').map_err(|e| anyhow::anyhow!("fourcc: {e}"))?;
     let size = Size::new(width, height);
 
     let mut left_w = VideoWriter::new(

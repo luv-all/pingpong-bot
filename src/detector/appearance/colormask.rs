@@ -6,8 +6,8 @@ use opencv::core::{Point, Scalar, Vector};
 use opencv::imgproc;
 use opencv::prelude::*;
 
-use super::super::scoring::candidate::{Candidate, candidates_from_contours};
 use super::super::motion::draw_candidate_contour;
+use super::super::scoring::candidate::{Candidate, candidates_from_contours};
 use super::super::scoring::scorer::Scorer;
 use crate::PixelPoint;
 use crate::camera::Frame;
@@ -313,7 +313,10 @@ mod tests {
         };
         let mut det = ColormaskDetector::new(params);
         let scorer = Scorer::shape(20.0, 20_000.0, 0.55);
-        let pixel = det.detect_debug(&frame, &scorer).0.expect("should find blob");
+        let pixel = det
+            .detect_debug(&frame, &scorer)
+            .0
+            .expect("should find blob");
         assert!((pixel.x - 100.0).abs() < 5.0, "x={}", pixel.x);
         assert!((pixel.y - 80.0).abs() < 5.0, "y={}", pixel.y);
     }
@@ -360,10 +363,8 @@ mod tests {
             },
             vec![[10, 20, 30], [40, 50, 60]],
         );
-        let path = std::env::temp_dir().join(format!(
-            "pp_colormask_compact_{}.json",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("pp_colormask_compact_{}.json", std::process::id()));
         save_colormask_set(&path, &set).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let _ = std::fs::remove_file(&path);

@@ -339,7 +339,11 @@ fn main() -> Result<()> {
         let colormask_nonzero = nonzero_bgr(&cm_panel);
         let contour_nonzero = nonzero_bgr(&ct_panel);
         let keep_nonzero = opencv::core::count_non_zero(&detector.mask.keep).unwrap_or(0);
-        let total_pixels = detector.mask.width.saturating_mul(detector.mask.height).max(1);
+        let total_pixels = detector
+            .mask
+            .width
+            .saturating_mul(detector.mask.height)
+            .max(1);
         let cut_percent = 100.0 * f64::from(total_pixels - keep_nonzero) / f64::from(total_pixels);
 
         // BGR: white / cyan / green / orange / yellow
@@ -447,7 +451,14 @@ fn main() -> Result<()> {
                 PreviewAction::Quit => break,
                 PreviewAction::Key(key) if key == i32::from(b'r') || key == i32::from(b'R') => {
                     detector.set_roi_enabled(!detector.roi.roi_enabled);
-                    println!("roi → {}", if detector.roi.roi_enabled { "on" } else { "off" });
+                    println!(
+                        "roi → {}",
+                        if detector.roi.roi_enabled {
+                            "on"
+                        } else {
+                            "off"
+                        }
+                    );
                 }
                 PreviewAction::Key(key) => {
                     handle_tune_key(&mut detector.roi, key);

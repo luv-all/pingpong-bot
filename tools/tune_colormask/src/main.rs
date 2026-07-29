@@ -236,11 +236,7 @@ fn load_samples_for_cam(cam_id: CameraId) -> Vec<Sample> {
     // 디스크에는 BGR만 — 오버레이 좌표 없음
     return stored
         .iter()
-        .map(|&bgr| Sample {
-            x: -1,
-            y: -1,
-            bgr,
-        })
+        .map(|&bgr| Sample { x: -1, y: -1, bgr })
         .collect();
 }
 
@@ -463,12 +459,7 @@ fn build_scatter(
             &mut panel,
             opencv::core::Point::new(px, py),
             3,
-            Scalar::new(
-                f64::from(bgr[0]),
-                f64::from(bgr[1]),
-                f64::from(bgr[2]),
-                0.0,
-            ),
+            Scalar::new(f64::from(bgr[0]), f64::from(bgr[1]), f64::from(bgr[2]), 0.0),
             -1,
             imgproc::LINE_8,
             0,
@@ -506,7 +497,13 @@ fn build_iso_cube(
         pts.push(iso_project_u8(ch[0], ch[1], ch[2]));
     }
     // 전체 공간 모서리도 포함해 스케일 안정화
-    for c in [[0u8, 0, 0], [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]] {
+    for c in [
+        [0u8, 0, 0],
+        [255, 0, 0],
+        [0, 255, 0],
+        [0, 0, 255],
+        [255, 255, 255],
+    ] {
         pts.push(iso_project_u8(c[0], c[1], c[2]));
     }
 
@@ -564,19 +561,18 @@ fn build_iso_cube(
             &mut panel,
             p,
             3,
-            Scalar::new(
-                f64::from(bgr[0]),
-                f64::from(bgr[1]),
-                f64::from(bgr[2]),
-                0.0,
-            ),
+            Scalar::new(f64::from(bgr[0]), f64::from(bgr[1]), f64::from(bgr[2]), 0.0),
             -1,
             imgproc::LINE_8,
             0,
         )?;
     }
 
-    draw_cam_label(&mut panel, "iso AABB", Scalar::new(200.0, 200.0, 200.0, 0.0))?;
+    draw_cam_label(
+        &mut panel,
+        "iso AABB",
+        Scalar::new(200.0, 200.0, 200.0, 0.0),
+    )?;
     return Ok(panel);
 }
 
@@ -704,7 +700,10 @@ fn main() -> Result<()> {
     );
     hint_existing(cam_id, samples.len());
     if !samples.is_empty() {
-        println!("resumed {} samples — pick more or p to re-save", samples.len());
+        println!(
+            "resumed {} samples — pick more or p to re-save",
+            samples.len()
+        );
     }
     println!(
         "LMB/Enter=pick  arrows|hjkl=1px  Shift+move=loupe  z=undo  c=clear  Space=freeze  s=space  p=save→{}  q=quit",

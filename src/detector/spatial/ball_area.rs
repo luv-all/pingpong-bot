@@ -3,10 +3,10 @@
 use anyhow::{Result, bail};
 use nalgebra::Vector3;
 
+use crate::Point3;
 use crate::camera::CameraParams;
 use crate::constants::{BALL_RADIUS, table};
 use crate::detector::ScorerParams;
-use crate::Point3;
 
 const AREA_MIN_SCALE: f64 = 0.5;
 const AREA_MAX_SCALE: f64 = 2.5;
@@ -77,11 +77,7 @@ mod tests {
 
     #[test]
     fn nearer_gives_larger_max_than_defaults_floor() {
-        let eye = Vector3::new(
-            table::WIDTH_X * 0.5,
-            -0.5,
-            table::SURFACE_Z + 1.2,
-        );
+        let eye = Vector3::new(table::WIDTH_X * 0.5, -0.5, table::SURFACE_Z + 1.2);
         let target = Vector3::new(
             table::WIDTH_X * 0.5,
             table::LENGTH_Y * 0.3,

@@ -27,20 +27,21 @@ pub use camera::{
     DEFAULT_STREAM_WIDTH, ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource,
     MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, OpenCvCapture, PixelPickMouse, PixelPoint,
     PreviewAction, ResolvedCam, ShowBgrResult, SimCamera, StereoCamCliArgs, StereoPairCliArgs,
-    StreamPreset, TABLE_LANDMARK_COUNT, TableLandmark, TablePnpResult, ThreadedCapture, arducam_b0332,
-    arrow_delta, calibrate_charuco, calibrate_table_pnp, destroy_window, detect_and_draw_charuco,
-    display_fit_bounds, dlt_triangulate, draw_cam_label, draw_circle_px, draw_debug_lines,
-    draw_help_lines, draw_pixel_loupe, draw_world_grid, draw_world_velocity, ensure_reproj_below,
-    ensure_reproj_ok, fit_bgr_downscale, hstack_bgr, parse_fourcc, resolve_cams, sample_at, show_bgr,
+    StreamPreset, TABLE_LANDMARK_COUNT, TableLandmark, TablePnpResult, ThreadedCapture,
+    WorldGridParams, apply_grid_key, arducam_b0332, arrow_delta, calibrate_charuco,
+    calibrate_table_pnp, destroy_window, detect_and_draw_charuco, display_fit_bounds,
+    dlt_triangulate, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines,
+    draw_pixel_loupe, draw_world_grid, draw_world_velocity, ensure_reproj_below, ensure_reproj_ok,
+    fit_bgr_downscale, hstack_bgr, parse_fourcc, resolve_cams, sample_at, show_bgr,
     table_landmark_mesh_edges, table_landmarks, triangulate_projections, triangulate_synced,
-    triangulate_views, unscale_xy, upsert_camera, apply_grid_key, WorldGridParams,
+    triangulate_views, unscale_xy, upsert_camera,
 };
 pub use defaults::{
     ControlParams, DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME,
     DEFAULT_COLORMASK_PATH, DEFAULT_DATA_DIR, EstimatorParams, ImpactParams, PhysicsParams,
     SimMotorParams, calibration_path, calibration_pending_path, camera_params_for, colormask_for,
-    colormask_path, detector_for, ensure_parent_dir, primitive_4dof, rail_frame, robot, shared_robot,
-    urdf_4dof, urdf_test,
+    colormask_path, detector_for, ensure_parent_dir, primitive_4dof, rail_frame, robot,
+    shared_robot, urdf_4dof, urdf_test,
 };
 pub use detector::{
     AppearanceChain, AppearanceLayer, Candidate, CandidateGenerator, ColorSpace, ColormaskBgr,
@@ -78,14 +79,14 @@ pub use robot::{
     SerialChain, SerialChainError, SerialJoint, UrdfGeometry, UrdfLinkVisual, UrdfLoadError,
     UrdfModel, is_feasible, required_torque,
 };
-pub use sim::{
-    BallShooterSettings, BallState, ShooterLayout, SimBallEstimator, SimRuntimeControls,
-    SimSession, SimSessionConfig, SimWorld, new_shutdown_flag,
-};
 #[cfg(feature = "gui")]
 pub use sim::{
     BallHandle, BallOnlyViewerOptions, BallVisual, RobotHandle, SceneHostOptions, SceneLayers,
     ShooterHandle, SimScene, SimSceneBuilder, SimViewerOptions, TableSceneOptions,
     build_table_scene, run_ball_only_viewer, run_scene_host, run_sim_viewer,
+};
+pub use sim::{
+    BallShooterSettings, BallState, ShooterLayout, SimBallEstimator, SimRuntimeControls,
+    SimSession, SimSessionConfig, SimWorld, new_shutdown_flag,
 };
 pub use telemetry::{Telemetry, TelemetryEvent, TracingTelemetry};
