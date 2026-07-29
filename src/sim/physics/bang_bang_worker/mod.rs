@@ -24,24 +24,13 @@ use crate::error::DomainError;
 use crate::swing;
 use crate::{Arm, Prediction};
 
-struct Request {
-    id: u64,
-    arm: Arc<Arm>,
-    predictions: Vec<Prediction>,
-    start: robot::Pose,
-}
+mod inflight;
+mod request;
+mod response;
 
-struct Response {
-    id: u64,
-    result: Result<swing::bang_bang::PlannedIntercept, DomainError>,
-}
-
-/// 진행 중인 요청 하나의 메타데이터 — 응답이 오면 이 시각 기준으로
-/// 재생 시작 지점을 보정한다.
-struct Inflight {
-    id: u64,
-    requested_at_sim_time: f64,
-}
+use self::inflight::Inflight;
+use self::request::Request;
+use self::response::Response;
 
 /// bang-bang 계획 전용 백그라운드 워커 — 요청 1개씩 순차 처리.
 pub struct BangBangWorker {

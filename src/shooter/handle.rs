@@ -3,18 +3,18 @@
 use std::sync::{Arc, Mutex};
 
 use crate::Point3;
-use crate::sim::physics::shooter::BallShooterSettings;
+use crate::shooter::Settings;
 use crate::sim::physics::world::SimWorld;
 use crate::sim::session::controls::SimRuntimeControls;
 
 /// 슈터 settings R/W (+ 선택적 월드 position read).
 #[derive(Clone)]
-pub struct ShooterHandle {
+pub struct Handle {
     controls: Arc<Mutex<SimRuntimeControls>>,
     world: Option<Arc<Mutex<SimWorld>>>,
 }
 
-impl ShooterHandle {
+impl Handle {
     pub fn new(
         controls: Arc<Mutex<SimRuntimeControls>>,
         world: Option<Arc<Mutex<SimWorld>>>,
@@ -22,11 +22,11 @@ impl ShooterHandle {
         return Self { controls, world };
     }
 
-    pub fn settings(&self) -> BallShooterSettings {
+    pub fn settings(&self) -> Settings {
         return self.controls.lock().expect("controls").shooter.clone();
     }
 
-    pub fn set_settings(&self, settings: BallShooterSettings) {
+    pub fn set_settings(&self, settings: Settings) {
         self.controls.lock().expect("controls").shooter = settings;
     }
 
@@ -58,7 +58,7 @@ mod tests {
     #[test]
     fn shooter_handle_settings_rw() {
         let controls = Arc::new(Mutex::new(SimRuntimeControls::default()));
-        let shooter = ShooterHandle::new(Arc::clone(&controls), None);
+        let shooter = Handle::new(Arc::clone(&controls), None);
         let mut s = shooter.settings();
         s.speed_mps = 9.0;
         shooter.set_settings(s.clone());

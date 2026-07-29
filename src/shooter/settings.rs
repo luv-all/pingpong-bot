@@ -1,8 +1,9 @@
-//! 반대편 볼 슈터(발사기) — 로봇(y≈0) 반대(+y)에서 공을 쏴 탁구로봇이 받는 구조.
+//! 발사 파라미터.
 
 use crate::HitPlane;
 use crate::constants::{ball, table};
 use crate::defaults;
+use crate::shooter::Layout;
 use crate::swing;
 use nalgebra::Vector3;
 use rand::Rng;
@@ -12,7 +13,9 @@ use rapier3d::prelude::{
     RigidBodyBuilder, RigidBodySet, Rotation, Vector,
 };
 
-use super::arm_bodies::{NET_HALF_THICKNESS_M, ball_collision_groups, static_collision_groups};
+use crate::sim::physics::arm_bodies::{
+    NET_HALF_THICKNESS_M, ball_collision_groups, static_collision_groups,
+};
 
 pub use crate::defaults::sim::{
     RANDOM_SHOT_HEIGHT_MAX_M, RANDOM_SHOT_HEIGHT_MIN_M, RANDOM_SHOT_LATERAL_MAX_M,
@@ -23,27 +26,9 @@ pub use crate::defaults::sim::{
     RANDOM_SHOT_TOPSPIN_MIN,
 };
 
-/// 슈터 설치 위치 (월드 좌표, Z-up).
-pub struct ShooterLayout;
-
-impl ShooterLayout {
-    /// 로봇은 y≈0, 슈터는 테이블 +y 끝(상대편).
-    pub const MOUNT_X: f64 = table::WIDTH_X * 0.5;
-    /// 마운트 기준 발사구 전방 돌출 [m] (탄도 SSOT)
-    pub const BARREL_FORWARD_M: f64 = 0.22;
-    /// 뷰어 직육면체 전체 크기 [m] (충돌 없음 — 표시 전용)
-    pub const VISUAL_SIZE_X: f64 = 0.10;
-    pub const VISUAL_SIZE_Y: f64 = 0.18;
-    pub const VISUAL_SIZE_Z: f64 = 0.14;
-    /// 슈터 마운트 y [m] — 본체는 테이블 밖, 발사구는 끝선(LENGTH_Y).
-    pub const MOUNT_Y: f64 = table::LENGTH_Y + Self::BARREL_FORWARD_M;
-    /// 슈터 마운트 기준 높이 [m] (테이블 면 → 중심). 탄도 SSOT.
-    pub const BODY_HEIGHT: f64 = 0.45;
-}
-
 /// GUI·런타임에서 조절하는 발사 파라미터.
 #[derive(Debug, Clone, PartialEq)]
-pub struct BallShooterSettings {
+pub struct Settings {
     /// 초기 속도 크기 [m/s]
     pub speed_mps: f64,
     /// yaw [deg] — Z축 기준 좌우 조준 (0=로봇 정면, +x=우측)
@@ -52,7 +37,7 @@ pub struct BallShooterSettings {
     pub pitch_deg: f64,
     /// roll [deg] — 발사축 기준 롤 (스핀 축·발사구 위치 회전)
     pub roll_deg: f64,
-    /// 마운트 월드 오프셋 [m] — 기본 설치점(`ShooterLayout::MOUNT_*`) 기준
+    /// 마운트 월드 오프셋 [m] — 기본 설치점(`Layout::MOUNT_*`) 기준
     pub pos_offset_x_m: f64,
     pub pos_offset_y_m: f64,
     pub pos_offset_z_m: f64,
@@ -68,13 +53,13 @@ pub struct BallShooterSettings {
     pub drill_spin_rad_s: f64,
 }
 
-impl BallShooterSettings {
+impl Settings {
     /// 슈터 마운트 기준점 (월드) — 탄도·오프셋의 원점.
     pub fn mount_position(&self) -> Vector {
         return Vector::new(
-            (ShooterLayout::MOUNT_X + self.pos_offset_x_m) as f32,
-            (ShooterLayout::MOUNT_Y + self.pos_offset_y_m) as f32,
-            (table::SURFACE_Z + ShooterLayout::BODY_HEIGHT * 0.5 + self.pos_offset_z_m) as f32,
+            (Layout::MOUNT_X + self.pos_offset_x_m) as f32,
+            (Layout::MOUNT_Y + self.pos_offset_y_m) as f32,
+            (table::SURFACE_Z + Layout::BODY_HEIGHT * 0.5 + self.pos_offset_z_m) as f32,
         );
     }
 
@@ -120,7 +105,7 @@ impl BallShooterSettings {
     /// 발사구 위치 — 슈터 로컬 오프셋을 월드로 변환 (탄도 SSOT).
     pub fn muzzle_position(&self) -> Vector {
         let (forward, right, up) = self.local_basis();
-        let local = forward * (ShooterLayout::BARREL_FORWARD_M as f32)
+        let local = forward * (Layout::BARREL_FORWARD_M as f32)
             + up * self.height_offset_m as f32
             + right * self.lateral_offset_m as f32;
         return self.mount_position() + local;
@@ -129,7 +114,7 @@ impl BallShooterSettings {
     /// 뷰어 직육면체 중심 — 발사구가 전면에 오도록 조준축 뒤로 반 길이.
     pub fn visual_position(&self) -> Vector {
         let (forward, _, _) = self.local_basis();
-        let half_depth = (ShooterLayout::VISUAL_SIZE_Y * 0.5) as f32;
+        let half_depth = (Layout::VISUAL_SIZE_Y * 0.5) as f32;
         return self.muzzle_position() - forward * half_depth;
     }
 
@@ -155,10 +140,7 @@ impl BallShooterSettings {
     /// 두 샷이 진짜로 다른 궤적(다른 각도)이 된다 — `lateral_offset_m`만
     /// 바꾸는 평행이동과 달리.
     pub(crate) fn yaw_range_for_lateral_deg(lateral_offset_m: f64) -> (f64, f64) {
-        return Self::yaw_range_for_mount_deg(
-            ShooterLayout::MOUNT_X + lateral_offset_m,
-            ShooterLayout::MOUNT_Y,
-        );
+        return Self::yaw_range_for_mount_deg(Layout::MOUNT_X + lateral_offset_m, Layout::MOUNT_Y);
     }
 
     /// 마운트 (x,y)에서 로봇쪽 테이블 padding 안쪽을 조준하는 yaw 범위 [deg].
@@ -178,8 +160,8 @@ impl BallShooterSettings {
     /// 접수·리치 회귀 테스트용 — 높이·스핀·pitch/roll은 호출 시점 값을 유지한다.
     pub fn randomized_aim(&self, rng: &mut impl Rng) -> Self {
         let lateral_offset_m = rng.gen_range(RANDOM_SHOT_LATERAL_MIN_M..=RANDOM_SHOT_LATERAL_MAX_M);
-        let mount_x = ShooterLayout::MOUNT_X + self.pos_offset_x_m + lateral_offset_m;
-        let mount_y = ShooterLayout::MOUNT_Y + self.pos_offset_y_m;
+        let mount_x = Layout::MOUNT_X + self.pos_offset_x_m + lateral_offset_m;
+        let mount_y = Layout::MOUNT_Y + self.pos_offset_y_m;
         let (yaw_min, yaw_max) = Self::yaw_range_for_mount_deg(mount_x, mount_y);
         let yaw_deg = rng.gen_range(yaw_min..=yaw_max);
         let speed_mps = rng.gen_range(RANDOM_SHOT_SPEED_MIN_MPS..=RANDOM_SHOT_SPEED_MAX_MPS);
@@ -285,7 +267,7 @@ fn apply_aero_force(body: &mut rapier3d::prelude::RigidBody, physics: &crate::Ph
 }
 
 /// 테이블+네트+공만으로 수신 탄도의 네트 접촉 여부 (팔/라켓 없음).
-fn contacts_incoming_rapier_net(settings: &BallShooterSettings) -> bool {
+fn contacts_incoming_rapier_net(settings: &Settings) -> bool {
     let physics = defaults::PhysicsParams::default();
     let mut bodies = RigidBodySet::new();
     let mut colliders = ColliderSet::new();
@@ -336,7 +318,7 @@ fn contacts_incoming_rapier_net(settings: &BallShooterSettings) -> bool {
     let net_handle = bodies.insert(net_body);
     let net_collider = colliders.insert_with_parent(
         // 본 시뮬과 동일: soft 실체 네트 (관통 없음).
-        super::arm_bodies::net_collider_builder(&physics).build(),
+        crate::sim::physics::arm_bodies::net_collider_builder(&physics).build(),
         net_handle,
         &mut bodies,
     );
@@ -412,24 +394,6 @@ fn contacts_incoming_rapier_net(settings: &BallShooterSettings) -> bool {
     return false;
 }
 
-/// 공 비행 상태.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BallState {
-    /// 슈터 발사구에 고정 대기
-    Parked,
-    /// 비행 중
-    InFlight,
-}
-
-impl std::fmt::Display for BallState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return f.write_str(match self {
-            Self::Parked => "parked",
-            Self::InFlight => "in flight",
-        });
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,7 +401,7 @@ mod tests {
 
     #[test]
     fn visual_body_sits_outside_table_end() {
-        let s = BallShooterSettings::default();
+        let s = Settings::default();
         let visual = s.visual_position();
         // 본체 중심은 테이블 끝 밖(+y).
         assert!(
@@ -456,9 +420,9 @@ mod tests {
 
     #[test]
     fn visual_front_face_matches_muzzle() {
-        let s = BallShooterSettings::default();
+        let s = Settings::default();
         let (forward, _, _) = s.local_basis();
-        let front = s.visual_position() + forward * (ShooterLayout::VISUAL_SIZE_Y * 0.5) as f32;
+        let front = s.visual_position() + forward * (Layout::VISUAL_SIZE_Y * 0.5) as f32;
         let muzzle = s.muzzle_position();
         assert!(
             (front - muzzle).length_squared() < 1e-10,
@@ -468,7 +432,7 @@ mod tests {
 
     #[test]
     fn default_aims_toward_robot_with_slight_drop() {
-        let s = BallShooterSettings::default();
+        let s = Settings::default();
         let dir = s.aim_direction();
         assert!(dir.y < 0.0);
         assert!(dir.z < 0.0);
@@ -477,7 +441,7 @@ mod tests {
 
     #[test]
     fn yaw_deflects_toward_plus_x() {
-        let mut s = BallShooterSettings::default();
+        let mut s = Settings::default();
         s.yaw_deg = 10.0;
         s.pitch_deg = 0.0;
         let dir = s.aim_direction();
@@ -487,7 +451,7 @@ mod tests {
 
     #[test]
     fn launch_velocity_matches_speed_and_aim() {
-        let s = BallShooterSettings {
+        let s = Settings {
             speed_mps: 10.0,
             ..Default::default()
         };
@@ -498,7 +462,7 @@ mod tests {
 
     #[test]
     fn topspin_is_around_local_right() {
-        let s = BallShooterSettings {
+        let s = Settings {
             topspin_rad_s: 30.0,
             ..Default::default()
         };
@@ -511,9 +475,9 @@ mod tests {
         // 발사 위치가 오른쪽(+x)으로 치우칠수록: 가까운 오른쪽 padding 가장자리는
         // 거의 정면(yaw_max가 0에 가까워짐)이고, 먼 왼쪽 padding 가장자리는 더
         // 비스듬한 각도(yaw_min이 더 음수)가 필요하다. 왼쪽으로 치우치면 반대.
-        let (left_min, left_max) = BallShooterSettings::yaw_range_for_lateral_deg(-0.5);
-        let (center_min, center_max) = BallShooterSettings::yaw_range_for_lateral_deg(0.0);
-        let (right_min, right_max) = BallShooterSettings::yaw_range_for_lateral_deg(0.5);
+        let (left_min, left_max) = Settings::yaw_range_for_lateral_deg(-0.5);
+        let (center_min, center_max) = Settings::yaw_range_for_lateral_deg(0.0);
+        let (right_min, right_max) = Settings::yaw_range_for_lateral_deg(0.5);
 
         assert!(right_min < center_min && center_min < left_min);
         assert!(right_max < center_max && center_max < left_max);
@@ -523,7 +487,7 @@ mod tests {
 
     #[test]
     fn randomized_varies_aim_height_spin() {
-        let base = BallShooterSettings {
+        let base = Settings {
             pitch_deg: -7.0,
             roll_deg: 12.0,
             height_offset_m: 0.05,
@@ -557,8 +521,7 @@ mod tests {
                 (RANDOM_SHOT_PITCH_MIN_DEG..=RANDOM_SHOT_PITCH_MAX_DEG).contains(&shot.pitch_deg)
             );
             assert!((RANDOM_SHOT_ROLL_MIN_DEG..=RANDOM_SHOT_ROLL_MAX_DEG).contains(&shot.roll_deg));
-            let (yaw_min, yaw_max) =
-                BallShooterSettings::yaw_range_for_lateral_deg(shot.lateral_offset_m);
+            let (yaw_min, yaw_max) = Settings::yaw_range_for_lateral_deg(shot.lateral_offset_m);
             assert!(shot.yaw_deg >= yaw_min - 1e-9 && shot.yaw_deg <= yaw_max + 1e-9);
 
             assert_eq!(shot.pos_offset_x_m, base.pos_offset_x_m);
@@ -578,7 +541,7 @@ mod tests {
 
     #[test]
     fn sample_without_gate_often_clips_net_but_randomized_does_not() {
-        let base = BallShooterSettings::default();
+        let base = Settings::default();
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let mut raw_clips = 0;
         for _ in 0..80 {
@@ -608,7 +571,7 @@ mod tests {
 
     #[test]
     fn default_shot_clears_rapier_net() {
-        let shot = BallShooterSettings::default();
+        let shot = Settings::default();
         assert!(shot.clears_incoming_net_gate(), "default ballistics");
         assert!(shot.clears_incoming_rapier_net(), "default rapier net");
     }

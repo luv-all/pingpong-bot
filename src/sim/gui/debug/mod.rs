@@ -1,7 +1,11 @@
-//! 디버그 오버레이 토글·월드 스냅샷.
+//! 디버그 오버레이·스냅샷.
 
+mod commit_phase;
+mod obb;
 pub mod overlays;
 pub mod snap;
+mod snapshot;
 
+pub use commit_phase::CommitPhase;
 pub use overlays::DebugOverlays;
-pub use snap::{CommitPhase, SimDebugSnapshot};
+pub use snapshot::SimDebugSnapshot;

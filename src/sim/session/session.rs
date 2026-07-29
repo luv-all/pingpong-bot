@@ -1,6 +1,5 @@
-//! sim 세션 — 물리 스레드와 공유 월드.
+//! Rapier 디지털 트윈 세션.
 
-use crate::camera;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -8,64 +7,14 @@ use std::time::{Duration, Instant};
 
 use tracing::info;
 
+use super::clock_handle::SimClockHandle;
+use super::config::SimSessionConfig;
 use super::controls::SimRuntimeControls;
+use crate::camera;
 use crate::camera::SimCamera;
 use crate::hardware::SimHardware;
 use crate::robot::Robot;
 use crate::sim::physics::world::{SimStepInput, SimWorld};
-
-/// sim 실행 설정.
-#[derive(Debug, Clone, Copy)]
-pub struct SimSessionConfig {
-    /// 물리 적분 주파수 [Hz] — 공 CCD용 (plan §9)
-    pub physics_hz: f64,
-    /// 가상 카메라 프레임률 [Hz]
-    pub frame_hz: f64,
-    /// 1.0 = 실시간, 10.0 = 10배속
-    pub time_scale: f64,
-    /// sim 가상 카메라 대수
-    pub camera_count: u8,
-}
-
-impl Default for SimSessionConfig {
-    fn default() -> Self {
-        return Self {
-            physics_hz: 1000.0,
-            frame_hz: 120.0,
-            time_scale: 1.0,
-            camera_count: 3,
-        };
-    }
-}
-
-/// sim 경과 시간을 `Instant`로 노출하는 시계.
-pub struct SimClockHandle {
-    /// wall-clock 기준 원점
-    origin: Instant,
-    /// 공유 sim 시간 [s]
-    sim_time: Arc<Mutex<f64>>,
-}
-
-impl SimClockHandle {
-    /// sim 시간 뮤텍스로 핸들을 만든다.
-    fn new(sim_time: Arc<Mutex<f64>>) -> Self {
-        return Self {
-            origin: Instant::now(),
-            sim_time,
-        };
-    }
-
-    /// 현재 sim time [s].
-    pub fn sim_time_secs(&self) -> f64 {
-        return *self.sim_time.lock().expect("sim 시간");
-    }
-
-    /// sim 경과를 wall `Instant`로 노출 (관측 타임스탬프용).
-    pub fn now(&self) -> Instant {
-        let secs = *self.sim_time.lock().expect("sim 시간");
-        return self.origin + Duration::from_secs_f64(secs);
-    }
-}
 
 /// Rapier 디지털 트윈 세션.
 pub struct SimSession {

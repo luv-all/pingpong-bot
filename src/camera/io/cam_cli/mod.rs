@@ -21,8 +21,8 @@ pub use stereo_pair_cli_args::StereoPairCliArgs;
 pub use stream_preset::StreamPreset;
 
 pub use crate::defaults::calib::{
-    DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
-    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH,
+    DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT,
+    DEFAULT_STREAM_WIDTH,
 };
 
 pub(crate) fn parse_fourcc(value: &str) -> Result<[u8; 4], String> {

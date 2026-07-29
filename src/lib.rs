@@ -13,11 +13,13 @@ pub mod defaults;
 pub mod detector;
 pub mod error;
 pub mod estimator;
+pub mod eval;
 pub mod hardware;
 pub mod logging;
 pub mod pipeline;
 pub mod planner;
 pub mod robot;
+pub mod shooter;
 pub mod sim;
 pub mod swing;
 pub mod telemetry;
@@ -61,12 +63,8 @@ pub use robot::{
 };
 #[cfg(feature = "gui")]
 pub use sim::{
-    BallHandle, BallOnlyViewerOptions, BallVisual, RobotHandle, SceneHost, SceneHostOptions,
-    SceneLayers, SceneUiDraw, SceneUiHook, ShooterHandle, SimScene, SimSceneBuilder, SimViewer,
-    SimViewerOptions, TableSceneOptions,
+    BallOnlyViewerOptions, SceneHost, SceneHostOptions, SceneLayers, SceneUiDraw, SceneUiHook,
+    SimScene, SimSceneBuilder, SimViewer, SimViewerOptions, TableSceneOptions,
 };
-pub use sim::{
-    BallShooterSettings, BallState, EvalProtocol, ShooterLayout, SimBallEstimator,
-    SimRuntimeControls, SimSession, SimSessionConfig, SimWorld,
-};
+pub use sim::{SimBallEstimator, SimRuntimeControls, SimSession, SimSessionConfig, SimWorld};
 pub use telemetry::{Telemetry, TelemetryEvent, TracingTelemetry};

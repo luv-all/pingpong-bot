@@ -1,4 +1,4 @@
-//! SimScene 자식 — stdin JSON 한 줄 → BallHandle.
+//! SimScene 자식 — stdin JSON 한 줄 → ball::Handle.
 
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use anyhow::Result;
-use pingpong_bot::{BallHandle, Point3, SimRuntimeControls, SimScene};
+use pingpong_bot::ball;
+use pingpong_bot::{Point3, SimRuntimeControls, SimScene};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -38,7 +39,7 @@ pub fn run_sim_child() -> Result<()> {
     return Ok(());
 }
 
-fn stdin_loop(ball: BallHandle, stop: Arc<AtomicBool>) {
+fn stdin_loop(ball: ball::Handle, stop: Arc<AtomicBool>) {
     let stdin = std::io::stdin();
     let mut lines = BufReader::new(stdin.lock()).lines();
     while !stop.load(Ordering::Relaxed) {

@@ -10,11 +10,11 @@ use crate::swing;
 ///
 /// jog 툴은 IK/궤적을 **밖에서** 만든 뒤 [`Self::play`] / [`Self::set_pose`]만 호출한다.
 #[derive(Clone)]
-pub struct RobotHandle {
+pub struct Handle {
     world: Arc<Mutex<SimWorld>>,
 }
 
-impl RobotHandle {
+impl Handle {
     pub fn new(world: Arc<Mutex<SimWorld>>) -> Self {
         return Self { world };
     }
@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn robot_handle_set_pose_and_play_busy() {
         let world = test_world();
-        let robot = RobotHandle::new(Arc::clone(&world));
+        let robot = Handle::new(Arc::clone(&world));
         let pose = robot.pose();
         assert!(!robot.is_busy());
 
@@ -127,7 +127,7 @@ mod tests {
             w.set_kinematic_robot(true);
             w.robot_mut().set_auto_return_to_center(false);
         }
-        let robot = RobotHandle::new(Arc::clone(&world));
+        let robot = Handle::new(Arc::clone(&world));
         let start = robot.pose();
         let mut end = start.joints.clone();
         end.values[0] += 15f64.to_radians();

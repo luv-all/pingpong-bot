@@ -10,7 +10,7 @@ use pingpong_bot::ball;
 use pingpong_bot::constants::{self, table};
 use pingpong_bot::defaults;
 use pingpong_bot::sim::SimWorld;
-use pingpong_bot::sim::eval_protocol::{EvalMode, EvalProtocol};
+use pingpong_bot::sim::eval_protocol::{Mode, Protocol};
 
 fn v3(v: rapier3d::prelude::Vector) -> Vector3<f64> {
     return Vector3::new(f64::from(v.x), f64::from(v.y), f64::from(v.z));
@@ -172,13 +172,13 @@ fn hit_plane_prediction_matches_simulated_ball() {
     let mut worst = 0.0_f64;
     let mut net_clipped = 0;
     let mut report = Vec::new();
-    for (index, (zone, index_in_zone)) in EvalProtocol::shot_schedule(EvalMode::Block)
+    for (index, (zone, index_in_zone)) in Protocol::shot_schedule(Mode::Block)
         .into_iter()
         .enumerate()
         .filter(|(i, _)| i % 4 == 0)
     {
-        let settings = EvalProtocol::settings_for_zone_shot(
-            &pingpong_bot::sim::EvalLaunchParams::default(),
+        let settings = Protocol::settings_for_zone_shot(
+            &pingpong_bot::eval::LaunchParams::default(),
             zone,
             index_in_zone,
         );

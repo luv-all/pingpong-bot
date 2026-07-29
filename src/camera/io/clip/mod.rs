@@ -6,6 +6,7 @@ mod stereo_clip;
 pub use resolved_stereo_offline::ResolvedStereoOffline;
 pub(crate) use resolved_stereo_offline::{resolve_mono_offline, resolve_stereo_offline};
 pub use stereo_clip::StereoClip;
+#[cfg(test)]
 pub(crate) use stereo_clip::resolve_stereo_clip;
 
 /// `record-stereo` 오프라인 클립 루트.

@@ -3,9 +3,10 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
+use pingpong_bot::ball;
 use pingpong_bot::robot;
 use pingpong_bot::swing;
-use pingpong_bot::{Arm, BallHandle, Hardware, Point3, RealHardware, RobotHandle};
+use pingpong_bot::{Arm, Hardware, Point3, RealHardware};
 
 use crate::motion::{self, MotionDraft, MotionKind};
 
@@ -51,8 +52,8 @@ impl Phase {
 pub struct JogApp {
     pub arm: Arc<Arm>,
     pub hardware: Arc<Mutex<RealHardware>>,
-    pub robot: Option<RobotHandle>,
-    pub ball: Option<BallHandle>,
+    pub robot: Option<robot::Handle>,
+    pub ball: Option<ball::Handle>,
     pub dry_run: bool,
     pub phase: Phase,
     /// Sync 시점 포즈 — 미리보기 시작점·Discard 복원.
@@ -82,11 +83,11 @@ impl JogApp {
         };
     }
 
-    pub fn attach_robot(&mut self, robot: RobotHandle) {
+    pub fn attach_robot(&mut self, robot: robot::Handle) {
         self.robot = Some(robot);
     }
 
-    pub fn attach_ball(&mut self, ball: BallHandle) {
+    pub fn attach_ball(&mut self, ball: ball::Handle) {
         self.ball = Some(ball);
     }
 
@@ -110,7 +111,7 @@ impl JogApp {
         }
     }
 
-    fn robot(&self) -> Result<&RobotHandle> {
+    fn robot(&self) -> Result<&robot::Handle> {
         return self
             .robot
             .as_ref()

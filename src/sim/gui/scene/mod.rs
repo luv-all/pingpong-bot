@@ -7,8 +7,7 @@
 
 use kiss3d::prelude::*;
 
-use crate::Point3;
-use crate::constants::{ball, table};
+use crate::constants::table;
 
 /// 화면 밖 숨김 위치 (마커·공 공통 패턴).
 pub const HIDDEN: Vec3 = Vec3::new(0.0, 0.0, -10.0);
@@ -118,116 +117,6 @@ pub(crate) fn build_table_scene(scene: &mut SceneNode3d, opts: &TableSceneOption
             Vec3::Z,
             Color::new(0.25, 0.45, 1.0, 1.0),
         );
-    }
-}
-
-/// 시합용 주황 공 비주얼 (`ball::RADIUS`).
-pub struct BallVisual {
-    node: SceneNode3d,
-    base_color: Color,
-}
-
-impl BallVisual {
-    /// 시합용 주황 톤으로 공을 씬에 추가한다 (초기 위치: [`HIDDEN`]).
-    pub fn spawn(scene: &mut SceneNode3d) -> Self {
-        let base_color = Color::new(0.92, 0.48, 0.12, 1.0);
-        return Self::spawn_with_color(scene, base_color);
-    }
-
-    /// 도달점 미리보기용 반투명 홀로그램 공.
-    pub fn spawn_ghost(scene: &mut SceneNode3d) -> Self {
-        let base_color = Color::new(0.35, 0.95, 1.0, 0.38);
-        return Self::spawn_with_color(scene, base_color);
-    }
-
-    fn spawn_with_color(scene: &mut SceneNode3d, base_color: Color) -> Self {
-        let node = scene
-            .add_sphere(ball::RADIUS as f32)
-            .set_color(base_color)
-            .set_position(HIDDEN);
-        return Self { node, base_color };
-    }
-
-    /// 월드 좌표 [m]로 공을 옮긴다.
-    pub fn set_world_position(&mut self, p: Point3) {
-        self.node
-            .set_visible(true)
-            .set_position(Vec3::new(p.x as f32, p.y as f32, p.z as f32));
-    }
-
-    /// 화면 밖으로 숨긴다.
-    pub fn hide(&mut self) {
-        self.node.set_visible(false).set_position(HIDDEN);
-    }
-
-    /// 기본(주황) 색.
-    pub fn base_color(&self) -> Color {
-        return self.base_color;
-    }
-
-    /// 임시 색 변경 (예: net-gate 실패 톤). [`restore_color`]로 되돌린다.
-    pub fn set_color(&mut self, color: Color) {
-        self.node.set_color(color);
-    }
-
-    /// [`base_color`]로 복구.
-    pub fn restore_color(&mut self) {
-        self.node.set_color(self.base_color);
-    }
-
-    /// kiss3d 노드 (고급 동기화용).
-    pub fn node_mut(&mut self) -> &mut SceneNode3d {
-        return &mut self.node;
-    }
-}
-
-/// 공 속도 벡터 화살표 (jog 홀로그램 공 오버레이).
-pub struct BallVelocityVisual {
-    shaft: SceneNode3d,
-    tip: SceneNode3d,
-}
-
-impl BallVelocityVisual {
-    pub fn spawn(scene: &mut SceneNode3d) -> Self {
-        let color = Color::new(0.35, 0.95, 1.0, 0.95);
-        let shaft = scene
-            .add_cylinder(0.006, 0.2)
-            .set_color(color)
-            .set_position(HIDDEN);
-        let tip = scene
-            .add_cone(0.014, 0.045)
-            .set_color(color)
-            .set_position(HIDDEN);
-        return Self { shaft, tip };
-    }
-
-    /// 시작점 + 속도 벡터를 월드에 표시.
-    pub fn set_from_velocity(&mut self, origin: Point3, velocity: [f64; 3]) {
-        let v = Vec3::new(velocity[0] as f32, velocity[1] as f32, velocity[2] as f32);
-        let speed = v.length();
-        if speed < 1e-4 {
-            self.hide();
-            return;
-        }
-        let dir = v / speed;
-        let shaft_len = (speed * 0.06).clamp(0.08, 0.35);
-        let tip_len = 0.045_f32;
-        let origin = Vec3::new(origin.x as f32, origin.y as f32, origin.z as f32);
-        let rot = Quat::from_rotation_arc(Vec3::Y, dir);
-        self.shaft
-            .set_visible(true)
-            .set_local_scale(1.0, shaft_len / 0.2, 1.0)
-            .set_position(origin + dir * (shaft_len * 0.5))
-            .set_rotation(rot);
-        self.tip
-            .set_visible(true)
-            .set_position(origin + dir * (shaft_len + tip_len * 0.5))
-            .set_rotation(rot);
-    }
-
-    pub fn hide(&mut self) {
-        self.shaft.set_visible(false).set_position(HIDDEN);
-        self.tip.set_visible(false).set_position(HIDDEN);
     }
 }
 

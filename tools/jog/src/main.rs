@@ -1,6 +1,6 @@
 //! 인터랙티브 조그 GUI — sim 미리보기 후 Sync/Apply로 실기 전송.
 //!
-//! planner(`plan_swing`)는 쓰지 않는다. 목표 pose → quintic → `RobotHandle::play` /
+//! planner(`plan_swing`)는 쓰지 않는다. 목표 pose → quintic → `robot::Handle::play` /
 //! Apply 시 `Hardware::command`.
 
 mod motion;

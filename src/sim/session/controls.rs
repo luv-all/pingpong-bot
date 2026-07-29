@@ -3,13 +3,13 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crate::sim::physics::shooter::BallShooterSettings;
+use crate::shooter::Settings;
 
 /// GUI에서 바꾸고 물리 스레드가 읽는 sim 런타임 상태.
 #[derive(Debug)]
 pub struct SimRuntimeControls {
     /// 발사 파라미터 (GUI 슬라이더)
-    pub shooter: BallShooterSettings,
+    pub shooter: Settings,
     /// sim 시간 배율 (1.0 = 실시간)
     pub time_scale: f64,
     /// true면 commit 시 quintic 대신 순수 토크 bang-bang을 계획한다 - GUI
@@ -24,7 +24,7 @@ pub struct SimRuntimeControls {
 impl Default for SimRuntimeControls {
     fn default() -> Self {
         return Self {
-            shooter: BallShooterSettings::default(),
+            shooter: Settings::default(),
             time_scale: 1.0,
             use_bang_bang_swing: false,
             shoot_requested: false,

@@ -1,6 +1,6 @@
 //! 시뮬·랜덤 샷·평가 프로토콜 휴리스틱.
 
-use crate::sim::physics::shooter::BallShooterSettings;
+use crate::shooter::Settings;
 
 /// 랜덤 샷: 네트 통과 재시도 상한.
 pub const RANDOM_SHOT_NET_GATE_MAX_TRIES: usize = 48;
@@ -31,7 +31,7 @@ pub const EVAL_MAX_SCORE: u32 = (EVAL_TOTAL_SHOTS * 3) as u32;
 pub const EVAL_PASS_SCORE_EXCLUSIVE: u32 = 45;
 pub const EVAL_RACKET_REHIT_MIN_STEPS: u32 = 30;
 
-impl Default for BallShooterSettings {
+impl Default for Settings {
     fn default() -> Self {
         // speed 6.0: 시중 슈터 초보~중급 피딩 하단.
         // height 0.24 / pitch −1.0: Rapier·ballistics 네트 통과 최소값.

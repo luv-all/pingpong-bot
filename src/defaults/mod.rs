@@ -20,7 +20,7 @@
 //! | [`hardware`] | DynamixelConfig / RailConfig |
 //! | [`dxl_limits`] | derate·속도·토크 배열 |
 //! | [`planner`] | InterceptWindow + bang-bang consts |
-//! | [`sim`] | BallShooterSettings + 랜덤/eval consts |
+//! | [`sim`] | Settings + 랜덤/eval consts |
 //! | [`sim_motor`] | `SimMotorParams` |
 //!
 //! 활성 로봇을 바꾸려면 [`robot`] 본문만 고친다.

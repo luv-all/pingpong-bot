@@ -10,13 +10,13 @@ use crate::sim::physics::world::SimWorld;
 /// - **External**: `set_position`으로 직접 지정 (verify-stereo).
 /// - **World**: external이 `None`이면 `SimWorld` 공 위치를 읽는다 (메인 sim).
 #[derive(Clone)]
-pub struct BallHandle {
+pub struct Handle {
     external: Arc<Mutex<Option<Point3>>>,
     external_velocity: Arc<Mutex<Option<[f64; 3]>>>,
     world: Option<Arc<Mutex<SimWorld>>>,
 }
 
-impl BallHandle {
+impl Handle {
     /// 외부 write 전용 (물리 월드 없음). 초기 위치 `None` = 숨김.
     pub fn new() -> Self {
         return Self {
@@ -89,7 +89,7 @@ impl BallHandle {
     }
 }
 
-impl Default for BallHandle {
+impl Default for Handle {
     fn default() -> Self {
         return Self::new();
     }
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn ball_handle_external_roundtrip() {
-        let ball = BallHandle::new();
+        let ball = Handle::new();
         assert!(ball.position().is_none());
         let p = Point3::new(0.5, 0.7, 0.8);
         ball.set_position(Some(p));

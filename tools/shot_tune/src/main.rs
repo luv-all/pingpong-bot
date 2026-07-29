@@ -20,7 +20,8 @@
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use pingpong_bot::robot;
-use pingpong_bot::sim::{BallShooterSettings, SimWorld};
+use pingpong_bot::shooter::Settings;
+use pingpong_bot::sim::SimWorld;
 use pingpong_bot::swing;
 use pingpong_bot::{Arm, MountPreset, Robot, RobotBuilder, defaults};
 use rand::SeedableRng;
@@ -81,12 +82,12 @@ struct Args {
     #[arg(long, default_value_t = 1)]
     mount_height_steps: usize,
 
-    /// 후보마다 돌릴 랜덤 샷(좌우 위치·yaw) 개수 — `BallShooterSettings::randomized`
+    /// 후보마다 돌릴 랜덤 샷(좌우 위치·yaw) 개수 — `Settings::randomized`
     /// 와 같은 분포. 0이면 정면(lateral=0, yaw=0) 한 발만 본다.
     #[arg(long, default_value_t = 12)]
     shots: usize,
 
-    /// 속도를 스윕값으로 덮어쓰지 않고 `BallShooterSettings::randomized`가 뽑은
+    /// 속도를 스윕값으로 덮어쓰지 않고 `Settings::randomized`가 뽑은
     /// 값(= `RANDOM_SHOT_SPEED_MIN/MAX` 상수)을 그대로 쓴다 — 실제 게임처럼
     /// 매 샷 속도가 달라지는 조건에서 최종 기본값을 검증할 때.
     #[arg(long)]
@@ -209,11 +210,7 @@ struct ShotOutcome {
     best_peak_ratio: f64,
 }
 
-fn run_shot(
-    robot: &Robot,
-    settings: &BallShooterSettings,
-    start_from_table_center: bool,
-) -> ShotOutcome {
+fn run_shot(robot: &Robot, settings: &Settings, start_from_table_center: bool) -> ShotOutcome {
     use pingpong_bot::constants::{BALL_RADIUS, table};
 
     let arm = &robot.arm;
@@ -297,7 +294,7 @@ fn run_shot(
         // 매 스텝(1kHz) IK를 도는 것보다 20배 빠르다.
         if step % 20 == 0
             && !outcome.contact
-            && world.ball_state == pingpong_bot::BallState::InFlight
+            && world.ball_state == pingpong_bot::ball::State::InFlight
             && swing::Planner::past_midcourt(f64::from(position.y))
         {
             let start = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
@@ -462,7 +459,7 @@ fn rest_pose_search(arm: &Arm, iterations: usize) {
 
 /// 한 발을 돌리며 commit 창에서 `plan_best_swing`이 실제로 어떤 오류로
 /// 실패하는지 그대로 출력한다 — "왜 안 되는가"를 추측 대신 확인하기 위함.
-fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
+fn explain_one(robot: &Robot, settings: &Settings) {
     use pingpong_bot::constants::table;
 
     let arm = &robot.arm;
@@ -485,7 +482,7 @@ fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
     );
     for step in 0..MAX_STEPS {
         world.step(DT, None);
-        if step % 20 != 0 || world.ball_state != pingpong_bot::BallState::InFlight {
+        if step % 20 != 0 || world.ball_state != pingpong_bot::ball::State::InFlight {
             continue;
         }
         let ball_y = f64::from(world.ball_position().y);
@@ -612,9 +609,9 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // 좌우 위치·yaw 배터리는 후보마다 **같은** 시드로 뽑아 공정 비교한다.
-    let base = BallShooterSettings::default();
+    let base = Settings::default();
     let mut rng = StdRng::seed_from_u64(args.seed);
-    let battery: Vec<BallShooterSettings> = if args.shots == 0 {
+    let battery: Vec<Settings> = if args.shots == 0 {
         vec![base.clone()]
     } else {
         (0..args.shots).map(|_| base.randomized(&mut rng)).collect()
@@ -630,11 +627,11 @@ fn main() -> Result<()> {
         let robot = resolve_robot(&args.robot, Some((args.base_y_min, args.mount_height_min)))?;
         explain_one(
             &robot,
-            &BallShooterSettings {
+            &Settings {
                 speed_mps: args.speed_min,
                 pitch_deg: args.pitch_min,
                 height_offset_m: args.height_min,
-                ..BallShooterSettings::default()
+                ..Settings::default()
             },
         );
         return Ok(());
@@ -705,7 +702,7 @@ fn main() -> Result<()> {
                         };
                         let mut ratios = Vec::with_capacity(battery.len());
                         for shot in battery {
-                            let settings = BallShooterSettings {
+                            let settings = Settings {
                                 speed_mps: if random_speed {
                                     shot.speed_mps
                                 } else {
