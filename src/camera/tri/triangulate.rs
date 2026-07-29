@@ -2,13 +2,13 @@
 
 use std::time::Instant;
 
-use crate::{BallObservation, CameraId, DomainError, ObservationError, PixelPoint, Point3};
+use crate::{CameraId, DomainError, Observation, ObservationError, PixelPoint, Point3};
 use nalgebra::{DMatrix, Matrix3x4};
 
 use crate::camera::calib::{Calibration, CameraParams};
 
 /// 관측 시계열에서 `sync_time`에 해당하는 픽셀 위치를 선형 보간한다.
-pub fn sample_at(observations: &[BallObservation], sync_time: Instant) -> Option<PixelPoint> {
+pub fn sample_at(observations: &[Observation], sync_time: Instant) -> Option<PixelPoint> {
     if observations.is_empty() {
         return None;
     }
@@ -41,7 +41,7 @@ pub fn sample_at(observations: &[BallObservation], sync_time: Instant) -> Option
 
 /// 카메라별 관측 스트림을 `sync_time`으로 정렬한 뒤 3D 위치를 복원한다.
 pub fn triangulate_synced(
-    observations_by_camera: &[(CameraId, &[BallObservation])],
+    observations_by_camera: &[(CameraId, &[Observation])],
     sync_time: Instant,
     calibration: &Calibration,
 ) -> Result<Point3, DomainError> {
@@ -133,7 +133,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::constants::table;
-    use crate::{BallObservation, CameraId, DomainError, ObservationError, PixelPoint, Point3};
+    use crate::{CameraId, DomainError, Observation, ObservationError, PixelPoint, Point3};
 
     use super::*;
     use crate::camera::Calibration;
@@ -144,8 +144,8 @@ mod tests {
         elapsed_ms: u64,
         x: f64,
         y: f64,
-    ) -> BallObservation {
-        return BallObservation {
+    ) -> Observation {
+        return Observation {
             pixel: PixelPoint::new(x, y),
             camera_id,
             timestamp: base + Duration::from_millis(elapsed_ms),
@@ -169,7 +169,7 @@ mod tests {
     fn triangulate_requires_min_cameras() {
         let calibration = Calibration::default();
         let camera_id = CameraId::new(0);
-        let series: [BallObservation; 0] = [];
+        let series: [Observation; 0] = [];
         let err = triangulate_synced(&[(camera_id, &series[..])], Instant::now(), &calibration)
             .unwrap_err();
         assert!(matches!(
@@ -226,7 +226,7 @@ mod tests {
         let calibration = Calibration::sim(3);
         let truth = Point3::new(0.7, 1.2, 1.0);
         let base = Instant::now();
-        let mut series: Vec<(CameraId, Vec<BallObservation>)> = Vec::new();
+        let mut series: Vec<(CameraId, Vec<Observation>)> = Vec::new();
         for id in [CameraId::new(0), CameraId::new(1), CameraId::new(2)] {
             let pixel = calibration
                 .params(id)
@@ -241,7 +241,7 @@ mod tests {
                 ],
             ));
         }
-        let refs: Vec<(CameraId, &[BallObservation])> =
+        let refs: Vec<(CameraId, &[Observation])> =
             series.iter().map(|(id, s)| (*id, s.as_slice())).collect();
         let mid = base + Duration::from_millis(5);
         let recovered = triangulate_synced(&refs, mid, &calibration).expect("synced DLT");

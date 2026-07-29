@@ -3,6 +3,7 @@
 //! 경연용 단일 애플리케이션 안에서 카메라·추정·로봇·시뮬레이션·계획을
 //! 기능별 모듈로 나눈다.
 
+pub mod ball;
 pub mod camera;
 pub mod constants;
 pub mod defaults;
@@ -20,9 +21,11 @@ pub mod telemetry;
 /// 월드 좌표 점 [m] — `nalgebra::Point3<f64>`.
 pub type Point3 = nalgebra::Point3<f64>;
 
+pub use ball::Observation;
+pub use ball::Observation as BallObservation;
 pub use camera::{
-    BallObservation, Calibration, CamCliArgs, CamRigConfig, CamStreamArgs, CameraId, CameraParams,
-    CameraRole, CaptureBackend, Charuco, CharucoBoardSpec, CharucoCalibReport, CharucoFrameDetect,
+    Calibration, CamCliArgs, CamRigConfig, CamStreamArgs, CameraId, CameraParams, CameraRole,
+    CaptureBackend, Charuco, CharucoBoardSpec, CharucoCalibReport, CharucoFrameDetect,
     DEFAULT_CLIPS_DIR, DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
     DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH, ExposureReadout, Frame, FrameSource, HintSource,
     ImageDirSource, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, MonoOfflineArgs, OpenCvCapture,

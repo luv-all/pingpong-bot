@@ -66,14 +66,6 @@ impl fmt::Display for CameraId {
     }
 }
 
-/// 한 프레임에서 검출한 공.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BallObservation {
-    pub pixel: PixelPoint,
-    pub camera_id: CameraId,
-    pub timestamp: Instant,
-}
-
 /// ChArUco 보정 공개 진입점.
 pub struct Charuco;
 
@@ -134,12 +126,15 @@ impl TablePnp {
 pub struct Triangulate;
 
 impl Triangulate {
-    pub fn sample_at(observations: &[BallObservation], sync_time: Instant) -> Option<PixelPoint> {
+    pub fn sample_at(
+        observations: &[crate::ball::Observation],
+        sync_time: Instant,
+    ) -> Option<PixelPoint> {
         return tri::sample_at(observations, sync_time);
     }
 
     pub fn synced(
-        observations_by_camera: &[(CameraId, &[BallObservation])],
+        observations_by_camera: &[(CameraId, &[crate::ball::Observation])],
         sync_time: Instant,
         calibration: &Calibration,
     ) -> Result<Point3, crate::DomainError> {

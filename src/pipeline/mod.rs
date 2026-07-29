@@ -14,8 +14,8 @@ use crate::camera::{CameraParams, FrameSource, HintSource};
 use crate::detector::Detector;
 use crate::planner::SwingPlanner;
 use crate::{
-    BallObservation, CameraId, DomainError, Estimator, Hardware, InterceptWindow, Prediction,
-    Robot, SwingPlanError, Telemetry, TelemetryEvent,
+    CameraId, DomainError, Estimator, Hardware, InterceptWindow, Observation, Prediction, Robot,
+    SwingPlanError, Telemetry, TelemetryEvent,
 };
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
@@ -69,7 +69,7 @@ pub fn run(
     config: PipelineConfig,
     telemetry: Arc<dyn Telemetry>,
 ) -> Result<(), PipelineError> {
-    let (observation_tx, observation_rx) = bounded::<BallObservation>(OBSERVATION_CHANNEL_CAPACITY);
+    let (observation_tx, observation_rx) = bounded::<Observation>(OBSERVATION_CHANNEL_CAPACITY);
     let predictions: Arc<ArrayQueue<Vec<Prediction>>> = Arc::new(ArrayQueue::new(1));
     let shutdown = Arc::new(AtomicBool::new(false));
     let mut handles: Vec<(PipelineThread, JoinHandle<()>)> = Vec::new();
@@ -84,7 +84,7 @@ pub fn run(
                         let _span = info_span!("detect", ?camera_id).entered();
                         if let Some(pixel) = Detector::passthrough(hint) {
                             if sender
-                                .send(BallObservation {
+                                .send(Observation {
                                     pixel,
                                     camera_id,
                                     timestamp,
@@ -113,7 +113,7 @@ pub fn run(
                         };
                         if let Some(pixel) = detector.detect(&frame) {
                             if sender
-                                .send(BallObservation {
+                                .send(Observation {
                                     pixel,
                                     camera_id,
                                     timestamp: frame.timestamp,
@@ -138,7 +138,7 @@ pub fn run(
     handles.push((
         PipelineThread::Estimation,
         thread::spawn(move || {
-            let mut series: Vec<(CameraId, Vec<BallObservation>)> = calibration
+            let mut series: Vec<(CameraId, Vec<Observation>)> = calibration
                 .cameras
                 .iter()
                 .map(|c| (c.camera_id, Vec::new()))
@@ -165,7 +165,7 @@ pub fn run(
                     continue;
                 };
 
-                let refs: Vec<(CameraId, &[BallObservation])> = series
+                let refs: Vec<(CameraId, &[Observation])> = series
                     .iter()
                     .filter(|(_, b)| !b.is_empty())
                     .map(|(id, b)| (*id, b.as_slice()))
