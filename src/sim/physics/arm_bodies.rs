@@ -266,6 +266,21 @@ impl ArmMultibody {
 
     /// 목표 관절각으로 모터 위치 제어. effort 상한은 spawn 시 τ_max.
     pub fn set_motor_targets(&self, joints: &mut MultibodyJointSet, targets: &Joints) {
+        self.set_motor_targets_with_torque_residual(joints, targets, &[]);
+    }
+
+    /// 목표 관절각 위치제어에 signed residual torque를 더한다.
+    ///
+    /// Rapier 위치 모터는 `τ = k(q_target-q)-d·q̇`이므로
+    /// `q_target += τ_residual/k`는 포화 전 정확히 `τ_residual`을 더하는 것과
+    /// 같다. 최종 출력은 기존 `motor_max_force`에서 계속 잘리므로 학습기가
+    /// 실제 관절 토크 한계를 우회할 수 없다.
+    pub fn set_motor_targets_with_torque_residual(
+        &self,
+        joints: &mut MultibodyJointSet,
+        targets: &Joints,
+        residual_torques: &[f64],
+    ) {
         let n = self.joint_handles.len().min(targets.values.len());
         let (stiffness, damping) = motor_gains();
         for i in 0..n {
@@ -277,7 +292,9 @@ impl ArmMultibody {
                 continue;
             };
             if let Some(revolute) = link.joint.data.as_revolute_mut() {
-                revolute.set_motor_position(targets.values[i] as f32, stiffness, damping);
+                let residual = residual_torques.get(i).copied().unwrap_or(0.0);
+                let target = targets.values[i] + residual / f64::from(stiffness);
+                revolute.set_motor_position(target as f32, stiffness, damping);
             }
         }
     }

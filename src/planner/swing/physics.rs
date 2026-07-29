@@ -8,7 +8,10 @@ use crate::defaults::planner::{
     RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
-use crate::planner::impact::{rally_return_velocity, required_racket_velocity};
+use crate::planner::impact::{
+    SwingResidual, rally_return_velocity, rally_return_velocity_with_residual,
+    required_racket_velocity,
+};
 use crate::robot::Arm;
 use crate::{Joints, Prediction, RailMotion, RobotPose, SwingTrajectory};
 
@@ -144,10 +147,11 @@ fn best_impact_candidate(
     arm: &Arm,
     prediction: &Prediction,
     start: &RobotPose,
+    residual: SwingResidual,
 ) -> Result<ImpactCandidate, SwingPlanError> {
     let impact_position = prediction.impact_position;
     let v_in = prediction.incoming_velocity;
-    let v_out = rally_return_velocity(impact_position, v_in);
+    let v_out = rally_return_velocity_with_residual(impact_position, v_in, residual);
     let desired_normal = (v_out - v_in).normalize();
 
     let base_hint = arm.with_wrist_open(&start.joints, Arm::wrist_open_for_return(v_out - v_in))?;
@@ -233,8 +237,17 @@ pub(crate) fn solve_impact_target(
     prediction: &Prediction,
     start: &RobotPose,
 ) -> Result<ImpactTarget, DomainError> {
-    let candidate =
-        best_impact_candidate(arm, prediction, start).map_err(DomainError::InfeasibleSwing)?;
+    return solve_impact_target_with_residual(arm, prediction, start, SwingResidual::default());
+}
+
+fn solve_impact_target_with_residual(
+    arm: &Arm,
+    prediction: &Prediction,
+    start: &RobotPose,
+    residual: SwingResidual,
+) -> Result<ImpactTarget, DomainError> {
+    let candidate = best_impact_candidate(arm, prediction, start, residual)
+        .map_err(DomainError::InfeasibleSwing)?;
 
     if candidate.peak_joint_speed_ratio > NEAR_SINGULARITY_SPEED_RATIO {
         let (joint_index, required_speed) = candidate
@@ -304,7 +317,8 @@ pub fn swing_feasibility(
     prediction: &Prediction,
     start: &RobotPose,
 ) -> Option<SwingFeasibility> {
-    let candidate = best_impact_candidate(arm, prediction, start).ok()?;
+    let candidate =
+        best_impact_candidate(arm, prediction, start, SwingResidual::default()).ok()?;
     let peak_rail_speed_ratio = arm
         .rail
         .as_ref()
@@ -321,6 +335,16 @@ pub fn plan_swing(
     prediction: Prediction,
     start: &RobotPose,
 ) -> Result<SwingTrajectory, DomainError> {
+    return plan_swing_with_residual(arm, prediction, start, SwingResidual::default());
+}
+
+/// [`plan_swing`]에 학습된 저차원 리턴 보정값을 적용한다.
+pub fn plan_swing_with_residual(
+    arm: &Arm,
+    prediction: Prediction,
+    start: &RobotPose,
+    residual: SwingResidual,
+) -> Result<SwingTrajectory, DomainError> {
     let time_to_impact = prediction.time_to_impact_secs;
     if time_to_impact < defaults::ControlParams::default().min_swing_secs {
         return Err(DomainError::InfeasibleSwing(
@@ -331,7 +355,7 @@ pub fn plan_swing(
         ));
     }
 
-    let target = solve_impact_target(arm, &prediction, start)?;
+    let target = solve_impact_target_with_residual(arm, &prediction, start, residual)?;
 
     let start_velocity = vec![0.0; start.joints.values.len()];
     let rail_motion = RailMotion {
@@ -358,6 +382,17 @@ pub fn plan_best_swing(
     predictions: &[Prediction],
     start: &RobotPose,
 ) -> Result<PlannedIntercept, DomainError> {
+    return plan_best_swing_with_residual(arm, predictions, start, SwingResidual::default());
+}
+
+/// [`plan_best_swing`]과 같은 안전 검사/후보 선택을 사용하되 학습 residual을
+/// 리턴 목표에 적용한다.
+pub fn plan_best_swing_with_residual(
+    arm: &Arm,
+    predictions: &[Prediction],
+    start: &RobotPose,
+    residual: SwingResidual,
+) -> Result<PlannedIntercept, DomainError> {
     const MAX_CONTACT_ERROR: f64 = 0.005;
     let current_position = if arm.rail.is_some() {
         arm.forward_kinematics_with_rail(start.rail_x, &start.joints)
@@ -380,7 +415,7 @@ pub fn plan_best_swing(
     });
     let mut last_error = None;
     for prediction in ranked {
-        let trajectory = match plan_swing(arm, prediction, start) {
+        let trajectory = match plan_swing_with_residual(arm, prediction, start, residual) {
             Ok(trajectory) => trajectory,
             Err(error) => {
                 last_error = Some(error);

@@ -8,18 +8,72 @@ use crate::constants::table;
 use crate::defaults;
 use crate::error::SwingPlanError;
 
+/// 기존 리턴 플래너 위에 얹는 저차원 학습 보정값.
+///
+/// 접촉 위치는 탄도 예측값을 그대로 사용하고 상대 코트의 목표 착지점과
+/// 착지 시간만 바꾼다. 학습기가 불안정해도 공을 일부러 빗맞히는 액션은
+/// 만들지 않으면서 라켓 면 방향과 요구 임팩트 속도를 함께 탐색할 수 있다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SwingResidual {
+    /// 기본 목표 착지점의 x 보정 [m].
+    pub bounce_x_offset_m: f64,
+    /// 기본 목표 착지점의 y 보정 [m].
+    pub bounce_y_offset_m: f64,
+    /// 기본 착지 시간에 곱할 배율. 작을수록 빠르고 강한 리턴이다.
+    pub bounce_time_scale: f64,
+}
+
+impl Default for SwingResidual {
+    fn default() -> Self {
+        return Self {
+            bounce_x_offset_m: 0.0,
+            bounce_y_offset_m: 0.0,
+            bounce_time_scale: 1.0,
+        };
+    }
+}
+
+impl SwingResidual {
+    /// 비정상적인 정책 출력도 테이블 안의 안전한 목표로 제한한다.
+    pub fn clamped(self) -> Self {
+        return Self {
+            bounce_x_offset_m: finite_or(self.bounce_x_offset_m, 0.0).clamp(-0.45, 0.45),
+            bounce_y_offset_m: finite_or(self.bounce_y_offset_m, 0.0).clamp(-0.55, 0.55),
+            bounce_time_scale: finite_or(self.bounce_time_scale, 1.0).clamp(0.60, 1.50),
+        };
+    }
+}
+
+fn finite_or(value: f64, fallback: f64) -> f64 {
+    return if value.is_finite() { value } else { fallback };
+}
+
 /// 네트를 넘고 상대 코트 중앙에 바운드하는 출사 속도.
 ///
 /// 목표 바운드는 `(WIDTH/2, LENGTH*3/4, SURFACE+BALL_RADIUS)`이며,
 /// 무저항 중력 탄도의 경계값 문제를 풀어 `v_out`을 구한다.
 pub fn rally_return_velocity(impact: Point3, _v_in: Vector3<f64>) -> Vector3<f64> {
+    return rally_return_velocity_with_residual(impact, _v_in, SwingResidual::default());
+}
+
+/// [`rally_return_velocity`]에 학습된 저차원 보정값을 적용한다.
+pub fn rally_return_velocity_with_residual(
+    impact: Point3,
+    _v_in: Vector3<f64>,
+    residual: SwingResidual,
+) -> Vector3<f64> {
     let impact_cfg = defaults::ImpactParams::default();
+    let residual = residual.clamped();
     let target = Vector3::new(
-        table::WIDTH_X * 0.5,
-        table::LENGTH_Y * 0.75,
+        (table::WIDTH_X * 0.5 + residual.bounce_x_offset_m)
+            .clamp(crate::constants::BALL_RADIUS, table::WIDTH_X - crate::constants::BALL_RADIUS),
+        (table::LENGTH_Y * 0.75 + residual.bounce_y_offset_m).clamp(
+            table::LENGTH_Y * 0.5 + crate::constants::BALL_RADIUS,
+            table::LENGTH_Y - crate::constants::BALL_RADIUS,
+        ),
         table::SURFACE_Z + crate::constants::BALL_RADIUS,
     );
-    let t = impact_cfg.rally_time_to_bounce;
+    let t = impact_cfg.rally_time_to_bounce * residual.bounce_time_scale;
     let gravity_displacement = Vector3::new(0.0, 0.0, 0.5 * G_Z * t * t);
     let mut v_out = (target - impact.coords - gravity_displacement) / t;
 
@@ -207,5 +261,26 @@ mod tests {
             v_r.norm(),
             sticky.norm()
         );
+    }
+
+    #[test]
+    fn residual_is_finite_bounded_and_changes_return() {
+        let impact = Point3::new(
+            table::WIDTH_X * 0.5,
+            table::DEFAULT_HIT_PLANE_Y,
+            table::SURFACE_Z + 0.15,
+        );
+        let baseline = rally_return_velocity(impact, Vector3::zeros());
+        let faster = rally_return_velocity_with_residual(
+            impact,
+            Vector3::zeros(),
+            SwingResidual {
+                bounce_x_offset_m: f64::NAN,
+                bounce_y_offset_m: 0.2,
+                bounce_time_scale: 0.75,
+            },
+        );
+        assert!(faster.iter().all(|value| value.is_finite()));
+        assert!(faster.y > baseline.y);
     }
 }

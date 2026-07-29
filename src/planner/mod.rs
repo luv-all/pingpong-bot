@@ -10,15 +10,19 @@ pub use bang_bang::{
     plan_bang_bang_swing, step_racket_guidance,
 };
 pub use collision::{OrientedBox, clamp_above_table, robot_obbs, table_penetration};
-pub use impact::{rally_return_velocity, required_racket_velocity, verify_impact_model};
+pub use impact::{
+    SwingResidual, rally_return_velocity, rally_return_velocity_with_residual,
+    required_racket_velocity, verify_impact_model,
+};
 /// 하위 호환: `planner::physics::…`
 pub use swing::physics;
 /// 하위 호환: `planner::trajectory::…`
 pub use swing::trajectory;
 pub use swing::{
     PlannedIntercept, RailMotion, SwingFeasibility, SwingTrajectory, accel, aero_accel,
-    ball_past_midcourt_for_commit, in_swing_commit_window, plan_best_swing, plan_coarse_track,
-    plan_return_to_center, plan_swing, swing_feasibility,
+    ball_past_midcourt_for_commit, in_swing_commit_window, plan_best_swing,
+    plan_best_swing_with_residual, plan_coarse_track, plan_return_to_center, plan_swing,
+    plan_swing_with_residual, swing_feasibility,
 };
 
 use anyhow::{Result, ensure};

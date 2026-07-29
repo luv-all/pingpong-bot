@@ -62,11 +62,12 @@ pub use pipeline::{CameraFeed, PipelineConfig, PipelineError, PipelineThread, ru
 pub use planner::{
     BangBangTrajectory, InterceptWindow, MAX_INTERCEPT_SAMPLES, OrientedBox,
     PlannedBangBangIntercept, RacketGuidanceScratch, RacketGuidanceStep, RailMotion,
-    SwingFeasibility, SwingTrajectory, accel, aero_accel, ball_past_midcourt_for_commit,
+    SwingFeasibility, SwingResidual, SwingTrajectory, accel, aero_accel, ball_past_midcourt_for_commit,
     clamp_above_table, in_swing_commit_window, plan_bang_bang_swing, plan_best_swing,
-    plan_coarse_track, plan_return_to_center, plan_swing, rally_return_velocity,
-    required_racket_velocity, robot_obbs, step_racket_guidance, swing_feasibility,
-    table_penetration, verify_impact_model,
+    plan_best_swing_with_residual, plan_coarse_track, plan_return_to_center, plan_swing,
+    plan_swing_with_residual, rally_return_velocity, rally_return_velocity_with_residual,
+    required_racket_velocity, robot_obbs, step_racket_guidance, swing_feasibility, table_penetration,
+    verify_impact_model,
 };
 pub use robot::{
     Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, LinkInertial, MountPreset,
@@ -76,7 +77,8 @@ pub use robot::{
 };
 pub use sim::{
     BallShooterSettings, BallState, ShooterLayout, SimBallEstimator, SimRuntimeControls,
-    SimSession, SimSessionConfig, SimWorld, new_shutdown_flag,
+    SimSession, SimSessionConfig, SimWorld, TorqueEpisodeInfo, TorqueObservation,
+    TorqueResidualEnv, TorqueStep, new_shutdown_flag,
 };
 #[cfg(feature = "gui")]
 pub use sim::{SimViewerOptions, run_sim_viewer};

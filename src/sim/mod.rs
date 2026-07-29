@@ -7,6 +7,7 @@
 pub mod eval_protocol;
 pub mod gui;
 pub mod physics;
+pub mod rl_env;
 pub mod session;
 
 pub use eval_protocol::{
@@ -18,6 +19,7 @@ pub use gui::{CommitPhase, DebugOverlays, SimDebugSnapshot};
 #[cfg(feature = "gui")]
 pub use gui::{SimViewerOptions, run_sim_viewer};
 pub use physics::{ArmMultibody, BallShooterSettings, BallState, ShooterLayout, SimWorld};
+pub use rl_env::{TorqueEpisodeInfo, TorqueObservation, TorqueResidualEnv, TorqueStep};
 pub use session::{
     SimBallEstimator, SimRuntimeControls, SimSession, SimSessionConfig, new_shutdown_flag,
     predict_impact,

@@ -3858,6 +3858,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
 
 [[package]]
+name = "rl-tune"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "pingpong-bot",
+ "rand 0.8.7",
+ "rapier3d",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rl-torque-env"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "pingpong-bot",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rstar"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

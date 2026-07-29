@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use crate::{
     Arm, DomainError, InterceptWindow, PhysicsParams, Prediction, RobotPose, RobotState,
-    SwingPlanError, ball_past_midcourt_for_commit,
+    SwingPlanError, SwingResidual, ball_past_midcourt_for_commit,
     constants::{ball, table},
-    in_swing_commit_window, plan_best_swing, plan_coarse_track,
+    in_swing_commit_window, plan_best_swing_with_residual, plan_coarse_track,
 };
 use rapier3d::prelude::*;
 use tracing::{debug, info, warn};
@@ -92,6 +92,11 @@ pub struct SimWorld {
     /// true면 commit 시 quintic(`plan_best_swing`) 대신 순수 토크 bang-bang
     /// (`plan_bang_bang_swing`)을 계획한다 - GUI 디버그 토글 전용.
     use_bang_bang_swing: bool,
+    /// 학습/튜닝용 저차원 리턴 보정. 기본값은 기존 플래너와 동일하다.
+    swing_residual: SwingResidual,
+    /// RL이 마지막 스윙 구간에 더하는 signed 관절 토크 [N·m].
+    /// `drive_arm_motors`에서 물리 모터 위치 오프셋으로 변환되며 τ_max를 우회하지 않는다.
+    motor_torque_residual: Vec<f64>,
     /// 이번 비행에서 스윙을 이미 commit했는지 (재계획·팔 떨림 방지)
     swing_committed: bool,
     /// 이번 비행에서 스윙을 포기했는지 (도달 불능·너무 늦음). commit 없이 손 뗌.
@@ -232,6 +237,7 @@ impl SimWorld {
             .build();
         collider_set.insert_with_parent(ball_collider, ball_handle, &mut rigid_body_set);
 
+        let joint_count = arm.joint_count();
         let mut world = Self {
             integration_parameters,
             physics_pipeline: PhysicsPipeline::new(),
@@ -260,6 +266,8 @@ impl SimWorld {
             intercept: InterceptWindow::default(),
             use_ground_truth: true,
             use_bang_bang_swing: false,
+            swing_residual: SwingResidual::default(),
+            motor_torque_residual: vec![0.0; joint_count],
             swing_committed: false,
             swing_abandoned: false,
             shot_seq: 0,
@@ -307,6 +315,46 @@ impl SimWorld {
     /// bang-bang 스윙 모드 여부.
     pub fn use_bang_bang_swing(&self) -> bool {
         return self.use_bang_bang_swing;
+    }
+
+    /// 다음 스윙부터 적용할 안전 범위의 학습 residual.
+    pub fn set_swing_residual(&mut self, residual: SwingResidual) {
+        self.swing_residual = residual.clamped();
+    }
+
+    pub fn swing_residual(&self) -> SwingResidual {
+        return self.swing_residual;
+    }
+
+    /// 정규화된 정책 액션 `[-1, 1]`을 관절별 signed residual torque로 바꾼다.
+    ///
+    /// 정책은 최대 토크 전부를 요청할 수 있지만 Rapier 모터의 총 출력은
+    /// `motor_max_force=τ_max`로 다시 포화된다. 스윙 재생 중이 아니면 액션은
+    /// 무시해 준비 자세나 중앙 복귀를 학습기가 흔들지 못하게 한다.
+    pub fn set_normalized_torque_residual(&mut self, action: &[f64]) {
+        let active = self.robot.is_swinging() && self.ball_state == BallState::InFlight;
+        let limits = crate::defaults::ControlParams::default().max_joint_torques;
+        for (index, residual) in self.motor_torque_residual.iter_mut().enumerate() {
+            let normalized = action.get(index).copied().unwrap_or(0.0);
+            let normalized = if normalized.is_finite() {
+                normalized.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            *residual = if active {
+                normalized * limits.get(index).copied().unwrap_or(0.0)
+            } else {
+                0.0
+            };
+        }
+    }
+
+    pub fn clear_torque_residual(&mut self) {
+        self.motor_torque_residual.fill(0.0);
+    }
+
+    pub fn motor_torque_residual(&self) -> &[f64] {
+        return &self.motor_torque_residual;
     }
 
     /// 이번 공에 스윙을 이미 commit했는지.
@@ -620,7 +668,12 @@ impl SimWorld {
         }
         self.last_swing_attempt_at = self.sim_time;
         let start = RobotPose::new(self.robot.rail_x(), self.robot.joints().clone());
-        let planned = match plan_best_swing(&self.arm, &predictions, &start) {
+        let planned = match plan_best_swing_with_residual(
+            &self.arm,
+            &predictions,
+            &start,
+            self.swing_residual,
+        ) {
             Ok(planned) => {
                 self.hard_fail_streak = 0;
                 planned
@@ -872,6 +925,7 @@ impl SimWorld {
             body.enable_ccd(true);
         }
         self.ball_state = BallState::InFlight;
+        self.clear_torque_residual();
         self.robot.cancel_swing();
         // 이전 공에 대해 계산 중이던 bang-bang 계획이 있다면 추적을 버린다 —
         // 그 결과가 나중에 도착해도 이번(새) 공과 무관하므로 무시해야 한다
@@ -894,6 +948,7 @@ impl SimWorld {
     /// (`cancel_swing`) 레일·관절이 스윙 끝에 멈춰 다음 샷이 깨진다.
     /// 새 발사(`launch_ball_at`)만 진행 중 스윙을 취소한다.
     pub fn park_ball(&mut self, settings: &BallShooterSettings) {
+        self.clear_torque_residual();
         self.debug_prediction = None;
         self.last_shooter_settings = settings.clone();
         self.sync_shooter_pose(settings);
@@ -1057,17 +1112,23 @@ impl SimWorld {
             mount.position[2],
         );
         let targets = self.robot.targets().clone();
-        self.arm_bodies
-            .set_motor_targets(&mut self.multibody_joint_set, &targets);
+        self.arm_bodies.set_motor_targets_with_torque_residual(
+            &mut self.multibody_joint_set,
+            &targets,
+            &self.motor_torque_residual,
+        );
         if crate::defaults::ControlParams::default().torque_feedforward {
             let limits = crate::defaults::ControlParams::default().max_joint_torques;
             let n = self.arm.joint_count().min(limits.len());
             let mut forces = limits.to_vec();
             let now = &self.debug_snap.torque_now_nm;
             for i in 0..n {
-                let demand = now.get(i).copied().unwrap_or(0.0).abs() * 1.15;
+                let nominal_demand = now.get(i).copied().unwrap_or(0.0).abs() * 1.15;
+                let residual_demand = self.motor_torque_residual[i].abs();
                 // 천장 τ_max, 바닥 0.25·τ_max — 모델 오차로 스톨나지 않게
-                forces[i] = demand.clamp(limits[i] * 0.25, limits[i]);
+                // nominal과 residual이 같은 물리 effort budget을 나눠 쓴다.
+                forces[i] =
+                    (nominal_demand + residual_demand).clamp(limits[i] * 0.25, limits[i]);
             }
             self.arm_bodies
                 .set_motor_max_forces(&mut self.multibody_joint_set, &forces);

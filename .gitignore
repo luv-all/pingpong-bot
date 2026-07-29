@@ -1,4 +1,6 @@
 /target
+/models
+/rl_policy.json
 .DS_Store
 mise.local.toml
 

@@ -270,6 +270,7 @@ cargo run -p pingpong-bot
 | `measure-restitution` | [measure_restitution](tools/measure_restitution/README.md) |
 | `measure-friction` | [measure_friction](tools/measure_friction/README.md) |
 | `jog` | [jog](tools/jog/README.md) — 관절·레일 REPL |
+| `rl-torque-env` | [rl_torque_env](tools/rl_torque_env/README.md) — Rapier residual-torque SAC 학습 환경 |
 
 ### 비전 오프라인 흐름
 

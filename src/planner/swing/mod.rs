@@ -5,7 +5,7 @@ pub mod trajectory;
 
 pub use physics::{
     PlannedIntercept, SwingFeasibility, accel, aero_accel, ball_past_midcourt_for_commit,
-    in_swing_commit_window, plan_best_swing, plan_coarse_track, plan_return_to_center, plan_swing,
-    swing_feasibility,
+    in_swing_commit_window, plan_best_swing, plan_best_swing_with_residual, plan_coarse_track,
+    plan_return_to_center, plan_swing, plan_swing_with_residual, swing_feasibility,
 };
 pub use trajectory::{RailMotion, SwingTrajectory};
