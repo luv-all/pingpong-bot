@@ -1,6 +1,4 @@
-//! 프레임 소스 (sim 힌트 / OpenCV VideoCapture / 파일).
-
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use opencv::core::Mat;
@@ -9,97 +7,7 @@ use opencv::videoio::{self, VideoCapture, VideoCaptureTrait, VideoCaptureTraitCo
 
 use crate::camera;
 
-/// BGR 이미지 한 장 + 메타.
-pub struct Frame {
-    pub camera_id: camera::Id,
-    pub image: Mat,
-    pub timestamp: Instant,
-}
-
-impl Frame {
-    pub fn new(camera_id: camera::Id, image: Mat, timestamp: Instant) -> Self {
-        return Self {
-            camera_id,
-            image,
-            timestamp,
-        };
-    }
-}
-
-/// 카메라/파일에서 BGR 프레임을 낸다.
-pub trait FrameSource: Send {
-    fn next_frame(&mut self) -> Option<Frame>;
-
-    fn camera_id(&self) -> camera::Id;
-}
-
-/// sim·구 경로: 이미 아는 픽셀 힌트 (검출기 우회).
-pub trait HintSource: Send {
-    fn next_hint(&mut self) -> Option<(camera::Id, Option<camera::Pixel>, Instant)>;
-}
-
-/// OpenCV `VideoCapture` API 백엔드.
-///
-/// Windows에서 DSHOW는 MJPG 협상이 자주 실패하고 YUY2(~10fps)에 갇힌다.
-/// 듀얼 UVC는 [`CaptureBackend::recommended`]가 **MSMF**를 고른다 (hinguri 실측 경로).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CaptureBackend {
-    /// `CAP_ANY` — OS 기본 선택.
-    #[default]
-    Any,
-    /// DirectShow (Windows). MJPG 실패 시 YUY2로 떨어지기 쉬움.
-    DShow,
-    /// Media Foundation (Windows). 듀얼·고FPS에 유리.
-    Msmf,
-    /// V4L2 (Linux).
-    V4l2,
-    /// AVFoundation (macOS).
-    AvFoundation,
-}
-
-impl CaptureBackend {
-    /// 호스트에서 고FPS UVC에 안전한 기본값.
-    pub fn recommended() -> Self {
-        if cfg!(target_os = "windows") {
-            return Self::Msmf;
-        }
-        return Self::Any;
-    }
-
-    pub fn parse(s: &str) -> Result<Self, String> {
-        return match s.trim().to_ascii_lowercase().as_str() {
-            "any" | "default" | "" => Ok(Self::Any),
-            "dshow" | "directshow" => Ok(Self::DShow),
-            "msmf" | "mediafoundation" => Ok(Self::Msmf),
-            "v4l" | "v4l2" => Ok(Self::V4l2),
-            "avfoundation" | "avf" => Ok(Self::AvFoundation),
-            "recommended" | "auto" => Ok(Self::recommended()),
-            other => Err(format!(
-                "unknown capture backend '{other}' (any|dshow|msmf|v4l2|avfoundation|recommended)"
-            )),
-        };
-    }
-
-    pub fn as_str(self) -> &'static str {
-        return match self {
-            Self::Any => "any",
-            Self::DShow => "dshow",
-            Self::Msmf => "msmf",
-            Self::V4l2 => "v4l2",
-            Self::AvFoundation => "avfoundation",
-        };
-    }
-
-    pub fn api_pref(self) -> i32 {
-        return match self {
-            Self::Any => videoio::CAP_ANY,
-            Self::DShow => videoio::CAP_DSHOW,
-            Self::Msmf => videoio::CAP_MSMF,
-            Self::V4l2 => videoio::CAP_V4L2,
-            Self::AvFoundation => videoio::CAP_AVFOUNDATION,
-        };
-    }
-}
+use super::{CaptureBackend, ExposureReadout, Frame, FrameSource};
 
 /// MSMF 등이 돌려주는 `????` / 비그래픽 FOURCC는 비교 불가.
 pub fn fourcc_report_readable(got: &str) -> bool {
@@ -410,39 +318,6 @@ impl OpenCvCapture {
     }
 }
 
-/// [`OpenCvCapture::exposure_readout`] 결과.
-#[derive(Debug, Clone)]
-pub struct ExposureReadout {
-    pub auto: Option<f64>,
-    pub exposure: Option<f64>,
-    pub gain: Option<f64>,
-    pub backend: String,
-}
-
-impl ExposureReadout {
-    pub fn summary_line(&self) -> String {
-        let ae = self
-            .auto
-            .map(|v| format!("{v:.2}"))
-            .unwrap_or_else(|| "-".into());
-        let exp = self
-            .exposure
-            .map(|v| format!("{v:.2}"))
-            .unwrap_or_else(|| "-".into());
-        let gain = self
-            .gain
-            .map(|v| format!("{v:.1}"))
-            .unwrap_or_else(|| "-".into());
-        return format!("ae {ae} exp {exp} gain {gain}");
-    }
-
-    /// OpenCV macOS 백엔드는 width/height/fps 외 UVC 컨트롤을 거의 무시한다.
-    pub fn likely_unsupported(&self) -> bool {
-        let b = self.backend.to_ascii_lowercase();
-        return b.contains("avfoundation") || b.contains("avf");
-    }
-}
-
 impl FrameSource for OpenCvCapture {
     fn next_frame(&mut self) -> Option<Frame> {
         let mut image = Mat::default();
@@ -456,62 +331,6 @@ impl FrameSource for OpenCvCapture {
             Instant::now()
         };
         self.frame_index += 1;
-        return Some(Frame::new(self.camera_id, image, timestamp));
-    }
-
-    fn camera_id(&self) -> camera::Id {
-        return self.camera_id;
-    }
-}
-
-/// 디렉터리의 이미지를 정렬된 순서로 한 장씩 낸다 (`detect_*` 실험용).
-pub struct ImageDirSource {
-    camera_id: camera::Id,
-    paths: Vec<PathBuf>,
-    index: usize,
-    epoch: Instant,
-    /// 이미지 시퀀스용 가상 FPS
-    fps: f64,
-}
-
-impl ImageDirSource {
-    pub fn open(camera_id: camera::Id, dir: &Path) -> Result<Self, String> {
-        let mut paths: Vec<_> = std::fs::read_dir(dir)
-            .map_err(|e| format!("read_dir: {e}"))?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| {
-                matches!(
-                    p.extension().and_then(|e| e.to_str()),
-                    Some("png" | "jpg" | "jpeg" | "bmp")
-                )
-            })
-            .collect();
-        paths.sort();
-        if paths.is_empty() {
-            return Err(format!("이미지 없음: {}", dir.display()));
-        }
-        return Ok(Self {
-            camera_id,
-            paths,
-            index: 0,
-            epoch: Instant::now(),
-            fps: 30.0,
-        });
-    }
-}
-
-impl FrameSource for ImageDirSource {
-    fn next_frame(&mut self) -> Option<Frame> {
-        let path = self.paths.get(self.index)?;
-        let idx = self.index;
-        self.index += 1;
-        let path_str = path.to_str()?;
-        let image = opencv::imgcodecs::imread(path_str, opencv::imgcodecs::IMREAD_COLOR).ok()?;
-        if image.empty() {
-            return self.next_frame();
-        }
-        let timestamp = self.epoch + Duration::from_secs_f64(idx as f64 / self.fps);
         return Some(Frame::new(self.camera_id, image, timestamp));
     }
 
@@ -581,17 +400,5 @@ mod tests {
             )
             .is_none()
         );
-    }
-
-    #[test]
-    #[cfg(target_os = "windows")]
-    fn windows_recommended_is_msmf() {
-        assert_eq!(CaptureBackend::recommended(), CaptureBackend::Msmf);
-    }
-
-    #[test]
-    #[cfg(not(target_os = "windows"))]
-    fn non_windows_recommended_is_any() {
-        assert_eq!(CaptureBackend::recommended(), CaptureBackend::Any);
     }
 }
