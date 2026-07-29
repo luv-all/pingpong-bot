@@ -1,6 +1,6 @@
 //! URDF → domain `Arm` 일반 revolute 직렬 체인 변환.
 
-use crate::defaults::joint_torque_limits_4dof;
+use crate::defaults::{joint_reflected_inertias_4dof, joint_torque_limits_4dof};
 use crate::robot::Arm;
 use crate::robot::LinkInertial;
 use crate::robot::SerialChain;
@@ -50,7 +50,9 @@ pub fn to_arm(urdf: &UrdfModel, max_joint_speed: f64) -> Result<Arm, UrdfLoadErr
     let mut link_inertials = Vec::with_capacity(urdf.joint_count());
     let mut aggregated_inertials = Vec::with_capacity(urdf.joint_count());
     let mut joint_torque_limits = Vec::with_capacity(urdf.joint_count());
+    let mut joint_reflected_inertias = Vec::with_capacity(urdf.joint_count());
     let motor_torque_limits = joint_torque_limits_4dof();
+    let motor_reflected_inertias = joint_reflected_inertias_4dof();
     // 현재 revolute 관절이 움직이는 강체를 합성하기 위한 하위 링크 누적기.
     // `pending`은 이전 revolute의 child link 프레임을 기준(identity)으로 하므로
     // fixed joint를 만날 때의 `pending` 값이 그 하위 링크의 배치 변환이 된다.
@@ -100,6 +102,14 @@ pub fn to_arm(urdf: &UrdfModel, max_joint_speed: f64) -> Result<Arm, UrdfLoadErr
                 // effort-or-무한대로 되돌아간다.
                 let motor_derived_limit =
                     motor_torque_limits.get(joint_torque_limits.len()).copied();
+                // 회전자 반사관성도 같은 매핑을 따른다 — URDF `<inertial>`은
+                // 링크 강체만 담고 모터 회전자 관성은 어디에도 없다(WP8).
+                joint_reflected_inertias.push(
+                    motor_reflected_inertias
+                        .get(joint_torque_limits.len())
+                        .copied()
+                        .unwrap_or(0.0),
+                );
                 let effort = joint.limit.effort;
                 joint_torque_limits.push(
                     motor_derived_limit
@@ -147,6 +157,7 @@ pub fn to_arm(urdf: &UrdfModel, max_joint_speed: f64) -> Result<Arm, UrdfLoadErr
         defaults,
         max_joint_speed,
     )
+    .map(|arm| arm.with_joint_reflected_inertias(joint_reflected_inertias))
     .map_err(|e| UrdfLoadError::ArmConversion {
         reason: format!("{e}"),
     });

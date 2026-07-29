@@ -26,6 +26,8 @@ pub struct ArmBuilder {
     aggregated_inertials: Option<Vec<LinkInertial>>,
     /// per-joint 토크 한계 [N*m] (미설정 시 무제한 = `f64::INFINITY`)
     joint_torque_limits: Option<Vec<f64>>,
+    /// per-joint 회전자 반사관성 [kg*m^2] (미설정 시 0 = 순수 강체 모델)
+    joint_reflected_inertias: Option<Vec<f64>>,
 }
 
 impl ArmBuilder {
@@ -100,6 +102,13 @@ impl ArmBuilder {
         return self;
     }
 
+    /// per-joint 회전자·기어박스 반사관성 [kg*m^2]을 설정한다. 미설정 시 0
+    /// (순수 강체 링크 모델). 근거는 [`Arm::joint_reflected_inertias`].
+    pub fn joint_reflected_inertias(mut self, inertias: Vec<f64>) -> Self {
+        self.joint_reflected_inertias = Some(inertias);
+        return self;
+    }
+
     /// 검증 후 `Arm`을 만든다.
     pub fn build(self) -> Result<Arm, ArmBuildError> {
         let base = self.base.ok_or(ArmBuildError::MissingBase)?;
@@ -120,7 +129,7 @@ impl ArmBuilder {
         let joint_torque_limits = self
             .joint_torque_limits
             .unwrap_or_else(|| vec![f64::INFINITY; joint_count]);
-        return Arm::from_serial_chain(
+        let arm = Arm::from_serial_chain(
             base,
             self.rail,
             chain,
@@ -130,6 +139,10 @@ impl ArmBuilder {
             joint_torque_limits,
             default_joints,
             max_joint_speed,
-        );
+        )?;
+        return Ok(match self.joint_reflected_inertias {
+            Some(inertias) => arm.with_joint_reflected_inertias(inertias),
+            None => arm,
+        });
     }
 }

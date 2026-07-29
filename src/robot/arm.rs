@@ -32,6 +32,16 @@ pub struct Arm {
     /// 축별 관절 토크 한계 [N*m] - 모터 연속 토크 안전 한계.
     /// `limits`/`link_inertials`와 같은 길이. `f64::INFINITY`는 무제한.
     pub joint_torque_limits: Vec<f64>,
+    /// 축별 회전자·기어박스 반사관성 [kg*m^2] - 출력(관절)축 기준
+    /// `I_rotor * gear_ratio^2`. `limits`와 같은 길이, 0.0이면 "모름/무시".
+    ///
+    /// 강체 링크만 보는 RNEA([`dynamics::required_joint_torques_into`])에는
+    /// 없는 항이다 - 감속비 200:1(MX-64)이면 작은 회전자 관성도 x40000으로
+    /// 증폭돼 링크 관성과 같은 자릿수가 된다. 토크 실현 판단
+    /// ([`dynamics::required_joint_torques_with_rotor_into`])과 실기 Goal
+    /// Current 피드포워드가 이 값을 쓴다. 값의 출처는
+    /// [`crate::defaults::joint_reflected_inertias_4dof_array`].
+    pub joint_reflected_inertias: Vec<f64>,
     /// 부팅 시 초기 관절각
     pub default_joints: Joints,
     /// 관절 추종 최대 각속도 [rad/s]
@@ -112,10 +122,25 @@ impl Arm {
             link_inertials,
             aggregated_inertials,
             joint_torque_limits,
+            joint_reflected_inertias: vec![0.0; chain_count],
             default_joints,
             max_joint_speed,
             chain,
         });
+    }
+
+    /// 축별 회전자 반사관성 [kg*m^2]을 채운 사본을 돌려준다.
+    ///
+    /// `from_serial_chain`은 인자가 이미 9개라 여기서 분리했다. 길이가 관절
+    /// 수와 안 맞으면 **조용히 무시**한다(0.0 유지) - 4-dof 상수 배열을 축 수가
+    /// 다른 팔(예: 3축 `urdf-test`)에 그대로 넣어도 반사관성 없는 순수 강체
+    /// 모델로 안전하게 떨어지도록 한 방어적 폴백이며, 이 모듈의 다른 길이
+    /// 불일치 처리(`required_joint_torques_into`)와 같은 규약이다.
+    pub fn with_joint_reflected_inertias(mut self, inertias: Vec<f64>) -> Self {
+        if inertias.len() == self.joint_count() {
+            self.joint_reflected_inertias = inertias;
+        }
+        return self;
     }
 
     pub(super) fn arm_length(&self) -> f64 {
@@ -130,6 +155,20 @@ impl Arm {
     /// RNEA 필요 토크 [N·m]. `q`/`qd`/`qdd` 길이가 관절 수와 다르면 `None`.
     pub fn required_torque(&self, q: &[f64], qd: &[f64], qdd: &[f64]) -> Option<Vec<f64>> {
         return dynamics::required_torque(self, q, qd, qdd);
+    }
+
+    /// [`Self::required_torque`] + 모터 회전자·기어박스 반사관성 항.
+    ///
+    /// 실기 모터는 자기 회전자도 같이 가속시켜야 하므로 피드포워드에
+    /// 반사관성 항을 포함한다(WP8) — 강체 링크만 보는 RNEA는 감속비
+    /// 200:1에서 필요 전류를 크게 과소평가한다.
+    pub fn required_torque_with_rotor(
+        &self,
+        q: &[f64],
+        qd: &[f64],
+        qdd: &[f64],
+    ) -> Option<Vec<f64>> {
+        return dynamics::required_torque_with_rotor(self, q, qd, qdd);
     }
 
     /// `|τ_i| ≤ limits[i]` (limits 짧으면 마지막 값 반복).

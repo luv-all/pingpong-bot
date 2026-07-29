@@ -156,6 +156,79 @@ pub(crate) fn required_torque(arm: &Arm, q: &[f64], qd: &[f64], qdd: &[f64]) -> 
     return Some(required_joint_torques(arm, &Joints::from_slice(q), qd, qdd));
 }
 
+// ---------------------------------------------------------------------------
+// 회전자·기어박스 반사관성 (WP8)
+// ---------------------------------------------------------------------------
+//
+// 위 RNEA는 URDF/CAD `<inertial>`에서 온 **강체 링크 관성만** 쓴다. 모터
+// 회전자와 기어박스가 감속기 뒤에서 보이는 관성
+// (`I_reflected = I_rotor · gear_ratio²`)은 URDF 어디에도 없다. 감속비가
+// 200:1(MX-64)이면 회전자 관성이 ×40000으로 증폭돼 링크 관성과 같은
+// 자릿수가 되므로, 토크 여유를 판단할 때 빼놓으면 낙관적으로 어긋난다.
+//
+// 이 항은 **관절 단위로 완전히 분리(decoupled)**된다: 회전자는 자기 관절
+// 축으로만 돌기 때문에 자기 관절 각가속도에만 비례하고(`τ_i += I_i·q̈_i`)
+// 다른 관절과 커플링을 만들지 않는다(자이로스코픽 항은 회전자가 축대칭이라
+// 무시). 그래서 RNEA 재귀를 건드릴 필요 없이 결과에 더하면 된다.
+//
+// **왜 별도 함수인가**: `required_joint_torques_into`는 `mass_matrix` ·
+// `bias_torques` · `forward_dynamics`가 공유한다. `mass_matrix`는 Rapier
+// 위치 모터 게인 산정(`defaults::sim_motor`)과 `planner::bang_bang`의
+// 토크→가속도 역산에 쓰이고, `forward_dynamics`는 그 역함수라 두 쪽이
+// 반드시 같은 관성 모델을 봐야 한다. 반사관성을 RNEA에 직접 넣으면 그
+// 계약이 조용히 깨지므로, 소비처를 골라 쓰도록 래퍼로 분리한다.
+
+/// RNEA 결과에 회전자 반사관성 항 `τ_i += I_reflected,i · q̈_i`를 더한다.
+///
+/// 길이(관절 수·`joint_accelerations`·`torque`)가 안 맞으면 아무것도 하지
+/// 않는다 — 이 모듈의 다른 방어적 폴백과 같은 규약.
+pub fn add_reflected_rotor_torques(arm: &Arm, joint_accelerations: &[f64], torque: &mut [f64]) {
+    let reflected = &arm.joint_reflected_inertias;
+    if reflected.len() != torque.len() || joint_accelerations.len() != torque.len() {
+        return;
+    }
+    for i in 0..torque.len() {
+        torque[i] += reflected[i] * joint_accelerations[i];
+    }
+}
+
+/// [`required_joint_torques_into`] + 회전자 반사관성 항.
+///
+/// **모터가 실제로 내야 하는 토크**다 — 토크 실현 판단
+/// (`planner::swing::physics::peak_torque_utilization`)과 실기 Goal Current
+/// 피드포워드가 써야 하는 쪽. 관절 마찰은 여전히 미포함이며, 그 몫은
+/// `defaults::CONTINUOUS_TORQUE_DERATE` 마진이 흡수한다.
+pub fn required_joint_torques_with_rotor_into(
+    arm: &Arm,
+    joints: &Joints,
+    joint_velocities: &[f64],
+    joint_accelerations: &[f64],
+    scratch: &mut RneaScratch,
+    torque: &mut Vec<f64>,
+) {
+    required_joint_torques_into(
+        arm,
+        joints,
+        joint_velocities,
+        joint_accelerations,
+        scratch,
+        torque,
+    );
+    add_reflected_rotor_torques(arm, joint_accelerations, torque);
+}
+
+/// [`required_torque`] + 회전자 반사관성 항 (`Option` 버전).
+pub fn required_torque_with_rotor(
+    arm: &Arm,
+    q: &[f64],
+    qd: &[f64],
+    qdd: &[f64],
+) -> Option<Vec<f64>> {
+    let mut torque = required_torque(arm, q, qd, qdd)?;
+    add_reflected_rotor_torques(arm, qdd, &mut torque);
+    return Some(torque);
+}
+
 /// 중력·코리올리·원심력 항만 (가속 0에서의 필요 토크) [N*m].
 ///
 /// `forward_dynamics`가 `required_joint_torques`를 뒤집는 데 쓴다.
@@ -483,6 +556,115 @@ mod tests {
                 "joint {i}: recovered={} expected={}",
                 recovered[i],
                 accelerations[i]
+            );
+        }
+    }
+
+    #[test]
+    fn reflected_rotor_torque_scales_with_gear_ratio_squared() {
+        // 반사관성 항 τ = (I_rotor·N²)·q̈ 는 기어비의 **제곱**에 비례해야 한다.
+        // 같은 q̈에서 기어비를 2배로 하면 항이 4배가 된다.
+        use crate::defaults::reflected_inertia;
+
+        let rotor = 3.0e-7_f64;
+        let qdd = 250.0_f64;
+        let base_ratio = 200.0_f64;
+
+        let single = single_link_arm(0.2, 0.15);
+        let rigid = required_joint_torques(&single, &Joints::from_slice(&[0.0]), &[0.0], &[qdd]);
+
+        let arm_1x = single
+            .clone()
+            .with_joint_reflected_inertias(vec![reflected_inertia(rotor, base_ratio)]);
+        let arm_2x = single
+            .clone()
+            .with_joint_reflected_inertias(vec![reflected_inertia(rotor, 2.0 * base_ratio)]);
+
+        let tau_1x =
+            required_torque_with_rotor(&arm_1x, &[0.0], &[0.0], &[qdd]).expect("길이 일치");
+        let tau_2x =
+            required_torque_with_rotor(&arm_2x, &[0.0], &[0.0], &[qdd]).expect("길이 일치");
+
+        // 강체 항을 뺀 순수 반사관성 기여분.
+        let term_1x = tau_1x[0] - rigid[0];
+        let term_2x = tau_2x[0] - rigid[0];
+
+        let expected_1x = rotor * base_ratio * base_ratio * qdd;
+        assert!(
+            (term_1x - expected_1x).abs() < 1e-9,
+            "N=200 반사관성 항 {term_1x} ≈ {expected_1x} 기대"
+        );
+        assert!(
+            (term_2x / term_1x - 4.0).abs() < 1e-9,
+            "기어비 2배 → 반사관성 항 4배여야: {term_2x} / {term_1x}"
+        );
+        // 기어비가 0이면 항 자체가 사라진다(모델이 켜지지 않은 팔과 동일).
+        assert!(
+            (required_torque_with_rotor(&single, &[0.0], &[0.0], &[qdd]).expect("길이 일치")[0]
+                - rigid[0])
+                .abs()
+                < 1e-12,
+            "반사관성 미설정 팔은 순수 RNEA와 같아야"
+        );
+    }
+
+    #[test]
+    fn reflected_rotor_term_is_linear_in_acceleration_and_zero_at_rest() {
+        // 반사관성은 q̈에만 비례한다 — 정적(중력)·등속 구간에는 기여가 없다.
+        let arm = competition_arm();
+        let n = arm.joint_count();
+        assert!(
+            arm.joint_reflected_inertias.iter().any(|&i| i > 0.0),
+            "competition arm은 반사관성이 채워져 있어야"
+        );
+        let joints = arm.default_joints.clone();
+        let velocities = vec![0.4, -0.3, 0.2, -0.5];
+
+        let zero_accel = vec![0.0; n];
+        let rigid = required_joint_torques(&arm, &joints, &velocities, &zero_accel);
+        let with_rotor = required_torque_with_rotor(&arm, &joints.values, &velocities, &zero_accel)
+            .expect("길이 일치");
+        for i in 0..n {
+            assert!(
+                (with_rotor[i] - rigid[i]).abs() < 1e-12,
+                "q̈=0 이면 반사관성 기여 0이어야: joint {i}"
+            );
+        }
+
+        let accel = vec![120.0, -80.0, 45.0, -200.0];
+        let rigid = required_joint_torques(&arm, &joints, &velocities, &accel);
+        let with_rotor =
+            required_torque_with_rotor(&arm, &joints.values, &velocities, &accel).expect("길이 일치");
+        for i in 0..n {
+            let expected = rigid[i] + arm.joint_reflected_inertias[i] * accel[i];
+            assert!(
+                (with_rotor[i] - expected).abs() < 1e-9,
+                "joint {i}: {} 가 {expected} 여야",
+                with_rotor[i]
+            );
+        }
+    }
+
+    #[test]
+    fn mass_matrix_stays_rigid_body_only() {
+        // 반사관성 래퍼가 `required_joint_torques_into`의 의미를 바꾸면 안 된다:
+        // `mass_matrix`/`forward_dynamics`는 서로 역함수 계약이고
+        // `bang_bang`·`sim_motor` 게인이 그 대각을 참조하기 때문이다.
+        // (수치 SSOT 검증은 `defaults::sim_motor`의
+        // `inertia_matches_mass_matrix_diagonal`이 따로 한다.)
+        let arm = competition_arm();
+        assert!(arm.joint_reflected_inertias[0] > 1e-3, "반사관성이 채워진 팔");
+        let m = mass_matrix(&arm, &arm.default_joints);
+        let n = arm.joint_count();
+        let zero = vec![0.0; n];
+        for j in 0..n {
+            let mut unit = zero.clone();
+            unit[j] = 1.0;
+            let bias = required_joint_torques(&arm, &arm.default_joints, &zero, &zero);
+            let tau = required_joint_torques(&arm, &arm.default_joints, &zero, &unit);
+            assert!(
+                (m[(j, j)] - (tau[j] - bias[j])).abs() < 1e-12,
+                "joint {j}: mass_matrix 대각에 반사관성이 새어 들어옴"
             );
         }
     }

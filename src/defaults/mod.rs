@@ -50,7 +50,9 @@ pub use calib::{
 pub use control::ControlParams;
 pub use dxl_limits::{
     CONTINUOUS_TORQUE_DERATE, DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, JOINT_SPEED_DERATE,
-    joint_torque_limits_4dof, joint_torque_limits_4dof_array,
+    MX28_ROTOR_INERTIA_KG_M2, MX64_ROTOR_INERTIA_KG_M2, joint_reflected_inertias_4dof,
+    joint_reflected_inertias_4dof_array, joint_torque_limits_4dof, joint_torque_limits_4dof_array,
+    reflected_inertia,
 };
 pub use estimator::EstimatorParams;
 pub use impact::ImpactParams;

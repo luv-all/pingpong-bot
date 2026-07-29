@@ -95,7 +95,9 @@ impl SimDebugSnapshot {
             let q = trajectory.sample_at(t);
             let qd = trajectory.sample_velocity_at(t);
             let qdd = trajectory.sample_acceleration_at(t);
-            if let Some(tau) = arm.required_torque(&q.values, &qd, &qdd) {
+            // 플래너 게이트(`peak_torque_utilization`)와 같은 모델을 봐야
+            // HUD의 "τ 초과" 표시가 커밋 판정과 일치한다 — 회전자 반사관성 포함(WP8).
+            if let Some(tau) = arm.required_torque_with_rotor(&q.values, &qd, &qdd) {
                 for i in 0..n {
                     peaks[i] = f64::max(peaks[i], tau[i].abs());
                 }
@@ -118,6 +120,14 @@ impl SimDebugSnapshot {
     /// 매 물리 틱(최대 1kHz) 호출되므로 스크래치·출력 버퍼를 재사용해
     /// (`required_joint_torques_into`) 힙 할당을 피한다 — 길이가 안 맞으면
     /// `required_torque`처럼 조용히 스킵(기존 값 유지).
+    ///
+    /// **여기만 회전자 반사관성을 일부러 뺀다**(WP8). 이 값은
+    /// `SimWorld::drive_arm_motors`가 Rapier 관절 모터의 `motor_max_force`
+    /// 예산으로 그대로 쓰는데, Rapier 다물체에는 회전자 관성이 아예 없어서
+    /// (URDF `<inertial>`에만 의존) 시뮬 팔은 실물보다 가볍다. 가벼운 몸체에
+    /// 실물 기준 토크 예산을 주면 시뮬이 실물보다 빨라져 sim-to-real 격차가
+    /// 오히려 벌어진다. 제대로 된 해법은 Rapier 관절에도 armature를 넣는
+    /// 것이며 별도 과제다 (`docs/measure-physics.md` 참고).
     pub fn set_torque_now(&mut self, arm: &Arm, q: &[f64], qd: &[f64], qdd: &[f64]) {
         let n = arm.joint_count();
         if q.len() != n || qd.len() != n || qdd.len() != n {

@@ -174,6 +174,126 @@ Whoever recalibrates `MAX_JOINT_SPEED` (currently `16.0 rad/s` in
 `src/constants/arm.rs:10`, task #2) should derate from the no-load rpm above,
 not use it directly as an achievable sustained speed.
 
+## 5. Rotor / gearbox reflected inertia (added 2026-07-29 for WP8)
+
+Needed by `src/robot/dynamics.rs`: the RNEA only carries rigid **link** inertia
+from URDF/CAD, so the motor's own rotor + gearbox inertia — which the joint sees
+amplified by the square of the reduction ratio — is missing from every torque
+estimate. `I_reflected = I_rotor · N²`, and with N = 200 (MX-64) that is a
+×40 000 amplification, so even a sub-gram·cm² rotor matters.
+
+### 5.1 Gear ratios (datasheet, authoritative)
+
+| Model | Gear ratio | Motor type | Source |
+|---|---|---|---|
+| MX-28 | **193 : 1** | Coreless (Maxon) | https://emanual.robotis.com/docs/en/dxl/mx/mx-28-2/ (retrieved 2026-07-29) |
+| MX-64 | **200 : 1** | Coreless (Maxon) | https://emanual.robotis.com/docs/en/dxl/mx/mx-64-2/ (retrieved 2026-07-23) |
+| MX-106 | **225 : 1** | Coreless (Maxon) | https://emanual.robotis.com/docs/en/dxl/mx/mx-106-2/ (retrieved 2026-07-29) — reference point only, not used on this rig |
+
+### 5.2 MX-64 rotor inertia — third-party **identified**, not measured here
+
+**Robotis does not publish rotor inertia** for any MX-series model. The
+e-Manual specification tables list stall torque/current, no-load speed, gear
+ratio, weight, and resolution — nothing about armature inertia. Confirmed by
+re-reading both the MX-64 and MX-28 Protocol 2.0 pages on 2026-07-29.
+
+The best available public number comes from Rhoban's open-source actuator
+identification work:
+
+- Paper: M. Duclusaud, G. Passault, V. Padois, O. Ly, *"Extended Friction
+  Models for the Physics Simulation of Servo Actuators"*, arXiv:2410.08650
+  (v4, 4 Nov 2025). §II-A defines the pendulum test-bench dynamics as
+  `τ_m + τ_e(θ) + τ_f = J θ̈` with `J = m l² + J_m`, where `J_m` is the
+  **"servo actuator apparent inertia (sometimes referred to as armature)"**
+  and explicitly `J_m = N² J_r` when the constructor publishes `J_r`,
+  otherwise `J_m` is identified. §VI-A states MX-64 is one of the four
+  actuators identified. **`J_m` is therefore referenced to the output
+  (joint) shaft** — exactly the quantity we need.
+- Identified values: https://github.com/Rhoban/bam →
+  `bam/params/mx64/{m1..m6}.json` (retrieved 2026-07-29)
+
+| Model (friction) | `armature` `J_m` [kg·m²] |
+|---|---|
+| m1 (Coulomb-Viscous) | 0.011951 |
+| m2 (Stribeck) | 0.011924 |
+| m3 (load-dependent) | 0.011238 |
+| m4 (Stribeck load-dep.) | 0.010961 |
+| m5 (directional) | 0.011729 |
+| m6 (quadratic) | 0.012266 |
+
+Spread across friction models is ±6 %. **Adopted: `J_m` = 1.20e-2 kg·m²**
+→ `J_r = J_m / 200² = 3.0e-7 kg·m²` (= 3.0 g·cm², a plausible figure for a
+~24 mm coreless rotor).
+
+Independent sanity check that these params are output-referenced: the same
+files give `kt` ≈ 1.60–1.66 N·m/A, and the MX-64 e-Manual lists
+"6.0 N·m at 12 V, 4.1 A" → 1.46 N·m/A at the output shaft. Same order,
+consistent with §IV-B of the paper ("the torque constant `kt` is the product
+of the motor torque constant and the reducer ratio").
+
+> **Status: 제3자 식별값 (third-party identified), 실측 아님.** Not measured on
+> this rig, and not a manufacturer figure. Uncertainty taken as ±10 %.
+
+### 5.3 MX-28 rotor inertia — **추정치, 실측 필요 (estimate, needs measurement)**
+
+No public identification exists for MX-28 (BAM covers MX-64, MX-106, XL-320,
+XL-330, eRob80, Feetech STS3215 — not MX-28). Extrapolated from the two
+identified MX-family points, both Coreless(Maxon), using rotor-side stall
+torque `T_r = T_stall / N` as the size proxy:
+
+| Model | `T_stall` @12 V | N | `T_r` [N·m] | `J_m` [kg·m²] | `J_r` [kg·m²] |
+|---|---|---|---|---|---|
+| MX-64 | 6.0 | 200 | 0.03000 | 1.195e-2 | 2.99e-7 |
+| MX-106 | 8.4 | 225 | 0.03733 | 2.661e-2 | 5.26e-7 |
+| MX-28 | 2.5 | 193 | 0.01295 | *(estimated)* | *(estimated)* |
+
+Three extrapolations:
+
+| Method | exponent | MX-28 `J_r` | MX-28 `J_m` = `J_r·193²` |
+|---|---|---|---|
+| Two-point MX-64↔MX-106 fit on `T_r` | 2.59 (fitted) | 3.40e-8 | 1.27e-3 |
+| Two-point fit on servo weight (72 / 126 / 153 g) | 2.91 (fitted) | 5.85e-8 | 2.18e-3 |
+| Geometric similarity `J ∝ T^(5/3)` | 5/3 (assumed) | 7.4e-8 | 2.76e-3 |
+
+**Adopted: geometric mean, `J_r` = 5.4e-8 kg·m² → `J_m` ≈ 2.0e-3 kg·m².**
+Plausible range 1.3e-3 – 2.8e-3 kg·m².
+
+Validation of the scaling approach: applying the geometric-similarity law to
+predict MX-106 from MX-64 gives `J_r` = 4.32e-7 vs the identified 5.26e-7 —
+within 22 %. (The same law applied to XL-330 is off by 8×, but that is a
+different technology — cored motor, plastic gears, 5 V — so it is not a
+counter-example for the MX family.)
+
+> **Status: 추정치 — 실측 필요.** Follow-up measurement is registered in
+> `docs/measure-physics.md`. Direct method: pendulum test-bench per
+> arXiv:2410.08650 §V, or simpler — step the joint with a known load inertia
+> `m l²` and fit `J` from the acceleration response; `J_m` is the intercept as
+> `m l² → 0`.
+
+### 5.4 Values as used in code
+
+`src/defaults/dxl_limits.rs`:
+
+```rust
+pub const MX64_ROTOR_INERTIA_KG_M2: f64 = 3.0e-7;  // identified (BAM), ±10%
+pub const MX28_ROTOR_INERTIA_KG_M2: f64 = 5.4e-8;  // ESTIMATE, needs measurement
+pub const fn reflected_inertia(rotor: f64, gear_ratio: f64) -> f64 { rotor * gear_ratio * gear_ratio }
+```
+
+Per-joint (`joint_reflected_inertias_4dof_array`, mapping from §3):
+
+| Joint | Motor | `I_reflected` [kg·m²] | Rigid link `M_ii` | Increase |
+|---|---|---|---|---|
+| 0 yaw | MX-64 ×2 (dual, mechanically coupled → inertias add) | 2.40e-2 | 3.373e-2 | **+71 %** |
+| 1 shoulder | MX-64 | 1.20e-2 | 1.617e-2 | **+74 %** |
+| 2 elbow | MX-28 | 2.01e-3 | 1.429e-2 | +14 % |
+| 3 wrist | MX-28 | 2.01e-3 | 2.196e-3 | **+92 %** |
+
+(`M_ii` = `JOINT_EFFECTIVE_INERTIA_4DOF`, `src/defaults/sim_motor.rs`.)
+
+Because elbow's link inertia dominates its reflected term, the MX-28 estimate's
+±35 % uncertainty barely moves joint 2; only wrist is sensitive to it.
+
 ## Sources
 
 - https://emanual.robotis.com/docs/en/dxl/mx/mx-64-2/ (MX-64T/R/AT/AR, Protocol 2.0) — retrieved 2026-07-23
@@ -182,3 +302,6 @@ not use it directly as an achievable sustained speed.
 - `assets/robots/4-dof/README.md` (repo file, URDF joint <-> Dynamixel ID mapping)
 - `config/real-hardware.toml` (repo file, `motor_ids`, `joint_signs`)
 - `src/robot/mod.rs` (`Arm::competition()`, joint construction order)
+- https://emanual.robotis.com/docs/en/dxl/mx/mx-106-2/ (MX-106, Protocol 2.0) — retrieved 2026-07-29
+- https://arxiv.org/abs/2410.08650 — Duclusaud, Passault, Padois, Ly, "Extended Friction Models for the Physics Simulation of Servo Actuators" (v4, 2025-11-04); §II-A `J_m = N²J_r`, §VI-A MX-64 identification
+- https://github.com/Rhoban/bam — `bam/params/mx64/*.json`, `bam/params/mx106/m1.json` (identified `armature`) — retrieved 2026-07-29

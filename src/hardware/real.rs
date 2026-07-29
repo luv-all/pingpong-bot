@@ -217,7 +217,10 @@ impl Hardware for RealHardware {
                 if torque_ff {
                     let qd = trajectory.sample_velocity_at(sample_time);
                     let qdd = trajectory.sample_acceleration_at(sample_time);
-                    if let Some(tau) = arm.required_torque(&joints.values, &qd, &qdd) {
+                    // 실기 모터는 자기 회전자도 같이 가속시켜야 하므로
+                    // 피드포워드에 반사관성 항을 포함한다(WP8) — 강체 링크만
+                    // 보는 RNEA는 감속비 200:1에서 필요 전류를 크게 과소평가한다.
+                    if let Some(tau) = arm.required_torque_with_rotor(&joints.values, &qd, &qdd) {
                         let _ = bus.lock().map(|mut bus| {
                             let _ = bus.write_goal_currents_from_torques(&tau);
                         });

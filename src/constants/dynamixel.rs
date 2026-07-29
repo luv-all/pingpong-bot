@@ -16,6 +16,12 @@ pub const MX64_STALL_TORQUE_NM: f64 = 6.0;
 /// 12.0V stall torque [N·m] — MX-28T.
 pub const MX28_STALL_TORQUE_NM: f64 = 2.5;
 
+/// MX-64 감속비 N (200:1) — e-Manual "Gear Ratio".
+pub const MX64_GEAR_RATIO: f64 = 200.0;
+
+/// MX-28 감속비 N (193:1) — e-Manual "Gear Ratio".
+pub const MX28_GEAR_RATIO: f64 = 193.0;
+
 /// rev/min → rad/s.
 pub const fn rev_min_to_rad_s(rev_min: f64) -> f64 {
     return rev_min * std::f64::consts::TAU / 60.0;

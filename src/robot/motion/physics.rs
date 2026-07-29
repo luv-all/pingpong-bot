@@ -443,6 +443,12 @@ fn trajectory_collision_free(arm: &Arm, trajectory: &Trajectory) -> bool {
 /// Newton-Euler 역동역학으로 관절 토크를 계산하고, per-joint 연속 토크 한계
 /// (`Arm::joint_torque_limits`) 대비 이용률을 본다. 반환값 `<= 1.0` 이면 모든
 /// 관절이 토크 한계 안. 한계가 무한(`f64::INFINITY`)인 관절은 무시한다.
+///
+/// 강체 링크 관성뿐 아니라 모터 회전자·기어박스 반사관성
+/// (`Arm::joint_reflected_inertias`)까지 포함한
+/// `required_joint_torques_with_rotor_into`를 쓴다 — 감속비 200:1이면
+/// 반사관성이 링크 관성과 같은 자릿수라, 빼면 여유를 낙관적으로 본다(WP8).
+/// 관절 마찰은 아직 미모델이며 `CONTINUOUS_TORQUE_DERATE`가 그 몫을 흡수한다.
 fn peak_torque_utilization(arm: &Arm, trajectory: &Trajectory) -> f64 {
     // 토크 한계가 전부 무한(무제한)이면 동역학을 돌릴 필요가 없다.
     if arm
@@ -482,7 +488,7 @@ fn peak_torque_utilization(arm: &Arm, trajectory: &Trajectory) -> f64 {
             velocities[i] = qd;
             accelerations[i] = qdd;
         }
-        crate::robot::dynamics::required_joint_torques_into(
+        crate::robot::dynamics::required_joint_torques_with_rotor_into(
             arm,
             &joints,
             &velocities,
@@ -911,6 +917,128 @@ mod tests {
                 ..
             })) => {}
             Err(other) => panic!("토크/한계 게이트 또는 성공만 기대, got {other}"),
+        }
+    }
+
+    /// WP8 계측 — 회전자 반사관성 항 추가 전/후 `peak_torque_utilization` 비교.
+    ///
+    /// 같은 궤적을 두 모델(강체만 / 강체+반사관성)로 평가해 모델 변경만의
+    /// 효과를 분리하고, 이어서 각 모델로 **재계획**했을 때 달성 라켓 속도가
+    /// 어떻게 달라지는지(다운스케일의 실질 비용)까지 본다.
+    ///
+    /// ```text
+    /// cargo test -p pingpong-bot --lib diag_reflected_inertia -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "진단용 계측 — 수치를 stdout으로 뽑는다"]
+    fn diag_reflected_inertia_torque_utilization() {
+        /// 관절별 `max |τ| / limit` — `peak_torque_utilization`의 per-joint 버전.
+        fn per_joint_utilization(arm: &Arm, trajectory: &SwingTrajectory) -> Vec<f64> {
+            let n = arm.joint_count();
+            let samples = (trajectory.duration_secs / 0.005).ceil().max(1.0) as usize;
+            let mut scratch = crate::robot::dynamics::RneaScratch::new();
+            let mut torques = vec![0.0; n];
+            let mut worst = vec![0.0_f64; n];
+            for index in 0..=samples {
+                let time = trajectory.duration_secs * index as f64 / samples as f64;
+                let joints = trajectory.sample_at(time);
+                let qd = trajectory.sample_velocity_at(time);
+                let qdd = trajectory.sample_acceleration_at(time);
+                crate::robot::dynamics::required_joint_torques_with_rotor_into(
+                    arm,
+                    &joints,
+                    &qd,
+                    &qdd,
+                    &mut scratch,
+                    &mut torques,
+                );
+                for i in 0..n {
+                    worst[i] = worst[i].max(torques[i].abs() / arm.joint_torque_limits[i]);
+                }
+            }
+            return worst;
+        }
+
+        fn fmt(values: &[f64]) -> String {
+            return values
+                .iter()
+                .map(|v| format!("{v:.3}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+
+        let urdf_arm = (*crate::defaults::urdf_4dof().expect("urdf").arm).clone();
+        let urdf_rail_x = urdf_arm.rail.as_ref().map(|r| r.default_x()).unwrap_or(0.0);
+        let urdf_impact = urdf_arm
+            .forward_kinematics_with_rail(urdf_rail_x, &urdf_arm.default_joints)
+            .expect("FK")
+            .position;
+
+        let scenarios: Vec<(&str, Arm, Vec<(f64, Prediction)>)> = vec![
+            (
+                "primitive_4dof / 대표 임팩트 (y=0.18, z=table+0.18)",
+                sample_three_dof_arm(),
+                [0.22_f64, 0.25, 0.28, 0.30, 0.35, 0.40]
+                    .into_iter()
+                    .map(|tti| (tti, sample_prediction(tti)))
+                    .collect(),
+            ),
+            (
+                "urdf_4dof / 휴지 자세 FK 임팩트 (기존 토크게이트 테스트와 동일)",
+                urdf_arm,
+                [0.22_f64, 0.25, 0.30, 0.35]
+                    .into_iter()
+                    .map(|tti| {
+                        (
+                            tti,
+                            Prediction {
+                                time_to_impact_secs: tti,
+                                impact_position: urdf_impact,
+                                incoming_velocity: Vector3::new(0.0, -7.5, -0.3),
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+        ];
+
+        for (label, arm, cases) in scenarios {
+            let n = arm.joint_count();
+            let rigid_only = arm.clone().with_joint_reflected_inertias(vec![0.0; n]);
+            eprintln!("\n=== {label} ===");
+            eprintln!("  반사관성 [kg·m²] = {}", fmt(&arm.joint_reflected_inertias));
+            eprintln!("  토크한계  [N·m]  = {}", fmt(&arm.joint_torque_limits));
+
+            for (tti, prediction) in cases {
+                let start = sample_start(&arm);
+                // 반사관성 없이 계획한 궤적을 **고정**하고 두 모델로 평가한다 —
+                // 모델 변경만의 효과를 다운스케일 반응과 분리하기 위해서.
+                let Ok(trajectory) = plan_swing(&rigid_only, prediction, &start) else {
+                    eprintln!("  tti={tti:.2}s: 강체 모델로도 계획 실패 — 건너뜀");
+                    continue;
+                };
+                let before = peak_torque_utilization(&rigid_only, &trajectory);
+                let after = peak_torque_utilization(&arm, &trajectory);
+                eprintln!(
+                    "  tti={tti:.2}s peak q̈={:7.1} rad/s² | util 전={before:.3} 후={after:.3} ({:.2}×)",
+                    trajectory.peak_joint_acceleration(),
+                    after / before.max(1e-9),
+                );
+                eprintln!(
+                    "            관절별 util 전=[{}] 후=[{}]",
+                    fmt(&per_joint_utilization(&rigid_only, &trajectory)),
+                    fmt(&per_joint_utilization(&arm, &trajectory)),
+                );
+                // 반사관성을 켠 채 재계획하면 게이트가 끝속도를 깎을 수 있다.
+                match plan_swing(&arm, prediction, &start) {
+                    Ok(replanned) => eprintln!(
+                        "            재계획 성공: util={:.3}, peak q̇ 비={:.3}",
+                        peak_torque_utilization(&arm, &replanned),
+                        replanned.peak_joint_speed() / trajectory.peak_joint_speed().max(1e-9),
+                    ),
+                    Err(e) => eprintln!("            재계획 실패: {e}"),
+                }
+            }
         }
     }
 

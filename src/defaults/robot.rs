@@ -13,7 +13,9 @@ use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector3};
 use crate::Point3;
 use crate::constants::geometry;
 use crate::constants::table;
-use crate::defaults::dxl_limits::{DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, joint_torque_limits_4dof};
+use crate::defaults::dxl_limits::{
+    DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, joint_reflected_inertias_4dof, joint_torque_limits_4dof,
+};
 use crate::robot::{
     Arm, JointLimit, Joints, LinkInertial, MountPreset, RailFrame, Robot, RobotBuildError,
     RobotBuilder, SerialChain, SerialJoint,
@@ -133,6 +135,9 @@ pub fn primitive_4dof_with_mount(mount_y: f64, mount_z: f64) -> Result<Robot, Ro
         )
         .aggregated_inertials(aggregated_inertials)
         .joint_torque_limits(joint_torque_limits_4dof())
+        // URDF/CAD 관성에는 모터 회전자가 안 들어 있다 — 감속기 뒤에서 본
+        // 반사관성(`I_rotor·N²`)을 별도로 채운다(WP8).
+        .joint_reflected_inertias(joint_reflected_inertias_4dof())
         .max_joint_speed(DYNAMIXEL_MAX_JOINT_SPEED_RAD_S)
         .build()
         .map_err(|e| RobotBuildError::ArmConversion {
