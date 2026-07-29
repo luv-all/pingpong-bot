@@ -3,7 +3,6 @@
 use crate::HitPlane;
 use crate::constants::{ball, table};
 use crate::defaults;
-use crate::estimator::BallKinematics;
 use crate::planner::SwingPlanner;
 use nalgebra::Vector3;
 use rand::Rng;
@@ -211,7 +210,7 @@ impl BallShooterSettings {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        return BallKinematics::predict_to(
+        return crate::ball::Kinematics::predict_to(
             position,
             velocity,
             spin,

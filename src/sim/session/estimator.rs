@@ -6,8 +6,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::estimator::BallKinematics;
-use crate::{BallEkf, Estimator, HitPlane, Point3, Prediction};
+use crate::Point3;
+use crate::ball;
+use crate::estimator::{Estimator, HitPlane, Prediction};
 use nalgebra::Vector3;
 
 use crate::sim::shooter::BallState;
@@ -16,7 +17,7 @@ use crate::sim::world::SimWorld;
 /// Rapier 월드 스냅샷으로 접수 평면 교차를 예측한다 (물리 스텝·자동 스윙 공용).
 pub(crate) fn predict_impact(world: &SimWorld, plane: HitPlane) -> Option<Prediction> {
     let snap = snapshot_from_world(world)?;
-    return BallKinematics::predict_to(
+    return ball::Kinematics::predict_to(
         snap.position,
         snap.velocity,
         snap.omega,
@@ -28,7 +29,7 @@ pub(crate) fn predict_impact(world: &SimWorld, plane: HitPlane) -> Option<Predic
 /// Rapier 월드에서 공 상태를 읽어 EKF에 주입한 뒤 `predict_to`한다.
 pub struct SimBallEstimator {
     world: Arc<Mutex<SimWorld>>,
-    ekf: BallEkf,
+    ekf: ball::Ekf,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,7 +43,7 @@ impl SimBallEstimator {
     pub fn new(world: Arc<Mutex<SimWorld>>) -> Self {
         return Self {
             world,
-            ekf: BallEkf::new(0.0),
+            ekf: ball::Ekf::new(0.0),
         };
     }
 
@@ -125,7 +126,7 @@ mod tests {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        let pred = BallKinematics::predict_to(
+        let pred = ball::Kinematics::predict_to(
             snap.position,
             snap.velocity,
             snap.omega,
@@ -204,7 +205,7 @@ mod tests {
         };
         let snap = launch_snapshot();
         let at_launch =
-            BallKinematics::predict_to(snap.position, snap.velocity, snap.omega, plane, &physics)
+            ball::Kinematics::predict_to(snap.position, snap.velocity, snap.omega, plane, &physics)
                 .expect("발사 직후 예측");
 
         // (1) ballistics 자기정합: 커널로 바운스까지 적분 후 재예측 ≈ 발사 예측
@@ -216,7 +217,7 @@ mod tests {
         let mut bounced = false;
         while t < est.max_lead {
             let prev_vz = vel.z;
-            let (np, nv, nw) = BallKinematics::step(pos, vel, omega, est.integrate_dt, &physics);
+            let (np, nv, nw) = ball::Kinematics::step(pos, vel, omega, est.integrate_dt, &physics);
             pos = np;
             vel = nv;
             omega = nw;
@@ -227,7 +228,7 @@ mod tests {
             }
         }
         assert!(bounced, "ballistics가 테이블 바운스에 도달해야 함");
-        let after_bal = BallKinematics::predict_to(pos, vel, omega, plane, &physics)
+        let after_bal = ball::Kinematics::predict_to(pos, vel, omega, plane, &physics)
             .expect("바운스 후 ballistics 예측");
         let dz_bal =
             (after_bal.impact_position.coords.z - at_launch.impact_position.coords.z).abs();
@@ -281,7 +282,7 @@ mod tests {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
         assert!(
-            BallKinematics::predict_to(
+            ball::Kinematics::predict_to(
                 position,
                 velocity,
                 Vector3::zeros(),

@@ -1,4 +1,4 @@
-//! 테이블 바운스 SSOT(`estimator::bounce`)가 Rapier 실제 접촉과 맞는지.
+//! 테이블 바운스 SSOT(`ball::bounce`)가 Rapier 실제 접촉과 맞는지.
 //!
 //! 커널이 어긋나면 `predict_hit_plane`이 임팩트 위치를 크게 빗맞히고,
 //! 플래너가 라켓을 엉뚱한 높이에 갖다 놓는다 (2026-07-27 실측: 105 mm).
@@ -6,9 +6,9 @@
 use nalgebra::Vector3;
 
 use pingpong_bot::HitPlane;
-use pingpong_bot::constants::{ball, table};
+use pingpong_bot::ball;
+use pingpong_bot::constants::{self, table};
 use pingpong_bot::defaults;
-use pingpong_bot::estimator::BallKinematics;
 use pingpong_bot::sim::SimWorld;
 use pingpong_bot::sim::eval_protocol::{EvalMode, EvalProtocol};
 
@@ -103,7 +103,7 @@ fn table_bounce_kernel_matches_rapier_contact() {
     for (velocity, omega) in cases {
         let sample = observe_bounce(velocity, omega);
         let (kernel_v, kernel_w) =
-            BallKinematics::bounce_on_table(sample.v_before, sample.omega_before, &physics);
+            ball::Kinematics::bounce_on_table(sample.v_before, sample.omega_before, &physics);
         let error = (kernel_v - sample.v_after).norm();
         println!(
             "v_in=[{:.2} {:.2} {:.2}] w_in=[{:.1} {:.1} {:.1}]\n  \
@@ -203,7 +203,7 @@ fn hit_plane_prediction_matches_simulated_ball() {
             }
             let velocity = v3(world.ball_velocity());
             let omega = v3(world.ball_angular_velocity());
-            prediction = BallKinematics::predict_to(position, velocity, omega, plane, &physics);
+            prediction = ball::Kinematics::predict_to(position, velocity, omega, plane, &physics);
             if prediction.is_some() {
                 prediction_start = (position, velocity, omega);
             }
@@ -256,8 +256,13 @@ fn hit_plane_prediction_matches_simulated_ball() {
         let mut predicted_bounce_y = f64::NAN;
         for _ in 0..2_000 {
             let previous_vz = kernel_vel.z;
-            let (p, v, w) =
-                BallKinematics::step(kernel_pos, kernel_vel, kernel_omega, 1.0 / 1000.0, &physics);
+            let (p, v, w) = ball::Kinematics::step(
+                kernel_pos,
+                kernel_vel,
+                kernel_omega,
+                1.0 / 1000.0,
+                &physics,
+            );
             kernel_pos = p;
             kernel_vel = v;
             kernel_omega = w;
@@ -313,7 +318,7 @@ fn hit_plane_prediction_matches_simulated_ball() {
 fn table_bounce_kernel_models_spin_change() {
     let sample = observe_bounce(Vector3::new(0.0, -6.5, -2.5), Vector3::zeros());
     let spin_change = (sample.omega_after - sample.omega_before).norm();
-    let (_, kernel_w) = BallKinematics::bounce_on_table(
+    let (_, kernel_w) = ball::Kinematics::bounce_on_table(
         sample.v_before,
         sample.omega_before,
         &defaults::PhysicsParams::default(),
@@ -321,7 +326,7 @@ fn table_bounce_kernel_models_spin_change() {
     let kernel_change = (kernel_w - sample.omega_before).norm();
     println!(
         "rapier |Δω|={spin_change:.1} rad/s, kernel |Δω|={kernel_change:.1} rad/s, R={:.3}",
-        ball::RADIUS
+        constants::ball::RADIUS
     );
     assert!(
         (kernel_change - spin_change).abs() < 0.25 * spin_change.max(1.0),

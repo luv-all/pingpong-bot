@@ -7,9 +7,9 @@ mod capture_loop;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use pingpong_bot::SimWorld;
-use pingpong_bot::constants::{ball, table};
+use pingpong_bot::ball;
+use pingpong_bot::constants::{self, table};
 use pingpong_bot::defaults::{calibration_path, primitive_4dof};
-use pingpong_bot::estimator::PhysicsIdentify;
 use pingpong_bot::{PhysicsParams, StereoOfflineArgs, StereoPairCliArgs};
 
 #[derive(Parser, Debug)]
@@ -90,7 +90,7 @@ fn main() -> Result<()> {
 
     if let Some(ref raw) = args.vt_pairs {
         let pairs = parse_pairs(raw)?;
-        let mu = PhysicsIdentify::friction_from_tangential_speeds(&pairs)
+        let mu = ball::PhysicsIdentify::friction_from_tangential_speeds(&pairs)
             .context("접선 쌍으로부터 μ 추정 실패")?;
         println!("friction μ = {mu:.6}  (from {} vt pairs)", pairs.len());
         patch.friction = Some(mu);
@@ -116,7 +116,11 @@ fn main() -> Result<()> {
 
     print!(
         "{}",
-        PhysicsIdentify::format_physics_for_defaults(patch.restitution, patch.friction, patch.drag)
+        ball::PhysicsIdentify::format_physics_for_defaults(
+            patch.restitution,
+            patch.friction,
+            patch.drag
+        )
     );
     return Ok(());
 }
@@ -128,7 +132,7 @@ fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
 
     let x = table::WIDTH_X * 0.5;
     let y = table::LENGTH_Y * 0.35;
-    let z0 = table::SURFACE_Z + ball::RADIUS + drop_height;
+    let z0 = table::SURFACE_Z + constants::ball::RADIUS + drop_height;
     world.launch_ball_at(
         [x as f32, y as f32, z0 as f32],
         [horiz_speed as f32, 0.0, -0.01],
@@ -141,7 +145,7 @@ fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
     let mut vout_t = 0.0_f64;
     let mut saw_descent = false;
     let mut bounced = false;
-    let floor = table::SURFACE_Z + ball::RADIUS;
+    let floor = table::SURFACE_Z + constants::ball::RADIUS;
 
     for _ in 0..8000 {
         world.step(dt, None);
@@ -171,7 +175,7 @@ fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
         bail!("sim 바운스 접선 속도 미검출 — --vt-pairs 로 수동 입력");
     }
     println!("sim vt_in={vin_t:.4} vt_out={vout_t:.4}");
-    return PhysicsIdentify::friction_from_tangential_speeds(&[(vin_t, vout_t)])
+    return ball::PhysicsIdentify::friction_from_tangential_speeds(&[(vin_t, vout_t)])
         .context("sim μ 계산 실패");
 }
 

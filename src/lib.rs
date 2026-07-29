@@ -45,10 +45,7 @@ pub use detector::{
     ScorerParams,
 };
 pub use error::{DomainError, HwError, ObservationError, SwingPlanError};
-pub use estimator::{
-    BallEkf, BallKinematics, BounceEvent, Estimator, HitPlane, PhysicsIdentify, Prediction,
-    RollEvent, TrajAnalysis, TrajPoint,
-};
+pub use estimator::{Estimator, HitPlane, Prediction};
 #[cfg(feature = "real")]
 pub use hardware::RealHardware;
 pub use hardware::dynamixel::DynamixelConfig;

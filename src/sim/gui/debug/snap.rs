@@ -239,7 +239,7 @@ impl SimDebugSnapshot {
 
         if in_flight {
             self.push_truth(ball_pos);
-            self.net_gate_ok = Some(crate::estimator::BallKinematics::clears_net(
+            self.net_gate_ok = Some(crate::ball::Kinematics::clears_net(
                 ball_pos, ball_vel, omega, physics,
             ));
             self.predicted_arc = sample_predicted_arc(
@@ -298,7 +298,7 @@ fn sample_predicted_arc(
     let mut t = 0.0;
     while out.len() < max_samples && t < est.max_lead {
         let (next_pos, next_vel, next_omega) =
-            crate::estimator::BallKinematics::step(pos, vel, omega, est.integrate_dt, physics);
+            crate::ball::Kinematics::step(pos, vel, omega, est.integrate_dt, physics);
         pos = next_pos;
         vel = next_vel;
         omega = next_omega;

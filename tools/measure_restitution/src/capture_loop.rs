@@ -6,17 +6,16 @@ use std::time::Instant;
 use anyhow::{Result, bail};
 use opencv::core::Scalar;
 use opencv::prelude::*;
+use pingpong_bot::ball;
 use pingpong_bot::camera;
 use pingpong_bot::defaults::detector_for;
-use pingpong_bot::estimator::TrajAnalysis;
 use pingpong_bot::{
-    BounceEvent, Calibration, Detector, FrameSource, Preview, PreviewAction, StereoOfflineArgs,
-    TrajPoint, Triangulate,
+    Calibration, Detector, FrameSource, Preview, PreviewAction, StereoOfflineArgs, Triangulate,
 };
 
 pub struct CaptureResult {
-    pub traj: Vec<TrajPoint>,
-    pub bounces: Vec<BounceEvent>,
+    pub traj: Vec<ball::TrajPoint>,
+    pub bounces: Vec<ball::BounceEvent>,
     pub e: Option<f64>,
 }
 
@@ -119,15 +118,15 @@ pub fn run_capture(
             }
         };
         if let Some(pos) = Triangulate::pixels(&hits, &calibration) {
-            traj.push(TrajPoint {
+            traj.push(ball::TrajPoint {
                 t: sync_t,
                 pos,
                 pixels: hits.clone(),
             });
         }
 
-        let bounces = TrajAnalysis::detect_bounces(&traj);
-        let e_mean = TrajAnalysis::mean_bounce_e(&bounces);
+        let bounces = ball::TrajAnalysis::detect_bounces(&traj);
+        let e_mean = ball::TrajAnalysis::mean_bounce_e(&bounces);
 
         if let Some(ev) = bounces.last() {
             for (i, panel) in panels.iter_mut().enumerate() {
@@ -210,9 +209,9 @@ pub fn run_capture(
         Preview::destroy_window(window);
     }
 
-    let bounces = TrajAnalysis::detect_bounces(&traj);
+    let bounces = ball::TrajAnalysis::detect_bounces(&traj);
     return Ok(CaptureResult {
-        e: TrajAnalysis::mean_bounce_e(&bounces),
+        e: ball::TrajAnalysis::mean_bounce_e(&bounces),
         traj,
         bounces,
     });

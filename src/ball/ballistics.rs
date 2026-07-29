@@ -5,11 +5,12 @@
 
 use nalgebra::Vector3;
 
+use crate::Point3;
 use crate::constants::{G, ball, table};
 use crate::defaults;
 use crate::defaults::PhysicsParams;
+use crate::estimator::{HitPlane, Prediction};
 use crate::planner::SwingPlanner;
-use crate::{HitPlane, Point3, Prediction};
 
 /// 현재 탄도가 네트 클리어 높이를 통과하는지 (슬랙 포함).
 ///
@@ -170,7 +171,7 @@ pub fn semi_implicit_euler(
     let next_pos = pos + next_vel * dt;
     let floor_z = table::SURFACE_Z + ball::RADIUS;
     if next_pos.z <= floor_z && next_vel.z < 0.0 {
-        let (bounced_v, bounced_w) = super::bounce::table_bounce(next_vel, omega, physics);
+        let (bounced_v, bounced_w) = crate::ball::bounce::table_bounce(next_vel, omega, physics);
         return (
             Vector3::new(next_pos.x, next_pos.y, floor_z),
             bounced_v,
