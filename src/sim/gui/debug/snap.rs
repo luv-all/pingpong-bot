@@ -2,7 +2,6 @@
 
 use crate::SwingPlanError;
 use crate::defaults;
-use crate::estimator::ballistics;
 use crate::planner::collision::{OrientedBox, robot_obbs, table_penetration};
 use crate::{Arm, Joints, SwingTrajectory};
 
@@ -166,7 +165,7 @@ impl SimDebugSnapshot {
             let q = trajectory.sample_at(t);
             let qd = trajectory.sample_velocity_at(t);
             let qdd = trajectory.sample_acceleration_at(t);
-            if let Some(tau) = crate::robot::required_torque(arm, &q.values, &qd, &qdd) {
+            if let Some(tau) = arm.required_torque(&q.values, &qd, &qdd) {
                 for i in 0..n {
                     peaks[i] = f64::max(peaks[i], tau[i].abs());
                 }
@@ -240,7 +239,7 @@ impl SimDebugSnapshot {
 
         if in_flight {
             self.push_truth(ball_pos);
-            self.net_gate_ok = Some(ballistics::clears_net_gate(
+            self.net_gate_ok = Some(crate::estimator::BallKinematics::clears_net(
                 ball_pos, ball_vel, omega, physics,
             ));
             self.predicted_arc = sample_predicted_arc(
@@ -299,7 +298,7 @@ fn sample_predicted_arc(
     let mut t = 0.0;
     while out.len() < max_samples && t < est.max_lead {
         let (next_pos, next_vel, next_omega) =
-            ballistics::semi_implicit_euler(pos, vel, omega, est.integrate_dt, physics);
+            crate::estimator::BallKinematics::step(pos, vel, omega, est.integrate_dt, physics);
         pos = next_pos;
         vel = next_vel;
         omega = next_omega;

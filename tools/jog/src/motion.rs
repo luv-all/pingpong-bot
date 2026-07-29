@@ -2,11 +2,12 @@
 
 use anyhow::{Context, Result, ensure};
 use nalgebra::{Rotation3, Vector3};
+use pingpong_bot::constants::table;
+use pingpong_bot::planner::Impact;
 use pingpong_bot::{
     Arm, ControlParams, ImpactParams, Joints, Point3, RacketPose, RailMotion, RobotPose,
-    SwingTrajectory, rally_return_velocity, required_racket_velocity,
+    SwingTrajectory,
 };
-use pingpong_bot::constants::table;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MotionKind {
@@ -155,7 +156,14 @@ pub fn compose(
             let joints = arm
                 .inverse_kinematics_with_rail(&linear, start.rail_x, target, Some(&start.joints))
                 .context("ik")?;
-            move_traj(arm, start, joints, start.rail_x, duration_secs, max_delta_deg)
+            move_traj(
+                arm,
+                start,
+                joints,
+                start.rail_x,
+                duration_secs,
+                max_delta_deg,
+            )
         }
         MotionKind::Pose => {
             let (target, normal) = reach_pose_target(arm, start, draft)?;
@@ -186,9 +194,7 @@ pub fn compose(
                 max_delta_deg,
             )
         }
-        MotionKind::SwingBall => {
-            swing_ball_traj(arm, start, draft, duration_secs, max_delta_deg)
-        }
+        MotionKind::SwingBall => swing_ball_traj(arm, start, draft, duration_secs, max_delta_deg),
     };
 }
 
@@ -246,9 +252,9 @@ fn swing_ball_traj(
         .context("fk at impact")?;
     let normal = racket.normal.normalize();
 
-    let v_out = rally_return_velocity(target, v_in);
+    let v_out = Impact::rally_return(target, v_in);
     let e = ImpactParams::default().racket_effective_restitution;
-    let v_r = required_racket_velocity(v_in, v_out, normal, e).context("라켓 속도 역산")?;
+    let v_r = Impact::required_racket_velocity(v_in, v_out, normal, e).context("라켓 속도 역산")?;
 
     let (rail_impact_vel, joint_impact_vel) = arm
         .velocities_for_racket_velocity(&impact, v_r)
@@ -388,11 +394,7 @@ fn reach_pose_target(
         p.y + draft.reach_dxyz[1],
         p.z + draft.reach_dxyz[2],
     );
-    let normal = tilt_normal(
-        racket.normal,
-        draft.tilt_pitch_deg,
-        draft.tilt_yaw_deg,
-    )?;
+    let normal = tilt_normal(racket.normal, draft.tilt_pitch_deg, draft.tilt_yaw_deg)?;
     return Ok((target, normal));
 }
 

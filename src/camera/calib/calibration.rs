@@ -166,6 +166,14 @@ impl Calibration {
                 .collect(),
         };
     }
+
+    /// JSON 캘리브 파일을 읽는다.
+    pub fn load_json(path: &std::path::Path) -> Result<Self, String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("calibration 읽기: {}: {e}", path.display()))?;
+        return serde_json::from_str(&text)
+            .map_err(|e| format!("calibration JSON: {}: {e}", path.display()));
+    }
 }
 
 impl Default for Calibration {

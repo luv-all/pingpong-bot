@@ -7,7 +7,7 @@
 
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
-use pingpong_bot::sim::eval_protocol::{EvalMode, settings_for_zone_shot, shot_schedule};
+use pingpong_bot::sim::eval_protocol::{EvalMode, EvalProtocol};
 use pingpong_bot::sim::physics::BallShooterSettings;
 use pingpong_bot::sim::{BallState, SimWorld};
 
@@ -120,8 +120,11 @@ fn diag_default_shot() {
 #[ignore = "진단 전용"]
 fn diag_net_clearance() {
     let launch = pingpong_bot::sim::EvalLaunchParams::default();
-    for (i, (zone, index_in_zone)) in shot_schedule(EvalMode::Block).into_iter().enumerate() {
-        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+    for (i, (zone, index_in_zone)) in EvalProtocol::shot_schedule(EvalMode::Block)
+        .into_iter()
+        .enumerate()
+    {
+        let settings = EvalProtocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         println!(
             "#{:<3} {:<6} pitch={:+.2} gate_clear={:<5} sim_touch={:<5} clearance={}",
             i + 1,
@@ -142,8 +145,11 @@ fn incoming_net_gate_agrees_with_sim() {
     let launch = pingpong_bot::sim::EvalLaunchParams::default();
     let mut disagreements = Vec::new();
 
-    for (i, (zone, index_in_zone)) in shot_schedule(EvalMode::Block).into_iter().enumerate() {
-        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+    for (i, (zone, index_in_zone)) in EvalProtocol::shot_schedule(EvalMode::Block)
+        .into_iter()
+        .enumerate()
+    {
+        let settings = EvalProtocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let gate_says_clear = settings.clears_incoming_rapier_net();
         let sim_touches_net = incoming_touches_net_in_sim(&settings);
         if gate_says_clear && sim_touches_net {

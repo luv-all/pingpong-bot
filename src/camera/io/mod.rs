@@ -12,15 +12,12 @@ mod threaded;
 pub use cam_cli::{
     CamCliArgs, CamStreamArgs, DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
     DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH, MonoOfflineArgs, ResolvedCam, StereoCamCliArgs,
-    StereoOfflineArgs, StereoPairCliArgs, StreamPreset, parse_fourcc, resolve_cams,
+    StereoOfflineArgs, StereoPairCliArgs, StreamPreset,
 };
 pub use capture::{
     CaptureBackend, ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture,
 };
-pub use clip::{
-    DEFAULT_CLIPS_DIR, ResolvedStereoOffline, StereoClip, resolve_clip_dir, resolve_clip_side,
-    resolve_mono_offline, resolve_stereo_clip, resolve_stereo_offline,
-};
+pub use clip::{DEFAULT_CLIPS_DIR, ResolvedStereoOffline, StereoClip};
 pub use preview::{
     FittedBgr, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, PixelPickMouse, PreviewAction,
     ShowBgrResult, WorldGridParams, apply_grid_key, arrow_delta, destroy_window,

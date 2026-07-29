@@ -8,11 +8,9 @@ use nalgebra::Vector3;
 use pingpong_bot::HitPlane;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::defaults;
-use pingpong_bot::estimator::ballistics::{predict_hit_plane, semi_implicit_euler};
-use pingpong_bot::estimator::bounce::table_bounce;
+use pingpong_bot::estimator::BallKinematics;
 use pingpong_bot::sim::SimWorld;
-use pingpong_bot::sim::eval_protocol::{EvalMode, settings_for_zone_shot, shot_schedule};
-use pingpong_bot::sim::physics::BallShooterSettings;
+use pingpong_bot::sim::eval_protocol::{EvalMode, EvalProtocol};
 
 fn v3(v: rapier3d::prelude::Vector) -> Vector3<f64> {
     return Vector3::new(f64::from(v.x), f64::from(v.y), f64::from(v.z));
@@ -104,7 +102,8 @@ fn table_bounce_kernel_matches_rapier_contact() {
     let mut failures = Vec::new();
     for (velocity, omega) in cases {
         let sample = observe_bounce(velocity, omega);
-        let (kernel_v, kernel_w) = table_bounce(sample.v_before, sample.omega_before, &physics);
+        let (kernel_v, kernel_w) =
+            BallKinematics::bounce_on_table(sample.v_before, sample.omega_before, &physics);
         let error = (kernel_v - sample.v_after).norm();
         println!(
             "v_in=[{:.2} {:.2} {:.2}] w_in=[{:.1} {:.1} {:.1}]\n  \
@@ -173,12 +172,12 @@ fn hit_plane_prediction_matches_simulated_ball() {
     let mut worst = 0.0_f64;
     let mut net_clipped = 0;
     let mut report = Vec::new();
-    for (index, (zone, index_in_zone)) in shot_schedule(EvalMode::Block)
+    for (index, (zone, index_in_zone)) in EvalProtocol::shot_schedule(EvalMode::Block)
         .into_iter()
         .enumerate()
         .filter(|(i, _)| i % 4 == 0)
     {
-        let settings = settings_for_zone_shot(
+        let settings = EvalProtocol::settings_for_zone_shot(
             &pingpong_bot::sim::EvalLaunchParams::default(),
             zone,
             index_in_zone,
@@ -204,7 +203,7 @@ fn hit_plane_prediction_matches_simulated_ball() {
             }
             let velocity = v3(world.ball_velocity());
             let omega = v3(world.ball_angular_velocity());
-            prediction = predict_hit_plane(position, velocity, omega, plane, &physics);
+            prediction = BallKinematics::predict_to(position, velocity, omega, plane, &physics);
             if prediction.is_some() {
                 prediction_start = (position, velocity, omega);
             }
@@ -258,7 +257,7 @@ fn hit_plane_prediction_matches_simulated_ball() {
         for _ in 0..2_000 {
             let previous_vz = kernel_vel.z;
             let (p, v, w) =
-                semi_implicit_euler(kernel_pos, kernel_vel, kernel_omega, 1.0 / 1000.0, &physics);
+                BallKinematics::step(kernel_pos, kernel_vel, kernel_omega, 1.0 / 1000.0, &physics);
             kernel_pos = p;
             kernel_vel = v;
             kernel_omega = w;
@@ -314,7 +313,7 @@ fn hit_plane_prediction_matches_simulated_ball() {
 fn table_bounce_kernel_models_spin_change() {
     let sample = observe_bounce(Vector3::new(0.0, -6.5, -2.5), Vector3::zeros());
     let spin_change = (sample.omega_after - sample.omega_before).norm();
-    let (_, kernel_w) = table_bounce(
+    let (_, kernel_w) = BallKinematics::bounce_on_table(
         sample.v_before,
         sample.omega_before,
         &defaults::PhysicsParams::default(),

@@ -20,7 +20,8 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
 use crate::error::DomainError;
-use crate::{Arm, PlannedBangBangIntercept, Prediction, RobotPose, plan_bang_bang_swing};
+use crate::planner::SwingPlanner;
+use crate::{Arm, PlannedBangBangIntercept, Prediction, RobotPose};
 
 struct Request {
     id: u64,
@@ -55,8 +56,11 @@ impl BangBangWorker {
         let (res_tx, res_rx) = unbounded::<Response>();
         thread::spawn(move || {
             for request in req_rx.iter() {
-                let result =
-                    plan_bang_bang_swing(&request.arm, &request.predictions, &request.start);
+                let result = SwingPlanner::plan_bang_bang(
+                    &request.arm,
+                    &request.predictions,
+                    &request.start,
+                );
                 // 수신측(SimWorld)이 이미 drop돼 채널이 끊겼으면 조용히 종료.
                 if res_tx
                     .send(Response {

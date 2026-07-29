@@ -22,6 +22,11 @@ impl ScorerParams {
         );
         return Ok(());
     }
+
+    /// 캘리브 카메라 파라미터로 면적 밴드를 채운다.
+    pub fn from_calib(params: &crate::camera::CameraParams, circularity: f64) -> Result<Self> {
+        return crate::detector::scorer_params_from_calib(params, circularity);
+    }
 }
 
 #[cfg(test)]

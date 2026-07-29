@@ -30,9 +30,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use nalgebra::Vector3;
+use pingpong_bot::planner::{Impact, SwingPlanner};
 use pingpong_bot::{
     Arm, Joints, MountPreset, Point3, RacketGuidanceScratch, RobotBuilder, RobotPose, defaults,
-    rally_return_velocity, required_racket_velocity, step_racket_guidance,
 };
 use serde::{Deserialize, Serialize};
 
@@ -306,7 +306,7 @@ fn compute_target(
     incoming_velocity: Vector3<f64>,
 ) -> Result<Target> {
     let v_in = incoming_velocity;
-    let v_out = rally_return_velocity(impact, v_in);
+    let v_out = Impact::rally_return(impact, v_in);
     let desired_normal = (v_out - v_in).normalize();
 
     let ik_hint = arm
@@ -329,7 +329,7 @@ fn compute_target(
         .forward_kinematics_with_rail(solved.rail_x, &solved.joints)
         .ok_or_else(|| anyhow!("IK 해에서 FK 실패"))?;
 
-    let v_r = required_racket_velocity(
+    let v_r = Impact::required_racket_velocity(
         v_in,
         v_out,
         pose.normal,
@@ -417,7 +417,7 @@ fn simulate(
         // ZEM/ZEV의 `Tg`(목표 도달까지 남은 시간)로 이 시뮬레이션 자체의
         // 예산(`max_time_secs`)을 쓴다 — 모듈 문서 참고.
         let remaining_secs = max_time_secs - t;
-        let Some(step) = step_racket_guidance(
+        let Some(step) = SwingPlanner::step_racket_guidance(
             arm,
             &mut q,
             &mut qdot,

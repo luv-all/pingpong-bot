@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use anyhow::Result;
-use pingpong_bot::{BallHandle, Point3, SimScene, new_shutdown_flag};
+use pingpong_bot::{BallHandle, Point3, SimRuntimeControls, SimScene};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -18,7 +18,7 @@ struct BallMsg {
 
 /// `--sim-child` — kiss3d 블로킹. 부모 stdin: `{"x","y","z"}` 또는 `hide`.
 pub fn run_sim_child() -> Result<()> {
-    let shutdown = new_shutdown_flag();
+    let shutdown = SimRuntimeControls::new_shutdown();
     let scene = SimScene::builder()
         .title("verify-stereo sim")
         .with_ball()

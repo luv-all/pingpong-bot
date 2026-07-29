@@ -43,9 +43,9 @@ impl SimRuntimeControls {
     pub fn request_park(&mut self) {
         self.park_requested = true;
     }
-}
 
-/// 파이프라인·GUI 종료 신호.
-pub fn new_shutdown_flag() -> Arc<AtomicBool> {
-    return Arc::new(AtomicBool::new(false));
+    /// 파이프라인·GUI 종료 신호.
+    pub fn new_shutdown() -> Arc<AtomicBool> {
+        return Arc::new(AtomicBool::new(false));
+    }
 }

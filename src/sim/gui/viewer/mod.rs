@@ -52,7 +52,7 @@ const WORLD_LOCK_RETRY: Duration = Duration::from_micros(50);
 ///
 /// 렌더 스레드가 물리 스레드에 무한정 막히면 안 되므로 상한을 두되,
 /// `try_lock` 1회처럼 즉시 포기하지도 않는다 — 위 상수 설명 참고.
-pub fn lock_world_for_frame(world: &Mutex<SimWorld>) -> Option<MutexGuard<'_, SimWorld>> {
+pub(crate) fn lock_world_for_frame(world: &Mutex<SimWorld>) -> Option<MutexGuard<'_, SimWorld>> {
     let deadline = Instant::now() + WORLD_LOCK_WAIT;
     loop {
         match world.try_lock() {

@@ -171,7 +171,7 @@ pub fn required_joint_torques_into(
 /// [`required_joint_torques`]의 `Option` 버전 — `q`/`qd`/`qdd` 길이가 관절 수와
 /// 안 맞으면 `None`. 실기 Goal Current FF·HUD 디버그처럼 "모르면 스킵"이
 /// 안전한 호출부용 (`&[f64]` 원시 슬라이스 호출부, `Joints` 래핑 없이 씀).
-pub fn required_torque(arm: &Arm, q: &[f64], qd: &[f64], qdd: &[f64]) -> Option<Vec<f64>> {
+pub(crate) fn required_torque(arm: &Arm, q: &[f64], qd: &[f64], qdd: &[f64]) -> Option<Vec<f64>> {
     let n = arm.joint_count();
     if q.len() != n || qd.len() != n || qdd.len() != n {
         return None;
@@ -309,7 +309,7 @@ pub fn forward_dynamics(
 }
 
 /// \(|\tau_i| \le limits[i]` (limits 짧으면 마지막 값 반복).
-pub fn is_feasible(tau: &[f64], limits: &[f64]) -> bool {
+pub(crate) fn is_feasible(tau: &[f64], limits: &[f64]) -> bool {
     if limits.is_empty() {
         return false;
     }

@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use nalgebra::{Matrix3, Matrix6, Vector3, Vector6};
 
-use super::ballistics::{predict_hit_plane, semi_implicit_euler};
+use super::BallKinematics;
 use crate::defaults;
 use crate::defaults::PhysicsParams;
 use crate::estimator::Estimator;
@@ -173,7 +173,7 @@ impl BallEkf {
 
     fn predict_step(&mut self, dt: f64) {
         // ω 추정 전 — 각속도 0으로 전파.
-        let (pos, vel, _) = semi_implicit_euler(
+        let (pos, vel, _) = BallKinematics::step(
             self.position,
             self.velocity,
             Vector3::zeros(),
@@ -211,7 +211,7 @@ impl Estimator for BallEkf {
         if !self.initialized || !self.velocity_seeded {
             return None;
         }
-        return predict_hit_plane(
+        return BallKinematics::predict_to(
             self.position,
             self.velocity,
             Vector3::zeros(),
@@ -227,8 +227,8 @@ mod tests {
 
     use super::*;
     use crate::constants::table;
-    use crate::estimator::ballistics::{predict_hit_plane, semi_implicit_euler};
-    use crate::planner::physics::in_swing_commit_window;
+    use crate::estimator::BallKinematics;
+    use crate::planner::SwingPlanner;
 
     #[test]
     fn ekf_predicts_hit_plane_from_state() {
@@ -299,7 +299,8 @@ mod tests {
         let p0 = Vector3::new(table::WIDTH_X * 0.5, 2.4, table::SURFACE_Z + 0.25);
         let v0 = Vector3::new(0.0, -5.5, 0.8);
         let physics = crate::defaults::PhysicsParams::default();
-        let truth0 = predict_hit_plane(p0, v0, Vector3::zeros(), plane, &physics).expect("truth");
+        let truth0 =
+            BallKinematics::predict_to(p0, v0, Vector3::zeros(), plane, &physics).expect("truth");
 
         let mut ekf = BallEkf::new(0.0);
         let t0 = Instant::now();
@@ -313,7 +314,7 @@ mod tests {
             let time = t0 + dt * i;
             ekf.update_position(Point3::from(pos), time);
             if let Some(pred) = ekf.predict_to(plane) {
-                if in_swing_commit_window(pred.time_to_impact_secs)
+                if SwingPlanner::in_commit_window(pred.time_to_impact_secs)
                     && pos.y
                         <= table::LENGTH_Y
                             * defaults::ControlParams::default().swing_commit_max_ball_y_frac
@@ -322,7 +323,7 @@ mod tests {
                     best_err = best_err.min(err);
                 }
             }
-            let (np, nv, _) = semi_implicit_euler(pos, vel, Vector3::zeros(), 0.008, &physics);
+            let (np, nv, _) = BallKinematics::step(pos, vel, Vector3::zeros(), 0.008, &physics);
             pos = np;
             vel = nv;
             t += 0.008;

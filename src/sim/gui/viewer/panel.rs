@@ -750,7 +750,7 @@ fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mo
     let launch = ui_state.eval_launch;
     std::thread::spawn(move || {
         let _report =
-            eval_protocol::run_eval_protocol(&robot, physics, &launch, mode, Some(progress));
+            eval_protocol::EvalProtocol::run(&robot, physics, &launch, mode, Some(progress));
         running.store(false, Ordering::Relaxed);
     });
 }

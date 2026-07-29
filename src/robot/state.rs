@@ -1,6 +1,7 @@
 //! 런타임 관절 상태 - sim/real encoder 읽기가 같은 타입을 채운다.
 
 use super::{Arm, RacketPose};
+use crate::planner::SwingPlanner;
 use crate::{BangBangTrajectory, Joints};
 
 /// 런타임 관절 상태 - sim `RobotState`/real encoder 읽기가 같은 타입을 채운다.
@@ -217,7 +218,7 @@ impl RobotState {
             let finished = self.advance_swing_commands(dt);
             if finished && self.auto_return_to_center && !self.is_at_center(arm) {
                 let start = crate::RobotPose::new(self.rail_x, self.angles.clone());
-                if let Ok(trajectory) = crate::plan_return_to_center(arm, &start) {
+                if let Ok(trajectory) = SwingPlanner::return_to_center(arm, &start) {
                     self.replace_swing(trajectory);
                 }
             }
@@ -337,7 +338,7 @@ impl RobotState {
             let finished = self.advance_swing(arm, dt);
             if finished && self.auto_return_to_center && !self.is_at_center(arm) {
                 let start = crate::RobotPose::new(self.rail_x, self.angles.clone());
-                if let Ok(trajectory) = crate::plan_return_to_center(arm, &start) {
+                if let Ok(trajectory) = SwingPlanner::return_to_center(arm, &start) {
                     self.replace_swing(trajectory);
                 }
             }

@@ -4,10 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use pingpong_bot::{
-    Calibration, CameraId, CameraParams, PixelPoint, calibrate_table_pnp, ensure_reproj_below,
-    upsert_camera,
-};
+use pingpong_bot::TablePnp;
+use pingpong_bot::{Calibration, CameraId, CameraParams, PixelPoint};
 use serde::Deserialize;
 
 use crate::args::{Args, pending_path, resolve_camera_id, resolve_output};
@@ -56,7 +54,7 @@ pub fn from_pixels(path: &PathBuf, args: &Args) -> Result<()> {
         .iter()
         .map(|p| PixelPoint::new(p[0], p[1]))
         .collect();
-    let result = calibrate_table_pnp(
+    let result = TablePnp::calibrate(
         resolve_camera_id(args).map_err(anyhow::Error::msg)?,
         file.label,
         file.width,
@@ -72,7 +70,7 @@ pub fn from_pixels(path: &PathBuf, args: &Args) -> Result<()> {
             args.max_rmse
         );
     }
-    ensure_reproj_below(&result, args.max_rmse).map_err(anyhow::Error::msg)?;
+    TablePnp::ensure_reproj_below(&result, args.max_rmse).map_err(anyhow::Error::msg)?;
     return write_result(args, result.params, result.reproj_rmse, result.candidates);
 }
 
@@ -131,7 +129,7 @@ pub fn write_pending(
     let mut calib = read_pending_file(&path).unwrap_or_else(|| Calibration {
         cameras: Vec::new(),
     });
-    upsert_camera(&mut calib, params);
+    TablePnp::upsert_camera(&mut calib, params);
     let json = serde_json::to_string_pretty(&calib)?;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -237,7 +235,7 @@ pub fn write_result(args: &Args, params: CameraParams, rmse: f64, candidates: us
         }
     };
 
-    upsert_camera(&mut calib, params);
+    TablePnp::upsert_camera(&mut calib, params);
     let json = serde_json::to_string_pretty(&calib)?;
     if let Some(parent) = output.parent() {
         if !parent.as_os_str().is_empty() {

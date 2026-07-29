@@ -43,7 +43,10 @@ impl FloorEdgeMask {
         };
         ensure!(params.fx > 0.0, "floor-edge: fx must be > 0");
         let margin_m = MAX_REPROJ_RMSE_PX * z_cam / params.fx;
-        ensure!(margin_m.is_finite() && margin_m >= 0.0, "floor-edge: bad margin");
+        ensure!(
+            margin_m.is_finite() && margin_m >= 0.0,
+            "floor-edge: bad margin"
+        );
 
         // keep 여유: 컷을 바닥 쪽으로 민다 (left: x=-δ, right: x=W+δ).
         let cut_x = if cam_id.0 == 0 {

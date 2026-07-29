@@ -8,13 +8,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::Calibration;
+use crate::camera::Triangulate;
 use crate::camera::{CameraParams, FrameSource, HintSource};
-use crate::detector::{Detector, passthrough_detect, undistort_frame};
+use crate::detector::Detector;
+use crate::planner::SwingPlanner;
 use crate::{
     BallObservation, CameraId, DomainError, Estimator, Hardware, InterceptWindow, Prediction,
-    Robot, SwingPlanError, Telemetry, TelemetryEvent, plan_best_swing,
+    Robot, SwingPlanError, Telemetry, TelemetryEvent,
 };
-use crate::{Calibration, triangulate_synced};
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
 use tracing::{info, info_span, warn};
@@ -80,7 +82,7 @@ pub fn run(
                 CameraFeed::Hint(mut camera) => {
                     while let Some((camera_id, hint, timestamp)) = camera.next_hint() {
                         let _span = info_span!("detect", ?camera_id).entered();
-                        if let Some(pixel) = passthrough_detect(hint) {
+                        if let Some(pixel) = Detector::passthrough(hint) {
                             if sender
                                 .send(BallObservation {
                                     pixel,
@@ -102,7 +104,7 @@ pub fn run(
                     while let Some(frame) = source.next_frame() {
                         let camera_id = frame.camera_id;
                         let _span = info_span!("detect", ?camera_id).entered();
-                        let frame = match undistort_frame(&frame, &params) {
+                        let frame = match Detector::undistort(&frame, &params) {
                             Ok(f) => f,
                             Err(err) => {
                                 warn!(%err, "undistort 실패 — 프레임 스킵");
@@ -172,7 +174,7 @@ pub fn run(
                     continue;
                 }
 
-                match triangulate_synced(&refs, sync_time, &calibration) {
+                match Triangulate::synced(&refs, sync_time, &calibration) {
                     Ok(point) => {
                         estimator.update(point, sync_time);
                         let candidates: Vec<Prediction> = intercept
@@ -219,7 +221,7 @@ pub fn run(
                             continue;
                         }
                     };
-                    match plan_best_swing(&arm, &candidates, &start) {
+                    match SwingPlanner::plan_best(&arm, &candidates, &start) {
                         Ok(planned) => {
                             let trajectory = planned.trajectory;
                             telemetry_control.log(TelemetryEvent::SwingCommand(trajectory.clone()));
@@ -263,6 +265,21 @@ pub fn run(
 
     info!("파이프라인 종료");
     return Ok(());
+}
+
+/// 파이프라인 실행 공개 진입점.
+pub struct Pipeline;
+
+impl Pipeline {
+    pub fn run(
+        cameras: Vec<CameraFeed>,
+        estimator: Box<dyn Estimator>,
+        hardware: Box<dyn Hardware>,
+        config: PipelineConfig,
+        telemetry: Arc<dyn Telemetry>,
+    ) -> Result<(), PipelineError> {
+        return run(cameras, estimator, hardware, config, telemetry);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

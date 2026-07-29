@@ -7,19 +7,9 @@ pub mod swing;
 
 pub use bang_bang::{
     BangBangTrajectory, PlannedBangBangIntercept, RacketGuidanceScratch, RacketGuidanceStep,
-    plan_bang_bang_swing, step_racket_guidance,
 };
-pub use collision::{OrientedBox, clamp_above_table, robot_obbs, table_penetration};
-pub use impact::{rally_return_velocity, required_racket_velocity, verify_impact_model};
-/// 하위 호환: `planner::physics::…`
-pub use swing::physics;
-/// 하위 호환: `planner::trajectory::…`
-pub use swing::trajectory;
-pub use swing::{
-    PlannedIntercept, RailMotion, SwingFeasibility, SwingTrajectory, accel, aero_accel,
-    ball_past_midcourt_for_commit, in_swing_commit_window, plan_best_swing, plan_coarse_track,
-    plan_return_to_center, plan_swing, swing_feasibility,
-};
+pub use collision::OrientedBox;
+pub use swing::{PlannedIntercept, RailMotion, SwingFeasibility, SwingTrajectory};
 
 use anyhow::{Result, ensure};
 
@@ -68,6 +58,146 @@ impl InterceptWindow {
             planes.push(HitPlane { y: self.y_max });
         }
         return planes;
+    }
+}
+
+/// 임팩트 역산의 공개 진입점.
+pub struct Impact;
+
+impl Impact {
+    pub fn rally_return(
+        impact: crate::Point3,
+        incoming_velocity: nalgebra::Vector3<f64>,
+    ) -> nalgebra::Vector3<f64> {
+        return impact::rally_return_velocity(impact, incoming_velocity);
+    }
+
+    pub fn required_racket_velocity(
+        incoming_velocity: nalgebra::Vector3<f64>,
+        outgoing_velocity: nalgebra::Vector3<f64>,
+        normal: nalgebra::Vector3<f64>,
+        restitution: f64,
+    ) -> Result<nalgebra::Vector3<f64>, crate::error::SwingPlanError> {
+        return impact::required_racket_velocity(
+            incoming_velocity,
+            outgoing_velocity,
+            normal,
+            restitution,
+        );
+    }
+
+    pub fn verify(
+        incoming_velocity: nalgebra::Vector3<f64>,
+        outgoing_velocity: nalgebra::Vector3<f64>,
+        racket_velocity: nalgebra::Vector3<f64>,
+        normal: nalgebra::Vector3<f64>,
+        restitution: f64,
+    ) -> bool {
+        return impact::verify_impact_model(
+            incoming_velocity,
+            outgoing_velocity,
+            racket_velocity,
+            normal,
+            restitution,
+        );
+    }
+
+    pub fn clears_net(impact: crate::Point3, outgoing_velocity: nalgebra::Vector3<f64>) -> bool {
+        return impact::clears_net_ballistic(impact, outgoing_velocity);
+    }
+}
+
+/// 스윙 계획의 공개 진입점.
+pub struct SwingPlanner;
+
+impl SwingPlanner {
+    pub fn aero_accel(
+        velocity: nalgebra::Vector3<f64>,
+        omega: nalgebra::Vector3<f64>,
+        drag_coefficient: f64,
+        magnus_coefficient: f64,
+    ) -> nalgebra::Vector3<f64> {
+        return swing::physics::aero_accel(velocity, omega, drag_coefficient, magnus_coefficient);
+    }
+
+    pub fn in_commit_window(time_to_impact_secs: f64) -> bool {
+        return swing::physics::in_swing_commit_window(time_to_impact_secs);
+    }
+
+    pub fn past_midcourt(ball_y: f64) -> bool {
+        return swing::physics::ball_past_midcourt_for_commit(ball_y);
+    }
+
+    pub fn feasibility(
+        arm: &crate::robot::Arm,
+        prediction: &crate::Prediction,
+        start: &crate::RobotPose,
+    ) -> Option<SwingFeasibility> {
+        return swing::physics::swing_feasibility(arm, prediction, start);
+    }
+
+    pub fn plan(
+        arm: &crate::robot::Arm,
+        prediction: crate::Prediction,
+        start: &crate::RobotPose,
+    ) -> Result<SwingTrajectory, crate::error::DomainError> {
+        return swing::physics::plan_swing(arm, prediction, start);
+    }
+
+    pub fn plan_best(
+        arm: &crate::robot::Arm,
+        predictions: &[crate::Prediction],
+        start: &crate::RobotPose,
+    ) -> Result<PlannedIntercept, crate::error::DomainError> {
+        return swing::physics::plan_best_swing(arm, predictions, start);
+    }
+
+    pub fn plan_coarse_track(
+        arm: &crate::robot::Arm,
+        predictions: &[crate::Prediction],
+    ) -> Option<crate::RobotPose> {
+        return swing::physics::plan_coarse_track(arm, predictions);
+    }
+
+    pub fn return_to_center(
+        arm: &crate::robot::Arm,
+        start: &crate::RobotPose,
+    ) -> Result<SwingTrajectory, crate::error::DomainError> {
+        return swing::physics::plan_return_to_center(arm, start);
+    }
+
+    pub fn plan_bang_bang(
+        arm: &crate::robot::Arm,
+        predictions: &[crate::Prediction],
+        start: &crate::RobotPose,
+    ) -> Result<PlannedBangBangIntercept, crate::error::DomainError> {
+        return bang_bang::plan_bang_bang_swing(arm, predictions, start);
+    }
+
+    pub fn step_racket_guidance(
+        arm: &crate::robot::Arm,
+        q: &mut [f64],
+        qdot: &mut [f64],
+        rail_x: &mut f64,
+        rail_v: &mut f64,
+        target_racket_position: nalgebra::Vector3<f64>,
+        target_racket_velocity: nalgebra::Vector3<f64>,
+        remaining_secs: f64,
+        dt: f64,
+        scratch: &mut RacketGuidanceScratch,
+    ) -> Option<RacketGuidanceStep> {
+        return bang_bang::step_racket_guidance(
+            arm,
+            q,
+            qdot,
+            rail_x,
+            rail_v,
+            target_racket_position,
+            target_racket_velocity,
+            remaining_secs,
+            dt,
+            scratch,
+        );
     }
 }
 

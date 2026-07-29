@@ -13,23 +13,18 @@ pub mod physics;
 pub mod session;
 
 pub use eval_protocol::{
-    EvalLaunchParams, EvalMode, EvalProgress, EvalReport, EvalShot, EvalZone, LiveShotObserver,
-    MAX_SCORE, PASS_SCORE_EXCLUSIVE, SHOTS_PER_ZONE, TOTAL_SHOTS, run_eval_protocol, run_eval_shot,
-    settings_for_zone, settings_for_zone_shot, settings_for_zone_shot_jittered, shot_schedule,
+    EvalLaunchParams, EvalMode, EvalProgress, EvalProtocol, EvalReport, EvalShot, EvalZone,
+    LiveShotObserver, MAX_SCORE, PASS_SCORE_EXCLUSIVE, SHOTS_PER_ZONE, TOTAL_SHOTS,
 };
 #[cfg(feature = "gui")]
 pub use gui::{
-    BallHandle, BallOnlyViewerOptions, BallVisual, RobotHandle, SceneHostOptions, SceneLayers,
-    SceneLayersBuilder, SceneUiDraw, SceneUiHook, ShooterHandle, SimScene, SimSceneBuilder,
-    SimViewerOptions, TableSceneOptions, build_table_scene, run_ball_only_viewer, run_scene_host,
-    run_sim_viewer,
+    BallHandle, BallOnlyViewerOptions, BallVisual, RobotHandle, SceneHost, SceneHostOptions,
+    SceneLayers, SceneLayersBuilder, SceneUiDraw, SceneUiHook, ShooterHandle, SimScene,
+    SimSceneBuilder, SimViewer, SimViewerOptions, TableSceneOptions,
 };
 pub use gui::{CommitPhase, DebugOverlays, SimDebugSnapshot};
 pub use physics::{ArmMultibody, BallShooterSettings, BallState, ShooterLayout, SimWorld};
-pub use session::{
-    SimBallEstimator, SimRuntimeControls, SimSession, SimSessionConfig, new_shutdown_flag,
-    predict_impact,
-};
+pub use session::{SimBallEstimator, SimRuntimeControls, SimSession, SimSessionConfig};
 
 // 하위 호환 모듈 경로 (`sim::world`, `sim::shooter`, …)
 pub use gui::debug_overlays;

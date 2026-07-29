@@ -55,7 +55,7 @@ struct ClipMetaFile {
 }
 
 /// `fly_01` → `data/clips/fly_01`, 또는 이미 디렉터리면 그대로.
-pub fn resolve_clip_dir(clip: &Path) -> Result<PathBuf, String> {
+pub(crate) fn resolve_clip_dir(clip: &Path) -> Result<PathBuf, String> {
     if clip.as_os_str().is_empty() {
         return Err("--clip 이 비어 있음".into());
     }
@@ -106,7 +106,7 @@ fn load_meas_fps(dir: &Path) -> Option<f64> {
 }
 
 /// `--clip fly_01` → left/right 영상 + optional meas_fps.
-pub fn resolve_stereo_clip(clip: &Path) -> Result<StereoClip, String> {
+pub(crate) fn resolve_stereo_clip(clip: &Path) -> Result<StereoClip, String> {
     let dir = resolve_clip_dir(clip)?;
     let left = find_side_video(&dir, "left")?;
     let right = find_side_video(&dir, "right")?;
@@ -120,13 +120,15 @@ pub fn resolve_stereo_clip(clip: &Path) -> Result<StereoClip, String> {
 }
 
 /// 단안 툴: `--clip fly_01 --cam left` → `…/left.avi`.
-pub fn resolve_clip_side(clip: &Path, role: CameraRole) -> Result<PathBuf, String> {
+pub(crate) fn resolve_clip_side(clip: &Path, role: CameraRole) -> Result<PathBuf, String> {
     let dir = resolve_clip_dir(clip)?;
     return find_side_video(&dir, role.as_str());
 }
 
 /// `--clip` → 오프라인 경로. 없으면 `Ok(None)` (라이브).
-pub fn resolve_stereo_offline(clip: Option<&Path>) -> Result<Option<ResolvedStereoOffline>, String> {
+pub(crate) fn resolve_stereo_offline(
+    clip: Option<&Path>,
+) -> Result<Option<ResolvedStereoOffline>, String> {
     let Some(clip) = clip else {
         return Ok(None);
     };
@@ -140,7 +142,7 @@ pub fn resolve_stereo_offline(clip: Option<&Path>) -> Result<Option<ResolvedSter
 }
 
 /// `--clip` → 단안 파일. 없으면 `Ok(None)` (라이브).
-pub fn resolve_mono_offline(
+pub(crate) fn resolve_mono_offline(
     clip: Option<&Path>,
     role: CameraRole,
 ) -> Result<Option<PathBuf>, String> {

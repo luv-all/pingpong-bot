@@ -4,8 +4,8 @@
 //! - `Space` 동결/해제
 //! - `e` 짧은 노출 시도 (macOS OpenCV/AVFoundation에선 대개 무시됨)
 //!
-//! 모자이크는 `pingpong_bot::hstack_bgr` (최대 높이 + 패딩, 손실 없음).
-//! 표시만 모니터보다 클 때 downscale (`show_bgr`).
+//! 모자이크는 `Preview::hstack_bgr` (최대 높이 + 패딩, 손실 없음).
+//! 표시만 모니터보다 클 때 downscale (`Preview::show_bgr`).
 
 use std::time::Instant;
 
@@ -14,8 +14,7 @@ use clap::Parser;
 use opencv::core::Scalar;
 use opencv::prelude::*;
 use pingpong_bot::{
-    FrameSource, OpenCvCapture, PreviewAction, StereoCamCliArgs, ThreadedCapture, destroy_window,
-    draw_cam_label, draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
+    FrameSource, OpenCvCapture, Preview, PreviewAction, StereoCamCliArgs, ThreadedCapture,
 };
 
 #[derive(Parser, Debug)]
@@ -210,8 +209,8 @@ fn main() -> Result<()> {
                 }
             }
 
-            draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-            draw_cam_label(&mut panel, &cam.label, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+            Preview::draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+            Preview::draw_cam_label(&mut panel, &cam.label, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
             cam.panel = Some(panel);
         }
 
@@ -224,12 +223,12 @@ fn main() -> Result<()> {
                 .try_clone()
                 .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
             if frozen {
-                draw_cam_label(&mut shown, "FROZEN", Scalar::new(0.0, 0.0, 255.0, 0.0))?;
+                Preview::draw_cam_label(&mut shown, "FROZEN", Scalar::new(0.0, 0.0, 255.0, 0.0))?;
             }
             panels.push(shown);
         }
 
-        let mut mosaic = hstack_bgr(&panels)?;
+        let mut mosaic = Preview::hstack_bgr(&panels)?;
         let help_exp = if !exp_supported {
             "e N/A(mac)"
         } else if short_exposure {
@@ -238,8 +237,8 @@ fn main() -> Result<()> {
             "e auto"
         };
         let help = ["Space freeze", help_exp, "q/ESC quit"];
-        draw_help_lines(&mut mosaic, &help, Scalar::new(0.0, 255.0, 80.0, 0.0))?;
-        match show_bgr(window, &mosaic, 1)?.action {
+        Preview::draw_help_lines(&mut mosaic, &help, Scalar::new(0.0, 255.0, 80.0, 0.0))?;
+        match Preview::show_bgr(window, &mosaic, 1)?.action {
             PreviewAction::Quit => break,
             PreviewAction::Continue => {}
             PreviewAction::Key(key) if key == i32::from(b' ') => {
@@ -281,7 +280,7 @@ fn main() -> Result<()> {
         }
     }
 
-    destroy_window(window);
+    Preview::destroy_window(window);
     let _ = cams;
     return Ok(());
 }

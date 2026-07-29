@@ -12,10 +12,9 @@ use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
-use pingpong_bot::{
-    PhysicsParams, StereoOfflineArgs, StereoPairCliArgs, calibration_path, drag_from_trajectory,
-    format_physics_for_defaults, restitution_from_bounce_heights, restitution_from_normal_speeds,
-};
+use pingpong_bot::defaults::{calibration_path, primitive_4dof};
+use pingpong_bot::estimator::{BallKinematics, PhysicsIdentify};
+use pingpong_bot::{PhysicsParams, StereoOfflineArgs, StereoPairCliArgs};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -69,7 +68,7 @@ fn main() -> Result<()> {
 
     if let Some(ref csv) = args.drag_csv {
         let samples = load_traj_csv(csv)?;
-        let k = drag_from_trajectory(&samples)
+        let k = PhysicsIdentify::drag_from_trajectory(&samples)
             .context("항력 적합 실패 — 샘플≥3, 비행 구간 속도≥0.3 m/s")?;
         println!("drag k = {k:.8}  (from {})", csv.display());
         patch.drag = Some(k);
@@ -111,7 +110,7 @@ fn main() -> Result<()> {
 
     if let Some(ref raw) = args.heights {
         let hs = parse_f64_list(raw)?;
-        let e = restitution_from_bounce_heights(&hs)
+        let e = PhysicsIdentify::restitution_from_bounce_heights(&hs)
             .context("높이로부터 e 추정 실패 — 높이 ≥2개, 양수")?;
         println!("restitution e = {e:.6}  (from {} heights)", hs.len());
         patch.restitution = Some(e);
@@ -119,7 +118,8 @@ fn main() -> Result<()> {
 
     if let Some(ref raw) = args.vz_pairs {
         let pairs = parse_pairs(raw)?;
-        let e = restitution_from_normal_speeds(&pairs).context("속도 쌍으로부터 e 추정 실패")?;
+        let e = PhysicsIdentify::restitution_from_normal_speeds(&pairs)
+            .context("속도 쌍으로부터 e 추정 실패")?;
         println!("restitution e = {e:.6}  (from {} vz pairs)", pairs.len());
         patch.restitution = Some(e);
     }
@@ -153,14 +153,12 @@ fn main() -> Result<()> {
 
     print!(
         "{}",
-        format_physics_for_defaults(patch.restitution, patch.friction, patch.drag)
+        PhysicsIdentify::format_physics_for_defaults(patch.restitution, patch.friction, patch.drag)
     );
     return Ok(());
 }
 
 fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
-    use pingpong_bot::estimator::ballistics::semi_implicit_euler;
-
     let physics = PhysicsParams::default();
     let floor = table::SURFACE_Z + ball::RADIUS;
     let mut pos = Vector3::new(
@@ -175,7 +173,7 @@ fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
     let mut prev_vz: f64 = 0.0;
 
     for _ in 0..10_000 {
-        let (np, nv, _) = semi_implicit_euler(pos, vel, Vector3::zeros(), dt, &physics);
+        let (np, nv, _) = BallKinematics::step(pos, vel, Vector3::zeros(), dt, &physics);
         if vin.is_none() && prev_vz < -0.5 && nv.z >= 0.0 {
             vin = Some((-prev_vz).max(1e-6_f64));
             vout = Some(nv.z.max(0.0_f64));
@@ -189,11 +187,11 @@ fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
         (Some(a), Some(b)) => (a, b),
         _ => bail!("ballistics 바운스를 잡지 못함"),
     };
-    return restitution_from_normal_speeds(&[(vin, vout)]).context("ballistics e");
+    return PhysicsIdentify::restitution_from_normal_speeds(&[(vin, vout)]).context("ballistics e");
 }
 
 fn measure_e_in_sim(drop_height: f64) -> Result<f64> {
-    let robot = pingpong_bot::primitive_4dof().context("competition arm")?;
+    let robot = primitive_4dof().context("competition arm")?;
     let mut world = SimWorld::new(robot);
     world.set_use_ground_truth(false);
 
@@ -238,7 +236,8 @@ fn measure_e_in_sim(drop_height: f64) -> Result<f64> {
     let vin = (-min_vz).abs();
     let vout = max_vz_after;
     println!("sim vz_in={vin:.4} vz_out={vout:.4}");
-    return restitution_from_normal_speeds(&[(vin, vout)]).context("sim e 계산 실패");
+    return PhysicsIdentify::restitution_from_normal_speeds(&[(vin, vout)])
+        .context("sim e 계산 실패");
 }
 
 fn parse_f64_list(raw: &str) -> Result<Vec<f64>> {

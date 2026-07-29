@@ -12,8 +12,8 @@ use nalgebra::Vector3;
 
 use pingpong_bot::constants::{BALL_RADIUS, table};
 use pingpong_bot::defaults;
-use pingpong_bot::planner::impact::rally_return_velocity;
-use pingpong_bot::sim::eval_protocol::{EvalMode, settings_for_zone_shot, shot_schedule};
+use pingpong_bot::planner::Impact;
+use pingpong_bot::sim::eval_protocol::{EvalMode, EvalProtocol};
 use pingpong_bot::sim::physics::BallShooterSettings;
 use pingpong_bot::sim::{BallState, SimWorld};
 
@@ -152,7 +152,7 @@ fn run_shot(index: usize, settings: &BallShooterSettings) -> ShotDiag {
             diag.impact = p;
             diag.normal = racket_normal(&world);
             diag.v_racket = racket_point_velocity(&world, p);
-            diag.v_out_desired = rally_return_velocity(pingpong_bot::Point3::from(p), prev_v);
+            diag.v_out_desired = Impact::rally_return(pingpong_bot::Point3::from(p), prev_v);
             if let Some((_, q, qd, _)) = commanded {
                 diag.v_racket_commanded = commanded_racket_velocity(&world, &q, &qd);
                 diag.normal_commanded = world
@@ -199,10 +199,10 @@ fn diag_swing_timeseries() {
         .without_time()
         .try_init();
     let launch = pingpong_bot::sim::EvalLaunchParams::default();
-    let schedule = shot_schedule(EvalMode::Block);
+    let schedule = EvalProtocol::shot_schedule(EvalMode::Block);
     for pick in [0_usize, 20] {
         let (zone, index_in_zone) = schedule[pick];
-        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+        let settings = EvalProtocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let robot = defaults::robot().expect("robot");
         let mut world = SimWorld::with_physics(robot, defaults::PhysicsParams::default());
         world.set_use_ground_truth(true);
@@ -282,8 +282,11 @@ fn diag_swing_timeseries() {
 fn diag_motor_tracking() {
     const DT: f64 = 1.0 / 1000.0;
     let launch = pingpong_bot::sim::EvalLaunchParams::default();
-    let settings =
-        settings_for_zone_shot(&launch, pingpong_bot::sim::eval_protocol::EvalZone::Left, 9);
+    let settings = EvalProtocol::settings_for_zone_shot(
+        &launch,
+        pingpong_bot::sim::eval_protocol::EvalZone::Left,
+        9,
+    );
     let mut world = SimWorld::with_physics(
         defaults::robot().expect("robot"),
         defaults::PhysicsParams::default(),
@@ -377,7 +380,7 @@ fn diag_incoming_trajectory() {
             2,
         ),
     ] {
-        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+        let settings = EvalProtocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let mut world = SimWorld::with_physics(
             defaults::robot().expect("robot"),
             defaults::PhysicsParams::default(),
@@ -452,8 +455,11 @@ fn diag_miss_cause() {
         "ball @ min_d",
         "racket @ min_d"
     );
-    for (i, (zone, index_in_zone)) in shot_schedule(EvalMode::Block).into_iter().enumerate() {
-        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+    for (i, (zone, index_in_zone)) in EvalProtocol::shot_schedule(EvalMode::Block)
+        .into_iter()
+        .enumerate()
+    {
+        let settings = EvalProtocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let mut world = SimWorld::with_physics(
             defaults::robot().expect("robot"),
             defaults::PhysicsParams::default(),
@@ -528,10 +534,12 @@ fn diag_eval_flags_deterministic() {
     let physics = defaults::PhysicsParams::default();
     let robot = defaults::robot().expect("robot");
     let mut contact = 0;
-    for (i, (zone, index_in_zone)) in shot_schedule(EvalMode::Block).into_iter().enumerate() {
-        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
-        let (flags, passthrough) =
-            pingpong_bot::sim::eval_protocol::run_eval_shot(&robot, physics, &settings);
+    for (i, (zone, index_in_zone)) in EvalProtocol::shot_schedule(EvalMode::Block)
+        .into_iter()
+        .enumerate()
+    {
+        let settings = EvalProtocol::settings_for_zone_shot(&launch, zone, index_in_zone);
+        let (flags, passthrough) = EvalProtocol::run_shot(&robot, physics, &settings);
         if flags.contact {
             contact += 1;
         }
@@ -576,8 +584,11 @@ fn diag_weak_return() {
     );
     let mut cleared = 0;
     let mut contacted = 0;
-    for (i, (zone, index_in_zone)) in shot_schedule(EvalMode::Block).into_iter().enumerate() {
-        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+    for (i, (zone, index_in_zone)) in EvalProtocol::shot_schedule(EvalMode::Block)
+        .into_iter()
+        .enumerate()
+    {
+        let settings = EvalProtocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let d = run_shot(i + 1, &settings);
         if !d.contact {
             println!(

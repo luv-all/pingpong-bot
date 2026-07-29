@@ -12,7 +12,10 @@ const AREA_MIN_SCALE: f64 = 0.5;
 const AREA_MAX_SCALE: f64 = 2.5;
 
 /// 테이블 대표점에서 겉보기 공 면적 → `min/max_area_px` (여유 계수 포함).
-pub fn scorer_params_from_calib(params: &CameraParams, circularity: f64) -> Result<ScorerParams> {
+pub(crate) fn scorer_params_from_calib(
+    params: &CameraParams,
+    circularity: f64,
+) -> Result<ScorerParams> {
     let (min_a, max_a) = ball_area_bounds(params)?;
     let sp = ScorerParams {
         min_area_px: min_a,

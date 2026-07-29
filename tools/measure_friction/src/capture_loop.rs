@@ -3,30 +3,20 @@
 use std::path::Path;
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use opencv::core::Scalar;
 use opencv::prelude::*;
+use pingpong_bot::defaults::detector_for;
+use pingpong_bot::estimator::TrajAnalysis;
 use pingpong_bot::{
-    Calibration, CameraId, Detector, FrameSource, PixelPoint, Point3, PreviewAction, RollEvent,
-    StereoOfflineArgs, TrajPoint, destroy_window, detect_rolls, draw_cam_label, draw_circle_px,
-    draw_debug_lines, draw_help_lines, hstack_bgr, mean_roll_mu, show_bgr, triangulate_views,
+    Calibration, CameraId, Detector, FrameSource, Preview, PreviewAction, RollEvent,
+    StereoOfflineArgs, TrajPoint, Triangulate,
 };
 
 pub struct CaptureResult {
     pub traj: Vec<TrajPoint>,
     pub rolls: Vec<RollEvent>,
     pub mu: Option<f64>,
-}
-
-pub fn load_calibration(path: &Path) -> Result<Calibration> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("calibration 읽기: {}", path.display()))?;
-    let cal: Calibration = serde_json::from_str(&text)
-        .with_context(|| format!("calibration JSON: {}", path.display()))?;
-    if cal.camera_count() < 2 {
-        bail!("카메라 ≥2 필요 (got {})", cal.camera_count());
-    }
-    return Ok(cal);
 }
 
 fn open_sources(
@@ -40,21 +30,6 @@ fn open_sources(
     return Ok(sources);
 }
 
-fn triangulate_pixels(
-    hits: &[(CameraId, PixelPoint)],
-    calibration: &Calibration,
-) -> Option<Point3> {
-    if hits.len() < calibration.min_cameras_for_triangulation() {
-        return None;
-    }
-    let mut views = Vec::with_capacity(hits.len());
-    for &(id, pix) in hits {
-        let params = calibration.params(id)?;
-        views.push((params.projection_matrix(), pix));
-    }
-    return triangulate_views(&views);
-}
-
 /// OpenCV: open → read → detect/triangulate/draw → q 종료.
 pub fn run_capture(
     calibration: &Path,
@@ -65,7 +40,10 @@ pub fn run_capture(
     max_frames: usize,
     timeline_fps: Option<f64>,
 ) -> Result<CaptureResult> {
-    let calibration = load_calibration(calibration)?;
+    let calibration = Calibration::load_json(calibration).map_err(anyhow::Error::msg)?;
+    if calibration.camera_count() < 2 {
+        bail!("카메라 ≥2 필요 (got {})", calibration.camera_count());
+    }
     let mut sources = open_sources(cam, offline, timeline_fps)?;
     if sources.len() < 2 {
         bail!("카메라 소스 ≥2 필요");
@@ -81,7 +59,7 @@ pub fn run_capture(
     let ids: Vec<_> = sources.iter().map(|s| s.camera_id()).collect();
     let mut detectors: Vec<Detector> = ids
         .iter()
-        .map(|&id| pingpong_bot::detector_for(id))
+        .map(|&id| detector_for(id))
         .collect::<Result<Vec<_>>>()?;
 
     let window = "measure:friction";
@@ -117,9 +95,9 @@ pub fn run_capture(
                 .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
             if let Some(p) = pixel {
                 hits.push((cam_id, p));
-                draw_circle_px(&mut panel, p, 8, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
+                Preview::draw_circle_px(&mut panel, p, 8, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
             }
-            draw_cam_label(
+            Preview::draw_cam_label(
                 &mut panel,
                 &format!("cam{i}"),
                 Scalar::new(255.0, 255.0, 255.0, 0.0),
@@ -139,7 +117,7 @@ pub fn run_capture(
                 0.0
             }
         };
-        if let Some(pos) = triangulate_pixels(&hits, &calibration) {
+        if let Some(pos) = Triangulate::pixels(&hits, &calibration) {
             traj.push(TrajPoint {
                 t: sync_t,
                 pos,
@@ -147,8 +125,8 @@ pub fn run_capture(
             });
         }
 
-        let rolls = detect_rolls(&traj);
-        let mu_mean = mean_roll_mu(&rolls);
+        let rolls = TrajAnalysis::detect_rolls(&traj);
+        let mu_mean = TrajAnalysis::mean_roll_mu(&rolls);
 
         if let Some(ev) = rolls.last() {
             for (i, panel) in panels.iter_mut().enumerate() {
@@ -156,10 +134,10 @@ pub fn run_capture(
                     continue;
                 };
                 if let Some(px) = params.project_world(ev.p0) {
-                    draw_circle_px(panel, px, 9, Scalar::new(255.0, 200.0, 0.0, 0.0), 2)?;
+                    Preview::draw_circle_px(panel, px, 9, Scalar::new(255.0, 200.0, 0.0, 0.0), 2)?;
                 }
                 if let Some(px) = params.project_world(ev.p1) {
-                    draw_circle_px(panel, px, 9, Scalar::new(0.0, 255.0, 255.0, 0.0), 2)?;
+                    Preview::draw_circle_px(panel, px, 9, Scalar::new(0.0, 255.0, 255.0, 0.0), 2)?;
                 }
             }
         }
@@ -180,16 +158,16 @@ pub fn run_capture(
             lines.push(format!("mean mu={mu:.4}  (n={})", rolls.len()));
         }
 
-        let mut mosaic = hstack_bgr(&panels)?;
-        draw_debug_lines(&mut mosaic, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-        draw_help_lines(
+        let mut mosaic = Preview::hstack_bgr(&panels)?;
+        Preview::draw_debug_lines(&mut mosaic, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        Preview::draw_help_lines(
             &mut mosaic,
             &["q/ESC quit"],
             Scalar::new(0.0, 255.0, 80.0, 0.0),
         )?;
 
         if preview {
-            match show_bgr(window, &mosaic, wait_ms)?.action {
+            match Preview::show_bgr(window, &mosaic, wait_ms)?.action {
                 PreviewAction::Quit => break,
                 PreviewAction::Continue | PreviewAction::Key(_) => {}
             }
@@ -198,12 +176,12 @@ pub fn run_capture(
     }
 
     if preview {
-        destroy_window(window);
+        Preview::destroy_window(window);
     }
 
-    let rolls = detect_rolls(&traj);
+    let rolls = TrajAnalysis::detect_rolls(&traj);
     return Ok(CaptureResult {
-        mu: mean_roll_mu(&rolls),
+        mu: TrajAnalysis::mean_roll_mu(&rolls),
         traj,
         rolls,
     });

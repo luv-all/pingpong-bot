@@ -4,16 +4,13 @@
 
 mod capture_loop;
 
-use std::path::PathBuf;
-
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
-use pingpong_bot::{
-    PhysicsParams, StereoOfflineArgs, StereoPairCliArgs, calibration_path,
-    format_physics_for_defaults, friction_from_tangential_speeds,
-};
+use pingpong_bot::defaults::{calibration_path, primitive_4dof};
+use pingpong_bot::estimator::PhysicsIdentify;
+use pingpong_bot::{PhysicsParams, StereoOfflineArgs, StereoPairCliArgs};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -93,7 +90,8 @@ fn main() -> Result<()> {
 
     if let Some(ref raw) = args.vt_pairs {
         let pairs = parse_pairs(raw)?;
-        let mu = friction_from_tangential_speeds(&pairs).context("접선 쌍으로부터 μ 추정 실패")?;
+        let mu = PhysicsIdentify::friction_from_tangential_speeds(&pairs)
+            .context("접선 쌍으로부터 μ 추정 실패")?;
         println!("friction μ = {mu:.6}  (from {} vt pairs)", pairs.len());
         patch.friction = Some(mu);
     }
@@ -118,13 +116,13 @@ fn main() -> Result<()> {
 
     print!(
         "{}",
-        format_physics_for_defaults(patch.restitution, patch.friction, patch.drag)
+        PhysicsIdentify::format_physics_for_defaults(patch.restitution, patch.friction, patch.drag)
     );
     return Ok(());
 }
 
 fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
-    let robot = pingpong_bot::primitive_4dof().context("competition arm")?;
+    let robot = primitive_4dof().context("competition arm")?;
     let mut world = SimWorld::new(robot);
     world.set_use_ground_truth(false);
 
@@ -173,7 +171,8 @@ fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
         bail!("sim 바운스 접선 속도 미검출 — --vt-pairs 로 수동 입력");
     }
     println!("sim vt_in={vin_t:.4} vt_out={vout_t:.4}");
-    return friction_from_tangential_speeds(&[(vin_t, vout_t)]).context("sim μ 계산 실패");
+    return PhysicsIdentify::friction_from_tangential_speeds(&[(vin_t, vout_t)])
+        .context("sim μ 계산 실패");
 }
 
 fn parse_pairs(raw: &str) -> Result<Vec<(f64, f64)>> {

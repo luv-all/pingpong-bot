@@ -3,7 +3,8 @@
 use crate::HitPlane;
 use crate::constants::{ball, table};
 use crate::defaults;
-use crate::estimator::ballistics::predict_hit_plane;
+use crate::estimator::BallKinematics;
+use crate::planner::SwingPlanner;
 use nalgebra::Vector3;
 use rand::Rng;
 use rapier3d::prelude::{
@@ -210,7 +211,7 @@ impl BallShooterSettings {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        return predict_hit_plane(
+        return BallKinematics::predict_to(
             position,
             velocity,
             spin,
@@ -277,8 +278,7 @@ fn apply_aero_force(body: &mut rapier3d::prelude::RigidBody, physics: &crate::Ph
     if mass <= 1e-12 {
         return;
     }
-    let force =
-        crate::planner::physics::aero_accel(velocity, omega, physics.drag, physics.magnus) * mass;
+    let force = SwingPlanner::aero_accel(velocity, omega, physics.drag, physics.magnus) * mass;
     body.add_force(
         Vector::new(force.x as f32, force.y as f32, force.z as f32),
         true,

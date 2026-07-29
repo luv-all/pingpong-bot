@@ -12,11 +12,11 @@ use opencv::core::{Rect, Scalar, Vec3b, Vector};
 use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
+use pingpong_bot::defaults::colormask_path;
+use pingpong_bot::detector::{load_colormask_set_or_empty, save_colormask_set};
 use pingpong_bot::{
     CameraId, ColorSpace, ColormaskParams, FrameSource, ImageDirSource, PixelPickMouse, PixelPoint,
-    PreviewAction, arrow_delta, colormask_path, destroy_window, draw_cam_label, draw_circle_px,
-    draw_debug_lines, draw_help_lines, draw_pixel_loupe, hstack_bgr, load_colormask_set_or_empty,
-    save_colormask_set, show_bgr,
+    Preview, PreviewAction,
 };
 
 use cli::Args;
@@ -464,7 +464,7 @@ fn build_scatter(
         )?;
     }
 
-    draw_cam_label(&mut panel, label, Scalar::new(200.0, 200.0, 200.0, 0.0))?;
+    Preview::draw_cam_label(&mut panel, label, Scalar::new(200.0, 200.0, 200.0, 0.0))?;
     return Ok(panel);
 }
 
@@ -514,7 +514,7 @@ fn build_iso_cube(
         max_y = max_y.max(y);
     }
     if !min_x.is_finite() {
-        draw_cam_label(&mut panel, "iso", Scalar::new(200.0, 200.0, 200.0, 0.0))?;
+        Preview::draw_cam_label(&mut panel, "iso", Scalar::new(200.0, 200.0, 200.0, 0.0))?;
         return Ok(panel);
     }
     let dx = (max_x - min_x).max(1e-6);
@@ -566,7 +566,7 @@ fn build_iso_cube(
         )?;
     }
 
-    draw_cam_label(
+    Preview::draw_cam_label(
         &mut panel,
         "iso AABB",
         Scalar::new(200.0, 200.0, 200.0, 0.0),
@@ -624,7 +624,7 @@ fn build_range_viz(
         range,
     )?;
     let iso = build_iso_cube(w - cell * 3, h, &chs, &bgrs, range)?;
-    let row = hstack_bgr(&[p01, p02, p12, iso])?;
+    let row = Preview::hstack_bgr(&[p01, p02, p12, iso])?;
     return vstack_bgr(&swatch, &row);
 }
 
@@ -778,7 +778,7 @@ fn main() -> Result<()> {
             } else {
                 Scalar::new(0.0, 200.0, 255.0, 0.0)
             };
-            draw_circle_px(
+            Preview::draw_circle_px(
                 &mut original,
                 PixelPoint::new(f64::from(s.x), f64::from(s.y)),
                 6,
@@ -787,9 +787,9 @@ fn main() -> Result<()> {
             )?;
         }
         if frozen {
-            draw_cam_label(&mut original, "FROZEN", Scalar::new(0.0, 0.0, 255.0, 0.0))?;
+            Preview::draw_cam_label(&mut original, "FROZEN", Scalar::new(0.0, 0.0, 255.0, 0.0))?;
         }
-        draw_cam_label(
+        Preview::draw_cam_label(
             &mut original,
             "original",
             Scalar::new(255.0, 255.0, 255.0, 0.0),
@@ -799,9 +799,9 @@ fn main() -> Result<()> {
             Some(r) => make_mask_bgr(&frame_img, space, r)?,
             None => empty_bgr_like(&frame_img)?,
         };
-        draw_cam_label(&mut mask, "mask", Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        Preview::draw_cam_label(&mut mask, "mask", Scalar::new(0.0, 255.0, 255.0, 0.0))?;
 
-        let top = hstack_bgr(&[original, mask])?;
+        let top = Preview::hstack_bgr(&[original, mask])?;
         let strip = build_range_viz(top.cols(), &samples, space, active_range)?;
         let mut mosaic = vstack_bgr(&top, &strip)?;
 
@@ -817,8 +817,8 @@ fn main() -> Result<()> {
             format!("{}  margin={margin}  trim={trim_pct}%", range_txt),
             space_label(space).to_string(),
         ];
-        draw_debug_lines(&mut mosaic, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-        draw_help_lines(
+        Preview::draw_debug_lines(&mut mosaic, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        Preview::draw_help_lines(
             &mut mosaic,
             &[
                 "LMB/Enter pick",
@@ -833,17 +833,17 @@ fn main() -> Result<()> {
         )?;
         if let Some((hx, hy)) = hover {
             if hx >= 0 && hy >= 0 && hx < panel_w && hy < panel_h {
-                let _ = draw_pixel_loupe(&mut mosaic, &frame_img, hx, hy);
+                let _ = Preview::draw_pixel_loupe(&mut mosaic, &frame_img, hx, hy);
             }
         }
 
-        let shown = show_bgr(window, &mosaic, wait_ms)?;
+        let shown = Preview::show_bgr(window, &mosaic, wait_ms)?;
         display_scale = shown.scale;
         match shown.action {
             PreviewAction::Quit => break,
             PreviewAction::Continue => {}
             PreviewAction::Key(k) => {
-                if let Some((dx, dy)) = arrow_delta(k) {
+                if let Some((dx, dy)) = Preview::arrow_delta(k) {
                     let mut m = mouse.lock().expect("mouse lock");
                     m.sync(display_scale, panel_w, panel_h);
                     m.nudge(dx, dy, panel_w, panel_h);
@@ -903,7 +903,7 @@ fn main() -> Result<()> {
         }
     }
 
-    destroy_window(window);
+    Preview::destroy_window(window);
     return Ok(());
 }
 

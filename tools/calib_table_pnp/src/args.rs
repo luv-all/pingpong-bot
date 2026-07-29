@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use pingpong_bot::defaults::calibration_pending_path;
 use pingpong_bot::{
     CamCliArgs, CameraId, DEFAULT_CALIBRATION_PATH, DEFAULT_FOV_Y_DEG, MAX_REPROJ_RMSE_PX,
-    calibration_pending_path,
 };
 
 #[derive(Parser, Debug)]
@@ -67,7 +67,7 @@ pub fn pending_path(args: &Args) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pingpong_bot::calibration_path;
+    use pingpong_bot::defaults::calibration_path;
 
     fn args_with_output(output: &str) -> Args {
         return Args {

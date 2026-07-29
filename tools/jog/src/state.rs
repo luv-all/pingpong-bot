@@ -95,10 +95,7 @@ impl JogApp {
         let Some(ball) = &self.ball else {
             return;
         };
-        let show = matches!(
-            self.draft.kind,
-            MotionKind::AimBall | MotionKind::SwingBall
-        );
+        let show = matches!(self.draft.kind, MotionKind::AimBall | MotionKind::SwingBall);
         if show {
             let [x, y, z] = self.draft.arrival_xyz;
             ball.set_position(Some(Point3::new(x, y, z)));

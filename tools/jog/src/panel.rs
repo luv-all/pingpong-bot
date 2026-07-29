@@ -66,7 +66,14 @@ fn draw_status(ui: &mut egui::Ui, app: &JogApp) {
 
 fn draw_params(ui: &mut egui::Ui, app: &mut JogApp) {
     ui.label(RichText::new("이동 설정").strong());
-    ranged(ui, "이동 시간 [초]", &mut app.duration_secs, 0.05, 10.0, 0.05);
+    ranged(
+        ui,
+        "이동 시간 [초]",
+        &mut app.duration_secs,
+        0.05,
+        10.0,
+        0.05,
+    );
     ranged(
         ui,
         "한 번에 최대 각도 [°]",
@@ -141,7 +148,14 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
             }
         }
         MotionKind::RailAbs => {
-            ranged(ui, "레일 위치 [m]", &mut app.draft.rail_x, rail_min, rail_max, 0.005);
+            ranged(
+                ui,
+                "레일 위치 [m]",
+                &mut app.draft.rail_x,
+                rail_min,
+                rail_max,
+                0.005,
+            );
         }
         MotionKind::Ik => {
             draw_reach(ui, app, false);

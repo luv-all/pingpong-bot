@@ -48,7 +48,7 @@
 use nalgebra::{DMatrix, DVector, Vector3};
 
 use super::collision::{clamp_above_table, table_penetration};
-use super::physics::{in_swing_commit_window, solve_impact_target};
+use super::swing::physics::{in_swing_commit_window, solve_impact_target};
 use crate::defaults::planner::{
     JACOBIAN_DAMPING, JDOT_STEP, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
     POSITION_TOLERANCE_RAD_OR_M, RACKET_DIRECTION_TOLERANCE_DEG, RACKET_SPEED_RATIO_TOLERANCE,
@@ -848,7 +848,7 @@ mod tests {
         let mut worst = std::time::Duration::ZERO;
         for _ in 0..RUNS {
             let t0 = std::time::Instant::now();
-            let _ = crate::plan_swing(&arm, prediction, &start_pose);
+            let _ = crate::planner::SwingPlanner::plan(&arm, prediction, &start_pose);
             let elapsed = t0.elapsed();
             total += elapsed;
             worst = worst.max(elapsed);
@@ -1269,20 +1269,22 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::ball_past_midcourt_for_commit(ball_y) {
+                if !crate::planner::SwingPlanner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
                     .hit_planes()
                     .into_iter()
-                    .filter_map(|plane| crate::sim::predict_impact(&world, plane))
+                    .filter_map(|plane| world.predict_impact(plane))
                     .collect();
                 // 실제 게임플레이(`plan_best_swing`)처럼 커밋창 안 후보 중
                 // 하나라도 되면 되는 게 아니라, kinematic_ceiling 비율이 가장
                 // 좋은(가장 여유 있는) 후보를 골라 "최선의 경우"로 비교한다.
                 let best_in_window = predictions
                     .iter()
-                    .filter(|p| crate::in_swing_commit_window(p.time_to_impact_secs))
+                    .filter(|p| {
+                        crate::planner::SwingPlanner::in_commit_window(p.time_to_impact_secs)
+                    })
                     .copied()
                     .max_by(|a, b| {
                         let start =
@@ -2109,7 +2111,7 @@ mod tests {
                 impact_position: crate::Point3::new(impact.0, impact.1, impact.2),
                 incoming_velocity: Vector3::new(incoming.0, incoming.1, incoming.2),
             };
-            match crate::plan_swing(&arm, prediction, &start_pose) {
+            match crate::planner::SwingPlanner::plan(&arm, prediction, &start_pose) {
                 Ok(trajectory) => {
                     eprintln!("사용한 시나리오: {label} (quintic 계획 성공)");
                     chosen = Some(trajectory);
@@ -2266,17 +2268,19 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::ball_past_midcourt_for_commit(ball_y) {
+                if !crate::planner::SwingPlanner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
                     .hit_planes()
                     .into_iter()
-                    .filter_map(|plane| crate::sim::predict_impact(&world, plane))
+                    .filter_map(|plane| world.predict_impact(plane))
                     .collect();
                 let in_window: Vec<_> = predictions
                     .into_iter()
-                    .filter(|p| crate::in_swing_commit_window(p.time_to_impact_secs))
+                    .filter(|p| {
+                        crate::planner::SwingPlanner::in_commit_window(p.time_to_impact_secs)
+                    })
                     .collect();
                 if !in_window.is_empty() {
                     found = Some(in_window);
@@ -2368,17 +2372,19 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::ball_past_midcourt_for_commit(ball_y) {
+                if !crate::planner::SwingPlanner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
                     .hit_planes()
                     .into_iter()
-                    .filter_map(|plane| crate::sim::predict_impact(&world, plane))
+                    .filter_map(|plane| world.predict_impact(plane))
                     .collect();
                 let in_window: Vec<_> = predictions
                     .into_iter()
-                    .filter(|p| crate::in_swing_commit_window(p.time_to_impact_secs))
+                    .filter(|p| {
+                        crate::planner::SwingPlanner::in_commit_window(p.time_to_impact_secs)
+                    })
                     .collect();
                 if !in_window.is_empty() {
                     predictions_at_window = Some(in_window);
@@ -2402,7 +2408,7 @@ mod tests {
                         .position
                         .coords)
                     .norm();
-                match crate::swing_feasibility(&arm, p, &start_pose) {
+                match crate::planner::SwingPlanner::feasibility(&arm, p, &start_pose) {
                     Some(f) => {
                         eprintln!(
                             "  impact=({:.3},{:.3},{:.3}) tti={:.3} dist_from_home={:.3}m -> \
@@ -2485,17 +2491,19 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::ball_past_midcourt_for_commit(ball_y) {
+                if !crate::planner::SwingPlanner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
                     .hit_planes()
                     .into_iter()
-                    .filter_map(|plane| crate::sim::predict_impact(&world, plane))
+                    .filter_map(|plane| world.predict_impact(plane))
                     .collect();
                 let in_window: Vec<_> = predictions
                     .into_iter()
-                    .filter(|p| crate::in_swing_commit_window(p.time_to_impact_secs))
+                    .filter(|p| {
+                        crate::planner::SwingPlanner::in_commit_window(p.time_to_impact_secs)
+                    })
                     .collect();
                 if !in_window.is_empty() {
                     predictions_at_window = Some(in_window);
@@ -2513,7 +2521,7 @@ mod tests {
             );
             let mut any_succeeded_alone = false;
             for p in &predictions {
-                let feasibility = crate::swing_feasibility(&arm, p, &start_pose)
+                let feasibility = crate::planner::SwingPlanner::feasibility(&arm, p, &start_pose)
                     .map(|f| format!("peak_ratio={:.2}", f.peak_joint_speed_ratio))
                     .unwrap_or_else(|| "IK 실패".to_string());
                 match plan_bang_bang_swing(&arm, std::slice::from_ref(p), &start_pose) {
@@ -2586,7 +2594,7 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::ball_past_midcourt_for_commit(ball_y) {
+                if !crate::planner::SwingPlanner::past_midcourt(ball_y) {
                     continue;
                 }
 
@@ -2598,11 +2606,12 @@ mod tests {
                 let mut profile: Vec<(f64, f64, f64)> = Vec::new(); // (y, ratio, tti)
                 for i in 0..=50 {
                     let y = 0.10 + 0.01 * i as f64;
-                    let Some(prediction) = crate::sim::predict_impact(&world, HitPlane { y })
-                    else {
+                    let Some(prediction) = world.predict_impact(HitPlane { y }) else {
                         continue;
                     };
-                    if !crate::in_swing_commit_window(prediction.time_to_impact_secs) {
+                    if !crate::planner::SwingPlanner::in_commit_window(
+                        prediction.time_to_impact_secs,
+                    ) {
                         continue;
                     }
                     if let Some(ceiling) = kinematic_ceiling(&arm, &start_pose, &prediction) {
@@ -2632,7 +2641,7 @@ mod tests {
                 eprintln!(
                     "  => 최고점: y={best_y:.2} tti={best_tti:.3} capability/requirement={best_ratio:.2}"
                 );
-                let best_prediction = crate::sim::predict_impact(&world, HitPlane { y: best_y });
+                let best_prediction = world.predict_impact(HitPlane { y: best_y });
                 if let Some(prediction) = best_prediction {
                     match plan_bang_bang_swing(&arm, &[prediction], &start_pose) {
                         Ok(_) => eprintln!("  => 이 최고점에서 실제로 수렴 성공!"),

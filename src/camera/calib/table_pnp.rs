@@ -290,7 +290,7 @@ fn pose_score(rmse: f64, rotation: &Matrix3<f64>, translation: &Vector3<f64>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::camera::{CameraId, triangulate_projections};
+    use crate::camera::{CameraId, Triangulate};
     use nalgebra::Vector3;
 
     fn overhead_cam() -> CameraParams {
@@ -414,7 +414,7 @@ mod tests {
 
         let center = marks[4].world;
         let recovered =
-            triangulate_projections(&back, &[CameraId::new(0), CameraId::new(1)], center)
+            Triangulate::projections(&back, &[CameraId::new(0), CameraId::new(1)], center)
                 .expect("tri");
         let err = (recovered.coords - center.coords).norm();
         assert!(err < 0.02, "triangulation error {err} m");

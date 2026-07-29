@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pingpong_bot::defaults;
-use pingpong_bot::sim::gui::{WORLD_LOCK_WAIT, lock_world_for_frame};
+use pingpong_bot::sim::gui::{SimViewer, WORLD_LOCK_WAIT};
 use pingpong_bot::sim::physics::BallShooterSettings;
 use pingpong_bot::sim::world::SimStepInput;
 use pingpong_bot::sim::{BallState, SimWorld};
@@ -200,7 +200,7 @@ impl Acquire {
     fn get(self, world: &Mutex<SimWorld>) -> Option<std::sync::MutexGuard<'_, SimWorld>> {
         match self {
             Acquire::TryOnce => return world.try_lock().ok(),
-            Acquire::Production => return lock_world_for_frame(world),
+            Acquire::Production => return SimViewer::lock_world_for_frame(world),
             Acquire::BoundedWait(budget) => {
                 let deadline = Instant::now() + budget;
                 loop {

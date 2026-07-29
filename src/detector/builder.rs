@@ -34,6 +34,16 @@ impl Detector {
         return DetectorBuilder::default();
     }
 
+    /// sim: 카메라가 이미 넣은 힌트 픽셀을 그대로 쓴다.
+    pub fn passthrough(hint: Option<PixelPoint>) -> Option<PixelPoint> {
+        return super::passthrough_detect(hint);
+    }
+
+    /// 렌즈 왜곡 보정. 실패 시 에러 문자열.
+    pub fn undistort(frame: &Frame, params: &crate::camera::CameraParams) -> Result<Frame, String> {
+        return super::undistort_frame(frame, params);
+    }
+
     pub fn set_roi_enabled(&mut self, enabled: bool) {
         self.roi.set_roi_enabled(enabled);
     }

@@ -8,7 +8,7 @@ use crate::defaults::planner::{
     RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
-use crate::planner::impact::{rally_return_velocity, required_racket_velocity};
+use crate::planner::Impact;
 use crate::robot::Arm;
 use crate::{Joints, Prediction, RailMotion, RobotPose, SwingTrajectory};
 
@@ -149,7 +149,7 @@ fn best_impact_candidate(
 ) -> Result<ImpactCandidate, SwingPlanError> {
     let impact_position = prediction.impact_position;
     let v_in = prediction.incoming_velocity;
-    let v_out = rally_return_velocity(impact_position, v_in);
+    let v_out = Impact::rally_return(impact_position, v_in);
     let desired_normal = (v_out - v_in).normalize();
 
     let base_hint = arm.with_wrist_open(&start.joints, Arm::wrist_open_for_return(v_out - v_in))?;
@@ -179,7 +179,7 @@ fn best_impact_candidate(
         let Some(pose) = arm.forward_kinematics_with_rail(solved.rail_x, &solved.joints) else {
             continue;
         };
-        let v_r = match required_racket_velocity(
+        let v_r = match Impact::required_racket_velocity(
             v_in,
             v_out,
             pose.normal,
@@ -448,7 +448,7 @@ pub fn plan_coarse_track(arm: &Arm, predictions: &[Prediction]) -> Option<RobotP
 
     let impact_position = prediction.impact_position;
     let v_in = prediction.incoming_velocity;
-    let v_out = rally_return_velocity(impact_position, v_in);
+    let v_out = Impact::rally_return(impact_position, v_in);
     let delta = v_out - v_in;
     if delta.norm() < 1e-6 {
         return None;
@@ -938,7 +938,7 @@ mod tests {
             + pose.normal
                 * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z);
         let desired_normal =
-            (rally_return_velocity(prediction.impact_position, prediction.incoming_velocity)
+            (Impact::rally_return(prediction.impact_position, prediction.incoming_velocity)
                 - prediction.incoming_velocity)
                 .normalize();
         assert!((contact.x - prediction.impact_position.coords.x).abs() < 2e-3);
@@ -956,9 +956,9 @@ mod tests {
             )
             .expect("impact 직전 FK");
         let actual_racket_velocity = (pose.position.coords - before.position.coords) / dt;
-        let desired_racket_velocity = required_racket_velocity(
+        let desired_racket_velocity = Impact::required_racket_velocity(
             prediction.incoming_velocity,
-            rally_return_velocity(prediction.impact_position, prediction.incoming_velocity),
+            Impact::rally_return(prediction.impact_position, prediction.incoming_velocity),
             pose.normal,
             defaults::ImpactParams::default().racket_effective_restitution,
         )

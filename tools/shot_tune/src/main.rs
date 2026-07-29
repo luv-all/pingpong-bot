@@ -19,6 +19,7 @@
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use pingpong_bot::planner::SwingPlanner;
 use pingpong_bot::sim::{BallShooterSettings, SimWorld};
 use pingpong_bot::{Arm, MountPreset, Robot, RobotBuilder, RobotPose, defaults};
 use rand::SeedableRng;
@@ -296,14 +297,14 @@ fn run_shot(
         if step % 20 == 0
             && !outcome.contact
             && world.ball_state == pingpong_bot::BallState::InFlight
-            && pingpong_bot::ball_past_midcourt_for_commit(f64::from(position.y))
+            && SwingPlanner::past_midcourt(f64::from(position.y))
         {
             let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
             for plane in intercept.hit_planes() {
-                let Some(prediction) = pingpong_bot::sim::predict_impact(&world, plane) else {
+                let Some(prediction) = world.predict_impact(plane) else {
                     continue;
                 };
-                if let Some(f) = pingpong_bot::swing_feasibility(arm, &prediction, &start) {
+                if let Some(f) = SwingPlanner::feasibility(arm, &prediction, &start) {
                     outcome.best_peak_ratio = outcome.best_peak_ratio.min(f.peak_joint_speed_ratio);
                 }
             }
@@ -410,7 +411,7 @@ fn rest_pose_search(arm: &Arm, iterations: usize) {
         let mut solved = 0usize;
         for prediction in &scenarios {
             let Some(pose) =
-                pingpong_bot::plan_coarse_track(&arm, std::slice::from_ref(prediction))
+                SwingPlanner::plan_coarse_track(&arm, std::slice::from_ref(prediction))
             else {
                 continue;
             };
@@ -487,13 +488,13 @@ fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
             continue;
         }
         let ball_y = f64::from(world.ball_position().y);
-        if !pingpong_bot::ball_past_midcourt_for_commit(ball_y) {
+        if !SwingPlanner::past_midcourt(ball_y) {
             continue;
         }
         let predictions: Vec<_> = intercept
             .hit_planes()
             .into_iter()
-            .filter_map(|plane| pingpong_bot::sim::predict_impact(&world, plane))
+            .filter_map(|plane| world.predict_impact(plane))
             .collect();
         let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
         // 평면별로 "시간 창(`in_swing_commit_window`)"과 "관절속도 비율
@@ -502,8 +503,8 @@ fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
             .iter()
             .map(|p| {
                 let t = p.time_to_impact_secs;
-                let in_window = pingpong_bot::in_swing_commit_window(t);
-                let ratio = match pingpong_bot::swing_feasibility(arm, p, &start) {
+                let in_window = SwingPlanner::in_commit_window(t);
+                let ratio = match SwingPlanner::feasibility(arm, p, &start) {
                     Some(f) => format!("{:.1}", f.peak_joint_speed_ratio),
                     None => "IK✗".to_string(),
                 };
@@ -511,16 +512,14 @@ fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
                 // 마지막 오류만 남기므로, 평면별 `plan_swing`을 직접 부른다.
                 // 여기서 Ok인데 `plan_best_swing`이 실패하면 범인은
                 // `plan_best_swing`의 접촉오차 필터(MAX_CONTACT_ERROR)다.
-                let plan = match pingpong_bot::plan_swing(arm, *p, &start) {
+                let plan = match SwingPlanner::plan(arm, *p, &start) {
                     Ok(_) => "ok".to_string(),
                     Err(e) => format!("{e}"),
                 };
                 // 관절공간 이동거리 Δq와, 그걸 quintic(피크 계수 1.875)으로
                 // 관절속도 한계 안에서 소화하는 데 필요한 최소 시간.
-                let travel = pingpong_bot::swing_feasibility(arm, p, &start)
-                    .and(
-                        pingpong_bot::plan_coarse_track(arm, std::slice::from_ref(p))
-                            .map(|target| {
+                let travel = SwingPlanner::feasibility(arm, p, &start).and(
+                    SwingPlanner::plan_coarse_track(arm, std::slice::from_ref(p)).map(|target| {
                                 let dq = target
                                     .joints
                                     .values
@@ -547,7 +546,7 @@ fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
                 );
             })
             .collect();
-        let outcome = match pingpong_bot::plan_best_swing(arm, &predictions, &start) {
+        let outcome = match SwingPlanner::plan_best(arm, &predictions, &start) {
             Ok(_) => "COMMIT".to_string(),
             Err(e) => format!("{e}"),
         };

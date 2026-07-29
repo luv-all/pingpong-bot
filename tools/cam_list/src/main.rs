@@ -10,8 +10,7 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CamRigConfig, CameraId, CaptureBackend, FrameSource, OpenCvCapture, PreviewAction,
-    destroy_window, show_bgr,
+    CamRigConfig, CameraId, CaptureBackend, FrameSource, OpenCvCapture, Preview, PreviewAction,
 };
 
 #[derive(Parser, Debug)]
@@ -116,12 +115,12 @@ fn probe_backend(backend: CaptureBackend, max_index: i32, preview: bool) -> Resu
                         let window = format!("cam_list device {index} ({})", backend.as_str());
                         println!("    preview: q/ESC → next device");
                         loop {
-                            match show_bgr(&window, &f.image, 30)?.action {
+                            match Preview::show_bgr(&window, &f.image, 30)?.action {
                                 PreviewAction::Quit => break,
                                 PreviewAction::Continue | PreviewAction::Key(_) => {}
                             }
                         }
-                        destroy_window(&window);
+                        Preview::destroy_window(&window);
                     } else {
                         println!("    preview skipped (no frame)");
                     }

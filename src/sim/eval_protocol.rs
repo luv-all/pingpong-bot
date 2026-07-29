@@ -195,7 +195,7 @@ impl EvalReport {
 }
 
 /// `(zone, index_in_zone)` 30발 스케줄.
-pub fn shot_schedule(mode: EvalMode) -> Vec<(EvalZone, usize)> {
+pub(crate) fn shot_schedule(mode: EvalMode) -> Vec<(EvalZone, usize)> {
     match mode {
         EvalMode::Block => {
             let mut out = Vec::with_capacity(TOTAL_SHOTS);
@@ -257,12 +257,12 @@ impl Default for EvalProgress {
 ///
 /// 스핀/롤=0. 좌·우는 `side_yaw_deg` 대칭, 중앙은 yaw=0.
 /// pitch/height는 슈터 기본값에서 시작해 네트 게이트만 맞춘다.
-pub fn settings_for_zone(launch: &EvalLaunchParams, zone: EvalZone) -> BallShooterSettings {
+pub(crate) fn settings_for_zone(launch: &EvalLaunchParams, zone: EvalZone) -> BallShooterSettings {
     return settings_for_zone_shot(launch, zone, 0);
 }
 
 /// 존 안 n번째 샷 (지터 없음). `index_in_zone`은 스케줄 호환용으로 유지.
-pub fn settings_for_zone_shot(
+pub(crate) fn settings_for_zone_shot(
     launch: &EvalLaunchParams,
     zone: EvalZone,
     index_in_zone: usize,
@@ -272,7 +272,7 @@ pub fn settings_for_zone_shot(
 }
 
 /// 존 샷 + 미약 지터 (speed / yaw / pitch).
-pub fn settings_for_zone_shot_jittered<R: Rng + ?Sized>(
+pub(crate) fn settings_for_zone_shot_jittered<R: Rng + ?Sized>(
     launch: &EvalLaunchParams,
     zone: EvalZone,
     index_in_zone: usize,
@@ -338,7 +338,7 @@ fn lift_pitch_for_net_gate(shot: &mut BallShooterSettings) {
 }
 
 /// 헤드리스 한 발 — Rapier로 끝까지 돌리고 플래그·네트 투과 여부를 반환한다.
-pub fn run_eval_shot(
+pub(crate) fn run_eval_shot(
     robot: &Robot,
     physics: PhysicsParams,
     settings: &BallShooterSettings,
@@ -543,7 +543,7 @@ fn ball_contacts_table(world: &SimWorld) -> bool {
 }
 
 /// 30발 프로토콜 실행. `progress`가 있으면 매 발 후 갱신.
-pub fn run_eval_protocol(
+pub(crate) fn run_eval_protocol(
     robot: &Robot,
     physics: PhysicsParams,
     launch: &EvalLaunchParams,
@@ -620,6 +620,54 @@ pub fn run_eval_protocol(
         g.report = Some(report.clone());
     }
     return report;
+}
+
+/// 평가 프로토콜 공개 진입점.
+pub struct EvalProtocol;
+
+impl EvalProtocol {
+    pub fn shot_schedule(mode: EvalMode) -> Vec<(EvalZone, usize)> {
+        return shot_schedule(mode);
+    }
+
+    pub fn settings_for_zone(launch: &EvalLaunchParams, zone: EvalZone) -> BallShooterSettings {
+        return settings_for_zone(launch, zone);
+    }
+
+    pub fn settings_for_zone_shot(
+        launch: &EvalLaunchParams,
+        zone: EvalZone,
+        index_in_zone: usize,
+    ) -> BallShooterSettings {
+        return settings_for_zone_shot(launch, zone, index_in_zone);
+    }
+
+    pub fn settings_for_zone_shot_jittered<R: Rng + ?Sized>(
+        launch: &EvalLaunchParams,
+        zone: EvalZone,
+        index_in_zone: usize,
+        rng: &mut R,
+    ) -> BallShooterSettings {
+        return settings_for_zone_shot_jittered(launch, zone, index_in_zone, rng);
+    }
+
+    pub fn run_shot(
+        robot: &Robot,
+        physics: PhysicsParams,
+        settings: &BallShooterSettings,
+    ) -> (ShotFlags, bool) {
+        return run_eval_shot(robot, physics, settings);
+    }
+
+    pub fn run(
+        robot: &Robot,
+        physics: PhysicsParams,
+        launch: &EvalLaunchParams,
+        mode: EvalMode,
+        progress: Option<Arc<Mutex<EvalProgress>>>,
+    ) -> EvalReport {
+        return run_eval_protocol(robot, physics, launch, mode, progress);
+    }
 }
 
 #[cfg(test)]

@@ -223,7 +223,7 @@ pub struct SceneHostOptions {
 }
 
 /// 레이어 조합에 맞는 kiss3d 창 (블로킹).
-pub fn run_scene_host(options: SceneHostOptions) -> Result<(), String> {
+pub(crate) fn run_scene_host(options: SceneHostOptions) -> Result<(), String> {
     if options.enable_panel {
         let world = options
             .world
@@ -335,7 +335,7 @@ pub struct BallOnlyViewerOptions {
 }
 
 /// [`SimScene`] + 공 슬롯 래퍼.
-pub fn run_ball_only_viewer(options: BallOnlyViewerOptions) -> Result<(), String> {
+pub(crate) fn run_ball_only_viewer(options: BallOnlyViewerOptions) -> Result<(), String> {
     let scene = SimScene::builder()
         .title("pingpong-bot sim (ball only)")
         .table(options.table)
@@ -345,7 +345,7 @@ pub fn run_ball_only_viewer(options: BallOnlyViewerOptions) -> Result<(), String
 }
 
 /// 풀 sim → [`SimScene`] (패널 on).
-pub fn run_sim_viewer(options: SimViewerOptions) -> Result<(), String> {
+pub(crate) fn run_sim_viewer(options: SimViewerOptions) -> Result<(), String> {
     let world = Arc::clone(&options.world);
     let controls = Arc::clone(&options.controls);
     let scene = SimScene::builder()

@@ -6,9 +6,7 @@ use clap::{Parser, ValueEnum};
 
 use super::FrameSource;
 use super::capture::{CaptureBackend, OpenCvCapture};
-use super::clip::{
-    ResolvedStereoOffline, resolve_mono_offline, resolve_stereo_offline,
-};
+use super::clip::{ResolvedStereoOffline, resolve_mono_offline, resolve_stereo_offline};
 use super::rig::{CamRigConfig, CameraRole};
 use super::threaded::ThreadedCapture;
 use crate::CameraId;
@@ -299,11 +297,7 @@ impl CamCliArgs {
             }
             return Ok((self.open_file_sources(&resolved.paths(), fps)?, fps));
         }
-        let sources = self
-            .open_sources()?
-            .into_iter()
-            .map(|(_, s)| s)
-            .collect();
+        let sources = self.open_sources()?.into_iter().map(|(_, s)| s).collect();
         return Ok((sources, None));
     }
 
@@ -323,13 +317,16 @@ impl CamCliArgs {
                     .unwrap_or_default(),
                 path.display()
             );
-            return Ok(Box::new(OpenCvCapture::from_path(resolved.camera_id, &path)?));
+            return Ok(Box::new(OpenCvCapture::from_path(
+                resolved.camera_id,
+                &path,
+            )?));
         }
         return Ok(self.open_one()?.1);
     }
 }
 
-pub fn resolve_cams(roles: &[CameraRole]) -> Result<Vec<ResolvedCam>, String> {
+pub(crate) fn resolve_cams(roles: &[CameraRole]) -> Result<Vec<ResolvedCam>, String> {
     if roles.is_empty() {
         return Err("--cam 필수 (left|right) — 단일 캠 툴은 생략 불가".into());
     }
@@ -346,7 +343,7 @@ pub fn resolve_cams(roles: &[CameraRole]) -> Result<Vec<ResolvedCam>, String> {
     return Ok(out);
 }
 
-pub fn parse_fourcc(value: &str) -> Result<[u8; 4], String> {
+pub(crate) fn parse_fourcc(value: &str) -> Result<[u8; 4], String> {
     let bytes = value.as_bytes();
     if bytes.len() != 4 {
         return Err(format!("FOURCC는 정확히 4글자여야 함: {value}"));

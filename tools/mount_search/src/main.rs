@@ -19,7 +19,8 @@ use anyhow::Result;
 use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::constants::table;
-use pingpong_bot::{Point3, Prediction, RobotPose, defaults, swing_feasibility};
+use pingpong_bot::planner::SwingPlanner;
+use pingpong_bot::{Point3, Prediction, RobotPose, defaults};
 use serde::Serialize;
 
 /// 실현 가능(NearSingularity 임계값과 별개, 실기 관절속도 한계 자체) 판정 기준.
@@ -72,23 +73,23 @@ struct Scenario {
 /// 좁혔다 - 5cm(스킷)·40cm(높은 로브)는 실측상 어떤 마운트로도 항상
 /// 불가능했다.
 fn build_scenarios() -> Vec<Scenario> {
-    let mut scenarios = Vec::new();
-    for &x_frac in &[0.15, 0.35, 0.5, 0.65, 0.85] {
-        let impact_x = table::WIDTH_X * x_frac;
-        for &z_offset in &[0.10, 0.15, 0.20, 0.25, 0.30] {
-            let impact_z = table::SURFACE_Z + z_offset;
-            for &speed in &[7.0, 8.5, 10.0] {
-                for &descend_frac in &[0.10, 0.30] {
-                    let incoming_velocity = Vector3::new(0.0, -speed, -speed * descend_frac);
-                    scenarios.push(Scenario {
-                        impact: Point3::new(impact_x, table::DEFAULT_HIT_PLANE_Y, impact_z),
-                        incoming_velocity,
-                    });
-                }
-            }
-        }
-    }
-    return scenarios;
+    [0.15, 0.35, 0.5, 0.65, 0.85]
+        .into_iter()
+        .flat_map(|x_frac| {
+            let impact_x = table::WIDTH_X * x_frac;
+            [0.10, 0.15, 0.20, 0.25, 0.30]
+                .into_iter()
+                .flat_map(move |z_offset| {
+                    let impact_z = table::SURFACE_Z + z_offset;
+                    [7.0, 8.5, 10.0].into_iter().flat_map(move |speed| {
+                        [0.10, 0.30].into_iter().map(move |descend_frac| Scenario {
+                            impact: Point3::new(impact_x, table::DEFAULT_HIT_PLANE_Y, impact_z),
+                            incoming_velocity: Vector3::new(0.0, -speed, -speed * descend_frac),
+                        })
+                    })
+                })
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -122,26 +123,27 @@ fn evaluate_mount(
     let start = arm.initial_state();
     let start_pose = RobotPose::new(start.rail_x(), start.joints().clone());
 
-    let mut ratios = Vec::with_capacity(scenarios.len());
-    for scenario in scenarios {
-        let prediction = Prediction {
-            // IK/속도 조작성 평가에는 임팩트까지 남은 시간이 영향을 주지
-            // 않으므로(quintic 궤적 생성 없이 순간 조작성만 봄) 대표값으로
-            // 고정한다.
-            time_to_impact_secs: 0.2,
-            impact_position: scenario.impact,
-            incoming_velocity: scenario.incoming_velocity,
-        };
-        let ratio = swing_feasibility(&arm, &prediction, &start_pose)
-            .map(|f| f.peak_joint_speed_ratio)
-            .unwrap_or(f64::INFINITY);
-        ratios.push(ratio);
-    }
+    let ratios: Vec<f64> = scenarios
+        .iter()
+        .map(|scenario| {
+            let prediction = Prediction {
+                // IK/속도 조작성 평가에는 임팩트까지 남은 시간이 영향을 주지
+                // 않으므로(quintic 궤적 생성 없이 순간 조작성만 봄) 대표값으로
+                // 고정한다.
+                time_to_impact_secs: 0.2,
+                impact_position: scenario.impact,
+                incoming_velocity: scenario.incoming_velocity,
+            };
+            SwingPlanner::feasibility(&arm, &prediction, &start_pose)
+                .map(|f| f.peak_joint_speed_ratio)
+                .unwrap_or(f64::INFINITY)
+        })
+        .collect();
 
     let total = ratios.len();
     let feasible_count = ratios
         .iter()
-        .filter(|r| **r <= FEASIBLE_RATIO_THRESHOLD)
+        .filter(|&&r| r <= FEASIBLE_RATIO_THRESHOLD)
         .count();
     let finite: Vec<f64> = ratios.iter().copied().filter(|r| r.is_finite()).collect();
     let mean_peak_ratio = if finite.is_empty() {
@@ -165,14 +167,15 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let scenarios = build_scenarios();
 
-    let mut results: Vec<MountResult> = Vec::new();
-    for base_y in linspace(args.base_y_min, args.base_y_max, args.base_y_steps) {
-        for height_offset_m in linspace(args.height_min, args.height_max, args.height_steps) {
-            if let Some(result) = evaluate_mount(base_y, height_offset_m, &scenarios) {
-                results.push(result);
-            }
-        }
-    }
+    let heights = linspace(args.height_min, args.height_max, args.height_steps);
+    let mut results: Vec<MountResult> =
+        linspace(args.base_y_min, args.base_y_max, args.base_y_steps)
+            .into_iter()
+            .flat_map(|base_y| heights.iter().copied().map(move |h| (base_y, h)))
+            .filter_map(|(base_y, height_offset_m)| {
+                evaluate_mount(base_y, height_offset_m, &scenarios)
+            })
+            .collect();
 
     results.sort_by(|a, b| {
         b.feasible_count.cmp(&a.feasible_count).then_with(|| {

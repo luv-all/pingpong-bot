@@ -18,7 +18,6 @@ mod tests;
 use nalgebra::{DMatrix, DVector, Isometry3, Matrix3, UnitQuaternion, Vector3};
 
 pub use build::{ArmBuildError, ArmBuilder, MountPreset, Robot, RobotBuildError, RobotBuilder};
-pub use dynamics::{is_feasible, required_torque};
 pub use rail::{LinearRail, RailFrame};
 pub use serial::{SerialChain, SerialChainError, SerialJoint};
 pub use state::RobotState;
@@ -55,6 +54,20 @@ pub struct RobotPose {
 impl RobotPose {
     pub fn new(rail_x: f64, joints: Joints) -> Self {
         return Self { rail_x, joints };
+    }
+}
+
+impl Robot {
+    pub fn obbs(&self, rail_x: f64, joints: &Joints) -> Vec<crate::planner::OrientedBox> {
+        return crate::planner::collision::robot_obbs(&self.arm, rail_x, joints);
+    }
+
+    pub fn table_penetration(&self, rail_x: f64, joints: &Joints) -> f64 {
+        return crate::planner::collision::table_penetration(&self.arm, rail_x, joints);
+    }
+
+    pub fn clamp_above_table(&self, rail_x: f64, joints: &Joints) -> Joints {
+        return crate::planner::collision::clamp_above_table(&self.arm, rail_x, joints);
     }
 }
 
@@ -261,6 +274,16 @@ impl Arm {
     /// revolute 축(관절) 개수.
     pub fn joint_count(&self) -> usize {
         return self.limits.len();
+    }
+
+    /// RNEA 필요 토크 [N·m]. `q`/`qd`/`qdd` 길이가 관절 수와 다르면 `None`.
+    pub fn required_torque(&self, q: &[f64], qd: &[f64], qdd: &[f64]) -> Option<Vec<f64>> {
+        return dynamics::required_torque(self, q, qd, qdd);
+    }
+
+    /// `|τ_i| ≤ limits[i]` (limits 짧으면 마지막 값 반복).
+    pub fn torque_feasible(tau: &[f64], limits: &[f64]) -> bool {
+        return dynamics::is_feasible(tau, limits);
     }
 
     pub fn joint_limit(&self, index: usize) -> Option<JointLimit> {

@@ -14,13 +14,16 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 #[cfg(feature = "real")]
-use pingpong_bot::{CameraId, DynamixelConfig, Hardware, RailConfig, RealHardware, detector_for};
-use pingpong_bot::{
-    InterceptWindow, PhysicsParams, SimRuntimeControls, SimSession, SimSessionConfig, init_tracing,
-    new_shutdown_flag, robot,
-};
+use pingpong_bot::defaults::detector_for;
+use pingpong_bot::defaults::robot;
+use pingpong_bot::logging::init_tracing;
 #[cfg(feature = "gui")]
-use pingpong_bot::{SimViewerOptions, run_sim_viewer};
+use pingpong_bot::sim::gui::{SimViewer, SimViewerOptions};
+#[cfg(feature = "real")]
+use pingpong_bot::{CameraId, DynamixelConfig, Hardware, RailConfig, RealHardware};
+use pingpong_bot::{
+    InterceptWindow, PhysicsParams, SimRuntimeControls, SimSession, SimSessionConfig,
+};
 use tracing::info;
 #[cfg(not(feature = "gui"))]
 use tracing::warn;
@@ -69,7 +72,7 @@ fn run_sim_entry() -> Result<()> {
         "defaults SSOT"
     );
     let controls = Arc::new(Mutex::new(SimRuntimeControls::default()));
-    let shutdown = new_shutdown_flag();
+    let shutdown = SimRuntimeControls::new_shutdown();
     let session = SimSession::with_physics(
         SimSessionConfig {
             physics_hz: 1000.0,
@@ -91,7 +94,7 @@ fn run_sim_entry() -> Result<()> {
     info!("sim kiss3d");
     #[cfg(feature = "gui")]
     {
-        run_sim_viewer(SimViewerOptions {
+        SimViewer::run(SimViewerOptions {
             world: session.world(),
             controls,
             shutdown,

@@ -8,8 +8,7 @@ use opencv::core::{Mat, Scalar};
 use opencv::imgcodecs;
 use opencv::prelude::*;
 use pingpong_bot::{
-    FrameSource, MIN_CHARUCO_CORNERS, OpenCvCapture, PreviewAction, destroy_window,
-    detect_and_draw_charuco, draw_debug_lines, draw_help_lines, show_bgr,
+    Charuco, FrameSource, MIN_CHARUCO_CORNERS, OpenCvCapture, Preview, PreviewAction,
 };
 
 use crate::args::{Args, board_spec, resolve_output};
@@ -103,13 +102,13 @@ pub fn run(args: &Args) -> Result<()> {
                 Scalar::new(0.0, 0.0, 255.0, 0.0)
             };
             let lines = [status, format!("saved={save_index}")];
-            draw_debug_lines(&mut panel, &lines, color)?;
-            draw_help_lines(
+            Preview::draw_debug_lines(&mut panel, &lines, color)?;
+            Preview::draw_help_lines(
                 &mut panel,
                 &["s save", "n skip", "q quit"],
                 Scalar::new(0.0, 255.0, 80.0, 0.0),
             )?;
-            show_bgr(window, &panel, 30)?.action
+            Preview::show_bgr(window, &panel, 30)?.action
         } else {
             let Some(frame) = source.next_frame() else {
                 println!("입력 스트림 종료");
@@ -123,21 +122,21 @@ pub fn run(args: &Args) -> Result<()> {
                 "LIVE  saved={save_index} (need >= {})",
                 args.min_frames
             )];
-            draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-            draw_help_lines(
+            Preview::draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+            Preview::draw_help_lines(
                 &mut panel,
                 &["Space snap+detect", "q quit(+calib)"],
                 Scalar::new(0.0, 255.0, 80.0, 0.0),
             )?;
             // space를 받기 위해 라이브 프레임도 잠시 들고 있음
-            let action = show_bgr(window, &panel, 1)?.action;
+            let action = Preview::show_bgr(window, &panel, 1)?.action;
             if matches!(action, PreviewAction::Key(k) if k == i32::from(b' ')) {
                 let raw = frame
                     .image
                     .try_clone()
                     .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
                 let (overlay, det) =
-                    detect_and_draw_charuco(&raw, spec).map_err(anyhow::Error::msg)?;
+                    Charuco::detect_and_draw(&raw, spec).map_err(anyhow::Error::msg)?;
                 println!(
                     "snap: corners={} markers={} ok={}",
                     det.corners, det.markers, det.ok
@@ -184,7 +183,7 @@ pub fn run(args: &Args) -> Result<()> {
         }
     }
 
-    destroy_window(window);
+    Preview::destroy_window(window);
 
     let n = count_images(&images_dir);
     if n < args.min_frames {

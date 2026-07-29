@@ -12,9 +12,11 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use pingpong_bot::defaults::robot;
+use pingpong_bot::logging::init_tracing;
 use pingpong_bot::{
     DynamixelConfig, RailConfig, RealHardware, SceneUiDraw, SimRuntimeControls, SimScene,
-    SimSession, SimSessionConfig, init_tracing, new_shutdown_flag, robot,
+    SimSession, SimSessionConfig,
 };
 use tracing::info;
 
@@ -101,7 +103,7 @@ fn run(args: Args) -> Result<()> {
     .context("하드웨어 초기화 실패")?;
     let hardware = Arc::new(Mutex::new(hardware));
 
-    let shutdown = new_shutdown_flag();
+    let shutdown = SimRuntimeControls::new_shutdown();
     let controls = Arc::new(Mutex::new(SimRuntimeControls::default()));
     let mut session = SimSession::new(
         SimSessionConfig {

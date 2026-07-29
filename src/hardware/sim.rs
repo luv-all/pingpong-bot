@@ -5,7 +5,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::{Hardware, HwError, RobotPose, SwingTrajectory, ball_past_midcourt_for_commit};
+use crate::planner::SwingPlanner;
+use crate::{Hardware, HwError, RobotPose, SwingTrajectory};
 use tracing::debug;
 
 use crate::sim::world::SimWorld;
@@ -52,7 +53,7 @@ impl Hardware for SimHardware {
             }
             // decisions C4: 네트 통과 전 commit 금지 (ground truth 경로와 동일)
             let ball_y = f64::from(world.ball_position().y);
-            if !ball_past_midcourt_for_commit(ball_y) {
+            if !SwingPlanner::past_midcourt(ball_y) {
                 debug!(ball_y, "상대 코트 — EKF control commit 대기");
                 return Ok(());
             }

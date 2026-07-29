@@ -5,20 +5,15 @@ use std::time::Instant;
 use nalgebra::Vector3;
 
 use crate::Point3;
+use crate::defaults::PhysicsParams;
 
 pub mod ballistics;
 pub mod bounce;
 pub mod ekf;
 pub mod measure;
 
-pub use ballistics::{clears_net_gate, predict_hit_plane, semi_implicit_euler};
-pub use bounce::{rapier_table_ball_mu, table_ball_mu, table_bounce};
 pub use ekf::BallEkf;
-pub use measure::{
-    BounceEvent, RollEvent, TrajPoint, detect_bounces, detect_rolls, drag_from_trajectory,
-    format_physics_for_defaults, friction_from_tangential_speeds, mean_bounce_e, mean_roll_mu,
-    restitution_from_bounce_heights, restitution_from_normal_speeds,
-};
+pub use measure::{BounceEvent, PhysicsIdentify, RollEvent, TrajAnalysis, TrajPoint};
 
 /// 접수 평면. 월드 y [m] 하나.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -38,4 +33,54 @@ pub struct Prediction {
 pub trait Estimator: Send {
     fn update(&mut self, position: Point3, timestamp: Instant);
     fn predict_to(&self, plane: HitPlane) -> Option<Prediction>;
+}
+
+/// 공 탄도·바운스 예측의 공개 진입점.
+pub struct BallKinematics;
+
+impl BallKinematics {
+    pub fn clears_net(
+        position: Vector3<f64>,
+        velocity: Vector3<f64>,
+        omega: Vector3<f64>,
+        physics: &PhysicsParams,
+    ) -> bool {
+        return ballistics::clears_net_gate(position, velocity, omega, physics);
+    }
+
+    pub fn predict_to(
+        position: Vector3<f64>,
+        velocity: Vector3<f64>,
+        omega: Vector3<f64>,
+        plane: HitPlane,
+        physics: &PhysicsParams,
+    ) -> Option<Prediction> {
+        return ballistics::predict_hit_plane(position, velocity, omega, plane, physics);
+    }
+
+    pub fn step(
+        pos: Vector3<f64>,
+        vel: Vector3<f64>,
+        omega: Vector3<f64>,
+        dt: f64,
+        physics: &PhysicsParams,
+    ) -> (Vector3<f64>, Vector3<f64>, Vector3<f64>) {
+        return ballistics::semi_implicit_euler(pos, vel, omega, dt, physics);
+    }
+
+    pub fn table_ball_mu(physics: &PhysicsParams) -> f64 {
+        return bounce::table_ball_mu(physics);
+    }
+
+    pub fn rapier_table_ball_mu(physics: &PhysicsParams) -> f64 {
+        return bounce::rapier_table_ball_mu(physics);
+    }
+
+    pub fn bounce_on_table(
+        velocity: Vector3<f64>,
+        omega: Vector3<f64>,
+        physics: &PhysicsParams,
+    ) -> (Vector3<f64>, Vector3<f64>) {
+        return bounce::table_bounce(velocity, omega, physics);
+    }
 }

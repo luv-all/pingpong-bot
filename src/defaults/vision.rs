@@ -7,7 +7,7 @@ use crate::camera::{Calibration, CameraParams};
 use crate::defaults::calib::{calibration_path, colormask_path};
 use crate::detector::{
     ColormaskDetector, ColormaskParams, ContourDetector, Detector, FloorEdgeMask, RoiParams,
-    Scorer, ScorerParams, load_colormask_set, scorer_params_from_calib,
+    Scorer, ScorerParams, load_colormask_set,
 };
 
 /// scorer motion 가중.
@@ -75,7 +75,7 @@ pub fn camera_params_for(camera_id: CameraId) -> Result<CameraParams> {
 
 fn assemble(camera_id: CameraId, color: ColormaskParams, cam: &CameraParams) -> Result<Detector> {
     let circ = ScorerParams::default().min_circularity;
-    let scorer = scorer_params_from_calib(cam, circ)?;
+    let scorer = ScorerParams::from_calib(cam, circ)?;
 
     return Detector::builder()
         .mask(FloorEdgeMask::from_params(camera_id, cam)?)

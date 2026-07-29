@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::args::{Args, board_spec, resolve_output};
-use pingpong_bot::{Calibration, calibrate_charuco};
+use pingpong_bot::Calibration;
+use pingpong_bot::Charuco;
+use pingpong_bot::defaults::ensure_parent_dir;
 
 pub fn validate(path: &PathBuf) -> Result<()> {
     let text =
@@ -34,8 +36,7 @@ pub fn emit_sim(n: u8, args: &Args) -> Result<()> {
     let output = resolve_output(args);
     let calib = Calibration::sim(n);
     let json = serde_json::to_string_pretty(&calib)?;
-    pingpong_bot::ensure_parent_dir(&output)
-        .with_context(|| format!("디렉터리 생성: {}", output.display()))?;
+    ensure_parent_dir(&output).with_context(|| format!("디렉터리 생성: {}", output.display()))?;
     fs::write(&output, json).with_context(|| format!("쓰기 실패: {}", output.display()))?;
     println!(
         "wrote sim Calibration ({} cams, dist=[]) → {}",
@@ -47,15 +48,14 @@ pub fn emit_sim(n: u8, args: &Args) -> Result<()> {
 
 pub fn from_images(dir: &PathBuf, args: &Args) -> Result<()> {
     let output = resolve_output(args);
-    let (calib, report) = calibrate_charuco(
+    let (calib, report) = Charuco::calibrate(
         dir,
         board_spec(args),
         args.cam.camera_id().map_err(anyhow::Error::msg)?,
     )
     .map_err(anyhow::Error::msg)?;
     let json = serde_json::to_string_pretty(&calib)?;
-    pingpong_bot::ensure_parent_dir(&output)
-        .with_context(|| format!("디렉터리 생성: {}", output.display()))?;
+    ensure_parent_dir(&output).with_context(|| format!("디렉터리 생성: {}", output.display()))?;
     fs::write(&output, json).with_context(|| format!("쓰기 실패: {}", output.display()))?;
     println!(
         "wrote ChArUco Calibration → {} (rms={:.4}, frames={}/{})",

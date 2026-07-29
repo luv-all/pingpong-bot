@@ -16,10 +16,7 @@ use opencv::core::{Mat, Scalar, Size, Vector};
 use opencv::imgcodecs;
 use opencv::prelude::*;
 use opencv::videoio::{VideoWriter, VideoWriterTrait};
-use pingpong_bot::{
-    FrameSource, OpenCvCapture, PreviewAction, StereoPairCliArgs, destroy_window, draw_cam_label,
-    draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
-};
+use pingpong_bot::{FrameSource, OpenCvCapture, Preview, PreviewAction, StereoPairCliArgs};
 use serde::Serialize;
 
 const WINDOW: &str = "record_stereo";
@@ -253,24 +250,24 @@ fn main() -> Result<()> {
             format!("{}#{}", right_r.role, right_r.camera_id.0),
             format!("scene {}", args.scene.as_str()),
         ];
-        draw_debug_lines(&mut left, &left_lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-        draw_debug_lines(
+        Preview::draw_debug_lines(&mut left, &left_lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        Preview::draw_debug_lines(
             &mut right,
             &right_lines,
             Scalar::new(0.0, 255.0, 255.0, 0.0),
         )?;
-        draw_cam_label(
+        Preview::draw_cam_label(
             &mut left,
             left_r.role.as_str(),
             Scalar::new(0.0, 255.0, 255.0, 0.0),
         )?;
-        draw_cam_label(
+        Preview::draw_cam_label(
             &mut right,
             right_r.role.as_str(),
             Scalar::new(0.0, 255.0, 255.0, 0.0),
         )?;
 
-        let mut mosaic = hstack_bgr(&[left, right])?;
+        let mut mosaic = Preview::hstack_bgr(&[left, right])?;
         let mut help = vec!["Space save", "q quit"];
         if saving {
             help.insert(0, "SAVING…");
@@ -278,9 +275,9 @@ fn main() -> Result<()> {
         if let Some(s) = &status {
             help.push(s.as_str());
         }
-        draw_help_lines(&mut mosaic, &help, Scalar::new(0.0, 255.0, 80.0, 0.0))?;
+        Preview::draw_help_lines(&mut mosaic, &help, Scalar::new(0.0, 255.0, 80.0, 0.0))?;
 
-        match show_bgr(WINDOW, &mosaic, 1)?.action {
+        match Preview::show_bgr(WINDOW, &mosaic, 1)?.action {
             PreviewAction::Quit => break,
             PreviewAction::Continue => {}
             PreviewAction::Key(key) if key == i32::from(b' ') => {
@@ -329,7 +326,7 @@ fn main() -> Result<()> {
     *cmd_slot.lock().expect("cmd lock") = Some(CaptureCmd::Stop);
     stop.store(true, Ordering::Release);
     let _ = grab.join();
-    destroy_window(WINDOW);
+    Preview::destroy_window(WINDOW);
     return Ok(());
 }
 

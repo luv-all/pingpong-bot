@@ -197,9 +197,7 @@ impl Hardware for RealHardware {
                 if torque_ff {
                     let qd = trajectory.sample_velocity_at(sample_time);
                     let qdd = trajectory.sample_acceleration_at(sample_time);
-                    if let Some(tau) =
-                        crate::robot::required_torque(&arm, &joints.values, &qd, &qdd)
-                    {
+                    if let Some(tau) = arm.required_torque(&joints.values, &qd, &qdd) {
                         let _ = bus.lock().map(|mut bus| {
                             let _ = bus.write_goal_currents_from_torques(&tau);
                         });

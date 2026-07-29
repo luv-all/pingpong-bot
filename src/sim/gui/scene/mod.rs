@@ -34,7 +34,7 @@ impl Default for TableSceneOptions {
 /// 탁구대·네트·바닥·(옵션) 레일·축을 씬에 추가한다.
 ///
 /// 치수·레일 위치는 `constants` / `defaults` SSOT만 사용한다.
-pub fn build_table_scene(scene: &mut SceneNode3d, opts: &TableSceneOptions) {
+pub(crate) fn build_table_scene(scene: &mut SceneNode3d, opts: &TableSceneOptions) {
     let tw = table::WIDTH_X as f32;
     let tl = table::LENGTH_Y as f32;
     let tcx = tw * 0.5;
