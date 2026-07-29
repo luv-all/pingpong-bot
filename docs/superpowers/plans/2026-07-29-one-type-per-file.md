@@ -19,7 +19,8 @@
 - 주석: 단위·비자명만
 - `tests/` 재구성은 범위 밖 (깨지면 최소 import만 수정)
 - 레이어 종료마다: `cargo check --workspace --all-targets` (OpenCV 시 `LIBCLANG_PATH` 설정)
-- 커밋은 사용자 요청 시에만 (플랜 Step의 commit은 **사용자 승인 후**)
+- 호출부는 모듈 경로로 도메인을 남긴다: `camera::Id`, `ball::Observation` (`use …::Id`로 도메인 생략 금지)
+- 커밋은 피처 브랜치에서 태스크마다 진행 (사용자 승인됨)
 
 ### Rename map (확정)
 
