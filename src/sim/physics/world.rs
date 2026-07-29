@@ -537,6 +537,11 @@ impl SimWorld {
             return;
         }
 
+        if self.ball_net_fault() {
+            self.abandon_swing("네트 실격 — 접수 불가");
+            return;
+        }
+
         // 비행 중에는 항상 디버그 마커를 최신 탄도로 갱신 (커밋 후에도 스윙 재계획 없음).
         let t0 = std::time::Instant::now();
         let marker = self
@@ -2076,10 +2081,12 @@ mod tests {
 
         // 한쪽으로 크게 치우친 느린 샷 — 예측 임팩트 x가 중앙에서 벗어나고,
         // 느려서 commit 전 추종 시간이 넉넉하다.
-        let (_yaw_min, yaw_max) = shooter::Settings::yaw_range_for_lateral_deg(0.5);
+        let (yaw_min, _yaw_max) = shooter::Settings::yaw_range_for_lateral_deg(0.5);
         let settings = shooter::Settings {
             lateral_offset_m: 0.5,
-            yaw_deg: yaw_max,
+            // yaw_max(+0.24°)는 min speed에서 ballistics·Rapier 네트 게이트 미달.
+            // 코너 lateral에서 네트를 넘는 yaw_min(-18.88°)으로 off-center 샷을 쏜다.
+            yaw_deg: yaw_min,
             speed_mps: crate::defaults::sim::RANDOM_SHOT_SPEED_MIN_MPS,
             ..shooter::Settings::default()
         };
