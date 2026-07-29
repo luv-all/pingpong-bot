@@ -12,6 +12,7 @@ use crate::sim::physics::world::SimWorld;
 #[derive(Clone)]
 pub struct BallHandle {
     external: Arc<Mutex<Option<Point3>>>,
+    external_velocity: Arc<Mutex<Option<[f64; 3]>>>,
     world: Option<Arc<Mutex<SimWorld>>>,
 }
 
@@ -20,6 +21,7 @@ impl BallHandle {
     pub fn new() -> Self {
         return Self {
             external: Arc::new(Mutex::new(None)),
+            external_velocity: Arc::new(Mutex::new(None)),
             world: None,
         };
     }
@@ -28,6 +30,7 @@ impl BallHandle {
     pub fn from_world(world: Arc<Mutex<SimWorld>>) -> Self {
         return Self {
             external: Arc::new(Mutex::new(None)),
+            external_velocity: Arc::new(Mutex::new(None)),
             world: Some(world),
         };
     }
@@ -36,6 +39,7 @@ impl BallHandle {
     pub fn from_shared(external: Arc<Mutex<Option<Point3>>>) -> Self {
         return Self {
             external,
+            external_velocity: Arc::new(Mutex::new(None)),
             world: None,
         };
     }
@@ -62,6 +66,21 @@ impl BallHandle {
         if let Ok(mut guard) = self.external.lock() {
             *guard = position;
         }
+    }
+
+    /// 표시용 속도 벡터 설정. `None`이면 벡터 숨김.
+    pub fn set_velocity(&self, velocity: Option<[f64; 3]>) {
+        if let Ok(mut guard) = self.external_velocity.lock() {
+            *guard = velocity;
+        }
+    }
+
+    /// 현재 표시에 쓸 속도 벡터.
+    pub fn velocity(&self) -> Option<[f64; 3]> {
+        let Ok(guard) = self.external_velocity.lock() else {
+            return None;
+        };
+        return *guard;
     }
 
     /// 공유 슬롯 (호스트·레거시 옵션용).

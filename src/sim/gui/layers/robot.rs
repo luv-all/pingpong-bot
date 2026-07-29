@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::SwingTrajectory;
-use crate::robot::{Joints, RacketPose, RobotPose, RobotState};
+use crate::robot::{Joints, RacketPose, RobotPose};
 use crate::sim::physics::world::SimWorld;
 
 /// 로봇 원시 R/W — `SimWorld`의 [`RobotState`]에 위임.
@@ -35,10 +35,10 @@ impl RobotHandle {
         return world.robot().is_swinging();
     }
 
-    /// Sync용: 스윙 취소 후 관절·레일을 즉시 스냅.
+    /// Sync용: 스윙 취소 후 관절·레일을 즉시 스냅 (다물체 포함).
     pub fn set_pose(&self, pose: RobotPose) {
         let mut world = self.world.lock().expect("sim 월드");
-        *world.robot_mut() = RobotState::new(pose.joints, pose.rail_x);
+        world.snap_robot_pose(pose);
     }
 
     /// 홀드 추종 목표 (스윙 중이 아닐 때 모터가 rate-limit으로 따라감).
@@ -58,6 +58,12 @@ impl RobotHandle {
     pub fn cancel(&self) {
         let mut world = self.world.lock().expect("sim 월드");
         world.robot_mut().cancel_swing();
+    }
+
+    /// jog 등: 스윙 후 중앙 복귀 끄기.
+    pub fn set_auto_return_to_center(&self, enabled: bool) {
+        let mut world = self.world.lock().expect("sim 월드");
+        world.robot_mut().set_auto_return_to_center(enabled);
     }
 
     pub fn world(&self) -> Arc<Mutex<SimWorld>> {
@@ -111,5 +117,47 @@ mod tests {
         robot.set_pose(snapped.clone());
         let got = robot.pose();
         assert!((got.rail_x - snapped.rail_x).abs() < 1e-9);
+    }
+
+    #[test]
+    fn kinematic_joint_preview_moves_angles() {
+        let world = test_world();
+        {
+            let mut w = world.lock().expect("world");
+            w.set_kinematic_robot(true);
+            w.robot_mut().set_auto_return_to_center(false);
+        }
+        let robot = RobotHandle::new(Arc::clone(&world));
+        let start = robot.pose();
+        let mut end = start.joints.clone();
+        end.values[0] += 15f64.to_radians();
+        let traj = crate::SwingTrajectory::new(
+            start.joints.clone(),
+            end.clone(),
+            vec![0.0; start.joints.values.len()],
+            vec![0.0; start.joints.values.len()],
+            0.5,
+            crate::RailMotion {
+                start: start.rail_x,
+                end: start.rail_x,
+                start_velocity: 0.0,
+                end_velocity: 0.0,
+            },
+        );
+        robot.play(traj);
+        {
+            let mut w = world.lock().expect("world");
+            for _ in 0..600 {
+                w.step(1.0 / 1000.0, None);
+            }
+        }
+        let got = robot.pose();
+        assert!(
+            (got.joints.values[0] - end.values[0]).abs() < 1e-3,
+            "j0 got {} want {}",
+            got.joints.values[0].to_degrees(),
+            end.values[0].to_degrees()
+        );
+        assert!(!robot.is_busy());
     }
 }

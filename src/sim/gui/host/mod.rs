@@ -12,14 +12,23 @@ use std::sync::{Arc, Mutex};
 use kiss3d::prelude::*;
 
 use super::layers::{BallHandle, RobotHandle, SceneLayers, ShooterHandle};
-use super::scene::{BallVisual, TableSceneOptions, build_table_scene};
-use super::viewer::{self, SimViewerOptions};
+use super::robot_visual::RobotVisual;
+use super::scene::{BallVelocityVisual, BallVisual, TableSceneOptions, build_table_scene};
+use super::viewer::{self, SimViewerOptions, lock_world_for_frame};
 use crate::Point3;
 use crate::constants::table;
 use crate::constants::viewer::CAMERA_DIST_DEFAULT;
 use crate::robot::urdf::UrdfModel;
 use crate::sim::physics::world::SimWorld;
 use crate::sim::session::controls::SimRuntimeControls;
+
+/// 경량 호스트용 egui 드로어 (jog 패널 등). 풀 `enable_panel`과 상호 배타.
+pub trait SceneUiDraw: Send {
+    fn draw_ui(&mut self, ctx: &kiss3d::egui::Context);
+}
+
+/// [`SceneUiDraw`]를 호스트에 넘길 때 쓰는 공유 핸들.
+pub type SceneUiHook = Arc<Mutex<dyn SceneUiDraw>>;
 
 /// 조립된 씬 — 레이어 핸들 IO + [`Self::run`].
 ///
@@ -32,6 +41,8 @@ pub struct SimScene {
     controls: Option<Arc<Mutex<SimRuntimeControls>>>,
     urdf: Option<Arc<UrdfModel>>,
     enable_panel: bool,
+    ui_hook: Option<SceneUiHook>,
+    ghost_ball: bool,
     title: String,
 }
 
@@ -63,6 +74,8 @@ impl SimScene {
             controls: self.controls.clone(),
             urdf: self.urdf.clone(),
             enable_panel: self.enable_panel,
+            ui_hook: self.ui_hook.clone(),
+            ghost_ball: self.ghost_ball,
         });
     }
 }
@@ -78,6 +91,8 @@ pub struct SimSceneBuilder {
     controls: Option<Arc<Mutex<SimRuntimeControls>>>,
     urdf: Option<Arc<UrdfModel>>,
     enable_panel: bool,
+    ui_hook: Option<SceneUiHook>,
+    ghost_ball: bool,
     title: String,
 }
 
@@ -147,9 +162,21 @@ impl SimSceneBuilder {
         return self;
     }
 
-    /// 풀 egui 패널 (world·controls 필요).
+    /// 풀 egui 패널 (world·controls 필요). `ui_hook`과 동시에 쓰면 panel이 우선.
     pub fn enable_panel(mut self, enable: bool) -> Self {
         self.enable_panel = enable;
+        return self;
+    }
+
+    /// 경량 호스트 egui 콜백 (jog 등). `enable_panel(true)`면 무시된다.
+    pub fn with_ui_hook(mut self, hook: SceneUiHook) -> Self {
+        self.ui_hook = Some(hook);
+        return self;
+    }
+
+    /// 공을 반투명 홀로그램으로 표시 (도달점 미리보기).
+    pub fn ghost_ball(mut self, enable: bool) -> Self {
+        self.ghost_ball = enable;
         return self;
     }
 
@@ -174,6 +201,8 @@ impl SimSceneBuilder {
             controls: self.controls,
             urdf: self.urdf,
             enable_panel: self.enable_panel,
+            ui_hook: self.ui_hook,
+            ghost_ball: self.ghost_ball,
             title,
         };
     }
@@ -189,6 +218,8 @@ pub struct SceneHostOptions {
     pub controls: Option<Arc<Mutex<SimRuntimeControls>>>,
     pub urdf: Option<Arc<UrdfModel>>,
     pub enable_panel: bool,
+    pub ui_hook: Option<SceneUiHook>,
+    pub ghost_ball: bool,
 }
 
 /// 레이어 조합에 맞는 kiss3d 창 (블로킹).
@@ -231,17 +262,26 @@ async fn run_lightweight(options: SceneHostOptions) -> Result<(), String> {
 
     build_table_scene(&mut scene, &options.table);
 
-    let mut ball_visual = options
+    let mut ball_visual = options.layers.ball.as_ref().map(|_| {
+        if options.ghost_ball {
+            BallVisual::spawn_ghost(&mut scene)
+        } else {
+            BallVisual::spawn(&mut scene)
+        }
+    });
+    let mut ball_velocity_visual = options
         .layers
         .ball
         .as_ref()
-        .map(|_| BallVisual::spawn(&mut scene));
+        .map(|_| BallVelocityVisual::spawn(&mut scene));
 
-    let _ = (
-        &options.layers.robot,
-        &options.layers.shooter,
-        &options.world,
-    );
+    let mut robot_visual = options
+        .layers
+        .robot
+        .as_ref()
+        .map(|_| RobotVisual::spawn(&mut scene, options.urdf.as_deref()));
+
+    let _ = &options.layers.shooter;
 
     while window.render_3d(&mut scene, &mut camera).await {
         if options.shutdown.load(Ordering::Acquire) {
@@ -249,9 +289,37 @@ async fn run_lightweight(options: SceneHostOptions) -> Result<(), String> {
         }
         if let (Some(handle), Some(visual)) = (&options.layers.ball, &mut ball_visual) {
             match handle.position() {
-                Some(p) => visual.set_world_position(p),
-                None => visual.hide(),
+                Some(p) => {
+                    visual.set_world_position(p);
+                    if let Some(vector) = &mut ball_velocity_visual {
+                        if let Some(v) = handle.velocity() {
+                            vector.set_from_velocity(p, v);
+                        } else {
+                            vector.hide();
+                        }
+                    }
+                }
+                None => {
+                    visual.hide();
+                    if let Some(vector) = &mut ball_velocity_visual {
+                        vector.hide();
+                    }
+                }
             }
+        }
+        if let (Some(_), Some(visual), Some(world)) =
+            (&options.layers.robot, &mut robot_visual, &options.world)
+        {
+            if let Some(guard) = lock_world_for_frame(world) {
+                visual.sync_from_world(&guard, options.urdf.as_deref());
+            }
+        }
+        if let Some(hook) = &options.ui_hook {
+            window.draw_ui(|ctx| {
+                if let Ok(mut draw) = hook.lock() {
+                    draw.draw_ui(ctx);
+                }
+            });
         }
     }
 

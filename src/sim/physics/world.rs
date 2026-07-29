@@ -89,6 +89,8 @@ pub struct SimWorld {
     /// true면 Rapier ground truth로 자동 스윙 (sim 기본).
     /// false면 카메라→DLT→EKF→control이 타격.
     use_ground_truth: bool,
+    /// jog 등: 궤적을 키네마틱으로 관절각에 직접 재생 (다물체 모터 추종 없음).
+    kinematic_robot: bool,
     /// true면 commit 시 quintic(`plan_best_swing`) 대신 순수 토크 bang-bang
     /// (`plan_bang_bang_swing`)을 계획한다 - GUI 디버그 토글 전용.
     use_bang_bang_swing: bool,
@@ -259,6 +261,7 @@ impl SimWorld {
             debug_prediction: None,
             intercept: InterceptWindow::default(),
             use_ground_truth: true,
+            kinematic_robot: false,
             use_bang_bang_swing: false,
             swing_committed: false,
             swing_abandoned: false,
@@ -296,6 +299,38 @@ impl SimWorld {
     /// ground truth 기반 자동 스윙 여부.
     pub fn use_ground_truth(&self) -> bool {
         return self.use_ground_truth;
+    }
+
+    /// jog: 로봇을 키네마틱 미리보기 모드로 (Sync 스냅 + 궤적 각을 직접 재생).
+    pub fn set_kinematic_robot(&mut self, enabled: bool) {
+        self.kinematic_robot = enabled;
+    }
+
+    pub fn kinematic_robot(&self) -> bool {
+        return self.kinematic_robot;
+    }
+
+    /// 로봇 상태·다물체를 같은 포즈로 즉시 맞춤 (Sync / Discard).
+    pub fn snap_robot_pose(&mut self, pose: crate::RobotPose) {
+        self.robot.snap_to_pose(pose);
+        self.sync_robot_bodies_to_state();
+    }
+
+    fn sync_robot_bodies_to_state(&mut self) {
+        let mount = self.effective_sim_mount();
+        self.arm_bodies.set_base_xy(
+            &mut self.rigid_body_set,
+            &mut self.multibody_joint_set,
+            mount.position[0],
+            mount.position[1],
+            mount.position[2],
+        );
+        let joints = self.robot.joints().clone();
+        self.arm_bodies.teleport_joints(
+            &mut self.multibody_joint_set,
+            &mut self.rigid_body_set,
+            &joints,
+        );
     }
 
     /// commit 시 quintic 대신 순수 토크 bang-bang을 계획할지 on/off - GUI
@@ -349,6 +384,11 @@ impl SimWorld {
             }
         }
 
+        if self.kinematic_robot {
+            self.step_kinematic_robot(dt);
+            return;
+        }
+
         // B: 명령(궤적→모터 목표) → 물리 → 측정 관절각을 RobotState에 반영.
         self.robot.step_commands(&self.arm, dt);
         let t_swing = std::time::Instant::now();
@@ -392,6 +432,17 @@ impl SimWorld {
         if self.ball_state == BallState::InFlight {
             self.park_if_out_of_play();
         }
+    }
+
+    /// jog 키네마틱: 궤적 샘플 → 관절각·다물체 텔레포트 (모터/Rapier 암 추종 없음).
+    fn step_kinematic_robot(&mut self, dt: f64) {
+        if self.robot.is_swinging() {
+            let _finished = self.robot.advance_swing(&self.arm, dt);
+            // auto_return은 메인 sim(`step_commands`) 경로. jog는 꺼 둔다.
+        }
+        self.sync_robot_bodies_to_state();
+        self.sim_time += dt;
+        self.refresh_debug_snap();
     }
 
     /// 매 스텝 디버그 스냅샷(관통·ω·탄도 등)을 갱신한다.

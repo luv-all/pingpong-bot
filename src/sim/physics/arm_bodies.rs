@@ -316,6 +316,48 @@ impl ArmMultibody {
         return Joints::from_slice(&values);
     }
 
+    /// 관절각을 목표값으로 순간 이동 (키네마틱 미리보기·Sync 스냅).
+    pub fn teleport_joints(
+        &self,
+        joints: &mut MultibodyJointSet,
+        bodies: &mut RigidBodySet,
+        target: &Joints,
+    ) {
+        let current = self.read_joint_angles(joints);
+        let Some(&first) = self.joint_handles.first() else {
+            return;
+        };
+        let link_ids: Vec<usize> = self
+            .joint_handles
+            .iter()
+            .filter_map(|&h| joints.get(h).map(|(_, id)| id))
+            .collect();
+        let Some((mb, _)) = joints.get_mut(first) else {
+            return;
+        };
+        let mut disp = vec![0.0_f32; mb.ndofs()];
+        for (index, &link_id) in link_ids.iter().enumerate() {
+            let Some(link) = mb.link(link_id) else {
+                continue;
+            };
+            let aid = link.assembly_id();
+            if aid < disp.len() {
+                let cur = current.values.get(index).copied().unwrap_or(0.0);
+                let want = target.values.get(index).copied().unwrap_or(0.0);
+                disp[aid] = (want - cur) as f32;
+            }
+        }
+        mb.apply_displacements(&disp);
+        mb.forward_kinematics(bodies, true);
+        mb.update_rigid_bodies(bodies, true);
+        for &handle in &self.link_handles {
+            if let Some(body) = bodies.get_mut(handle) {
+                body.set_linvel(Vec3::ZERO, true);
+                body.set_angvel(Vec3::ZERO, true);
+            }
+        }
+    }
+
     fn apply_initial_angles(
         joints: &mut MultibodyJointSet,
         bodies: &mut RigidBodySet,

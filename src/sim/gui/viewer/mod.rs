@@ -2,7 +2,7 @@
 //!
 //! 탁구대·공 비주얼은 [`super::scene`] 공유 API. 로봇·슈터·디버그·egui만 여기에 둔다.
 
-mod mesh_loader;
+pub(crate) mod mesh_loader;
 mod panel;
 
 use std::sync::atomic::{AtomicBool, Ordering};

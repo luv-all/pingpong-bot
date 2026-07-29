@@ -84,8 +84,8 @@ pub use robot::{
 #[cfg(feature = "gui")]
 pub use sim::{
     BallHandle, BallOnlyViewerOptions, BallVisual, RobotHandle, SceneHostOptions, SceneLayers,
-    ShooterHandle, SimScene, SimSceneBuilder, SimViewerOptions, TableSceneOptions,
-    build_table_scene, run_ball_only_viewer, run_scene_host, run_sim_viewer,
+    SceneUiDraw, SceneUiHook, ShooterHandle, SimScene, SimSceneBuilder, SimViewerOptions,
+    TableSceneOptions, build_table_scene, run_ball_only_viewer, run_scene_host, run_sim_viewer,
 };
 pub use sim::{
     BallShooterSettings, BallState, ShooterLayout, SimBallEstimator, SimRuntimeControls,

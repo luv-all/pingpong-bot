@@ -20,8 +20,9 @@ pub use eval_protocol::{
 #[cfg(feature = "gui")]
 pub use gui::{
     BallHandle, BallOnlyViewerOptions, BallVisual, RobotHandle, SceneHostOptions, SceneLayers,
-    SceneLayersBuilder, ShooterHandle, SimScene, SimSceneBuilder, SimViewerOptions,
-    TableSceneOptions, build_table_scene, run_ball_only_viewer, run_scene_host, run_sim_viewer,
+    SceneLayersBuilder, SceneUiDraw, SceneUiHook, ShooterHandle, SimScene, SimSceneBuilder,
+    SimViewerOptions, TableSceneOptions, build_table_scene, run_ball_only_viewer, run_scene_host,
+    run_sim_viewer,
 };
 pub use gui::{CommitPhase, DebugOverlays, SimDebugSnapshot};
 pub use physics::{ArmMultibody, BallShooterSettings, BallState, ShooterLayout, SimWorld};

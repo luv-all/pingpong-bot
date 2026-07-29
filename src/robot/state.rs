@@ -16,6 +16,8 @@ pub struct RobotState {
     targets: Joints,
     /// 스윙 재생(quintic 또는 순수 토크 bang-bang)
     active_swing: Option<SwingPlayback>,
+    /// 스윙 종료 후 `plan_return_to_center` 자동 복귀 (메인 sim 기본 on, jog off).
+    auto_return_to_center: bool,
 }
 
 /// 재생 중인 스윙 궤적 - quintic(`plan_swing`)과 순수 토크 bang-bang
@@ -82,7 +84,26 @@ impl RobotState {
             targets: initial.clone(),
             angles: initial,
             active_swing: None,
+            auto_return_to_center: true,
         };
+    }
+
+    /// 스윙이 끝나면 테이블 중앙으로 자동 복귀할지 (메인 랠리 sim용).
+    pub fn set_auto_return_to_center(&mut self, enabled: bool) {
+        self.auto_return_to_center = enabled;
+    }
+
+    pub fn auto_return_to_center(&self) -> bool {
+        return self.auto_return_to_center;
+    }
+
+    /// 스윙 취소 후 관절·레일을 즉시 스냅 (플래그 유지).
+    pub fn snap_to_pose(&mut self, pose: crate::RobotPose) {
+        self.active_swing = None;
+        self.rail_x = pose.rail_x;
+        self.rail_target = pose.rail_x;
+        self.angles = pose.joints.clone();
+        self.targets = pose.joints;
     }
 
     /// 스윙 재생 중이면 `(elapsed, q, qd, qdd)` — RNEA HUD용.
@@ -167,6 +188,7 @@ impl RobotState {
     fn replace_playback(&mut self, trajectory: PlaybackTrajectory, elapsed: f64) {
         let elapsed = elapsed.clamp(0.0, trajectory.duration_secs());
         self.targets = trajectory.sample_at(elapsed);
+        self.angles = self.targets.clone();
         self.rail_target = trajectory.follow_through_rail_x();
         self.rail_x = trajectory.sample_rail_at(elapsed);
         self.active_swing = Some(SwingPlayback {
@@ -193,7 +215,7 @@ impl RobotState {
     pub fn step_commands(&mut self, arm: &Arm, dt: f64) {
         if self.active_swing.is_some() {
             let finished = self.advance_swing_commands(dt);
-            if finished && !self.is_at_center(arm) {
+            if finished && self.auto_return_to_center && !self.is_at_center(arm) {
                 let start = crate::RobotPose::new(self.rail_x, self.angles.clone());
                 if let Ok(trajectory) = crate::plan_return_to_center(arm, &start) {
                     self.replace_swing(trajectory);
@@ -313,7 +335,7 @@ impl RobotState {
     pub fn step_toward_targets(&mut self, arm: &Arm, dt: f64) {
         if self.active_swing.is_some() {
             let finished = self.advance_swing(arm, dt);
-            if finished && !self.is_at_center(arm) {
+            if finished && self.auto_return_to_center && !self.is_at_center(arm) {
                 let start = crate::RobotPose::new(self.rail_x, self.angles.clone());
                 if let Ok(trajectory) = crate::plan_return_to_center(arm, &start) {
                     self.replace_swing(trajectory);

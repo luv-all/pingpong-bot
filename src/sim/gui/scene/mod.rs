@@ -131,6 +131,16 @@ impl BallVisual {
     /// 시합용 주황 톤으로 공을 씬에 추가한다 (초기 위치: [`HIDDEN`]).
     pub fn spawn(scene: &mut SceneNode3d) -> Self {
         let base_color = Color::new(0.92, 0.48, 0.12, 1.0);
+        return Self::spawn_with_color(scene, base_color);
+    }
+
+    /// 도달점 미리보기용 반투명 홀로그램 공.
+    pub fn spawn_ghost(scene: &mut SceneNode3d) -> Self {
+        let base_color = Color::new(0.35, 0.95, 1.0, 0.38);
+        return Self::spawn_with_color(scene, base_color);
+    }
+
+    fn spawn_with_color(scene: &mut SceneNode3d, base_color: Color) -> Self {
         let node = scene
             .add_sphere(ball::RADIUS as f32)
             .set_color(base_color)
@@ -168,6 +178,56 @@ impl BallVisual {
     /// kiss3d 노드 (고급 동기화용).
     pub fn node_mut(&mut self) -> &mut SceneNode3d {
         return &mut self.node;
+    }
+}
+
+/// 공 속도 벡터 화살표 (jog 홀로그램 공 오버레이).
+pub struct BallVelocityVisual {
+    shaft: SceneNode3d,
+    tip: SceneNode3d,
+}
+
+impl BallVelocityVisual {
+    pub fn spawn(scene: &mut SceneNode3d) -> Self {
+        let color = Color::new(0.35, 0.95, 1.0, 0.95);
+        let shaft = scene
+            .add_cylinder(0.006, 0.2)
+            .set_color(color)
+            .set_position(HIDDEN);
+        let tip = scene
+            .add_cone(0.014, 0.045)
+            .set_color(color)
+            .set_position(HIDDEN);
+        return Self { shaft, tip };
+    }
+
+    /// 시작점 + 속도 벡터를 월드에 표시.
+    pub fn set_from_velocity(&mut self, origin: Point3, velocity: [f64; 3]) {
+        let v = Vec3::new(velocity[0] as f32, velocity[1] as f32, velocity[2] as f32);
+        let speed = v.length();
+        if speed < 1e-4 {
+            self.hide();
+            return;
+        }
+        let dir = v / speed;
+        let shaft_len = (speed * 0.06).clamp(0.08, 0.35);
+        let tip_len = 0.045_f32;
+        let origin = Vec3::new(origin.x as f32, origin.y as f32, origin.z as f32);
+        let rot = Quat::from_rotation_arc(Vec3::Y, dir);
+        self.shaft
+            .set_visible(true)
+            .set_local_scale(1.0, shaft_len / 0.2, 1.0)
+            .set_position(origin + dir * (shaft_len * 0.5))
+            .set_rotation(rot);
+        self.tip
+            .set_visible(true)
+            .set_position(origin + dir * (shaft_len + tip_len * 0.5))
+            .set_rotation(rot);
+    }
+
+    pub fn hide(&mut self) {
+        self.shaft.set_visible(false).set_position(HIDDEN);
+        self.tip.set_visible(false).set_position(HIDDEN);
     }
 }
 
