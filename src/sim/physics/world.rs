@@ -137,24 +137,41 @@ pub struct SimWorld {
 ///   quintic이 못 들어온다 —
 ///   `.omc/research/known-regressions-realistic-joint-speed.md` §1의 회귀 재현.
 ///
-/// 실측 스윕 ([`diag_swing_commit_rate_across_shot_grid`] 67샷 격자 +
-/// [`diag_pre_vs_post_contact_commanded_travel`] 기본 샷 접촉 전 명령 이동량):
+/// 실측 스윕 ([`diag_swing_commit_rate_across_shot_grid`], `COARSE_GRID_ROUNDS=60`
+/// → 67샷 격자). **WP5(coarse rate-limit) 적용 후 재측정** — 이전 표는 관절
+/// 목표를 매 틱 통째로 갈아끼우던(무제한 스텝 입력) 시절 값이라 폐기했다:
 ///
-/// | fraction | 커밋률(67샷) | yaw pre | elbow pre | wrist pre |
-/// |----------|-------------|---------|-----------|-----------|
-/// | 1.00     | 91%         | 0.52°   | 9.10°     |  4.55°    |
-/// | 0.85     | 91%         | 3.02°   | 9.32°     | 11.97°    |
-/// | **0.80** | **91%**     | **3.91°** | **9.78°** | **14.60°** |
-/// | 0.75     | 91%         | 4.80°   | 10.30°    | 17.27°    |
-/// | 0.70     | 90%         | 1.98°   | 14.61°    | 19.74°    |
-/// | 0.50     | 50%         | 7.31°   |  8.03°    |  6.89°    |
-/// | 0.00     | 20%         | — (커밋 없음) | — | — |
+/// | fraction | 커밋률(67샷) | 접촉 | 측정 조건 |
+/// |----------|-------------|------|-----------|
+/// | 1.00     | 76%         | 50   | iters=12 |
+/// | 0.90     | 76%         | 51   | iters=12 |
+/// | **0.80** | **76% / 75%** | **51 / 52** | **iters=12 / 32** |
+/// | 0.65     | 76%         | 53   | iters=12 |
+/// | 0.50     | 33%         | 55   | iters=12 |
 ///
-/// 0.80을 고른 이유: 커밋률이 완전 선추종(1.0)과 **동일한 91%** 인 구간
-/// (0.75~1.0)의 한가운데라 절벽(0.70에서 열화 시작, 0.50에서 반토막)까지
-/// 여유가 있으면서, base 선회량을 0.52° → 3.91°로 **7.5배** 되살린다.
-/// 관절별 pre/post 비도 0.028/0.261/0.079(들쭉날쭉)에서
-/// 0.213/0.281/0.253(고름)으로 모인다 — 팔 전체가 임팩트에 동기해 움직인다.
+/// **측정 조건 주의**: 이 스윕은 `num_solver_iterations = 12` 시절에 돌렸고,
+/// 직후 WP6가 그 값을 32로 올렸다(접촉 타이밍·반발 정합). 0.80 행만 32에서
+/// 재측정했고 75%/52접촉으로 재현됐다(원래 기록한 ±1샷 흔들림 범위 안).
+/// 나머지 행은 12 기준 값이므로, 이 상수를 실제로 바꾸려면 32에서 다시 스윕할
+/// 것. "0.65~1.00 평평 + 0.50 절벽"이라는 **모양**은 0.80의 재현으로 볼 때
+/// 유지될 것으로 보이지만 각 행의 절대값은 재확인 대상이다.
+///
+/// 0.65~1.00이 **완전히 평평하다**(전부 51커밋). 즉 rate-limit 이후에는 이
+/// 상수가 더 이상 커밋률의 지배 인자가 아니다 — 절벽은 0.50과 0.65 사이에
+/// 있다. 0.80을 유지하는 이유는 (a) 평평 구간의 한가운데라 절벽까지 여유가
+/// 크고, (b) 완전 선추종(1.0)이 임팩트 직전을 flick으로 붕괴시키는 원래
+/// 문제를 그대로 두기 때문이다(위 두 회귀의 트레이드오프 설명 참고).
+///
+/// **커밋률 76%의 출처는 이 상수가 아니라 레일 가속 제한이다.** 같은 격자
+/// (iters=12)에서 `RobotState::advance_rail`의 `RAIL_ACCEL_M_S2`만 끄면
+/// 99%(66/67), 켜면 76%(51/67)로, 관절 슬루·`clamp_above_table`은 각각 0 %p다
+/// — 이 분해도 12 기준이다(위 주의 참고). 실기 AXL
+/// 레일은 `v²/2a = 5.0²/24 = 1.04 m`를 써야 `RAIL_MAX_SPEED`에 닿는데 레일
+/// 전장이 `table::WIDTH_X = 1.525 m`라, 실제 프로파일은 순항 없는 삼각형이고
+/// 예전 sim의 "한 틱에 최고속" 레일보다 훨씬 느리다. 이 23 %p는 sim이
+/// 실기에 맞게 정직해진 결과지 이 상수로 되살릴 수 있는 게 아니다 —
+/// 회복하려면 레일 하드웨어 사양(`RAIL_ACCEL_M_S2`/`RAIL_MAX_SPEED`)이나
+/// 커밋 창(`swing_commit_max_secs`)을 건드려야 한다(WP2a).
 ///
 /// **이 상수를 만질 때는 추종 오차가 아니라 커밋률을 먼저 본다.** 낮출수록
 /// 증상은 좋아 보이지만 어느 지점에서 로봇이 아예 안 친다.
@@ -180,8 +197,21 @@ impl SimWorld {
         let crate::robot::Robot { arm, urdf } = robot;
         let mut integration_parameters = IntegrationParameters::default();
         integration_parameters.dt = 1.0 / 1000.0;
-        // 다물체 + 공 접촉: 12가 키네마틱 라켓 리턴 임펄스에 필요 (8이면 스침만 기록).
-        integration_parameters.num_solver_iterations = 12;
+        // WP6(RC-3, 2026-07-29/30) 실측: 기본 12에서는 (a) 테이블-공 반발이
+        // 설정값(e=0.88)보다 낮게 실현되고(평균 0.789, diag_table_restitution의
+        // `diag_rapier_effective_table_restitution`) (b) 그 산포의 지배 성분이
+        // 속도 의존 물리가 아니라 서브틱 접촉 위상 아티팩트다
+        // (`diag_effective_restitution_subtick_phase`: 낙하고 0.1mm 차이로도
+        // e가 0.688~0.845로 요동). 같은 원인이 라켓 접촉도 계획보다 일찍
+        // 발동시켜(`diag_contact_timing`의 `d_total` 평균 −3.9ms) RC-3(접촉
+        // 타이밍 불일치)을 만든다. 32로 올리면 두 증상이 동시에 거의 사라진다
+        // — e_eff 평균 0.8756(산포 0.1014→0.0182), d_total 평균 +0.02ms
+        // (산포 −0.23~+0.28ms). `normalized_prediction_distance`를 0에
+        // 가깝게 낮추는 대안도 비슷한 효과가 있었지만(e_eff 0.878, d_total
+        // +0.59ms) solver_iters=32가 두 지표 모두 더 낫다. 틱 비용은
+        // `diag_shoot_lag_tick_cost` 참고 — in-flight 평균 rapier step이 예산
+        // 1ms 대비 여유 있다(2026-07-30 재측정, 이전 12-iter 기준선과 비교).
+        integration_parameters.num_solver_iterations = 32;
 
         let mut rigid_body_set = RigidBodySet::new();
         let mut collider_set = ColliderSet::new();
@@ -428,7 +458,7 @@ impl SimWorld {
         // B: 명령(궤적→모터 목표) → 물리 → 측정 관절각을 robot::State에 반영.
         self.robot.step_commands(&self.arm, dt);
         let t_swing = std::time::Instant::now();
-        self.try_auto_swing();
+        self.try_auto_swing(dt);
         self.diag_auto_swing_secs = t_swing.elapsed().as_secs_f64();
         self.drive_arm_motors();
         self.apply_ball_aero_forces();
@@ -571,7 +601,9 @@ impl SimWorld {
     ///   초·중반 예측이 틀릴 수 있어 비행 전체 포기는 하지 않고 재시도한다.
     /// - `InsufficientTime`: 스로틀 재시도. 모든 후보가 `tti < min_swing`이면 포기.
     /// - 포기 후에는 팔이 움직이지 않는다.
-    fn try_auto_swing(&mut self) {
+    ///
+    /// `dt`는 commit 전 coarse 선추종의 관절 슬루 rate-limit에 쓰인다.
+    fn try_auto_swing(&mut self, dt: f64) {
         if self.ball_state != crate::sim::physics::BallState::InFlight {
             self.diag_marker_secs = 0.0;
             self.diag_predictions_secs = 0.0;
@@ -627,9 +659,14 @@ impl SimWorld {
 
         // 상대 코트에 있으면 아직 이름 — 바운스·탄도 안정화 대기.
         // 다만 손 놓고 기다리지 말고, 값싼 rough 추종(rough-to-fine의 rough)으로
-        // 레일/관절을 예측 임팩트 쪽으로 미리 옮겨 둔다. 목표만 설정하면 실제
-        // 이동은 rate-limited·table-clamped 추종 루프(step_toward_targets)가
-        // 처리하므로 max_joint_speed/rail.max_speed·충돌 안전을 자동 상속한다.
+        // 레일/관절을 예측 임팩트 쪽으로 미리 옮겨 둔다.
+        //
+        // 레일 목표는 `set_rail_target`으로 두면 `RobotState::advance_rail`이
+        // `rail.max_speed`+`RAIL_ACCEL_M_S2`로 슬루한다. 회전 관절 목표는
+        // **여기서 직접 rate-limit 해야 한다** — Rapier 위치-PD 모터는
+        // `targets`를 그대로 스텝 입력으로 받고 `motor_max_force`(토크 한계)로만
+        // 눌리므로, `set_targets`로 목표를 통째로 갈아끼우면 실기에 없는 무제한
+        // 스텝 입력이 된다(`RobotState::slew_targets_toward` 참고).
         let ball_y = f64::from(self.ball_position().y);
         if !motion::Planner::past_midcourt(ball_y) {
             self.debug_snap.commit_phase = CommitPhase::WaitMidcourt;
@@ -645,9 +682,9 @@ impl SimWorld {
                 self.robot.set_rail_target(*rail_x);
             }
             // 회전 관절은 예측 임팩트 자세 쪽으로 **부분만** 미리 옮긴다
-            // ([`COARSE_TRACK_JOINT_FRACTION`]). 실제 이동은 rate-limited·범위
-            // 클램프된 추종 루프가 하므로 `max_joint_speed`·충돌 안전을 자동
-            // 상속한다.
+            // ([`COARSE_TRACK_JOINT_FRACTION`]). 목표 자체를 `max_joint_speed`로
+            // 슬루하고 `clamp_above_table`을 태워, 명령이 실기 관절속도를 넘거나
+            // 테이블을 파고드는 자세를 지시하지 않게 한다.
             if COARSE_TRACK_JOINT_FRACTION > 0.0
                 && let Some((_, Some(joints))) = coarse
             {
@@ -657,7 +694,7 @@ impl SimWorld {
                     let from = rest.values.get(i).copied().unwrap_or(*value);
                     *value = from + (*value - from) * COARSE_TRACK_JOINT_FRACTION;
                 }
-                self.robot.set_targets(blended);
+                self.robot.slew_targets_toward(&self.arm, &blended, dt);
             }
             return;
         }
@@ -983,7 +1020,7 @@ impl SimWorld {
         self.last_swing_attempt_at = f64::NEG_INFINITY;
         self.flight_started_at = self.sim_time;
         self.debug_snap.reset_for_new_flight();
-        self.try_auto_swing();
+        self.try_auto_swing(f64::from(self.integration_parameters.dt));
     }
 
     /// 공을 슈터 발사구에 주차한다.

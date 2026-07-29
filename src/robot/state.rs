@@ -13,6 +13,11 @@ pub struct State {
     rail_x: f64,
     /// 리니어 목표 x [m]
     rail_target: f64,
+    /// 리니어 레일 현재 속도 [m/s] — `RAIL_ACCEL_M_S2` 가속 제한 적분 상태.
+    ///
+    /// 속도만 제한하면(예전 동작) 레일이 한 틱 만에 정지→최고속으로 뛰는데,
+    /// 실기 AXL 스테이지는 `RAIL_ACCEL_M_S2`로 가속·감속한다.
+    rail_vel: f64,
     /// 현재 관절각
     angles: Joints,
     /// 추종 목표 관절각 (궤적 없을 때)
@@ -29,6 +34,7 @@ impl State {
         return Self {
             rail_x,
             rail_target: rail_x,
+            rail_vel: 0.0,
             targets: initial.clone(),
             angles: initial,
             active_swing: None,
@@ -50,6 +56,7 @@ impl State {
         self.active_swing = None;
         self.rail_x = pose.rail_x;
         self.rail_target = pose.rail_x;
+        self.rail_vel = 0.0;
         self.angles = pose.joints.clone();
         self.targets = pose.joints;
     }
@@ -97,8 +104,8 @@ impl State {
 
     /// 리니어 레일 목표 x [m]를 직접 설정한다.
     ///
-    /// `set_targets`의 레일 짝. 보간은 하지 않는다 — `step_toward_targets`의
-    /// rate-limited 추종 루프가 설정된 목표를 향해 `rail.max_speed`로 접근한다.
+    /// `set_targets`의 레일 짝. 보간은 하지 않는다 — [`Self::advance_rail`]이
+    /// 설정된 목표를 향해 `rail.max_speed`·`RAIL_ACCEL_M_S2`로 접근한다.
     pub fn set_rail_target(&mut self, rail_x: f64) {
         self.rail_target = rail_x;
     }
@@ -143,6 +150,9 @@ impl State {
         self.angles = self.targets.clone();
         self.rail_target = trajectory.follow_through_rail_x();
         self.rail_x = trajectory.sample_rail_at(elapsed);
+        // 궤적 재생 중에는 레일 위치를 궤적이 직접 준다 — 슬루 적분 상태를
+        // 남겨두면 재생이 끝난 뒤 낡은 속도로 튄다.
+        self.rail_vel = 0.0;
         self.active_swing = Some(SwingPlayback {
             trajectory,
             elapsed,
@@ -175,11 +185,64 @@ impl State {
             }
             return;
         }
-        if let Some(rail) = &arm.rail {
-            let diff = self.rail_target - self.rail_x;
-            let step = (rail.max_speed * dt).min(diff.abs());
-            self.rail_x += diff.signum() * step;
+        self.advance_rail(arm, dt);
+    }
+
+    /// 레일을 `rail_target` 쪽으로 한 틱 옮긴다 — 속도 한계(`rail.max_speed`)와
+    /// **가속도 한계**([`RAIL_ACCEL_M_S2`](crate::defaults::motion::RAIL_ACCEL_M_S2))를
+    /// 모두 지키는 사다리꼴 프로파일 근사.
+    ///
+    /// 남은 거리 `d`에서 `a`로 정확히 멈출 수 있는 속도는 `√(2a|d|)`다. 목표
+    /// 속도를 `min(max_speed, √(2a|d|))`로 잡으면 가속 구간·순항 구간·감속
+    /// 구간이 자동으로 나오고 오버슛 없이 정지한다.
+    ///
+    /// 왜 필요한가: 속도 제한만 있던 예전 코드는 정지 상태에서 한 틱 만에
+    /// `max_speed`로 뛰었다 — 실기 AXL 리니어 스테이지가 못 하는 동작이라
+    /// sim이 실기보다 낙관적인 coarse 추종을 보여줬다.
+    fn advance_rail(&mut self, arm: &Arm, dt: f64) {
+        let Some(rail) = &arm.rail else {
+            return;
+        };
+        let diff = self.rail_target - self.rail_x;
+        if diff == 0.0 && self.rail_vel == 0.0 {
+            return;
         }
+        let accel = crate::defaults::motion::RAIL_ACCEL_M_S2;
+        let brake_speed = (2.0 * accel * diff.abs()).sqrt();
+        let desired_vel = diff.signum() * rail.max_speed.min(brake_speed);
+        self.rail_vel += (desired_vel - self.rail_vel).clamp(-accel * dt, accel * dt);
+        let step = self.rail_vel * dt;
+        if step.abs() >= diff.abs() {
+            self.rail_x = self.rail_target;
+            self.rail_vel = 0.0;
+        } else {
+            self.rail_x += step;
+        }
+    }
+
+    /// coarse(commit 전) 선추종 목표를 `goal` 쪽으로 **rate-limit** 해서 갱신한다.
+    ///
+    /// [`Self::set_targets`]와 달리 한 틱에 `arm.max_joint_speed · dt` 이상은
+    /// 못 움직인다. sim의 Rapier 위치-PD 모터는 `targets`를 그대로 스텝 입력으로
+    /// 받고 `motor_max_force`(토크 한계)로만 눌리므로, 목표를 매 틱 통째로
+    /// 바꾸면 실기에 없는 무제한 스텝 입력이 된다.
+    ///
+    /// 갱신된 목표는 [`clamp_above_table`](crate::robot::collision::clamp_above_table)로
+    /// 테이블 위로 클램프한다 — 명령 자세 자체가 테이블을 파고들지 않게 한다.
+    pub fn slew_targets_toward(&mut self, arm: &Arm, goal: &Joints, dt: f64) {
+        let n = self.targets.values.len().min(goal.values.len());
+        for i in 0..n {
+            let raw_diff = goal.values[i] - self.targets.values[i];
+            let diff = if arm.joint_limit(i).is_none() {
+                (raw_diff + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                    - std::f64::consts::PI
+            } else {
+                raw_diff
+            };
+            let step = (arm.max_joint_speed * dt).min(diff.abs());
+            self.targets.values[i] += diff.signum() * step;
+        }
+        self.targets = crate::robot::collision::clamp_above_table(arm, self.rail_x, &self.targets);
     }
 
     /// 스윙 시계만 진행하고 `targets`·`rail_x`를 샘플한다 (각도 덮어쓰기 없음).
@@ -295,11 +358,7 @@ impl State {
             }
             return;
         }
-        if let Some(rail) = &arm.rail {
-            let diff = self.rail_target - self.rail_x;
-            let step = (rail.max_speed * dt).min(diff.abs());
-            self.rail_x += diff.signum() * step;
-        }
+        self.advance_rail(arm, dt);
         let n = self.angles.values.len().min(self.targets.values.len());
         for i in 0..n {
             let raw_diff = self.targets.values[i] - self.angles.values[i];
@@ -380,6 +439,100 @@ mod tests {
         for (actual, expected) in state.joints().values.iter().zip(end.values) {
             assert!((actual - expected).abs() < 1e-12);
         }
+    }
+
+    /// 레일은 정지 상태에서 한 틱 만에 `max_speed`로 뛰지 못한다 —
+    /// `RAIL_ACCEL_M_S2`가 실제로 걸리는지 잠근다(WP5 회귀 가드).
+    ///
+    /// 참고: `RAIL_MAX_SPEED=5.0`에 도달하려면 `v²/2a = 1.04 m`가 필요한데
+    /// 레일 전장은 `table::WIDTH_X=1.525 m`다 — 실제 프로파일은 사다리꼴이
+    /// 아니라 **삼각형**이고 순항 구간이 없다. 그래서 "max_speed에 도달하는가"가
+    /// 아니라 "가속 한계를 지키며 오버슛 없이 도착하는가"로 판정한다.
+    #[test]
+    fn rail_slew_obeys_acceleration_limit_from_rest() {
+        const DT: f64 = 1.0 / 1000.0;
+        let arm = crate::defaults::primitive_4dof().expect("arm").arm;
+        let rail = *arm.rail.as_ref().expect("rail");
+        let mut state = arm.initial_state();
+        let start = state.rail_x();
+        let goal = rail.x_max;
+        state.set_rail_target(goal);
+
+        let accel = crate::defaults::motion::RAIL_ACCEL_M_S2;
+        state.step_commands(&arm, DT);
+        let first = (state.rail_x() - start).abs();
+        assert!(
+            first <= accel * DT * DT * 1.001,
+            "첫 틱 이동 {first} > a·dt² = {} — 가속 제한이 안 걸렸다",
+            accel * DT * DT
+        );
+        assert!(
+            first < rail.max_speed * DT * 0.5,
+            "첫 틱에 예전(속도만 제한) 스텝 {}에 근접했다: {first}",
+            rail.max_speed * DT
+        );
+
+        // 매 틱 속도 증가분이 a·dt를 넘지 않고, max_speed도 안 넘고,
+        // 오버슛 없이 목표에 도착해야 한다.
+        let mut prev_speed = first / DT;
+        let mut arrived = None;
+        for step in 0..5_000 {
+            let before = state.rail_x();
+            state.step_commands(&arm, DT);
+            let speed = (state.rail_x() - before).abs() / DT;
+            assert!(
+                speed <= prev_speed + accel * DT * 1.001,
+                "틱 {step}에서 속도가 {prev_speed} → {speed} 로 뛰었다 (한계 a·dt={})",
+                accel * DT
+            );
+            assert!(speed <= rail.max_speed * 1.001, "max_speed 초과: {speed}");
+            prev_speed = speed;
+            if (state.rail_x() - goal).abs() < 1e-9 {
+                arrived = Some(step);
+                break;
+            }
+        }
+        assert!(arrived.is_some(), "레일이 목표에 도착하지 못했다");
+        assert!(
+            state.rail_x() <= goal + 1e-9,
+            "오버슛: {} > {goal}",
+            state.rail_x()
+        );
+    }
+
+    /// coarse 선추종 목표는 `max_joint_speed`로 슬루된다 — `set_targets`처럼
+    /// 한 틱에 통째로 점프하면 Rapier 모터에 무제한 스텝 입력이 된다(WP5).
+    #[test]
+    fn coarse_slew_limits_target_step_to_max_joint_speed() {
+        const DT: f64 = 1.0 / 1000.0;
+        let arm = crate::defaults::primitive_4dof().expect("arm").arm;
+        let mut state = arm.initial_state();
+        let before = state.targets().clone();
+        let mut goal = before.clone();
+        for value in goal.values.iter_mut() {
+            *value += 1.0;
+        }
+
+        state.slew_targets_toward(&arm, &goal, DT);
+
+        let cap = arm.max_joint_speed * DT;
+        for (i, (after, start)) in state
+            .targets()
+            .values
+            .iter()
+            .zip(before.values.iter())
+            .enumerate()
+        {
+            let moved = (after - start).abs();
+            assert!(
+                moved <= cap * 1.001,
+                "q{i} 목표가 한 틱에 {moved} rad 움직였다 (상한 {cap})"
+            );
+        }
+        assert!(
+            state.targets().values != before.values,
+            "슬루가 목표를 전혀 못 옮겼다"
+        );
     }
 
     #[test]
