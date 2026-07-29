@@ -71,9 +71,9 @@ pub use planner::{
     PlannedBangBangIntercept, RacketGuidanceScratch, RacketGuidanceStep, RailMotion,
     SwingFeasibility, SwingTrajectory, accel, aero_accel, ball_past_midcourt_for_commit,
     clamp_above_table, in_swing_commit_window, plan_bang_bang_swing, plan_best_swing,
-    plan_coarse_track, plan_return_to_center, plan_swing, rally_return_velocity,
-    required_racket_velocity, robot_obbs, step_racket_guidance, swing_feasibility,
-    table_penetration, verify_impact_model,
+    plan_coarse_track, plan_coarse_track_targets, plan_return_to_center, plan_swing,
+    rally_return_velocity, required_racket_velocity, robot_obbs, step_racket_guidance,
+    swing_feasibility, table_penetration, verify_impact_model,
 };
 pub use robot::{
     Arm, ArmBuildError, ArmBuilder, JointLimit, Joints, LinearRail, LinkInertial, MountPreset,

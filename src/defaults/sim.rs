@@ -7,7 +7,33 @@ pub const RANDOM_SHOT_NET_GATE_MAX_TRIES: usize = 48;
 pub const RANDOM_SHOT_LATERAL_MIN_M: f64 = -0.5;
 pub const RANDOM_SHOT_LATERAL_MAX_M: f64 = 0.5;
 pub const RANDOM_SHOT_TARGET_PADDING_M: f64 = 0.25;
-pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 5.7;
+/// 랜덤 샷 속도 하한 [m/s] — **로봇에 실제로 닿는 공**의 최저 속도.
+///
+/// 이 값보다 느리면 공이 마지막 바운스 뒤 로봇 앞에서 굴러 멈춰
+/// hit plane(가장 먼 y=0.35)에 도달하지 못한다. 그러면 `predict_impact`가
+/// 매 스텝 `None`이라 `plan_coarse_track`이 아예 호출되지 않고, 로봇은
+/// 커밋도 포기도 못 한 채 공만 지나간다.
+///
+/// 실측(좌우 5 × yaw 5 = 25개 격자, 순수 탄도, 기본 pitch/높이):
+///
+/// | 속도 | 도달/25 | 최악 min-y |
+/// |------|---------|-----------|
+/// | 5.5  |  6/25   | 1.395 |
+/// | 5.6  |  8/25   | 1.394 |
+/// | 5.7  | 16/25   | 1.395 |
+/// | 5.8  | 21/25   | 1.388 |
+/// | 5.9  | **25/25** | **−0.147** |
+/// | 6.0+ | 25/25   | −0.146 |
+///
+/// 절벽이다 — 5.9에서 최악 min-y가 1.388(테이블 위에서 멈춤)에서
+/// −0.147(로봇을 0.5 m 지나침)로 한 번에 넘어간다. 코너 샷일수록 비행거리가
+/// 길어 더 빠른 속도가 필요하므로 격자 **최악값** 기준으로 잡았다.
+///
+/// 6.0을 고른 이유: 절벽(5.9)에서 한 칸 여유가 있고, 기본 샷 속도
+/// (`BallShooterSettings::default().speed_mps`)와 같아 "시중 슈터 초보~중급
+/// 피딩 하단"이라는 기준점과 일치한다. 근거 측정은
+/// `diag_random_shot_speed_reachability` (`sim::physics::world` 테스트).
+pub const RANDOM_SHOT_SPEED_MIN_MPS: f64 = 6.0;
 pub const RANDOM_SHOT_SPEED_MAX_MPS: f64 = 6.3;
 pub const RANDOM_SHOT_HEIGHT_MIN_M: f64 = 0.22;
 pub const RANDOM_SHOT_HEIGHT_MAX_M: f64 = 0.28;

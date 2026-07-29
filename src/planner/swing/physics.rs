@@ -427,6 +427,52 @@ pub fn plan_best_swing(
 /// (`inverse_pose_with_rail`)로 rough 포즈를 구한다. IK가 수렴 못 하면 `None`
 /// — 확정 스윙이 아니라 rough 목표라 실패는 에러가 아니라 "이번 틱 스킵"이다.
 pub fn plan_coarse_track(arm: &Arm, predictions: &[Prediction]) -> Option<RobotPose> {
+    let target = coarse_track_geometry(arm, predictions)?;
+    let rail = arm.rail.as_ref()?;
+    // 기본 중앙 포즈를 힌트로 단일 IK. 실제 이동은 rate-limited 추종 루프가 함.
+    let hint = RobotPose::new(rail.default_x(), arm.default_joints.clone());
+    return arm
+        .inverse_pose_with_rail(target.reachable, target.desired_normal, &hint)
+        .ok();
+}
+
+/// coarse 추종 목표를 **한 번의 기하 계산으로** 레일 x와 회전 관절 목표를 함께
+/// 낸다 — 시뮬 루프처럼 둘 다 필요한 호출자용.
+///
+/// 레일 x만 따로 구하는 함수와 [`plan_coarse_track`]을 각각 부르면 예측
+/// 선택·반사 법선 기하를 두 번 돌게 되고, 이 경로는 **매 물리 틱**(1 kHz) 도는
+/// 자리라 그 중복이 `bang_bang_swing_planning_does_not_block_physics_step`
+/// (스텝 wall-clock 가드)를 부하 중에 넘길 만큼 유의미하다. 실측: 중복 호출
+/// 버전은 전체 스위트 병렬 실행에서 그 테스트를 3회 중 2회 실패시켰고, 단일
+/// 패스로 합치면 사라진다.
+///
+/// 반환값의 관절 목표는 `Option` — 레일 x는 순수 기하라 항상 나오지만 IK는
+/// 수렴 못 할 수 있고, 그때도 레일 선추종은 계속돼야 한다.
+pub fn plan_coarse_track_targets(
+    arm: &Arm,
+    predictions: &[Prediction],
+) -> Option<(f64, Option<Joints>)> {
+    let target = coarse_track_geometry(arm, predictions)?;
+    let rail = arm.rail.as_ref()?;
+    let hint = RobotPose::new(rail.default_x(), arm.default_joints.clone());
+    let joints = arm
+        .inverse_pose_with_rail(target.reachable, target.desired_normal, &hint)
+        .ok()
+        .map(|pose| pose.joints);
+    return Some((target.rail_x, joints));
+}
+
+/// coarse 추종 목표 기하 — IK 이전 단계까지.
+struct CoarseTrackTarget {
+    /// 레일 목표 x [m] (`rail.clamp_x` 순수 기하 — IK 불필요).
+    rail_x: f64,
+    /// 팔 도달 구 안으로 클램프한 라켓 중심.
+    reachable: crate::Point3,
+    /// 원하는 라켓 면 법선.
+    desired_normal: Vector3<f64>,
+}
+
+fn coarse_track_geometry(arm: &Arm, predictions: &[Prediction]) -> Option<CoarseTrackTarget> {
     // 예측 hit plane들 중 로봇에 가장 가까운(= 가장 도달 가능성 높은) 하나를
     // 고른다. 가장 먼 평면은 공이 아직 높이 떠 있어 팔 도달권 밖이라, rough
     // 추종엔 base에 제일 가까운 임팩트가 "가장 관련 있는" 목표다. 레일이 x를
@@ -460,15 +506,15 @@ pub fn plan_coarse_track(arm: &Arm, predictions: &[Prediction]) -> Option<RobotP
                 * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z),
     );
     // rough 단계라 예측 임팩트가 아직 팔 도달권 밖(공이 높이 떠 있는 초기
-    // 비행)이어도, 레일 x라도 미리 맞추도록 도달 구 안으로 클램프한 목표에
-    // IK를 건다(y=접수 깊이 우선 보존). coarse 추종은 레일이 있는 로봇 대상.
+    // 비행)이어도, 레일 x라도 미리 맞추도록 도달 구 안으로 클램프한다
+    // (y=접수 깊이 우선 보존). coarse 추종은 레일이 있는 로봇 대상.
     let rail = arm.rail.as_ref()?;
-    let (_rail_x, reachable) = arm.clamp_impact_for_rail(rail, racket_center);
-    // 기본 중앙 포즈를 힌트로 단일 IK. 실제 이동은 rate-limited 추종 루프가 함.
-    let hint = RobotPose::new(rail.default_x(), arm.default_joints.clone());
-    return arm
-        .inverse_pose_with_rail(reachable, desired_normal, &hint)
-        .ok();
+    let (rail_x, reachable) = arm.clamp_impact_for_rail(rail, racket_center);
+    return Some(CoarseTrackTarget {
+        rail_x,
+        reachable,
+        desired_normal,
+    });
 }
 
 /// 스윙(혹은 랠리) 뒤 로봇을 중앙 포즈(관절 `default_joints`, 레일 `default_x`

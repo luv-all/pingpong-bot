@@ -18,7 +18,7 @@ pub use swing::trajectory;
 pub use swing::{
     PlannedIntercept, RailMotion, SwingFeasibility, SwingTrajectory, accel, aero_accel,
     ball_past_midcourt_for_commit, in_swing_commit_window, plan_best_swing, plan_coarse_track,
-    plan_return_to_center, plan_swing, swing_feasibility,
+    plan_coarse_track_targets, plan_return_to_center, plan_swing, swing_feasibility,
 };
 
 use anyhow::{Result, ensure};

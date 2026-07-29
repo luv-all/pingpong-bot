@@ -11,13 +11,15 @@ use crate::constants::table;
 use crate::defaults;
 use crate::robot::{Arm, Joints};
 
-/// 위치 추종 게인 — τ 여유 있을 때 명령각에 가깝게, 포화 시에만 지연.
+/// 관절별 위치 추종 게인 — τ 여유 있을 때 명령각에 가깝게, 포화 시에만 지연.
 /// 값은 [`defaults::sim_motor`] SSOT (시뮬 전용 — 실물 서보에는 안 나감).
-fn motor_gains() -> (f32, f32) {
-    let motor = defaults::SimMotorParams::default();
+///
+/// 관절마다 반사 관성이 15배까지 차이 나서 하나의 `(k, d)` 쌍으로는 어느 한
+/// 관절에만 맞는 대역폭이 나온다. 배열보다 관절이 많으면 마지막 값으로 폴백.
+fn motor_gain_at(motor: &defaults::SimMotorParams, joint: usize) -> (f32, f32) {
     return (
-        motor.position_stiffness as f32,
-        motor.position_damping as f32,
+        motor.stiffness_at(joint) as f32,
+        motor.damping_at(joint) as f32,
     );
 }
 
@@ -106,7 +108,7 @@ impl ArmMultibody {
         restitution: f32,
     ) -> Self {
         let torques = defaults::ControlParams::default().max_joint_torques;
-        let (stiffness, damping) = motor_gains();
+        let motor = defaults::SimMotorParams::default();
         let n = arm.joint_count().min(initial.values.len());
         let mount_iso = arm.chain.mount_isometry(mount);
         let base = bodies.insert(
@@ -141,6 +143,7 @@ impl ArmMultibody {
             let axis1 = origin.rotation * axis_local;
             let axis2 = axis_local;
             let tau = torques.get(index).copied().unwrap_or(6.0) as f32;
+            let (stiffness, damping) = motor_gain_at(&motor, index);
             let mut revolute = RevoluteJointBuilder::new(vec3_f32(axis2))
                 .local_anchor1(vec3_f32(origin.translation.vector))
                 .local_anchor2(Vec3::ZERO)
@@ -267,7 +270,7 @@ impl ArmMultibody {
     /// 목표 관절각으로 모터 위치 제어. effort 상한은 spawn 시 τ_max.
     pub fn set_motor_targets(&self, joints: &mut MultibodyJointSet, targets: &Joints) {
         let n = self.joint_handles.len().min(targets.values.len());
-        let (stiffness, damping) = motor_gains();
+        let motor = defaults::SimMotorParams::default();
         for i in 0..n {
             let handle = self.joint_handles[i];
             let Some((mb, link_id)) = joints.get_mut(handle) else {
@@ -277,6 +280,7 @@ impl ArmMultibody {
                 continue;
             };
             if let Some(revolute) = link.joint.data.as_revolute_mut() {
+                let (stiffness, damping) = motor_gain_at(&motor, i);
                 revolute.set_motor_position(targets.values[i] as f32, stiffness, damping);
             }
         }
