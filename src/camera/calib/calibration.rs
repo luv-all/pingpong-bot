@@ -1,12 +1,12 @@
 //! ChArUco 등으로 측정한 카메라 번들.
 
-use crate::camera::{Id, Params};
+use crate::camera;
 
-/// ChArUco 등으로 측정한 카메라 번들. `cameras[i]` <-> `Id(i)`.
+/// ChArUco 등으로 측정한 카메라 번들. `cameras[i]` <-> `camera::Id(i)`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Calibration {
     /// 등록된 카메라 목록
-    pub cameras: Vec<Params>,
+    pub cameras: Vec<camera::Params>,
 }
 
 impl Calibration {
@@ -21,7 +21,7 @@ impl Calibration {
     }
 
     /// ID로 카메라 파라미터를 조회한다.
-    pub fn params(&self, camera_id: Id) -> Option<&Params> {
+    pub fn params(&self, camera_id: camera::Id) -> Option<&camera::Params> {
         return self.cameras.iter().find(|c| c.camera_id == camera_id);
     }
 
@@ -29,7 +29,9 @@ impl Calibration {
     pub fn sim(camera_count: u8) -> Self {
         let n = camera_count.max(2);
         return Self {
-            cameras: (0..n).map(|i| Params::sim_layout(Id(i), n)).collect(),
+            cameras: (0..n)
+                .map(|i| camera::Params::sim_layout(camera::Id(i), n))
+                .collect(),
         };
     }
 

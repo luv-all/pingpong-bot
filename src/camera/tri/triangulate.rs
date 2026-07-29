@@ -2,14 +2,15 @@
 
 use std::time::Instant;
 
-use crate::{DomainError, Id, Observation, ObservationError, Pixel, Point3};
+use crate::{DomainError, ObservationError, Point3};
 use nalgebra::{DMatrix, Matrix3x4};
 
-use crate::camera::Params;
+use crate::ball;
+use crate::camera;
 use crate::camera::calib::Calibration;
 
 /// 관측 시계열에서 `sync_time`에 해당하는 픽셀 위치를 선형 보간한다.
-pub fn sample_at(observations: &[Observation], sync_time: Instant) -> Option<Pixel> {
+pub fn sample_at(observations: &[ball::Observation], sync_time: Instant) -> Option<camera::Pixel> {
     if observations.is_empty() {
         return None;
     }
@@ -42,7 +43,7 @@ pub fn sample_at(observations: &[Observation], sync_time: Instant) -> Option<Pix
 
 /// 카메라별 관측 스트림을 `sync_time`으로 정렬한 뒤 3D 위치를 복원한다.
 pub fn triangulate_synced(
-    observations_by_camera: &[(Id, &[Observation])],
+    observations_by_camera: &[(camera::Id, &[ball::Observation])],
     sync_time: Instant,
     calibration: &Calibration,
 ) -> Result<Point3, DomainError> {
@@ -77,12 +78,12 @@ pub fn triangulate_synced(
 }
 
 /// OpenCV로 뷰를 합친다. 3뷰 이상은 OpenCV의 2뷰 API 제약 때문에 DLT를 쓴다.
-pub fn triangulate_views(views: &[(Matrix3x4<f64>, Pixel)]) -> Option<Point3> {
+pub fn triangulate_views(views: &[(Matrix3x4<f64>, camera::Pixel)]) -> Option<Point3> {
     return super::opencv_tri::triangulate_views(views);
 }
 
 /// 알려진 픽셀/투영행렬로 DLT 삼각측량 (동차 SVD).
-pub fn dlt_triangulate(views: &[(Matrix3x4<f64>, Pixel)]) -> Option<Point3> {
+pub fn dlt_triangulate(views: &[(Matrix3x4<f64>, camera::Pixel)]) -> Option<Point3> {
     if views.len() < 2 {
         return None;
     }
@@ -117,12 +118,12 @@ pub fn dlt_triangulate(views: &[(Matrix3x4<f64>, Pixel)]) -> Option<Point3> {
 /// 테스트/디버그용: Calibration의 카메라들로 점을 투영한 뒤 복원한다.
 pub fn triangulate_projections(
     calibration: &Calibration,
-    camera_ids: &[Id],
+    camera_ids: &[camera::Id],
     point: Point3,
 ) -> Option<Point3> {
     let mut views = Vec::new();
     for id in camera_ids {
-        let params: &Params = calibration.params(*id)?;
+        let params: &camera::Params = calibration.params(*id)?;
         let pixel = params.project_world(point)?;
         views.push((params.projection_matrix(), pixel));
     }
@@ -134,14 +135,22 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::constants::table;
-    use crate::{DomainError, Id, Observation, ObservationError, Pixel, Point3};
+    use crate::{DomainError, ObservationError, Point3};
 
     use super::*;
+    use crate::ball;
+    use crate::camera;
     use crate::camera::Calibration;
 
-    fn observation(camera_id: Id, base: Instant, elapsed_ms: u64, x: f64, y: f64) -> Observation {
-        return Observation {
-            pixel: Pixel::new(x, y),
+    fn observation(
+        camera_id: camera::Id,
+        base: Instant,
+        elapsed_ms: u64,
+        x: f64,
+        y: f64,
+    ) -> ball::Observation {
+        return ball::Observation {
+            pixel: camera::Pixel::new(x, y),
             camera_id,
             timestamp: base + Duration::from_millis(elapsed_ms),
         };
@@ -150,7 +159,7 @@ mod tests {
     #[test]
     fn sample_at_interpolates() {
         let base = Instant::now();
-        let camera_id = Id::new(0);
+        let camera_id = camera::Id::new(0);
         let series = vec![
             observation(camera_id, base, 0, 0.0, 0.0),
             observation(camera_id, base, 10, 10.0, 0.0),
@@ -163,8 +172,8 @@ mod tests {
     #[test]
     fn triangulate_requires_min_cameras() {
         let calibration = Calibration::default();
-        let camera_id = Id::new(0);
-        let series: [Observation; 0] = [];
+        let camera_id = camera::Id::new(0);
+        let series: [ball::Observation; 0] = [];
         let err = triangulate_synced(&[(camera_id, &series[..])], Instant::now(), &calibration)
             .unwrap_err();
         assert!(matches!(
@@ -181,7 +190,7 @@ mod tests {
             table::LENGTH_Y * 0.4,
             table::SURFACE_Z + 0.2,
         );
-        let ids = [Id::new(0), Id::new(1), Id::new(2)];
+        let ids = [camera::Id::new(0), camera::Id::new(1), camera::Id::new(2)];
         let recovered = triangulate_projections(&calibration, &ids, truth).expect("DLT");
         let err = (recovered.coords - truth.coords).norm();
         assert!(
@@ -196,14 +205,18 @@ mod tests {
     fn dlt_works_with_two_cameras() {
         let calibration = Calibration::sim(3);
         let truth = Point3::new(0.6, 1.0, 0.9);
-        let recovered = triangulate_projections(&calibration, &[Id::new(0), Id::new(2)], truth)
-            .expect("2-view DLT");
+        let recovered = triangulate_projections(
+            &calibration,
+            &[camera::Id::new(0), camera::Id::new(2)],
+            truth,
+        )
+        .expect("2-view DLT");
         assert!((recovered.coords - truth.coords).norm() < 1e-3);
     }
 
     #[test]
     fn table_center_projects_near_image_center() {
-        let cam = Params::sim_layout(Id::new(1), 3);
+        let cam = camera::Params::sim_layout(camera::Id::new(1), 3);
         let pixel = cam
             .project_world(Point3::new(
                 table::WIDTH_X * 0.5,
@@ -220,8 +233,8 @@ mod tests {
         let calibration = Calibration::sim(3);
         let truth = Point3::new(0.7, 1.2, 1.0);
         let base = Instant::now();
-        let mut series: Vec<(Id, Vec<Observation>)> = Vec::new();
-        for id in [Id::new(0), Id::new(1), Id::new(2)] {
+        let mut series: Vec<(camera::Id, Vec<ball::Observation>)> = Vec::new();
+        for id in [camera::Id::new(0), camera::Id::new(1), camera::Id::new(2)] {
             let pixel = calibration
                 .params(id)
                 .unwrap()
@@ -235,7 +248,7 @@ mod tests {
                 ],
             ));
         }
-        let refs: Vec<(Id, &[Observation])> =
+        let refs: Vec<(camera::Id, &[ball::Observation])> =
             series.iter().map(|(id, s)| (*id, s.as_slice())).collect();
         let mid = base + Duration::from_millis(5);
         let recovered = triangulate_synced(&refs, mid, &calibration).expect("synced DLT");

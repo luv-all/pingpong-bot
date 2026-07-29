@@ -4,7 +4,7 @@
 //! 규격·datasheet(ITTF, CAD, G, B0332, DXL stall)는 [`crate::constants`].
 //!
 //! 패턴:
-//! - `impl Default for Params|Config|CliArgs` — 앱 프리셋
+//! - `impl Default for camera::Params|Config|CliArgs` — 앱 프리셋
 //! - `pub const` — clap `default_value_t`·임계값
 //! - [`detector_for`] / [`robot`] — 조립이 `Result`이거나 파이프라인인 팩토리만 예외
 //!
@@ -84,7 +84,7 @@ pub use vision::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Id;
+    use crate::camera;
     use crate::defaults::colormask_for;
     use crate::detector::{RoiParams, ScorerParams};
     use crate::hardware::dynamixel::DynamixelConfig;
@@ -99,8 +99,8 @@ mod tests {
         EstimatorParams::default().validate().unwrap();
         InterceptWindow::default().validate().unwrap();
         ScorerParams::default().validate().unwrap();
-        colormask_for(Id(0)).unwrap().validate().unwrap();
-        colormask_for(Id(1)).unwrap().validate().unwrap();
+        colormask_for(camera::Id(0)).unwrap().validate().unwrap();
+        colormask_for(camera::Id(1)).unwrap().validate().unwrap();
         RoiParams::default().validate().unwrap();
         DynamixelConfig::default().validate().unwrap();
         RailConfig::default().validate().unwrap();

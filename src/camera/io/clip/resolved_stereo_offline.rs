@@ -1,9 +1,9 @@
 //! `--clip` 해석 결과.
 
+use crate::camera;
 use std::path::{Path, PathBuf};
 
 use super::stereo_clip::{resolve_clip_side, resolve_stereo_clip};
-use crate::camera::Role;
 
 /// `--clip` 해석 결과. `None`이면 라이브.
 #[derive(Debug, Clone)]
@@ -51,7 +51,7 @@ pub(crate) fn resolve_stereo_offline(
 /// `--clip` → 단안 파일. 없으면 `Ok(None)` (라이브).
 pub(crate) fn resolve_mono_offline(
     clip: Option<&Path>,
-    role: Role,
+    role: camera::Role,
 ) -> Result<Option<PathBuf>, String> {
     let Some(clip) = clip else {
         return Ok(None);

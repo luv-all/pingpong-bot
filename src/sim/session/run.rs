@@ -1,5 +1,6 @@
 //! sim 세션 — 물리 스레드와 공유 월드.
 
+use crate::camera;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -206,7 +207,7 @@ impl SimSession {
     }
 
     /// 가상 카메라 소스를 만든다. `frames == 0` 이면 종료 신호까지 무한.
-    pub fn camera(&self, camera_id: crate::Id, frames: u64) -> SimCamera {
+    pub fn camera(&self, camera_id: camera::Id, frames: u64) -> SimCamera {
         return SimCamera::new(
             camera_id,
             self.config.camera_count,

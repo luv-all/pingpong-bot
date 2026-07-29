@@ -2,6 +2,9 @@
 //!
 //! 경연용 단일 애플리케이션 안에서 카메라·추정·로봇·시뮬레이션·계획을
 //! 기능별 모듈로 나눈다.
+//!
+//! 도메인 타입은 모듈 경로로 쓴다 (`camera::Id`, `ball::Observation`).
+//! 루트 `pub use`로 짧은 이름을 펼치지 않는다.
 
 pub mod ball;
 pub mod camera;
@@ -21,25 +24,14 @@ pub mod telemetry;
 /// 월드 좌표 점 [m] — `nalgebra::Point3<f64>`.
 pub type Point3 = nalgebra::Point3<f64>;
 
-pub use ball::Observation;
-pub use ball::Observation as BallObservation;
 pub use camera::{
-    BoardSpec, Calibration, CamCliArgs, CamRigConfig, CamStreamArgs, CaptureBackend, Charuco,
+    Calibration, CamCliArgs, CamRigConfig, CamStreamArgs, CaptureBackend, Charuco,
     DEFAULT_CLIPS_DIR, DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
-    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH, ExposureReadout, Frame, FrameDetect, FrameSource,
-    HintSource, Id, ImageDirSource, Landmark, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS,
-    MonoOfflineArgs, OpenCvCapture, Params, Pixel, PixelPickMouse, PnpResult, Preview,
-    PreviewAction, Report, ResolvedCam, ResolvedStereoOffline, Role, ShowBgrResult, SimCamera,
-    StereoCamCliArgs, StereoClip, StereoOfflineArgs, StereoPairCliArgs, StreamPreset,
-    TABLE_LANDMARK_COUNT, TablePnp, ThreadedCapture, Triangulate, View, WorldGridParams,
-    arducam_b0332,
-};
-// 移行 별칭
-pub use camera::{
-    BoardSpec as CharucoBoardSpec, FrameDetect as CharucoFrameDetect, Id as CameraId,
-    Landmark as TableLandmark, Params as CameraParams, Pixel as PixelPoint,
-    PnpResult as TablePnpResult, Report as CharucoCalibReport, Role as CameraRole,
-    View as CameraView,
+    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH, ExposureReadout, Frame, FrameSource, HintSource,
+    ImageDirSource, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, MonoOfflineArgs, OpenCvCapture,
+    PixelPickMouse, Preview, PreviewAction, ResolvedCam, ResolvedStereoOffline, ShowBgrResult,
+    SimCamera, StereoCamCliArgs, StereoClip, StereoOfflineArgs, StereoPairCliArgs, StreamPreset,
+    TABLE_LANDMARK_COUNT, TablePnp, ThreadedCapture, Triangulate, WorldGridParams, arducam_b0332,
 };
 pub use defaults::{
     ControlParams, DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME,

@@ -14,13 +14,15 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 #[cfg(feature = "real")]
+use pingpong_bot::camera;
+#[cfg(feature = "real")]
 use pingpong_bot::defaults::detector_for;
 use pingpong_bot::defaults::robot;
 use pingpong_bot::logging::init_tracing;
 #[cfg(feature = "gui")]
 use pingpong_bot::sim::gui::{SimViewer, SimViewerOptions};
 #[cfg(feature = "real")]
-use pingpong_bot::{DynamixelConfig, Hardware, Id, RailConfig, RealHardware};
+use pingpong_bot::{DynamixelConfig, Hardware, RailConfig, RealHardware};
 use pingpong_bot::{
     InterceptWindow, PhysicsParams, SimRuntimeControls, SimSession, SimSessionConfig,
 };
@@ -122,7 +124,7 @@ fn run_real_entry(args: &Args) -> Result<()> {
         RealHardware::new(dxl, Some(RailConfig::default()), arm).context("RealHardware")?;
     let pose = hardware.read_pose().context("read pose")?;
     info!(joints = ?pose.joints.values, "pose");
-    let _ = detector_for(Id(0)).context("detector_for cam0")?;
+    let _ = detector_for(camera::Id(0)).context("detector_for cam0")?;
     return Ok(());
 }
 

@@ -1,10 +1,10 @@
 //! 스테레오/멀티 선택용 CLI.
 
+use crate::camera;
 use clap::Parser;
 
 use super::cam_cli_args::CamCliArgs;
 use super::cam_stream_args::CamStreamArgs;
-use crate::camera::Role;
 use crate::defaults::calib::DEFAULT_STEREO_CAM_ROLES;
 
 /// 스테레오/멀티 선택용 (`left,right` 기본). `cam-preview`처럼 한 대만 열 수도 있는 툴.
@@ -17,7 +17,7 @@ pub struct StereoCamCliArgs {
         value_delimiter = ',',
         default_values_t = DEFAULT_STEREO_CAM_ROLES
     )]
-    pub cam: Vec<Role>,
+    pub cam: Vec<camera::Role>,
 
     #[command(flatten)]
     pub stream: CamStreamArgs,

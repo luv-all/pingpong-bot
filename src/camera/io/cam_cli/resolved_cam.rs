@@ -1,17 +1,17 @@
 //! resolve된 한 대 (device는 rig에서만).
 
+use crate::camera;
 use crate::camera::io::rig::CamRigConfig;
-use crate::camera::{Id, Role};
 
 /// resolve된 한 대 (device는 rig에서만).
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedCam {
-    pub role: Role,
+    pub role: camera::Role,
     pub device: i32,
-    pub camera_id: Id,
+    pub camera_id: camera::Id,
 }
 
-pub(crate) fn resolve_cams(roles: &[Role]) -> Result<Vec<ResolvedCam>, String> {
+pub(crate) fn resolve_cams(roles: &[camera::Role]) -> Result<Vec<ResolvedCam>, String> {
     if roles.is_empty() {
         return Err("--cam 필수 (left|right) — 단일 캠 툴은 생략 불가".into());
     }

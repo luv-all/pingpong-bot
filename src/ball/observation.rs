@@ -2,12 +2,11 @@
 
 use std::time::Instant;
 
-use crate::camera::{Id, Pixel};
+use crate::camera;
 
-/// 한 프레임에서 검출한 공.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Observation {
-    pub pixel: Pixel,
-    pub camera_id: Id,
+    pub pixel: camera::Pixel,
+    pub camera_id: camera::Id,
     pub timestamp: Instant,
 }

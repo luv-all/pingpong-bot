@@ -3,12 +3,12 @@
 use opencv::core::{Point, Vector};
 use opencv::imgproc;
 
-use crate::Pixel;
+use crate::camera;
 
 /// 한 프레임 안의 공 후보.
 #[derive(Debug, Clone)]
 pub struct Candidate {
-    pub pixel: Pixel,
+    pub pixel: camera::Pixel,
     pub area: f64,
     /// `4π·area / peri²`. 원일수록 1에 가깝다.
     pub circularity: f64,
@@ -32,7 +32,7 @@ pub fn candidate_from_contour(contour: &Vector<Point>) -> Option<Candidate> {
         return None;
     }
     return Some(Candidate {
-        pixel: Pixel::new(moments.m10 / moments.m00, moments.m01 / moments.m00),
+        pixel: camera::Pixel::new(moments.m10 / moments.m00, moments.m01 / moments.m00),
         area,
         circularity,
         contour: contour.clone(),

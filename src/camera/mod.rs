@@ -37,14 +37,3 @@ pub use io::{
     ShowBgrResult, SimCamera, StereoCamCliArgs, StereoClip, StereoOfflineArgs, StereoPairCliArgs,
     StreamPreset, ThreadedCapture, WorldGridParams,
 };
-
-// 移行 별칭 (§3)
-pub use Id as CameraId;
-pub use Params as CameraParams;
-pub use Pixel as PixelPoint;
-pub use Role as CameraRole;
-pub use View as CameraView;
-pub use calib::{
-    BoardSpec as CharucoBoardSpec, FrameDetect as CharucoFrameDetect, Landmark as TableLandmark,
-    PnpResult as TablePnpResult, Report as CharucoCalibReport,
-};

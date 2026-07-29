@@ -1,6 +1,7 @@
 //! OpenCV `triangulatePoints` 경로.
 
-use crate::{Pixel, Point3};
+use crate::Point3;
+use crate::camera;
 use nalgebra::Matrix3x4;
 use opencv::core::{CV_64F, Mat, MatTraitConst, Point2d, Vector};
 use opencv::prelude::*;
@@ -8,7 +9,7 @@ use opencv::prelude::*;
 use super::triangulate::dlt_triangulate;
 
 /// 2뷰는 OpenCV `triangulate_points`, 3뷰 이상은 nalgebra DLT(동일 수식)로 폴백.
-pub fn triangulate_views(views: &[(Matrix3x4<f64>, Pixel)]) -> Option<Point3> {
+pub fn triangulate_views(views: &[(Matrix3x4<f64>, camera::Pixel)]) -> Option<Point3> {
     if views.len() < 2 {
         return None;
     }
@@ -19,7 +20,10 @@ pub fn triangulate_views(views: &[(Matrix3x4<f64>, Pixel)]) -> Option<Point3> {
     return dlt_triangulate(views);
 }
 
-fn triangulate_two(a: &(Matrix3x4<f64>, Pixel), b: &(Matrix3x4<f64>, Pixel)) -> Option<Point3> {
+fn triangulate_two(
+    a: &(Matrix3x4<f64>, camera::Pixel),
+    b: &(Matrix3x4<f64>, camera::Pixel),
+) -> Option<Point3> {
     let proj1 = matrix3x4_to_mat(&a.0)?;
     let proj2 = matrix3x4_to_mat(&b.0)?;
     let mut points1 = Vector::<Point2d>::new();

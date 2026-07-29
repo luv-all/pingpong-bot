@@ -3,11 +3,12 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use pingpong_bot::CamCliArgs;
+use pingpong_bot::camera;
 use pingpong_bot::defaults::calib::{
     CHARUCO_MARKER_LENGTH_M, CHARUCO_SQUARE_LENGTH_M, CHARUCO_SQUARES_X, CHARUCO_SQUARES_Y,
     DEFAULT_CALIBRATION_PATH,
 };
-use pingpong_bot::{BoardSpec, CamCliArgs};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -54,8 +55,8 @@ pub struct Args {
     pub marker_length: f32,
 }
 
-pub fn board_spec(args: &Args) -> BoardSpec {
-    return BoardSpec {
+pub fn board_spec(args: &Args) -> camera::BoardSpec {
+    return camera::BoardSpec {
         squares_x: args.squares_x,
         squares_y: args.squares_y,
         square_length_m: args.square_length,

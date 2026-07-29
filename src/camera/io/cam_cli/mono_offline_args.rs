@@ -1,10 +1,10 @@
 //! 단안 오프라인 입력.
 
+use crate::camera;
 use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::camera::Role;
 use crate::camera::io::clip::resolve_mono_offline;
 
 /// 단안 오프라인 입력 (`--clip`). 없으면 라이브.
@@ -16,7 +16,7 @@ pub struct MonoOfflineArgs {
 }
 
 impl MonoOfflineArgs {
-    pub fn resolve(&self, role: Role) -> Result<Option<PathBuf>, String> {
+    pub fn resolve(&self, role: camera::Role) -> Result<Option<PathBuf>, String> {
         return resolve_mono_offline(self.clip.as_deref(), role);
     }
 

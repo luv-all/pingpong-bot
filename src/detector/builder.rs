@@ -14,7 +14,7 @@
 
 use anyhow::{Result, bail};
 
-use crate::Pixel;
+use crate::camera;
 use crate::camera::Frame;
 use crate::detector::spatial::FloorEdgeMask;
 use crate::detector::{
@@ -35,7 +35,7 @@ impl Detector {
     }
 
     /// sim: 카메라가 이미 넣은 힌트 픽셀을 그대로 쓴다.
-    pub fn passthrough(hint: Option<Pixel>) -> Option<Pixel> {
+    pub fn passthrough(hint: Option<camera::Pixel>) -> Option<camera::Pixel> {
         return super::passthrough_detect(hint);
     }
 
@@ -48,7 +48,7 @@ impl Detector {
         self.roi.set_roi_enabled(enabled);
     }
 
-    pub fn detect(&mut self, frame: &Frame) -> Option<Pixel> {
+    pub fn detect(&mut self, frame: &Frame) -> Option<camera::Pixel> {
         let Ok(masked) = self.mask.apply_bgr(&frame.image) else {
             return None;
         };

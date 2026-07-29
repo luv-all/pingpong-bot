@@ -14,10 +14,3 @@ pub use table::{
     ensure_reproj_below, ensure_reproj_ok, table_landmark_mesh_edges, table_landmarks,
     upsert_camera,
 };
-
-// 移行 별칭
-pub use charuco::BoardSpec as CharucoBoardSpec;
-pub use charuco::FrameDetect as CharucoFrameDetect;
-pub use charuco::Report as CharucoCalibReport;
-pub use table::Landmark as TableLandmark;
-pub use table::PnpResult as TablePnpResult;

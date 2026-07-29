@@ -12,9 +12,10 @@ use opencv::core::{Rect, Scalar, Vector};
 use opencv::imgcodecs;
 use opencv::imgproc;
 use opencv::prelude::*;
+use pingpong_bot::camera;
 use pingpong_bot::defaults::{colormask_for, detector_for};
 use pingpong_bot::{
-    AppearanceChain, ColormaskDetector, ContourDetector, Frame, FrameSource, ImageDirSource, Pixel,
+    AppearanceChain, ColormaskDetector, ContourDetector, Frame, FrameSource, ImageDirSource,
     Preview, PreviewAction, RoiTrack, Scorer,
 };
 
@@ -76,7 +77,7 @@ fn appearance_steps(
     scorer: &Scorer,
     frame: &Frame,
     roi: Option<Rect>,
-) -> Result<(Option<Pixel>, Mat, Mat)> {
+) -> Result<(Option<camera::Pixel>, Mat, Mat)> {
     let Some(r) = roi else {
         let (px, cm, cas) = appearance.detect_debug(frame, scorer);
         return Ok((px, cm, cas));
@@ -98,7 +99,7 @@ fn appearance_steps(
     paste_at(&mut cm_full, &cm_local, r)?;
     paste_at(&mut cas_full, &cas_local, r)?;
 
-    let px = local_px.map(|p| Pixel::new(p.x + f64::from(r.x), p.y + f64::from(r.y)));
+    let px = local_px.map(|p| camera::Pixel::new(p.x + f64::from(r.x), p.y + f64::from(r.y)));
     return Ok((px, cm_full, cas_full));
 }
 
@@ -122,7 +123,7 @@ fn draw_panel_hud(img: &mut Mat, lines: &[impl AsRef<str>], color: Scalar) -> Re
     Preview::draw_debug_lines(img, lines, color).map_err(Into::into)
 }
 
-fn pixel_hud_line(label: &str, pixel: Option<Pixel>, equivalent_radius: f64) -> String {
+fn pixel_hud_line(label: &str, pixel: Option<camera::Pixel>, equivalent_radius: f64) -> String {
     return match pixel {
         Some(p) => format!(
             "{label}  pixel=({:.1},{:.1})  radius~{:.0}",
@@ -212,8 +213,8 @@ fn main() -> Result<()> {
 
     let mut n = 0usize;
     let mut hits = 0usize;
-    let mut last_pixel: Option<Pixel> = None;
-    let mut prev_pixel: Option<Pixel> = None;
+    let mut last_pixel: Option<camera::Pixel> = None;
+    let mut prev_pixel: Option<camera::Pixel> = None;
 
     while let Some(frame) = source.next_frame() {
         let pixel = detector.detect(&frame);

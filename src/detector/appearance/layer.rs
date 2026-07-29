@@ -10,7 +10,7 @@ use super::super::scoring::scorer::Scorer;
 use super::colormask::ColormaskDetector;
 use super::contour::ContourDetector;
 use super::generator::CandidateGenerator;
-use crate::Pixel;
+use crate::camera;
 use crate::camera::Frame;
 
 /// 이전 마스크를 게이트로 삼아 다음 이진 마스크를 만든다.
@@ -114,7 +114,11 @@ impl AppearanceChain {
     }
 
     /// `(pixel, first_stage_bgr, last_stage_bgr)` — detect_full 패널용.
-    pub fn detect_debug(&mut self, frame: &Frame, scorer: &Scorer) -> (Option<Pixel>, Mat, Mat) {
+    pub fn detect_debug(
+        &mut self,
+        frame: &Frame,
+        scorer: &Scorer,
+    ) -> (Option<camera::Pixel>, Mat, Mat) {
         let empty = || empty_bgr(frame);
         let Some(stages) = self.stage_masks(frame) else {
             return (None, empty(), empty());
@@ -190,7 +194,7 @@ fn empty_bgr(frame: &Frame) -> Mat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Id;
+    use crate::camera;
     use crate::detector::{ColorSpace, ColormaskParams, ScorerParams};
     use opencv::core::{CV_8UC3, Scalar, Size};
     use std::time::Instant;
@@ -208,7 +212,7 @@ mod tests {
             0,
         )
         .unwrap();
-        return Frame::new(Id(0), img, Instant::now());
+        return Frame::new(camera::Id(0), img, Instant::now());
     }
 
     #[test]

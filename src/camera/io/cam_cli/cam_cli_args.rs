@@ -8,8 +8,7 @@ use super::cam_stream_args::CamStreamArgs;
 use super::mono_offline_args::MonoOfflineArgs;
 use super::resolved_cam::{ResolvedCam, resolve_cams};
 use super::stereo_offline_args::StereoOfflineArgs;
-use crate::Id;
-use crate::camera::Role;
+use crate::camera;
 use crate::camera::io::FrameSource;
 use crate::camera::io::capture::OpenCvCapture;
 use crate::camera::io::threaded::ThreadedCapture;
@@ -20,7 +19,7 @@ use crate::camera::io::threaded::ThreadedCapture;
 pub struct CamCliArgs {
     /// 로봇 기준 역할. 예: `--cam left` (생략 불가)
     #[arg(long = "cam", value_enum, value_delimiter = ',')]
-    pub cam: Vec<Role>,
+    pub cam: Vec<camera::Role>,
 
     #[command(flatten)]
     pub stream: CamStreamArgs,
@@ -43,7 +42,7 @@ impl CamCliArgs {
     }
 
     /// 논리 id만 (파일 입력 등). 첫 `--cam` 역할 기준.
-    pub fn camera_id(&self) -> Result<Id, String> {
+    pub fn camera_id(&self) -> Result<camera::Id, String> {
         return Ok(self.resolve_one()?.camera_id);
     }
 
@@ -76,7 +75,7 @@ impl CamCliArgs {
         return Ok(all.remove(0));
     }
 
-    /// 파일 경로들을 `--cam` 역할 순서의 `Id`로 연다.
+    /// 파일 경로들을 `--cam` 역할 순서의 `camera::Id`로 연다.
     pub fn open_file_sources(
         &self,
         paths: &[PathBuf],
@@ -85,7 +84,10 @@ impl CamCliArgs {
         let roles = self.resolve()?;
         let mut out = Vec::with_capacity(paths.len());
         for (i, path) in paths.iter().enumerate() {
-            let id = roles.get(i).map(|r| r.camera_id).unwrap_or(Id(i as u8));
+            let id = roles
+                .get(i)
+                .map(|r| r.camera_id)
+                .unwrap_or(camera::Id(i as u8));
             let mut cap = OpenCvCapture::from_path(id, path)?;
             if let Some(fps) = timeline_fps {
                 cap.set_timeline_fps(fps);

@@ -2,8 +2,9 @@
 
 use rapier3d::prelude::Vector;
 
+use super::params::Params;
 use crate::Point3;
-use crate::camera::{Id, Params, Pixel};
+use crate::camera;
 
 /// 카메라 시야 — 캘리브 [`Params`]의 얇은 래퍼.
 #[derive(Debug, Clone)]
@@ -16,12 +17,12 @@ impl View {
     /// 카메라 대수에 따라 테이블 주위에 배치한다 (`Params::sim_layout`).
     pub fn for_camera_index(index: u8, count: u8) -> Self {
         return Self {
-            params: Params::sim_layout(Id::new(index), count),
+            params: Params::sim_layout(camera::Id::new(index), count),
         };
     }
 
     /// 월드 좌표 [m] → 픽셀. 시야 밖·카메라 뒤면 `None`.
-    pub fn project(&self, world: Vector) -> Option<Pixel> {
+    pub fn project(&self, world: Vector) -> Option<camera::Pixel> {
         let point = Point3::new(f64::from(world.x), f64::from(world.y), f64::from(world.z));
         return self.params.project_world(point);
     }

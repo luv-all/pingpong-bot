@@ -3,6 +3,7 @@
 //! 외부 R|t는 피팅하지 않는다. 외참은 [`crate::camera::calib::table`] / `calib-table-pnp`를 쓴다.
 //! 이 모듈은 K·dist만 덮어쓰고, sim look-at을 자리표시자로 둔다.
 
+use crate::camera;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
@@ -15,14 +16,13 @@ use opencv::objdetect::{
 use opencv::prelude::*;
 use opencv::{calib3d, imgcodecs, imgproc};
 
-use super::{BoardSpec, Report};
-use crate::camera::Id;
+use super::Report;
 use crate::camera::calib::Calibration;
 
 pub fn calibrate_charuco(
     dir: &Path,
-    board_spec: BoardSpec,
-    camera_id: Id,
+    board_spec: camera::BoardSpec,
+    camera_id: camera::Id,
 ) -> Result<(Calibration, Report), String> {
     let dict = get_predefined_dictionary(PredefinedDictionaryType::DICT_4X4_50)
         .map_err(|e| format!("dictionary: {e}"))?;

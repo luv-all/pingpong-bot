@@ -1,13 +1,13 @@
 //! OpenCV 프리뷰/오버레이 공개 진입점.
 
 use crate::Point3;
+use crate::camera;
 use crate::camera::io::{
     FittedBgr, ShowBgrResult, WorldGridParams, apply_grid_key, arrow_delta, destroy_window,
     display_fit_bounds, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines,
     draw_pixel_loupe, draw_world_grid, draw_world_velocity, fit_bgr_downscale, hstack_bgr,
     show_bgr, unscale_xy,
 };
-use crate::camera::{Params, Pixel};
 
 /// OpenCV 프리뷰/오버레이 공개 진입점.
 pub struct Preview;
@@ -63,7 +63,7 @@ impl Preview {
 
     pub fn draw_circle_px(
         img: &mut opencv::core::Mat,
-        pixel: Pixel,
+        pixel: camera::Pixel,
         radius_px: i32,
         color: opencv::core::Scalar,
         thickness: i32,
@@ -73,7 +73,7 @@ impl Preview {
 
     pub fn draw_world_velocity(
         img: &mut opencv::core::Mat,
-        params: &Params,
+        params: &camera::Params,
         origin: Point3,
         velocity: nalgebra::Vector3<f64>,
         scale_secs: f64,
@@ -84,7 +84,7 @@ impl Preview {
 
     pub fn draw_world_grid(
         img: &mut opencv::core::Mat,
-        params: &Params,
+        params: &camera::Params,
         grid: &WorldGridParams,
     ) -> opencv::Result<()> {
         return draw_world_grid(img, params, *grid);

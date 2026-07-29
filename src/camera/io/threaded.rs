@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use opencv::prelude::*;
 
 use super::capture::{Frame, FrameSource, OpenCvCapture};
-use crate::Id;
+use crate::camera;
 
 /// 첫 프레임 대기 상한 (MSMF 콜드스타트용).
 const FIRST_FRAME_WAIT: Duration = Duration::from_secs(8);
@@ -24,7 +24,7 @@ struct LatestSlot {
 ///
 /// UI/검출이 느려도 캡처는 계속 진행되어 USB 버퍼가 쌓이지 않는다.
 pub struct ThreadedCapture {
-    camera_id: Id,
+    camera_id: camera::Id,
     latest: Arc<Mutex<Option<LatestSlot>>>,
     stop: Arc<AtomicBool>,
     /// grab 루프가 `read` 실패로 종료됨.
@@ -83,7 +83,7 @@ impl ThreadedCapture {
         };
     }
 
-    pub fn camera_id(&self) -> Id {
+    pub fn camera_id(&self) -> camera::Id {
         return self.camera_id;
     }
 
@@ -132,7 +132,7 @@ impl FrameSource for ThreadedCapture {
         return None;
     }
 
-    fn camera_id(&self) -> Id {
+    fn camera_id(&self) -> camera::Id {
         return self.camera_id;
     }
 }

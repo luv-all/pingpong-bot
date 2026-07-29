@@ -29,7 +29,8 @@ Status: approved
 | 자유함수 | 결과 타입 파일, 또는 `ops.rs` |
 | 작명 | 모듈이 도메인, 타입은 역할어만 (§3) |
 | 주석 | 단위·비자명만 |
-| 공개 API | 점진적으로 `crate::ball::…` 형태. 移行 중 `as OldName` 별칭 허용 |
+| 공개 API | 모듈 경로로 씀 (`camera::Id`). 루트/`use`로 도메인 생략 금지 |
+| 호출부 | `use crate::camera;` 후 `camera::Id` — `use crate::camera::Id` / 루트 `Id` 금지 |
 
 ## Approach
 

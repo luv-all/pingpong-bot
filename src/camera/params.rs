@@ -3,14 +3,14 @@
 use nalgebra::Vector3;
 
 use crate::Point3;
-use crate::camera::{Id, Pixel};
+use crate::camera;
 use crate::constants::table;
 
 /// 카메라 1대의 핀홀 캘리브레이션 (OpenCV 관례: +X 오른쪽, +Y 아래, +Z 전방).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Params {
     /// 카메라 ID
-    pub camera_id: Id,
+    pub camera_id: camera::Id,
     /// 설정용 표시 이름 (예: "공중-왼쪽"). 없으면 `카메라 N번`으로 표시.
     pub label: Option<String>,
     /// 이미지 너비 [px]
@@ -35,7 +35,7 @@ pub struct Params {
 
 impl Params {
     /// sim 기본 배치: 테이블 주위 원호, 테이블 중앙을 바라봄.
-    pub fn sim_layout(camera_id: Id, camera_count: u8) -> Self {
+    pub fn sim_layout(camera_id: camera::Id, camera_count: u8) -> Self {
         let count = camera_count.max(1);
         let index = camera_id.0;
         let t = if count <= 1 {
@@ -69,7 +69,7 @@ impl Params {
 
     /// eye -> target look-at으로 핀홀 파라미터를 만든다.
     pub fn look_at(
-        camera_id: Id,
+        camera_id: camera::Id,
         label: Option<String>,
         eye: Vector3<f64>,
         target: Vector3<f64>,
@@ -122,7 +122,7 @@ impl Params {
     }
 
     /// 월드 점 -> 픽셀. 카메라 뒤/이미지 밖이면 `None`.
-    pub fn project_world(&self, point: Point3) -> Option<Pixel> {
+    pub fn project_world(&self, point: Point3) -> Option<camera::Pixel> {
         let x_cam = self.rotation * point.coords + self.translation;
         if x_cam.z <= 0.05 {
             return None;
@@ -132,7 +132,7 @@ impl Params {
         if u < 0.0 || v < 0.0 || u >= f64::from(self.width) || v >= f64::from(self.height) {
             return None;
         }
-        return Some(Pixel::new(u, v));
+        return Some(camera::Pixel::new(u, v));
     }
 }
 
@@ -142,14 +142,14 @@ mod tests {
 
     #[test]
     fn sim_params_include_empty_dist() {
-        let cam = Params::sim_layout(Id(0), 3);
+        let cam = Params::sim_layout(camera::Id(0), 3);
         assert!(cam.dist.is_empty());
         assert!(!cam.has_distortion());
     }
 
     #[test]
     fn params_serde_requires_dist() {
-        let cam = Params::sim_layout(Id(0), 1);
+        let cam = Params::sim_layout(camera::Id(0), 1);
         let json = serde_json::to_string(&cam).expect("serialize");
         assert!(json.contains("\"dist\""));
         let back: Params = serde_json::from_str(&json).expect("deserialize");

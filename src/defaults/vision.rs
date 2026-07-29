@@ -1,9 +1,9 @@
-//! 공 검출 조립 + 비전 UI — Params [`Default`]가 앱 프리셋.
+//! 공 검출 조립 + 비전 UI — [`camera::Params`] [`Default`]가 앱 프리셋.
 
+use crate::camera;
 use anyhow::{Context, Result, bail};
 
-use crate::Id;
-use crate::camera::{Calibration, Params};
+use crate::camera::Calibration;
 use crate::defaults::calib::{calibration_path, colormask_path};
 use crate::detector::{
     ColormaskDetector, ColormaskParams, ContourDetector, Detector, FloorEdgeMask, RoiParams,
@@ -42,7 +42,7 @@ impl Default for RoiParams {
 }
 
 /// [`crate::defaults::DEFAULT_COLORMASK_PATH`]에서 캠별 params. 파일·해당 cam 없으면 에러.
-pub fn colormask_for(camera_id: Id) -> Result<ColormaskParams> {
+pub fn colormask_for(camera_id: camera::Id) -> Result<ColormaskParams> {
     let path = colormask_path();
     let set =
         load_colormask_set(&path).with_context(|| format!("colormask 로드: {}", path.display()))?;
@@ -56,8 +56,8 @@ pub fn colormask_for(camera_id: Id) -> Result<ColormaskParams> {
     return Ok(params);
 }
 
-/// [`calibration_path`]에서 캠 [`Params`]. 없으면 에러.
-pub fn camera_params_for(camera_id: Id) -> Result<Params> {
+/// [`calibration_path`]에서 캠 [`camera::Params`]. 없으면 에러.
+pub fn camera_params_for(camera_id: camera::Id) -> Result<camera::Params> {
     let path = calibration_path();
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("calibration 읽기: {}", path.display()))?;
@@ -73,7 +73,11 @@ pub fn camera_params_for(camera_id: Id) -> Result<Params> {
     return Ok(params);
 }
 
-fn assemble(camera_id: Id, color: ColormaskParams, cam: &Params) -> Result<Detector> {
+fn assemble(
+    camera_id: camera::Id,
+    color: ColormaskParams,
+    cam: &camera::Params,
+) -> Result<Detector> {
     let circ = ScorerParams::default().min_circularity;
     let scorer = ScorerParams::from_calib(cam, circ)?;
 
@@ -88,7 +92,7 @@ fn assemble(camera_id: Id, color: ColormaskParams, cam: &Params) -> Result<Detec
 
 /// 본선: mask → color → contour → scorer + ROI track.
 /// 캘리브·colormask SSOT 필수.
-pub fn detector_for(camera_id: Id) -> Result<Detector> {
+pub fn detector_for(camera_id: camera::Id) -> Result<Detector> {
     let cam = camera_params_for(camera_id)?;
     return assemble(camera_id, colormask_for(camera_id)?, &cam);
 }
