@@ -1,18 +1,7 @@
-//! AXL 리니어 레일 설정·클램프·soft-limit 인자.
-
 use std::path::PathBuf;
 
-use thiserror::Error;
-
-/// `AxmSignalSetSoftLimit` 인자 (미터 단위).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SoftLimitArgs {
-    pub use_: u32,
-    pub stop_mode: u32,
-    pub selection: u32,
-    pub positive_m: f64,
-    pub negative_m: f64,
-}
+use super::rail_config_error::RailConfigError;
+use super::soft_limit_args::SoftLimitArgs;
 
 /// AXL 리니어 레일 설정.
 ///
@@ -46,19 +35,6 @@ pub struct RailConfig {
     pub limit_stop_mode: u32,
     pub pos_end_limit_level: u32,
     pub neg_end_limit_level: u32,
-}
-
-/// 레일 설정 검증 실패.
-#[derive(Debug, Error)]
-pub enum RailConfigError {
-    #[error("enabled=true일 때 dll_path는 비어 있으면 안 됩니다")]
-    DllPathEmpty,
-    #[error("enabled=true일 때 pulses_per_meter는 0보다 커야 합니다")]
-    PulsesPerMeter,
-    #[error("x_min_m은 x_max_m보다 작아야 합니다")]
-    InvalidRange,
-    #[error("motion 파라미터가 유효하지 않습니다")]
-    MotionParams,
 }
 
 impl RailConfig {
