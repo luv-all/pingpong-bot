@@ -9,7 +9,8 @@
 //! **조립 SSOT:** [`crate::defaults::detector_for`].
 
 pub mod appearance;
-pub mod builder;
+mod builder;
+mod detector;
 pub mod motion;
 mod roi_params;
 pub mod scoring;
@@ -20,7 +21,8 @@ mod undistort;
 use crate::camera;
 
 pub use appearance::*;
-pub use builder::{Detector, DetectorBuilder};
+pub use builder::DetectorBuilder;
+pub use detector::Detector;
 pub use motion::MotionPrior;
 pub use roi_params::RoiParams;
 pub use scoring::candidate::{self as candidate, Candidate};
