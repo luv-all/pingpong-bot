@@ -1,41 +1,59 @@
 # tune-colormask
 
-탁구공 위 픽셀을 클릭해 **YCrCb / HSV** `inRange` 범위를 뽑는다.  
-채널별 **양꼬리 퍼센타일**(`--trim`, 기본 10% → p10..p90)로 하이라이트·그림자·혼색 아웃라이어를 잘라낸 뒤 `--margin`을 더한다.  
-`p` (및 샘플 있는 채 종료) 시 현재 `--cam`의 **범위 + BGR 샘플**(`[[B,G,R],…]`)을 [`data/colormask.json`](../../data/colormask.json)에 upsert.  
-`--cam left|right` **필수** (어느 카메라인지 명시).  
-다음 실행 시 같은 캠의 샘플을 자동 로드해 이어서 픽한다 (픽셀 좌표는 저장하지 않음).
+탁구공 픽셀을 찍어 **YCrCb / HSV** `inRange` 범위를 만든다.  
+양꼬리 퍼센타일(`--trim`, 기본 10% → p10..p90) 후 `--margin`을 더한다.  
+`p`(또는 샘플 있는 채 종료) 시 `--cam`의 범위+BGR 샘플을 `data/colormask.json`에 upsert.  
+`--cam left|right` **필수**.
 
 ## 화면
 
-위에서 아래:
-
-1. **original | mask** — 클릭 샘플 · 현재 space 마스크
-2. **색상 띠** — 샘플 swatch (실제 BGR)
-3. **산점도 3 + iso** — 채널 쌍(c0-c1 / c0-c2 / c1-c2)에 샘플 점·AABB 사각형, 오른쪽에 아이소메트릭 AABB 와이어
+1. **original | mask** — 샘플 · 현재 space 마스크  
+2. **색상 띠** — BGR swatch  
+3. **산점도 3 + iso** — 채널 쌍 AABB
 
 ## 사용
 
 ```bash
-cargo run -p tune-colormask -- --cam left   # data/colormask.json cam0
-cargo run -p tune-colormask -- --cam right  # cam1 upsert
-cargo run -p tune-colormask -- --cam left --space hsv
-cargo run -p tune-colormask -- --cam left --margin 5
-cargo run -p tune-colormask -- --cam left --trim 15   # 더 공격적으로 꼬리 절단
-cargo run -p tune-colormask -- --cam left --trim 0    # 예전 min/max
-cargo run -p tune-colormask -- --path clip.mp4
+# 라이브
+cargo run -p tune-colormask -- --cam left
+cargo run -p tune-colormask -- --cam right --space hsv
+
+# 오프라인 클립
+cargo run -p tune-colormask -- --cam left --clip fly_01
+cargo run -p tune-colormask -- --cam right --clip fly_01 --trim 15
 ```
+
+## 옵션
+
+| 옵션 | 기본 | 설명 |
+|------|------|------|
+| `--cam left\|right` | **필수** | upsert 대상 카메라 |
+| `--clip NAME\|DIR` | — | `data/clips/<name>`의 해당 캠 영상 |
+| `--images DIR` | — | 이미지 시퀀스 |
+| `--space ycrcb\|hsv` | `ycrcb` | 시작 색공간 (`s`로 토글) |
+| `--margin N` | 3 | 퍼센타일 구간에 더할 여유 (0..=32) |
+| `--trim PCT` | 10 | 양꼬리 절단 % (`0` = min/max) |
+| `--max-frames N` | 0 | 0이면 제한 없음 |
+| `--wait-ms MS` | (자동) | `waitKey` 대기 |
+| `--backend` | `recommended` | 라이브 OpenCV 백엔드 |
+| `--width` / `--height` | 1280 / 800 | 라이브 해상도 |
+| `--fps` | 120 | 라이브 요청 FPS |
+| `--fourcc` | `MJPG` | 라이브 FOURCC |
+| `--threaded true\|false` | `true` | 라이브 grab 스레드 |
+| `--preset full\|mid\|low` | — | 해상도 프리셋 |
+
+## 키
 
 | 키 | 동작 |
 |----|------|
-| LMB / Enter | 공 픽셀 샘플 추가 (좌측 original만, aim 위치) |
-| `←↑→↓` / `hjkl` | aim 1px (마우스 이동 시 재동기화; nudge 중 loupe 유지) |
-| `Shift`+이동 | 8× 원형 loupe (좌측 original, 중심 픽셀 정밀 정렬) |
+| LMB / Enter | 공 픽셀 샘플 추가 (좌측 original) |
+| `←↑→↓` / `hjkl` | aim 1px |
+| `Shift`+이동 | 8× loupe |
 | `z` / Backspace | 마지막 샘플 취소 |
 | `c` | 샘플 전체 삭제 |
 | `Space` | freeze / live |
-| `s` | ycrcb ↔ hsv (미리보기) |
-| `p` | 저장(현재 space 범위 + 샘플) |
+| `s` | ycrcb ↔ hsv |
+| `p` | 저장 |
 | `q` / ESC | 종료 (샘플 있으면 저장) |
 
-SSOT: `defaults::DEFAULT_COLORMASK_PATH` → `detector_for(CameraId)`.
+SSOT: `data/colormask.json` → `detector_for(CameraId)`.

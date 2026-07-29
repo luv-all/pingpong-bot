@@ -6,17 +6,17 @@ mod cli;
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use opencv::core::{Rect, Scalar, Vec3b, Vector};
 use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CameraId, ColorSpace, ColormaskParams, FrameSource, ImageDirSource, OpenCvCapture,
-    PixelPickMouse, PixelPoint, PreviewAction, arrow_delta, colormask_path, destroy_window,
-    draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines, draw_pixel_loupe,
-    hstack_bgr, load_colormask_set_or_empty, save_colormask_set, show_bgr,
+    CameraId, ColorSpace, ColormaskParams, FrameSource, ImageDirSource, PixelPickMouse, PixelPoint,
+    PreviewAction, arrow_delta, colormask_path, destroy_window, draw_cam_label, draw_circle_px,
+    draw_debug_lines, draw_help_lines, draw_pixel_loupe, hstack_bgr, load_colormask_set_or_empty,
+    save_colormask_set, show_bgr,
 };
 
 use cli::Args;
@@ -106,21 +106,19 @@ impl ChannelRange {
 fn open_source(args: &Args) -> Result<Box<dyn FrameSource>> {
     let cam_id = args.cam.camera_id().map_err(anyhow::Error::msg)?;
     if let Some(images) = &args.images {
+        if args.offline.has_offline() {
+            bail!("--images 와 --clip 동시 사용 불가");
+        }
         return Ok(Box::new(
             ImageDirSource::open(cam_id, images)
                 .map_err(anyhow::Error::msg)
                 .context("images")?,
         ));
     }
-    if let Some(path) = &args.path {
-        return Ok(Box::new(
-            OpenCvCapture::from_path(cam_id, path)
-                .map_err(anyhow::Error::msg)
-                .context("path")?,
-        ));
-    }
-    let (_r, src) = args.cam.open_one().map_err(anyhow::Error::msg)?;
-    return Ok(src);
+    return Ok(args
+        .cam
+        .open_mono_input(&args.offline)
+        .map_err(anyhow::Error::msg)?);
 }
 
 fn read_bgr_avg(img: &Mat, x: i32, y: i32, radius: i32) -> Option<[u8; 3]> {
@@ -658,7 +656,7 @@ fn main() -> Result<()> {
     let mut space = args.space;
     let wait_ms = args
         .wait_ms
-        .unwrap_or(if args.path.is_some() || args.images.is_some() {
+        .unwrap_or(if args.offline.has_offline() || args.images.is_some() {
             33
         } else {
             1

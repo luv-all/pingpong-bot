@@ -1,41 +1,60 @@
 # detect-full
 
-런타임과 같은 **Detector 빌더** 본선 (`defaults::detector_for(cam_id)`) + adaptive ROI 튜닝.
+런타임과 같은 **Detector** (`defaults::detector_for`) + adaptive ROI 튜닝.
 
-조립 예 (`vision.rs`):
+조립 (`vision.rs`): `.mask(…) .then(Colormask) .then(Contour) .scorer(…) .roi(…)`
 
-```text
-.mask(…) .then(ColormaskDetector) .then(ContourDetector) .scorer(…) .roi(…)
-```
+## 파이프라인 패널
 
-파이프라인 스텝(읽는 순서):
+| 0 raw | 1 floor-mask | 2 colormask | 3 +contour | 4 roi |
+|-------|--------------|-------------|------------|-------|
 
-| 0 raw | 1 floor-mask | 2 colormask |
-| 3 +contour | 4 roi | |
+- **0**: 원본 — hit rate / mode HUD
+- **1**: 테이블 옆변을 `MAX_REPROJ_RMSE_PX`만큼 바깥(`x=-δ` / `x=W+δ`)으로 민 투영으로 바닥 제거 — cut_x / margin / keep
+- **2→3**: appearance (color→contour) — nonzero / area / circularity
+- **4**: ROI 박스 · radius_scale / motion_scale / padding
+- track 중이면 2·3도 ROI 크롭에서 계산
 
-- **0**: 원본 BGR — hit rate / mode HUD + 키 안내
-- **1**: 캘리브 테이블 옆변(`x=0` / `x=W`) 투영 사다리꼴로 바닥 제거 + 변 선 — cut% / keep HUD
-- **2→3**: 마스크된 프레임에서 appearance `.then` (color→contour) — nonzero / area / circularity HUD
-- **4**: ROI 박스·half·radius_scale / motion_scale / padding HUD
-- **track 중**: 2·3도 ROI 크롭에서 계산 (본선과 동일 영역)
-- Scorer `min/max_area`는 캘리브+`BALL_RADIUS`로 캠별 추정
+SSOT: `data/colormask.json` · `data/calibration.json`
 
-키:
-
-- **`r`**: ROI track on/off
-- **`[` `]`**: `radius_scale` (±0.25)
-- **`,` `.`**: `motion_scale` (±0.25)
-- **`-` `=`**: `padding` (±4)
-- **`p`**: `RoiParams::default()` paste 스니펫
-- **`q` / ESC**: 종료
-
-SSOT: `src/defaults/vision.rs` → `detector_for` / `colormask_for` / `camera_params_for` · `data/colormask.json` · `data/calibration.json`
-
-appearance 단독 비교(병렬): [detect-appearance](../detect_appearance/README.md).
+## 사용
 
 ```bash
-cargo run -p detect-full
-cargo run -p detect-full -- --no-roi
-cargo run -p detect-full -- --path clip.mp4
-cargo run -p detect-full -- --images ./frames -o out/
+# 라이브 (캠 역할 필수)
+cargo run -p detect-full -- --cam left
+cargo run -p detect-full -- --cam right --no-roi
+
+# 오프라인 클립
+cargo run -p detect-full -- --cam left --clip fly_01
+cargo run -p detect-full -- --cam right --clip drop_02
 ```
+
+## 옵션
+
+| 옵션 | 기본 | 설명 |
+|------|------|------|
+| `--cam left\|right` | **필수** | 어느 쪽 카메라인지 |
+| `--clip NAME\|DIR` | — | `data/clips/<name>`의 해당 캠 영상 |
+| `--images DIR` | — | 이미지 시퀀스 디렉터리 (png/jpg…) |
+| `--no-roi` | off | 시작 시 ROI track off |
+| `-o` / `--output DIR` | — | 프레임 덤프 출력 |
+| `--max-frames N` | 300 | 처리 상한 |
+| `--no-preview` | off | 창 없이 돌림 |
+| `--wait-ms MS` | (자동) | `waitKey` 대기 |
+| `--backend` | `recommended` | 라이브 OpenCV 백엔드 |
+| `--width` / `--height` | 1280 / 800 | 라이브 해상도 |
+| `--fps` | 120 | 라이브 요청 FPS |
+| `--fourcc` | `MJPG` | 라이브 FOURCC |
+| `--threaded true\|false` | `true` | 라이브 grab 스레드 |
+| `--preset full\|mid\|low` | — | 해상도 프리셋 |
+
+## 키
+
+| 키 | 동작 |
+|----|------|
+| `r` | ROI track on/off |
+| `[` `]` | `radius_scale` ±0.25 |
+| `,` `.` | `motion_scale` ±0.25 |
+| `-` `=` | `padding` ±4 |
+| `p` | `RoiParams::default()` paste 스니펫 |
+| `q` / ESC | 종료 |

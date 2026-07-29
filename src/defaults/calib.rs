@@ -29,6 +29,8 @@ pub const DEFAULT_CALIBRATION_PATH: &str = "data/calibration.json";
 pub const DEFAULT_CALIBRATION_PENDING_NAME: &str = "calibration.pending.json";
 /// 카메라별 `ColormaskParams` 번들 SSOT.
 pub const DEFAULT_COLORMASK_PATH: &str = "data/colormask.json";
+/// `record-stereo` 오프라인 클립 루트 (`{scene}_{nn}/left.avi` …).
+pub const DEFAULT_CLIPS_DIR: &str = "data/clips";
 
 /// [`DEFAULT_CALIBRATION_PATH`]의 `PathBuf`.
 pub fn calibration_path() -> PathBuf {

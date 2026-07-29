@@ -20,14 +20,16 @@ pub use calib::{
     ensure_reproj_ok, table_landmark_mesh_edges, table_landmarks, upsert_camera,
 };
 pub use io::{
-    CamCliArgs, CamRigConfig, CamStreamArgs, CameraRole, CaptureBackend, DEFAULT_FOV_Y_DEG,
-    DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH,
-    ExposureReadout, FittedBgr, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture,
-    PixelPickMouse, PreviewAction, ResolvedCam, ShowBgrResult, SimCamera, StereoCamCliArgs,
+    CamCliArgs, CamRigConfig, CamStreamArgs, CameraRole, CaptureBackend, DEFAULT_CLIPS_DIR,
+    DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT,
+    DEFAULT_STREAM_WIDTH, ExposureReadout, FittedBgr, Frame, FrameSource, HintSource,
+    ImageDirSource, MonoOfflineArgs, OpenCvCapture, PixelPickMouse, PreviewAction, ResolvedCam,
+    ResolvedStereoOffline, ShowBgrResult, SimCamera, StereoCamCliArgs, StereoClip, StereoOfflineArgs,
     StereoPairCliArgs, StreamPreset, ThreadedCapture, WorldGridParams, apply_grid_key, arrow_delta,
     destroy_window, display_fit_bounds, draw_cam_label, draw_circle_px, draw_debug_lines,
     draw_help_lines, draw_pixel_loupe, draw_world_grid, draw_world_velocity, fit_bgr_downscale,
-    hstack_bgr, parse_fourcc, resolve_cams, show_bgr, unscale_xy,
+    hstack_bgr, parse_fourcc, resolve_cams, resolve_clip_dir, resolve_clip_side,
+    resolve_mono_offline, resolve_stereo_clip, resolve_stereo_offline, show_bgr, unscale_xy,
 };
 pub use tri::{
     dlt_triangulate, sample_at, triangulate_projections, triangulate_synced, triangulate_views,

@@ -11,8 +11,8 @@ use clap::Parser;
 use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{
-    PhysicsParams, StereoPairCliArgs, calibration_path, format_physics_for_defaults,
-    friction_from_tangential_speeds,
+    PhysicsParams, StereoOfflineArgs, StereoPairCliArgs, calibration_path,
+    format_physics_for_defaults, friction_from_tangential_speeds,
 };
 
 #[derive(Parser, Debug)]
@@ -21,11 +21,8 @@ use pingpong_bot::{
     about = "테이블 마찰 μ 측정 → PhysicsParams::default() 스니펫. 영상 멀티캠 또는 수동 숫자"
 )]
 struct Args {
-    /// Calibration JSON (캡처 기본: `data/calibration.json` SSOT)
-    #[arg(long, value_name = "PATH")]
-    calibration: Option<PathBuf>,
-    #[arg(long = "video", value_name = "PATH")]
-    videos: Vec<PathBuf>,
+    #[command(flatten)]
+    offline: StereoOfflineArgs,
     #[command(flatten)]
     cam: StereoPairCliArgs,
     #[arg(long)]
@@ -65,15 +62,15 @@ fn main() -> Result<()> {
     let mut patch = Patch::default();
 
     let has_other = args.vt_pairs.is_some() || args.sim;
-    let run_capture = args.calibration.is_some() || !args.videos.is_empty() || !has_other;
+    let run_capture = args.offline.has_offline() || !has_other;
 
     if run_capture {
-        let cal = args.calibration.clone().unwrap_or_else(calibration_path);
+        let cal = calibration_path();
         let cam = args.cam.as_cam_cli();
         let result = capture_loop::run_capture(
             &cal,
-            &args.videos,
             &cam,
+            &args.offline,
             !args.no_preview,
             args.wait_ms,
             args.max_frames,
@@ -113,9 +110,7 @@ fn main() -> Result<()> {
     if patch.is_empty() {
         bail!(
             "입력이 없습니다. 예:\n  \
-             cargo run -p measure-friction\n  \
-             cargo run -p measure-friction -- --calibration data/calibration.json\n  \
-             --video cam0.mp4 --video cam1.mp4\n  \
+             cargo run -p measure-friction -- --clip roll_01\n  \
              --vt-pairs 2.0:1.4\n  \
              --sim"
         );

@@ -2,6 +2,7 @@
 
 mod cam_cli;
 mod capture;
+mod clip;
 pub mod preview;
 mod projection;
 mod rig;
@@ -10,11 +11,15 @@ mod threaded;
 
 pub use cam_cli::{
     CamCliArgs, CamStreamArgs, DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
-    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH, ResolvedCam, StereoCamCliArgs, StereoPairCliArgs,
-    StreamPreset, parse_fourcc, resolve_cams,
+    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH, MonoOfflineArgs, ResolvedCam, StereoCamCliArgs,
+    StereoOfflineArgs, StereoPairCliArgs, StreamPreset, parse_fourcc, resolve_cams,
 };
 pub use capture::{
     CaptureBackend, ExposureReadout, Frame, FrameSource, HintSource, ImageDirSource, OpenCvCapture,
+};
+pub use clip::{
+    DEFAULT_CLIPS_DIR, ResolvedStereoOffline, StereoClip, resolve_clip_dir, resolve_clip_side,
+    resolve_mono_offline, resolve_stereo_clip, resolve_stereo_offline,
 };
 pub use preview::{
     FittedBgr, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, PixelPickMouse, PreviewAction,

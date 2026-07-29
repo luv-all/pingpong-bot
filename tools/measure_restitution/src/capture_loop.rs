@@ -1,14 +1,14 @@
 //! 멀티캠 캡처 루프 — 반발 e (이 툴 전용 보일러플레이트).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use opencv::core::Scalar;
 use opencv::prelude::*;
 use pingpong_bot::{
-    BounceEvent, Calibration, CameraId, Detector, FrameSource, OpenCvCapture, PixelPoint, Point3,
-    PreviewAction, TrajPoint, destroy_window, detect_bounces, draw_cam_label, draw_circle_px,
+    BounceEvent, Calibration, CameraId, Detector, FrameSource, PixelPoint, Point3, PreviewAction,
+    StereoOfflineArgs, TrajPoint, destroy_window, detect_bounces, draw_cam_label, draw_circle_px,
     draw_debug_lines, draw_help_lines, draw_world_velocity, hstack_bgr, mean_bounce_e, show_bgr,
     triangulate_views,
 };
@@ -31,31 +31,13 @@ pub fn load_calibration(path: &Path) -> Result<Calibration> {
 }
 
 fn open_sources(
-    videos: &[PathBuf],
     cam: &pingpong_bot::CamCliArgs,
+    offline: &StereoOfflineArgs,
     timeline_fps: Option<f64>,
 ) -> Result<Vec<Box<dyn FrameSource>>> {
-    let mut sources = Vec::new();
-    if !videos.is_empty() {
-        let roles = cam.resolve().map_err(anyhow::Error::msg)?;
-        for (i, path) in videos.iter().enumerate() {
-            let id = roles
-                .get(i)
-                .map(|r| r.camera_id)
-                .unwrap_or(CameraId(i as u8));
-            let mut cap = OpenCvCapture::from_path(id, path)
-                .map_err(anyhow::Error::msg)
-                .with_context(|| format!("video {}", path.display()))?;
-            if let Some(fps) = timeline_fps {
-                cap.set_timeline_fps(fps);
-            }
-            sources.push(Box::new(cap) as Box<dyn FrameSource>);
-        }
-        return Ok(sources);
-    }
-    for (_r, src) in cam.open_sources().map_err(anyhow::Error::msg)? {
-        sources.push(src);
-    }
+    let (sources, _) = cam
+        .open_stereo_input(offline, timeline_fps)
+        .map_err(anyhow::Error::msg)?;
     return Ok(sources);
 }
 
@@ -77,15 +59,15 @@ fn triangulate_pixels(
 /// OpenCV: open → read → detect/triangulate/draw → q 종료.
 pub fn run_capture(
     calibration: &Path,
-    videos: &[PathBuf],
     cam: &pingpong_bot::CamCliArgs,
+    offline: &StereoOfflineArgs,
     preview: bool,
     wait_ms: i32,
     max_frames: usize,
     timeline_fps: Option<f64>,
 ) -> Result<CaptureResult> {
     let calibration = load_calibration(calibration)?;
-    let mut sources = open_sources(videos, cam, timeline_fps)?;
+    let mut sources = open_sources(cam, offline, timeline_fps)?;
     if sources.len() < 2 {
         bail!("카메라 소스 ≥2 필요");
     }

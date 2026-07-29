@@ -6,11 +6,15 @@ use clap::{Parser, ValueEnum};
 
 use super::FrameSource;
 use super::capture::{CaptureBackend, OpenCvCapture};
+use super::clip::{
+    ResolvedStereoOffline, resolve_mono_offline, resolve_stereo_offline,
+};
 use super::rig::{CamRigConfig, CameraRole};
 use super::threaded::ThreadedCapture;
 use crate::CameraId;
 use crate::constants::camera::arducam_b0332;
 use crate::defaults::calib::DEFAULT_STEREO_CAM_ROLES;
+use std::path::PathBuf;
 
 pub use crate::defaults::calib::{
     DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
@@ -160,6 +164,42 @@ impl StereoPairCliArgs {
     }
 }
 
+/// 스테레오 오프라인 입력 (`--clip`). 없으면 라이브.
+#[derive(Parser, Debug, Clone, Default)]
+pub struct StereoOfflineArgs {
+    /// `data/clips` 클립 이름 또는 디렉터리 (`fly_01`)
+    #[arg(long, value_name = "NAME|DIR")]
+    pub clip: Option<PathBuf>,
+}
+
+impl StereoOfflineArgs {
+    pub fn resolve(&self) -> Result<Option<ResolvedStereoOffline>, String> {
+        return resolve_stereo_offline(self.clip.as_deref());
+    }
+
+    pub fn has_offline(&self) -> bool {
+        return self.clip.is_some();
+    }
+}
+
+/// 단안 오프라인 입력 (`--clip`). 없으면 라이브.
+#[derive(Parser, Debug, Clone, Default)]
+pub struct MonoOfflineArgs {
+    /// `data/clips` 클립 (`fly_01`) — `--cam` 쪽 left/right 자동
+    #[arg(long, value_name = "NAME|DIR")]
+    pub clip: Option<PathBuf>,
+}
+
+impl MonoOfflineArgs {
+    pub fn resolve(&self, role: CameraRole) -> Result<Option<PathBuf>, String> {
+        return resolve_mono_offline(self.clip.as_deref(), role);
+    }
+
+    pub fn has_offline(&self) -> bool {
+        return self.clip.is_some();
+    }
+}
+
 /// resolve된 한 대 (device는 rig에서만).
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedCam {
@@ -216,6 +256,76 @@ impl CamCliArgs {
             ));
         }
         return Ok(all.remove(0));
+    }
+
+    /// 파일 경로들을 `--cam` 역할 순서의 `CameraId`로 연다.
+    pub fn open_file_sources(
+        &self,
+        paths: &[PathBuf],
+        timeline_fps: Option<f64>,
+    ) -> Result<Vec<Box<dyn FrameSource>>, String> {
+        let roles = self.resolve()?;
+        let mut out = Vec::with_capacity(paths.len());
+        for (i, path) in paths.iter().enumerate() {
+            let id = roles
+                .get(i)
+                .map(|r| r.camera_id)
+                .unwrap_or(CameraId(i as u8));
+            let mut cap = OpenCvCapture::from_path(id, path)?;
+            if let Some(fps) = timeline_fps {
+                cap.set_timeline_fps(fps);
+            }
+            out.push(Box::new(cap) as Box<dyn FrameSource>);
+        }
+        return Ok(out);
+    }
+
+    /// 스테레오: `--clip`이면 파일, 없으면 라이브.
+    /// 반환 timeline_fps = CLI 덮어쓰기 또는 clip `meas_fps`.
+    pub fn open_stereo_input(
+        &self,
+        offline: &StereoOfflineArgs,
+        timeline_fps: Option<f64>,
+    ) -> Result<(Vec<Box<dyn FrameSource>>, Option<f64>), String> {
+        if let Some(resolved) = offline.resolve()? {
+            resolved.log();
+            let fps = timeline_fps.or(resolved.meas_fps);
+            if let Some(f) = fps {
+                if timeline_fps.is_some() {
+                    println!("timeline_fps={f:.2} (cli)");
+                } else {
+                    println!("timeline_fps={f:.2}");
+                }
+            }
+            return Ok((self.open_file_sources(&resolved.paths(), fps)?, fps));
+        }
+        let sources = self
+            .open_sources()?
+            .into_iter()
+            .map(|(_, s)| s)
+            .collect();
+        return Ok((sources, None));
+    }
+
+    /// 단안: `--clip`이면 파일, 없으면 라이브.
+    pub fn open_mono_input(
+        &self,
+        offline: &MonoOfflineArgs,
+    ) -> Result<Box<dyn FrameSource>, String> {
+        let resolved = self.resolve_one()?;
+        if let Some(path) = offline.resolve(resolved.role)? {
+            println!(
+                "clip {} → {}",
+                offline
+                    .clip
+                    .as_ref()
+                    .map(|c| c.display().to_string())
+                    .unwrap_or_default(),
+                path.display()
+            );
+            return Ok(Box::new(OpenCvCapture::from_path(resolved.camera_id, &path)?));
+        }
+        return Ok(self.open_one()?.1);
     }
 }
 

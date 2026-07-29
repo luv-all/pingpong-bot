@@ -13,7 +13,7 @@ use nalgebra::Vector3;
 use pingpong_bot::SimWorld;
 use pingpong_bot::constants::{ball, table};
 use pingpong_bot::{
-    PhysicsParams, StereoPairCliArgs, calibration_path, drag_from_trajectory,
+    PhysicsParams, StereoOfflineArgs, StereoPairCliArgs, calibration_path, drag_from_trajectory,
     format_physics_for_defaults, restitution_from_bounce_heights, restitution_from_normal_speeds,
 };
 
@@ -23,11 +23,8 @@ use pingpong_bot::{
     about = "반발계수 e 측정 → PhysicsParams::default() 스니펫. 영상 멀티캠 또는 수동 숫자"
 )]
 struct Args {
-    /// Calibration JSON (캡처 기본: `data/calibration.json` SSOT)
-    #[arg(long, value_name = "PATH")]
-    calibration: Option<PathBuf>,
-    #[arg(long = "video", value_name = "PATH")]
-    videos: Vec<PathBuf>,
+    #[command(flatten)]
+    offline: StereoOfflineArgs,
     #[command(flatten)]
     cam: StereoPairCliArgs,
     #[arg(long)]
@@ -36,7 +33,7 @@ struct Args {
     wait_ms: i32,
     #[arg(long, default_value_t = 10_000)]
     max_frames: usize,
-    /// 파일 재생 타임라인 FPS (미지정 시 파일 메타 / 스트림 fps)
+    /// 파일 재생 타임라인 FPS (미지정 시 clip meta / 파일 메타)
     #[arg(long)]
     timeline_fps: Option<f64>,
     #[arg(long, value_name = "H0,H1,...")]
@@ -83,15 +80,15 @@ fn main() -> Result<()> {
         || args.sim
         || args.sim_ballistics
         || args.drag_csv.is_some();
-    let run_capture = args.calibration.is_some() || !args.videos.is_empty() || !has_other;
+    let run_capture = args.offline.has_offline() || !has_other;
 
     if run_capture {
-        let cal = args.calibration.clone().unwrap_or_else(calibration_path);
+        let cal = calibration_path();
         let cam = args.cam.as_cam_cli();
         let result = capture_loop::run_capture(
             &cal,
-            &args.videos,
             &cam,
+            &args.offline,
             !args.no_preview,
             args.wait_ms,
             args.max_frames,
@@ -148,9 +145,7 @@ fn main() -> Result<()> {
     if patch.is_empty() {
         bail!(
             "입력이 없습니다. 예:\n  \
-             cargo run -p measure-restitution\n  \
-             cargo run -p measure-restitution -- --calibration data/calibration.json\n  \
-             --video cam0.mp4 --video cam1.mp4\n  \
+             cargo run -p measure-restitution -- --clip drop_02\n  \
              --heights 0.40,0.29,0.21\n  \
              --sim"
         );

@@ -10,8 +10,8 @@ use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    Calibration, CameraId, Detector, Frame, FrameSource, OpenCvCapture, PixelPoint, Point3,
-    PreviewAction, WorldGridParams, apply_grid_key, destroy_window, detector_for,
+    Calibration, CameraId, Detector, Frame, FrameSource, PixelPoint, Point3, PreviewAction,
+    WorldGridParams, apply_grid_key, calibration_path, destroy_window, detector_for,
     display_fit_bounds, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines,
     draw_world_grid, fit_bgr_downscale, triangulate_views,
 };
@@ -31,24 +31,9 @@ pub fn load_calibration(path: &Path) -> Result<Calibration> {
 
 fn open_sources(args: &Args) -> Result<Vec<Box<dyn FrameSource>>> {
     let cam = args.cam.as_cam_cli();
-    let mut sources = Vec::new();
-    if !args.videos.is_empty() {
-        let roles = cam.resolve().map_err(anyhow::Error::msg)?;
-        for (i, path) in args.videos.iter().enumerate() {
-            let id = roles
-                .get(i)
-                .map(|r| r.camera_id)
-                .unwrap_or(CameraId(i as u8));
-            let cap = OpenCvCapture::from_path(id, path)
-                .map_err(anyhow::Error::msg)
-                .with_context(|| format!("video {}", path.display()))?;
-            sources.push(Box::new(cap) as Box<dyn FrameSource>);
-        }
-        return Ok(sources);
-    }
-    for (_r, src) in cam.open_sources().map_err(anyhow::Error::msg)? {
-        sources.push(src);
-    }
+    let (sources, _) = cam
+        .open_stereo_input(&args.offline, None)
+        .map_err(anyhow::Error::msg)?;
     return Ok(sources);
 }
 
@@ -129,7 +114,8 @@ fn show_panel(window: &str, panel: &Mat, wait_ms: i32) -> Result<PreviewAction> 
 }
 
 pub fn run_opencv(args: &Args) -> Result<()> {
-    let calibration = load_calibration(&args.calibration)?;
+    let cal_path = calibration_path();
+    let calibration = load_calibration(&cal_path)?;
     let mut sources = open_sources(args)?;
     if sources.len() < 2 {
         bail!("카메라 소스 ≥2 필요 (got {})", sources.len());
@@ -167,7 +153,7 @@ pub fn run_opencv(args: &Args) -> Result<()> {
 
     println!(
         "verify-stereo — cal={} cams={:?} sim={}",
-        args.calibration.display(),
+        cal_path.display(),
         ids.iter().map(|c| c.0).collect::<Vec<_>>(),
         args.sim
     );

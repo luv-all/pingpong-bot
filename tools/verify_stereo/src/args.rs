@@ -1,9 +1,7 @@
-//! clap — calibration SSOT · stereo cams · sim child.
-
-use std::path::PathBuf;
+//! clap — stereo cams · clip · sim child.
 
 use clap::Parser;
-use pingpong_bot::{DEFAULT_CALIBRATION_PATH, StereoPairCliArgs};
+use pingpong_bot::{StereoOfflineArgs, StereoPairCliArgs};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -15,13 +13,8 @@ pub struct Args {
     #[command(flatten)]
     pub cam: StereoPairCliArgs,
 
-    /// Calibration JSON. 생략 시 [`DEFAULT_CALIBRATION_PATH`]
-    #[arg(long, default_value = DEFAULT_CALIBRATION_PATH)]
-    pub calibration: PathBuf,
-
-    /// 녹화 파일 (left,right 순서). 없으면 라이브.
-    #[arg(long = "video", value_name = "PATH")]
-    pub videos: Vec<PathBuf>,
+    #[command(flatten)]
+    pub offline: StereoOfflineArgs,
 
     /// SimScene 자식 창 (테이블+공). `--sim false`로 끔.
     #[arg(long = "sim", default_value_t = true, action = clap::ArgAction::Set)]

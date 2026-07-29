@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use pingpong_bot::CamCliArgs;
+use pingpong_bot::{CamCliArgs, MonoOfflineArgs};
 
 #[derive(Parser, Debug)]
 #[command(about = "Detector 본선 — adaptive ROI 튜닝 + 단계 패널")]
@@ -11,8 +11,10 @@ pub struct Args {
 
     #[arg(long)]
     pub images: Option<PathBuf>,
-    #[arg(long)]
-    pub path: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub offline: MonoOfflineArgs,
+
     /// 시작 시 ROI off
     #[arg(long)]
     pub no_roi: bool,

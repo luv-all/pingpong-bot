@@ -1,10 +1,24 @@
 # data/clips
 
-연구실 스테레오 리그에서 찍은 **오프라인 재생용 영상** (`record-stereo`).
+연구실에서 `record-stereo`로 찍은 **오프라인 재생 클립**.
 
-`data/calibration.json` · `data/colormask.json` 과 같이 비전 산출물 트리 아래 둔다.
+`data/calibration.json` · `data/colormask.json`과 같은 비전 트리.
 
-레이아웃: `{scene}_{nn}/left.avi` · `right.avi` · `meta.json`  
+```
+{scene}_{nn}/
+  left.avi
+  right.avi
+  meta.json
+```
+
 장면: `fly` | `roll` | `drop`
 
-자세한 녹화 방법: [tools/record_stereo/README.md](../../tools/record_stereo/README.md)
+```bash
+cargo run -p verify-stereo -- --clip fly_01
+cargo run -p measure-restitution -- --clip drop_02
+cargo run -p measure-friction -- --clip roll_01
+cargo run -p detect-full -- --cam left --clip fly_01
+cargo run -p tune-colormask -- --cam left --clip fly_01
+```
+
+녹화: [tools/record_stereo/README.md](../../tools/record_stereo/README.md)

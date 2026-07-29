@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use pingpong_bot::{CamCliArgs, ColorSpace};
+use pingpong_bot::{CamCliArgs, ColorSpace, MonoOfflineArgs};
 
 #[derive(Parser, Debug)]
 #[command(about = "공 픽셀 픽커 → YCrCb/HSV inRange → data/colormask.json upsert")]
@@ -11,8 +11,10 @@ pub struct Args {
 
     #[arg(long)]
     pub images: Option<PathBuf>,
-    #[arg(long)]
-    pub path: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub offline: MonoOfflineArgs,
+
     /// 시작 색공간 (마스크·띠 미리보기). `s`로 토글
     #[arg(long, value_enum, default_value_t = ColorSpace::Ycrcb)]
     pub space: ColorSpace,

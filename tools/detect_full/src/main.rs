@@ -6,7 +6,7 @@
 
 mod cli;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use opencv::core::{Rect, Scalar, Vector};
 use opencv::imgcodecs;
@@ -14,8 +14,8 @@ use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
     AppearanceChain, ColormaskDetector, ContourDetector, Frame, FrameSource, ImageDirSource,
-    OpenCvCapture, PixelPoint, PreviewAction, RoiTrack, Scorer, destroy_window, draw_cam_label,
-    draw_circle_px, draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
+    PixelPoint, PreviewAction, RoiTrack, Scorer, destroy_window, draw_cam_label, draw_circle_px,
+    draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
 };
 
 use cli::Args;
@@ -23,21 +23,19 @@ use cli::Args;
 fn open_source(args: &Args) -> Result<Box<dyn FrameSource>> {
     let cam_id = args.cam.camera_id().map_err(anyhow::Error::msg)?;
     if let Some(images) = &args.images {
+        if args.offline.has_offline() {
+            bail!("--images 와 --clip 동시 사용 불가");
+        }
         return Ok(Box::new(
             ImageDirSource::open(cam_id, images)
                 .map_err(anyhow::Error::msg)
                 .context("images")?,
         ));
     }
-    if let Some(path) = &args.path {
-        return Ok(Box::new(
-            OpenCvCapture::from_path(cam_id, path)
-                .map_err(anyhow::Error::msg)
-                .context("path")?,
-        ));
-    }
-    let (_r, src) = args.cam.open_one().map_err(anyhow::Error::msg)?;
-    return Ok(src);
+    return Ok(args
+        .cam
+        .open_mono_input(&args.offline)
+        .map_err(anyhow::Error::msg)?);
 }
 
 fn vstack_bgr(top: &Mat, bottom: &Mat) -> Result<Mat> {
@@ -205,7 +203,7 @@ fn main() -> Result<()> {
     let window = "detect:full";
     let wait_ms = args
         .wait_ms
-        .unwrap_or(if args.path.is_some() || args.images.is_some() {
+        .unwrap_or(if args.offline.has_offline() || args.images.is_some() {
             33
         } else {
             1
@@ -373,6 +371,10 @@ fn main() -> Result<()> {
             &mut mask_panel,
             &[
                 "floor-edge keep".to_string(),
+                format!(
+                    "cut_x={:.3}m  margin={:.3}m",
+                    detector.mask.cut_x, detector.mask.margin_m
+                ),
                 format!(
                     "edge y=({:.0},{:.0})",
                     detector.mask.line_y_at_left, detector.mask.line_y_at_right
