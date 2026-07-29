@@ -9,10 +9,13 @@
 //! cargo run -p pingpong-bot -- --debug
 //! ```
 
+mod args;
+mod mode_arg;
+
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 #[cfg(feature = "real")]
 use pingpong_bot::camera;
 #[cfg(feature = "real")]
@@ -33,26 +36,8 @@ use tracing::info;
 #[cfg(not(feature = "gui"))]
 use tracing::warn;
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum ModeArg {
-    Sim,
-    Real,
-}
-
-/// CLI 인자.
-#[derive(Parser)]
-#[command(name = "pingpong-bot", about = "협력 랠리 핑퐁 로봇 런타임")]
-struct Args {
-    /// sim | real
-    #[arg(long, value_enum, default_value = "sim")]
-    mode: ModeArg,
-    /// Dynamixel 포트 오버라이드 (`DynamixelConfig::default().port`보다 우선).
-    #[arg(long)]
-    dxl_port: Option<String>,
-    /// debug 로그 (샷별 계획·하드웨어 상세).
-    #[arg(long)]
-    debug: bool,
-}
+use args::Args;
+use mode_arg::ModeArg;
 
 fn main() -> Result<()> {
     let args = Args::parse();

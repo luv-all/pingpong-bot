@@ -1,4 +1,4 @@
-//! 백그라운드 grab + 최신 프레임 (hinguri Camera::update 알맹이).
+//! `OpenCvCapture`를 전용 스레드에서 돌리고, 소비자는 최신 프레임만 읽는다.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -7,21 +7,14 @@ use std::time::{Duration, Instant};
 
 use opencv::prelude::*;
 
-use super::capture::{Frame, FrameSource, OpenCvCapture};
+use super::latest_slot::LatestSlot;
 use crate::camera;
+use crate::camera::io::capture::{Frame, FrameSource, OpenCvCapture};
 
 /// 첫 프레임 대기 상한 (MSMF 콜드스타트용).
 const FIRST_FRAME_WAIT: Duration = Duration::from_secs(8);
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-struct LatestSlot {
-    image: opencv::core::Mat,
-    timestamp: Instant,
-    seq: u64,
-}
-
-/// `OpenCvCapture`를 전용 스레드에서 돌리고, 소비자는 최신 프레임만 읽는다.
-///
 /// UI/검출이 느려도 캡처는 계속 진행되어 USB 버퍼가 쌓이지 않는다.
 pub struct ThreadedCapture {
     camera_id: camera::Id,

@@ -1,5 +1,6 @@
 //! `data/clips/{scene}_{nn}/` 오프라인 클립 경로 해석.
 
+mod clip_meta_file;
 mod resolved_stereo_offline;
 mod stereo_clip;
 

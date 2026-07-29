@@ -3,9 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
-
 use super::DEFAULT_CLIPS_DIR;
+use super::clip_meta_file::ClipMetaFile;
 
 const VIDEO_EXTS: &[&str] = &["avi", "mp4", "mkv", "mov"];
 
@@ -17,11 +16,6 @@ pub struct StereoClip {
     pub right: PathBuf,
     /// `meta.json`의 `meas_fps` (있으면).
     pub meas_fps: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ClipMetaFile {
-    meas_fps: Option<f64>,
 }
 
 /// `fly_01` → `data/clips/fly_01`, 또는 이미 디렉터리면 그대로.
