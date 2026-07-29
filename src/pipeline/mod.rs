@@ -10,11 +10,11 @@ use std::time::{Duration, Instant};
 
 use crate::Calibration;
 use crate::camera::Triangulate;
-use crate::camera::{CameraParams, FrameSource, HintSource};
+use crate::camera::{FrameSource, HintSource, Params};
 use crate::detector::Detector;
 use crate::planner::SwingPlanner;
 use crate::{
-    CameraId, DomainError, Estimator, Hardware, InterceptWindow, Observation, Prediction, Robot,
+    DomainError, Estimator, Hardware, Id, InterceptWindow, Observation, Prediction, Robot,
     SwingPlanError, Telemetry, TelemetryEvent,
 };
 use crossbeam_channel::bounded;
@@ -57,7 +57,7 @@ pub enum CameraFeed {
     Detect {
         source: Box<dyn FrameSource>,
         detector: Box<Detector>,
-        params: CameraParams,
+        params: Params,
     },
 }
 
@@ -138,7 +138,7 @@ pub fn run(
     handles.push((
         PipelineThread::Estimation,
         thread::spawn(move || {
-            let mut series: Vec<(CameraId, Vec<Observation>)> = calibration
+            let mut series: Vec<(Id, Vec<Observation>)> = calibration
                 .cameras
                 .iter()
                 .map(|c| (c.camera_id, Vec::new()))
@@ -165,7 +165,7 @@ pub fn run(
                     continue;
                 };
 
-                let refs: Vec<(CameraId, &[Observation])> = series
+                let refs: Vec<(Id, &[Observation])> = series
                     .iter()
                     .filter(|(_, b)| !b.is_empty())
                     .map(|(id, b)| (*id, b.as_slice()))

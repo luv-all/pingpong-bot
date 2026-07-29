@@ -1,27 +1,27 @@
-//! 핀홀 카메라 투영 (sim 전용) — `vision::CameraParams`와 동일 모델.
+//! 핀홀 카메라 투영 (sim 전용).
 
-use crate::{CameraId, PixelPoint, Point3};
 use rapier3d::prelude::Vector;
 
-use crate::camera::CameraParams;
+use crate::Point3;
+use crate::camera::{Id, Params, Pixel};
 
-/// 카메라 시야 — vision 캘리브의 얇은 래퍼.
+/// 카메라 시야 — 캘리브 [`Params`]의 얇은 래퍼.
 #[derive(Debug, Clone)]
-pub struct CameraView {
+pub struct View {
     /// 공유 핀홀 파라미터
-    pub params: CameraParams,
+    pub params: Params,
 }
 
-impl CameraView {
-    /// 카메라 대수에 따라 테이블 주위에 배치한다 (`CameraParams::sim_layout`).
+impl View {
+    /// 카메라 대수에 따라 테이블 주위에 배치한다 (`Params::sim_layout`).
     pub fn for_camera_index(index: u8, count: u8) -> Self {
         return Self {
-            params: CameraParams::sim_layout(CameraId::new(index), count),
+            params: Params::sim_layout(Id::new(index), count),
         };
     }
 
     /// 월드 좌표 [m] → 픽셀. 시야 밖·카메라 뒤면 `None`.
-    pub fn project(&self, world: Vector) -> Option<PixelPoint> {
+    pub fn project(&self, world: Vector) -> Option<Pixel> {
         let point = Point3::new(f64::from(world.x), f64::from(world.y), f64::from(world.z));
         return self.params.project_world(point);
     }
@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn table_center_projects_near_image_center() {
-        let view = CameraView::for_camera_index(1, 3);
+        let view = View::for_camera_index(1, 3);
         let pixel = view
             .project(Vector::new(
                 (table::WIDTH_X * 0.5) as f32,

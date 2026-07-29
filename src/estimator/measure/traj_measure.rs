@@ -3,14 +3,14 @@
 use nalgebra::Vector3;
 
 use crate::constants::{ball, table};
-use crate::{CameraId, PixelPoint, Point3};
+use crate::{Id, Pixel, Point3};
 
 /// 삼각측량된 한 샘플.
 #[derive(Debug, Clone)]
 pub struct TrajPoint {
     pub t: f64,
     pub pos: Point3,
-    pub pixels: Vec<(CameraId, PixelPoint)>,
+    pub pixels: Vec<(Id, Pixel)>,
 }
 
 /// 바운스 한 번 (반발계수 디버그용).

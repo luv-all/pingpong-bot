@@ -11,8 +11,8 @@ use opencv::prelude::*;
 use pingpong_bot::defaults::calibration_path;
 use pingpong_bot::defaults::detector_for;
 use pingpong_bot::{
-    Calibration, CameraId, Detector, Frame, FrameSource, PixelPoint, Point3, Preview,
-    PreviewAction, Triangulate, WorldGridParams,
+    Calibration, Detector, Frame, FrameSource, Id, Pixel, Point3, Preview, PreviewAction,
+    Triangulate, WorldGridParams,
 };
 
 use crate::args::Args;
@@ -25,11 +25,7 @@ fn open_sources(args: &Args) -> Result<Vec<Box<dyn FrameSource>>> {
     return Ok(sources);
 }
 
-fn reproj_rmse(
-    world: Point3,
-    hits: &[(CameraId, PixelPoint)],
-    calibration: &Calibration,
-) -> Option<f64> {
+fn reproj_rmse(world: Point3, hits: &[(Id, Pixel)], calibration: &Calibration) -> Option<f64> {
     let errs: Vec<f64> = hits
         .iter()
         .filter_map(|&(id, pix)| {
@@ -93,7 +89,7 @@ pub fn run_opencv(args: &Args) -> Result<()> {
         bail!("카메라 소스 ≥2 필요 (got {})", sources.len());
     }
 
-    let ids: Vec<CameraId> = sources.iter().map(|s| s.camera_id()).collect();
+    let ids: Vec<Id> = sources.iter().map(|s| s.camera_id()).collect();
     let mut detectors: Vec<Detector> = ids
         .iter()
         .map(|&id| detector_for(id))
@@ -172,8 +168,8 @@ pub fn run_opencv(args: &Args) -> Result<()> {
             imgs
         };
 
-        let mut hits: Vec<(CameraId, PixelPoint)> = Vec::new();
-        let mut panels: Vec<(Mat, CameraId)> = Vec::with_capacity(frames.len());
+        let mut hits: Vec<(Id, Pixel)> = Vec::new();
+        let mut panels: Vec<(Mat, Id)> = Vec::with_capacity(frames.len());
 
         for (i, frame) in frames.iter().enumerate() {
             let id = frame.camera_id;

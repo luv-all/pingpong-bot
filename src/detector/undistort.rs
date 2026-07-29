@@ -4,10 +4,10 @@ use opencv::calib3d;
 use opencv::core::Mat;
 use opencv::prelude::*;
 
-use crate::camera::{CameraParams, Frame};
+use crate::camera::{Frame, Params};
 
 /// `dist`가 비어 있으면 원본 프레임을 그대로 돌려준다.
-pub(crate) fn undistort_frame(frame: &Frame, params: &CameraParams) -> Result<Frame, String> {
+pub(crate) fn undistort_frame(frame: &Frame, params: &Params) -> Result<Frame, String> {
     if !params.has_distortion() {
         return Ok(Frame::new(
             frame.camera_id,

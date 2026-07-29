@@ -1,37 +1,27 @@
-//! 탁구대 랜드마크 → OpenCV `solvePnP`(IPPE) → [`CameraParams`] 외참.
+//! 탁구대 랜드마크 → OpenCV `solvePnP`(IPPE) → [`Params`] 외참.
 
 use nalgebra::{Matrix3, Vector3};
 use opencv::calib3d::{self, SolvePnPMethod};
 use opencv::core::{CV_64F, Mat, MatTraitConst, Point2d, Point3d, Vector};
 use opencv::prelude::*;
 
-use super::table_landmarks::{MAX_REPROJ_RMSE_PX, TABLE_LANDMARK_COUNT, table_landmarks};
-use super::{Calibration, CameraParams};
+use super::{MAX_REPROJ_RMSE_PX, PnpResult, TABLE_LANDMARK_COUNT, table_landmarks};
 use crate::Point3;
-use crate::camera::{CameraId, PixelPoint};
+use crate::camera::calib::Calibration;
+use crate::camera::{Id, Params, Pixel};
 use crate::constants::table;
-
-/// PnP 결과 (+ 재투영 RMSE).
-#[derive(Debug, Clone)]
-pub struct TablePnpResult {
-    pub params: CameraParams,
-    /// 선택 해의 재투영 RMSE [px]
-    pub reproj_rmse: f64,
-    /// IPPE가 낸 후보 수
-    pub candidates: usize,
-}
 
 /// FOV로 인트린식을 근사한 뒤 랜드마크 픽셀로 외참을 푼다.
 ///
 /// `pixels.len()`은 [`TABLE_LANDMARK_COUNT`]와 같아야 한다 (순서 = `table_landmarks()`).
 pub fn calibrate_table_pnp(
-    camera_id: CameraId,
+    camera_id: Id,
     label: Option<String>,
     width: u32,
     height: u32,
     fov_y_deg: f64,
-    pixels: &[PixelPoint],
-) -> Result<TablePnpResult, String> {
+    pixels: &[Pixel],
+) -> Result<PnpResult, String> {
     if pixels.len() != TABLE_LANDMARK_COUNT {
         return Err(format!(
             "랜드마크 픽셀 {}개 필요 (got {})",
@@ -124,7 +114,7 @@ pub fn calibrate_table_pnp(
         return Err("solvePnP: 유한 RMSE 해 없음".into());
     };
 
-    let params = CameraParams {
+    let params = Params {
         camera_id,
         label: label.or_else(|| {
             Some(format!(
@@ -142,7 +132,7 @@ pub fn calibrate_table_pnp(
         translation,
     };
 
-    return Ok(TablePnpResult {
+    return Ok(PnpResult {
         params,
         reproj_rmse,
         candidates: rvecs.len(),
@@ -150,7 +140,7 @@ pub fn calibrate_table_pnp(
 }
 
 /// RMSE가 `max_rmse` 이하면 Ok.
-pub fn ensure_reproj_below(result: &TablePnpResult, max_rmse: f64) -> Result<(), String> {
+pub fn ensure_reproj_below(result: &PnpResult, max_rmse: f64) -> Result<(), String> {
     if result.reproj_rmse > max_rmse {
         return Err(format!(
             "재투영 RMSE {:.2} px > 한도 {max_rmse} px (클릭·FOV 확인)",
@@ -161,12 +151,12 @@ pub fn ensure_reproj_below(result: &TablePnpResult, max_rmse: f64) -> Result<(),
 }
 
 /// RMSE가 [`MAX_REPROJ_RMSE_PX`] 이하면 Ok.
-pub fn ensure_reproj_ok(result: &TablePnpResult) -> Result<(), String> {
+pub fn ensure_reproj_ok(result: &PnpResult) -> Result<(), String> {
     return ensure_reproj_below(result, MAX_REPROJ_RMSE_PX);
 }
 
 /// 기존 번들에 카메라 1대를 넣거나 같은 `camera_id`를 교체한다.
-pub fn upsert_camera(calib: &mut Calibration, params: CameraParams) {
+pub fn upsert_camera(calib: &mut Calibration, params: Params) {
     if let Some(slot) = calib
         .cameras
         .iter_mut()
@@ -196,7 +186,7 @@ fn object_points_mat(world: &[Point3]) -> Result<Vector<Point3d>, String> {
     return Ok(v);
 }
 
-fn image_points_mat(pixels: &[PixelPoint]) -> Result<Vector<Point2d>, String> {
+fn image_points_mat(pixels: &[Pixel]) -> Result<Vector<Point2d>, String> {
     let mut v = Vector::<Point2d>::new();
     for p in pixels {
         v.push(Point2d::new(p.x, p.y));
@@ -245,7 +235,7 @@ fn tvec_to_vector3(tvec: &Mat) -> Result<Vector3<f64>, String> {
 
 fn reprojection_rmse(
     world: &[Point3],
-    pixels: &[PixelPoint],
+    pixels: &[Pixel],
     rotation: &Matrix3<f64>,
     translation: &Vector3<f64>,
     fx: f64,
@@ -290,18 +280,18 @@ fn pose_score(rmse: f64, rotation: &Matrix3<f64>, translation: &Vector3<f64>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::camera::{CameraId, Triangulate};
+    use crate::camera::{Id, Triangulate};
     use nalgebra::Vector3;
 
-    fn overhead_cam() -> CameraParams {
+    fn overhead_cam() -> Params {
         let target = Vector3::new(
             table::WIDTH_X * 0.5,
             table::LENGTH_Y * 0.5,
             table::SURFACE_Z,
         );
         let eye = target + Vector3::new(0.0, -0.4, 2.4);
-        return CameraParams::look_at(
-            CameraId::new(0),
+        return Params::look_at(
+            Id::new(0),
             None,
             eye,
             target,
@@ -327,15 +317,9 @@ mod tests {
             * ((f64::from(truth.height) * 0.5) / truth.fy)
                 .atan()
                 .to_degrees();
-        let result = calibrate_table_pnp(
-            CameraId::new(0),
-            None,
-            truth.width,
-            truth.height,
-            fov_y,
-            &pixels,
-        )
-        .expect("pnp");
+        let result =
+            calibrate_table_pnp(Id::new(0), None, truth.width, truth.height, fov_y, &pixels)
+                .expect("pnp");
         ensure_reproj_ok(&result).expect("rmse");
         assert!(result.reproj_rmse < 0.5, "rmse {}", result.reproj_rmse);
 
@@ -360,15 +344,9 @@ mod tests {
             * ((f64::from(truth.height) * 0.5) / truth.fy)
                 .atan()
                 .to_degrees();
-        let result = calibrate_table_pnp(
-            CameraId::new(0),
-            None,
-            truth.width,
-            truth.height,
-            fov_y,
-            &pixels,
-        )
-        .expect("pnp");
+        let result =
+            calibrate_table_pnp(Id::new(0), None, truth.width, truth.height, fov_y, &pixels)
+                .expect("pnp");
         ensure_reproj_ok(&result).expect("rmse");
 
         // 두 번째 카메라: 반대쪽에서 같은 점 투영 → PnP → 삼각측량
@@ -378,8 +356,8 @@ mod tests {
             table::SURFACE_Z,
         );
         let eye2 = target + Vector3::new(0.0, 0.4, 2.4);
-        let truth2 = CameraParams::look_at(
-            CameraId::new(1),
+        let truth2 = Params::look_at(
+            Id::new(1),
             None,
             eye2,
             target,
@@ -393,7 +371,7 @@ mod tests {
             .map(|m| truth2.project_world(m.world).expect("in FOV"))
             .collect();
         let result2 = calibrate_table_pnp(
-            CameraId::new(1),
+            Id::new(1),
             None,
             truth2.width,
             truth2.height,
@@ -414,8 +392,7 @@ mod tests {
 
         let center = marks[4].world;
         let recovered =
-            Triangulate::projections(&back, &[CameraId::new(0), CameraId::new(1)], center)
-                .expect("tri");
+            Triangulate::projections(&back, &[Id::new(0), Id::new(1)], center).expect("tri");
         let err = (recovered.coords - center.coords).norm();
         assert!(err < 0.02, "triangulation error {err} m");
     }

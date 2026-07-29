@@ -14,8 +14,8 @@ use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::defaults::{colormask_for, detector_for};
 use pingpong_bot::{
-    AppearanceChain, ColormaskDetector, ContourDetector, Frame, FrameSource, ImageDirSource,
-    PixelPoint, Preview, PreviewAction, RoiTrack, Scorer,
+    AppearanceChain, ColormaskDetector, ContourDetector, Frame, FrameSource, ImageDirSource, Pixel,
+    Preview, PreviewAction, RoiTrack, Scorer,
 };
 
 use cli::Args;
@@ -76,7 +76,7 @@ fn appearance_steps(
     scorer: &Scorer,
     frame: &Frame,
     roi: Option<Rect>,
-) -> Result<(Option<PixelPoint>, Mat, Mat)> {
+) -> Result<(Option<Pixel>, Mat, Mat)> {
     let Some(r) = roi else {
         let (px, cm, cas) = appearance.detect_debug(frame, scorer);
         return Ok((px, cm, cas));
@@ -98,7 +98,7 @@ fn appearance_steps(
     paste_at(&mut cm_full, &cm_local, r)?;
     paste_at(&mut cas_full, &cas_local, r)?;
 
-    let px = local_px.map(|p| PixelPoint::new(p.x + f64::from(r.x), p.y + f64::from(r.y)));
+    let px = local_px.map(|p| Pixel::new(p.x + f64::from(r.x), p.y + f64::from(r.y)));
     return Ok((px, cm_full, cas_full));
 }
 
@@ -122,7 +122,7 @@ fn draw_panel_hud(img: &mut Mat, lines: &[impl AsRef<str>], color: Scalar) -> Re
     Preview::draw_debug_lines(img, lines, color).map_err(Into::into)
 }
 
-fn pixel_hud_line(label: &str, pixel: Option<PixelPoint>, equivalent_radius: f64) -> String {
+fn pixel_hud_line(label: &str, pixel: Option<Pixel>, equivalent_radius: f64) -> String {
     return match pixel {
         Some(p) => format!(
             "{label}  pixel=({:.1},{:.1})  radius~{:.0}",
@@ -212,8 +212,8 @@ fn main() -> Result<()> {
 
     let mut n = 0usize;
     let mut hits = 0usize;
-    let mut last_pixel: Option<PixelPoint> = None;
-    let mut prev_pixel: Option<PixelPoint> = None;
+    let mut last_pixel: Option<Pixel> = None;
+    let mut prev_pixel: Option<Pixel> = None;
 
     while let Some(frame) = source.next_frame() {
         let pixel = detector.detect(&frame);

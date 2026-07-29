@@ -9,7 +9,7 @@ use opencv::prelude::*;
 use super::super::motion::draw_candidate_contour;
 use super::super::scoring::candidate::{Candidate, candidates_from_contours};
 use super::super::scoring::scorer::Scorer;
-use crate::PixelPoint;
+use crate::Pixel;
 use crate::camera::Frame;
 
 #[derive(
@@ -82,7 +82,7 @@ pub type ColormaskBgr = [u8; 3];
 /// 한 카메라의 colormask 엔트리 (`camera_id` + flatten params + optional samples).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ColormaskCam {
-    pub camera_id: crate::CameraId,
+    pub camera_id: crate::Id,
     #[serde(flatten)]
     pub params: ColormaskParams,
     /// `[[B,G,R], …]` — 픽셀 좌표 없음 (공은 움직이므로 색만 SSOT).
@@ -97,7 +97,7 @@ pub struct ColormaskSet {
 }
 
 impl ColormaskSet {
-    pub fn params(&self, camera_id: crate::CameraId) -> Option<&ColormaskParams> {
+    pub fn params(&self, camera_id: crate::Id) -> Option<&ColormaskParams> {
         return self
             .cameras
             .iter()
@@ -105,7 +105,7 @@ impl ColormaskSet {
             .map(|c| &c.params);
     }
 
-    pub fn samples(&self, camera_id: crate::CameraId) -> Option<&[ColormaskBgr]> {
+    pub fn samples(&self, camera_id: crate::Id) -> Option<&[ColormaskBgr]> {
         return self
             .cameras
             .iter()
@@ -115,7 +115,7 @@ impl ColormaskSet {
 
     pub fn upsert(
         &mut self,
-        camera_id: crate::CameraId,
+        camera_id: crate::Id,
         params: ColormaskParams,
         samples: Vec<ColormaskBgr>,
     ) {
@@ -226,7 +226,7 @@ impl ColormaskDetector {
 
     /// 검출 + 색 마스크(BGR). 선택 컨투어는 초록.
     /// hard cut은 호출측 `Scorer`를 쓴다.
-    pub fn detect_debug(&mut self, frame: &Frame, scorer: &Scorer) -> (Option<PixelPoint>, Mat) {
+    pub fn detect_debug(&mut self, frame: &Frame, scorer: &Scorer) -> (Option<Pixel>, Mat) {
         self.last_area = None;
         let empty = || empty_bgr(frame);
         let Some(mask) = self.color_mask(frame) else {
@@ -283,7 +283,7 @@ fn empty_bgr(frame: &Frame) -> Mat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CameraId;
+    use crate::Id;
     use opencv::core::{CV_8UC3, Size};
     use std::time::Instant;
 
@@ -301,7 +301,7 @@ mod tests {
             0,
         )
         .unwrap();
-        let frame = Frame::new(CameraId(0), img, Instant::now());
+        let frame = Frame::new(Id(0), img, Instant::now());
         let params = ColormaskParams {
             space: ColorSpace::Ycrcb,
             c0_min: 50,
@@ -325,7 +325,7 @@ mod tests {
     fn colormask_json_roundtrip_keeps_samples() {
         let mut set = ColormaskSet::default();
         set.upsert(
-            CameraId(0),
+            Id(0),
             ColormaskParams {
                 space: ColorSpace::Hsv,
                 c0_min: 10,
@@ -340,18 +340,18 @@ mod tests {
         let json = serde_json::to_string(&set).unwrap();
         assert!(json.contains("\"samples\":[[40,120,200]]") || json.contains("[40, 120, 200]"));
         let loaded: ColormaskSet = serde_json::from_str(&json).unwrap();
-        assert_eq!(loaded.samples(CameraId(0)).unwrap(), &[[40u8, 120, 200]]);
+        assert_eq!(loaded.samples(Id(0)).unwrap(), &[[40u8, 120, 200]]);
         // 구포맷(samples 없음)도 로드
         let legacy = r#"{"cameras":[{"camera_id":1,"space":"ycrcb","c0_min":1,"c0_max":2,"c1_min":3,"c1_max":4,"c2_min":5,"c2_max":6}]}"#;
         let legacy_set: ColormaskSet = serde_json::from_str(legacy).unwrap();
-        assert!(legacy_set.samples(CameraId(1)).unwrap().is_empty());
+        assert!(legacy_set.samples(Id(1)).unwrap().is_empty());
     }
 
     #[test]
     fn save_colormask_writes_compact_single_line() {
         let mut set = ColormaskSet::default();
         set.upsert(
-            CameraId(0),
+            Id(0),
             ColormaskParams {
                 space: ColorSpace::Hsv,
                 c0_min: 1,

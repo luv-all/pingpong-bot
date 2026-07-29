@@ -15,8 +15,8 @@ use opencv::prelude::*;
 use pingpong_bot::defaults::colormask_path;
 use pingpong_bot::detector::{load_colormask_set_or_empty, save_colormask_set};
 use pingpong_bot::{
-    CameraId, ColorSpace, ColormaskParams, FrameSource, ImageDirSource, PixelPickMouse, PixelPoint,
-    Preview, PreviewAction,
+    ColorSpace, ColormaskParams, FrameSource, Id, ImageDirSource, Pixel, PixelPickMouse, Preview,
+    PreviewAction,
 };
 
 use cli::Args;
@@ -200,7 +200,7 @@ fn space_label(space: ColorSpace) -> &'static str {
 }
 
 fn upsert_colormask(
-    cam_id: CameraId,
+    cam_id: Id,
     space: ColorSpace,
     range: ChannelRange,
     samples: &[Sample],
@@ -223,7 +223,7 @@ fn upsert_colormask(
     return Ok(());
 }
 
-fn load_samples_for_cam(cam_id: CameraId) -> Vec<Sample> {
+fn load_samples_for_cam(cam_id: Id) -> Vec<Sample> {
     let path = colormask_path();
     let Ok(set) = load_colormask_set_or_empty(&path) else {
         return Vec::new();
@@ -238,7 +238,7 @@ fn load_samples_for_cam(cam_id: CameraId) -> Vec<Sample> {
         .collect();
 }
 
-fn hint_existing(cam_id: CameraId, n_samples: usize) {
+fn hint_existing(cam_id: Id, n_samples: usize) {
     let path = colormask_path();
     let Ok(set) = load_colormask_set_or_empty(&path) else {
         return;
@@ -780,7 +780,7 @@ fn main() -> Result<()> {
             };
             Preview::draw_circle_px(
                 &mut original,
-                PixelPoint::new(f64::from(s.x), f64::from(s.y)),
+                Pixel::new(f64::from(s.x), f64::from(s.y)),
                 6,
                 color,
                 2,

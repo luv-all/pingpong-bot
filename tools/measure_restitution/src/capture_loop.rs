@@ -9,8 +9,8 @@ use opencv::prelude::*;
 use pingpong_bot::defaults::detector_for;
 use pingpong_bot::estimator::TrajAnalysis;
 use pingpong_bot::{
-    BounceEvent, Calibration, CameraId, Detector, FrameSource, Preview, PreviewAction,
-    StereoOfflineArgs, TrajPoint, Triangulate,
+    BounceEvent, Calibration, Detector, FrameSource, Id, Preview, PreviewAction, StereoOfflineArgs,
+    TrajPoint, Triangulate,
 };
 
 pub struct CaptureResult {
@@ -87,7 +87,7 @@ pub fn run_capture(
             if i == 0 {
                 frame0_ts = Some(frame.timestamp);
             }
-            let cam_id = CameraId(i as u8);
+            let cam_id = Id(i as u8);
             let pixel = detectors[i].detect(&frame);
             let mut panel = frame
                 .image
@@ -130,7 +130,7 @@ pub fn run_capture(
 
         if let Some(ev) = bounces.last() {
             for (i, panel) in panels.iter_mut().enumerate() {
-                let Some(params) = calibration.params(CameraId(i as u8)) else {
+                let Some(params) = calibration.params(Id(i as u8)) else {
                     continue;
                 };
                 if let Some(px) = params.project_world(ev.contact) {

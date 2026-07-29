@@ -10,7 +10,7 @@ use super::motion::MotionPrior;
 use super::roi_params::RoiParams;
 use super::scoring::candidate::Candidate;
 use super::scoring::scorer::Scorer;
-use crate::PixelPoint;
+use crate::Pixel;
 use crate::camera::Frame;
 
 /// appearance + scorer(+motion) + ROI 탐색 정책.
@@ -21,7 +21,7 @@ pub struct RoiTrack {
     pub params: RoiParams,
     pub half_px: i32,
     pub roi_enabled: bool,
-    last: Option<PixelPoint>,
+    last: Option<Pixel>,
     last_area: Option<f64>,
     last_delta_px: f64,
     pub last_roi: Option<Rect>,
@@ -91,7 +91,7 @@ impl RoiTrack {
         return self.last_area;
     }
 
-    pub fn detect(&mut self, frame: &Frame) -> Option<PixelPoint> {
+    pub fn detect(&mut self, frame: &Frame) -> Option<Pixel> {
         self.last_roi = None;
         self.used_roi = false;
 
@@ -126,7 +126,7 @@ impl RoiTrack {
         return None;
     }
 
-    fn roi_rect(prev: PixelPoint, half: i32, frame: &Frame) -> Option<Rect> {
+    fn roi_rect(prev: Pixel, half: i32, frame: &Frame) -> Option<Rect> {
         let size = frame.image.size().ok()?;
         let x0 = (prev.x as i32 - half).max(0);
         let y0 = (prev.y as i32 - half).max(0);
@@ -137,7 +137,7 @@ impl RoiTrack {
         return Some(Rect::new(x0, y0, w, h));
     }
 
-    fn pick_in_frame(&mut self, frame: &Frame) -> Option<PixelPoint> {
+    fn pick_in_frame(&mut self, frame: &Frame) -> Option<Pixel> {
         let motion_mask = self.motion.as_mut().and_then(|m| m.update(frame));
         let overlap = |c: &Candidate| match &motion_mask {
             Some(mask) => MotionPrior::overlap(mask, c),
@@ -149,7 +149,7 @@ impl RoiTrack {
         return Some(best.pixel);
     }
 
-    fn detect_region(&mut self, frame: &Frame, roi: Option<Rect>) -> Option<PixelPoint> {
+    fn detect_region(&mut self, frame: &Frame, roi: Option<Rect>) -> Option<Pixel> {
         let Some(r) = roi else {
             return self.pick_in_frame(frame);
         };
@@ -162,10 +162,10 @@ impl RoiTrack {
         };
         return self
             .pick_in_frame(&local)
-            .map(|p| PixelPoint::new(p.x + f64::from(r.x), p.y + f64::from(r.y)));
+            .map(|p| Pixel::new(p.x + f64::from(r.x), p.y + f64::from(r.y)));
     }
 
-    fn note_hit(&mut self, p: PixelPoint) {
+    fn note_hit(&mut self, p: Pixel) {
         let delta = self
             .last
             .map(|prev| {
@@ -190,7 +190,7 @@ impl RoiTrack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CameraId;
+    use crate::Id;
     use crate::detector::{
         AppearanceChain, ColorSpace, ColormaskDetector, ColormaskParams, ContourDetector,
         ScorerParams,
@@ -212,7 +212,7 @@ mod tests {
             0,
         )
         .unwrap();
-        return Frame::new(CameraId(0), img, Instant::now());
+        return Frame::new(Id(0), img, Instant::now());
     }
 
     fn loose_color() -> ColormaskParams {

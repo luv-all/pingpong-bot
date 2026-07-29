@@ -1,10 +1,9 @@
-//! 카메라 입출력 — 캡처·프리뷰·투영·시뮬 카메라.
+//! 카메라 입출력 — 캡처·프리뷰·시뮬 카메라.
 
 mod cam_cli;
 mod capture;
 mod clip;
 pub mod preview;
-mod projection;
 mod rig;
 mod sim;
 mod threaded;
@@ -25,7 +24,6 @@ pub use preview::{
     draw_pixel_loupe, draw_world_grid, draw_world_velocity, fit_bgr_downscale, hstack_bgr,
     show_bgr, unscale_xy,
 };
-pub use projection::CameraView;
-pub use rig::{CamRigConfig, CameraRole};
+pub use rig::CamRigConfig;
 pub use sim::SimCamera;
 pub use threaded::ThreadedCapture;

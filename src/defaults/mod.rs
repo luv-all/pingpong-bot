@@ -84,7 +84,7 @@ pub use vision::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CameraId;
+    use crate::Id;
     use crate::defaults::colormask_for;
     use crate::detector::{RoiParams, ScorerParams};
     use crate::hardware::dynamixel::DynamixelConfig;
@@ -99,8 +99,8 @@ mod tests {
         EstimatorParams::default().validate().unwrap();
         InterceptWindow::default().validate().unwrap();
         ScorerParams::default().validate().unwrap();
-        colormask_for(CameraId(0)).unwrap().validate().unwrap();
-        colormask_for(CameraId(1)).unwrap().validate().unwrap();
+        colormask_for(Id(0)).unwrap().validate().unwrap();
+        colormask_for(Id(1)).unwrap().validate().unwrap();
         RoiParams::default().validate().unwrap();
         DynamixelConfig::default().validate().unwrap();
         RailConfig::default().validate().unwrap();

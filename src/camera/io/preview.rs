@@ -5,7 +5,7 @@ use opencv::imgproc;
 use opencv::prelude::*;
 use opencv::{Result as CvResult, highgui};
 
-use crate::{CameraParams, PixelPoint, Point3};
+use crate::{Params, Pixel, Point3};
 use nalgebra::Vector3;
 
 /// 프리뷰 키 입력.
@@ -415,7 +415,7 @@ pub fn draw_help_lines(img: &mut Mat, lines: &[impl AsRef<str>], color: Scalar) 
 /// 검출/궤적 마커 원.
 pub fn draw_circle_px(
     img: &mut Mat,
-    pixel: PixelPoint,
+    pixel: Pixel,
     radius: i32,
     color: Scalar,
     thickness: i32,
@@ -435,7 +435,7 @@ pub fn draw_circle_px(
 /// 월드 점·속도를 카메라에 투영해 화살표를 그린다. `dt_draw` 초만큼 전진한 끝을 tip으로.
 pub fn draw_world_velocity(
     img: &mut Mat,
-    params: &CameraParams,
+    params: &Params,
     origin: Point3,
     vel: Vector3<f64>,
     dt_draw: f64,
@@ -512,7 +512,7 @@ fn jet_bgr(t: f64) -> Scalar {
     return Scalar::new(b * 255.0, g * 255.0, r * 255.0, 0.0);
 }
 
-fn project_grid_pt(params: &CameraParams, x: f64, y: f64, z: f64) -> Option<Point> {
+fn project_grid_pt(params: &Params, x: f64, y: f64, z: f64) -> Option<Point> {
     let px = params.project_world(Point3::new(x, y, z))?;
     return Some(Point::new(px.x.round() as i32, px.y.round() as i32));
 }
@@ -535,11 +535,7 @@ fn grid_axis_inclusive(max: f64, step: f64) -> Vec<f64> {
 
 /// 탁구대 XY×Z 격자를 `project_world`로 투영해 점+선분으로 그린다.
 /// XY는 간격과 무관하게 `0`·`WIDTH_X`·`LENGTH_Y` 경계를 항상 포함한다.
-pub fn draw_world_grid(
-    img: &mut Mat,
-    params: &CameraParams,
-    grid: WorldGridParams,
-) -> CvResult<()> {
+pub fn draw_world_grid(img: &mut Mat, params: &Params, grid: WorldGridParams) -> CvResult<()> {
     use crate::constants::table;
 
     let grid = grid.clamp();

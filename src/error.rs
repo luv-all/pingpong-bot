@@ -4,7 +4,7 @@
 
 use thiserror::Error;
 
-use crate::CameraId;
+use crate::Id;
 
 /// 도메인 계층 공통 에러.
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -151,10 +151,10 @@ pub enum ObservationError {
     },
     /// 동기화 시각 보간에 필요한 앞뒤 관측 프레임 없음
     #[error("{camera_id} - 동기화 시각 보간용 앞뒤 프레임 없음")]
-    InterpolationFailed { camera_id: CameraId },
+    InterpolationFailed { camera_id: Id },
     /// Calibration에 해당 카메라가 없음
     #[error("{camera_id} - Calibration에 파라미터 없음")]
-    MissingCalibration { camera_id: CameraId },
+    MissingCalibration { camera_id: Id },
     /// DLT가 유한한 3D 점을 내지 못함 (퇴화/수치 실패)
     #[error("DLT 삼각측량 실패 (퇴화 또는 비유한 해)")]
     TriangulationFailed,

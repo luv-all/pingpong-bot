@@ -20,7 +20,7 @@ use pingpong_bot::logging::init_tracing;
 #[cfg(feature = "gui")]
 use pingpong_bot::sim::gui::{SimViewer, SimViewerOptions};
 #[cfg(feature = "real")]
-use pingpong_bot::{CameraId, DynamixelConfig, Hardware, RailConfig, RealHardware};
+use pingpong_bot::{DynamixelConfig, Hardware, Id, RailConfig, RealHardware};
 use pingpong_bot::{
     InterceptWindow, PhysicsParams, SimRuntimeControls, SimSession, SimSessionConfig,
 };
@@ -122,7 +122,7 @@ fn run_real_entry(args: &Args) -> Result<()> {
         RealHardware::new(dxl, Some(RailConfig::default()), arm).context("RealHardware")?;
     let pose = hardware.read_pose().context("read pose")?;
     info!(joints = ?pose.joints.values, "pose");
-    let _ = detector_for(CameraId(0)).context("detector_for cam0")?;
+    let _ = detector_for(Id(0)).context("detector_for cam0")?;
     return Ok(());
 }
 

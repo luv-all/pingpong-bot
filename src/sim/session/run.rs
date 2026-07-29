@@ -206,7 +206,7 @@ impl SimSession {
     }
 
     /// 가상 카메라 소스를 만든다. `frames == 0` 이면 종료 신호까지 무한.
-    pub fn camera(&self, camera_id: crate::CameraId, frames: u64) -> SimCamera {
+    pub fn camera(&self, camera_id: crate::Id, frames: u64) -> SimCamera {
         return SimCamera::new(
             camera_id,
             self.config.camera_count,

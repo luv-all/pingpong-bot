@@ -1,6 +1,6 @@
 //! OpenCV ChArUco 보드 → 카메라 인트린식·왜곡 (`Calibration` JSON).
 //!
-//! 외부 R|t는 피팅하지 않는다. 외참은 [`super::table_pnp`] / `calib-table-pnp`를 쓴다.
+//! 외부 R|t는 피팅하지 않는다. 외참은 [`crate::camera::calib::table`] / `calib-table-pnp`를 쓴다.
 //! 이 모듈은 K·dist만 덮어쓰고, sim look-at을 자리표시자로 둔다.
 
 use std::ffi::OsStr;
@@ -9,38 +9,21 @@ use std::path::Path;
 
 use opencv::core::{Point2f, Point3f, Size, TermCriteria, TermCriteria_Type, Vector};
 use opencv::objdetect::{
-    self, CharucoBoard, CharucoDetector, CharucoParameters, DetectorParameters,
-    PredefinedDictionaryType, RefineParameters, get_predefined_dictionary,
+    CharucoBoard, CharucoDetector, CharucoParameters, DetectorParameters, PredefinedDictionaryType,
+    RefineParameters, get_predefined_dictionary,
 };
 use opencv::prelude::*;
 use opencv::{calib3d, imgcodecs, imgproc};
 
-use super::Calibration;
-use crate::CameraId;
+use super::{BoardSpec, Report};
+use crate::camera::Id;
+use crate::camera::calib::Calibration;
 
-/// ChArUco 보드 규격 (CLI에서 덮어쓸 수 있음).
-#[derive(Debug, Clone, Copy)]
-pub struct CharucoBoardSpec {
-    pub squares_x: i32,
-    pub squares_y: i32,
-    pub square_length_m: f32,
-    pub marker_length_m: f32,
-}
-
-/// 보정 결과 메타 (로그용).
-#[derive(Debug, Clone)]
-pub struct CharucoCalibReport {
-    pub rms: f64,
-    pub frames_used: usize,
-    pub frames_total: usize,
-}
-
-/// `dir`의 이미지에서 ChArUco를 모아 인트린식+dist를 피팅한다.
 pub fn calibrate_charuco(
     dir: &Path,
-    board_spec: CharucoBoardSpec,
-    camera_id: CameraId,
-) -> Result<(Calibration, CharucoCalibReport), String> {
+    board_spec: BoardSpec,
+    camera_id: Id,
+) -> Result<(Calibration, Report), String> {
     let dict = get_predefined_dictionary(PredefinedDictionaryType::DICT_4X4_50)
         .map_err(|e| format!("dictionary: {e}"))?;
     let board = CharucoBoard::new_def(
@@ -179,7 +162,7 @@ pub fn calibrate_charuco(
 
     return Ok((
         calib,
-        CharucoCalibReport {
+        Report {
             rms,
             frames_used,
             frames_total: entries.len(),
@@ -205,102 +188,4 @@ fn read_dist_coeffs(d: &opencv::core::Mat) -> Result<Vec<f64>, String> {
         out.push(v);
     }
     return Ok(out);
-}
-
-/// 한 프레임 ChArUco 검출 + 오버레이 (인터랙티브 calib용).
-#[derive(Debug, Clone)]
-pub struct CharucoFrameDetect {
-    /// 보정에 쓸 만한 코너 수 (≥ [`MIN_CHARUCO_CORNERS`])
-    pub corners: usize,
-    pub markers: usize,
-    pub ok: bool,
-}
-
-/// 프레임당 최소 ChArUco 코너 (저장·보정 후보).
-pub use crate::defaults::calib::MIN_CHARUCO_CORNERS;
-
-fn make_charuco_detector(
-    board_spec: CharucoBoardSpec,
-) -> Result<(CharucoBoard, CharucoDetector), String> {
-    let dict = get_predefined_dictionary(PredefinedDictionaryType::DICT_4X4_50)
-        .map_err(|e| format!("dictionary: {e}"))?;
-    let board = CharucoBoard::new_def(
-        Size::new(board_spec.squares_x, board_spec.squares_y),
-        board_spec.square_length_m,
-        board_spec.marker_length_m,
-        &dict,
-    )
-    .map_err(|e| format!("board: {e}"))?;
-    let charuco_params =
-        CharucoParameters::default().map_err(|e| format!("charuco_params: {e}"))?;
-    let detector_params =
-        DetectorParameters::default().map_err(|e| format!("detector_params: {e}"))?;
-    let refine_params = RefineParameters::new_def().map_err(|e| format!("refine_params: {e}"))?;
-    let detector = CharucoDetector::new(&board, &charuco_params, &detector_params, refine_params)
-        .map_err(|e| format!("detector: {e}"))?;
-    return Ok((board, detector));
-}
-
-/// BGR 프레임에 마커·ChArUco 코너를 그린다. `ok`면 저장 후보.
-pub fn detect_and_draw_charuco(
-    bgr: &Mat,
-    board_spec: CharucoBoardSpec,
-) -> Result<(Mat, CharucoFrameDetect), String> {
-    let (board, detector) = make_charuco_detector(board_spec)?;
-    let mut gray = Mat::default();
-    imgproc::cvt_color(
-        bgr,
-        &mut gray,
-        imgproc::COLOR_BGR2GRAY,
-        0,
-        opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
-    )
-    .map_err(|e| format!("cvt_color: {e}"))?;
-
-    let mut charuco_corners = Vector::<Point2f>::new();
-    let mut charuco_ids = Vector::<i32>::new();
-    let mut marker_corners = Vector::<Vector<Point2f>>::new();
-    let mut marker_ids = Vector::<i32>::new();
-    detector
-        .detect_board(
-            &gray,
-            &mut charuco_corners,
-            &mut charuco_ids,
-            &mut marker_corners,
-            &mut marker_ids,
-        )
-        .map_err(|e| format!("detect_board: {e}"))?;
-    let _board_alive = board;
-
-    let mut overlay = bgr.try_clone().map_err(|e| format!("clone: {e}"))?;
-    if !marker_corners.is_empty() {
-        objdetect::draw_detected_markers(
-            &mut overlay,
-            &marker_corners,
-            &marker_ids,
-            opencv::core::Scalar::new(0.0, 255.0, 0.0, 0.0),
-        )
-        .map_err(|e| format!("draw_markers: {e}"))?;
-    }
-    if !charuco_corners.is_empty() {
-        objdetect::draw_detected_corners_charuco(
-            &mut overlay,
-            &charuco_corners,
-            &charuco_ids,
-            opencv::core::Scalar::new(255.0, 0.0, 255.0, 0.0),
-        )
-        .map_err(|e| format!("draw_charuco: {e}"))?;
-    }
-
-    let corners = charuco_ids.len();
-    let markers = marker_ids.len();
-    let ok = corners >= MIN_CHARUCO_CORNERS;
-    return Ok((
-        overlay,
-        CharucoFrameDetect {
-            corners,
-            markers,
-            ok,
-        },
-    ));
 }

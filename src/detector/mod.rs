@@ -17,7 +17,7 @@ pub mod spatial;
 mod track;
 mod undistort;
 
-use crate::PixelPoint;
+use crate::Pixel;
 
 pub use appearance::*;
 pub use builder::{Detector, DetectorBuilder};
@@ -34,6 +34,6 @@ pub(crate) use undistort::undistort_frame;
 pub(crate) use track::track;
 
 /// sim: 카메라가 이미 넣은 힌트 픽셀을 그대로 쓴다.
-pub(crate) fn passthrough_detect(hint: Option<PixelPoint>) -> Option<PixelPoint> {
+pub(crate) fn passthrough_detect(hint: Option<Pixel>) -> Option<Pixel> {
     return hint;
 }

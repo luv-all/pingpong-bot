@@ -24,15 +24,22 @@ pub type Point3 = nalgebra::Point3<f64>;
 pub use ball::Observation;
 pub use ball::Observation as BallObservation;
 pub use camera::{
-    Calibration, CamCliArgs, CamRigConfig, CamStreamArgs, CameraId, CameraParams, CameraRole,
-    CaptureBackend, Charuco, CharucoBoardSpec, CharucoCalibReport, CharucoFrameDetect,
+    BoardSpec, Calibration, CamCliArgs, CamRigConfig, CamStreamArgs, CaptureBackend, Charuco,
     DEFAULT_CLIPS_DIR, DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
-    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH, ExposureReadout, Frame, FrameSource, HintSource,
-    ImageDirSource, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, MonoOfflineArgs, OpenCvCapture,
-    PixelPickMouse, PixelPoint, Preview, PreviewAction, ResolvedCam, ResolvedStereoOffline,
-    ShowBgrResult, SimCamera, StereoCamCliArgs, StereoClip, StereoOfflineArgs, StereoPairCliArgs,
-    StreamPreset, TABLE_LANDMARK_COUNT, TableLandmark, TablePnp, TablePnpResult, ThreadedCapture,
-    Triangulate, WorldGridParams, arducam_b0332,
+    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH, ExposureReadout, Frame, FrameDetect, FrameSource,
+    HintSource, Id, ImageDirSource, Landmark, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS,
+    MonoOfflineArgs, OpenCvCapture, Params, Pixel, PixelPickMouse, PnpResult, Preview,
+    PreviewAction, Report, ResolvedCam, ResolvedStereoOffline, Role, ShowBgrResult, SimCamera,
+    StereoCamCliArgs, StereoClip, StereoOfflineArgs, StereoPairCliArgs, StreamPreset,
+    TABLE_LANDMARK_COUNT, TablePnp, ThreadedCapture, Triangulate, View, WorldGridParams,
+    arducam_b0332,
+};
+// 移行 별칭
+pub use camera::{
+    BoardSpec as CharucoBoardSpec, FrameDetect as CharucoFrameDetect, Id as CameraId,
+    Landmark as TableLandmark, Params as CameraParams, Pixel as PixelPoint,
+    PnpResult as TablePnpResult, Report as CharucoCalibReport, Role as CameraRole,
+    View as CameraView,
 };
 pub use defaults::{
     ControlParams, DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME,

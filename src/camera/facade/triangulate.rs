@@ -1,0 +1,63 @@
+//! 삼각측량 공개 진입점.
+
+use std::time::Instant;
+
+use crate::Point3;
+use crate::camera::calib::Calibration;
+use crate::camera::{Id, Pixel};
+
+/// 삼각측량 공개 진입점.
+pub struct Triangulate;
+
+impl Triangulate {
+    pub fn sample_at(
+        observations: &[crate::ball::Observation],
+        sync_time: Instant,
+    ) -> Option<Pixel> {
+        return crate::camera::tri::sample_at(observations, sync_time);
+    }
+
+    pub fn synced(
+        observations_by_camera: &[(Id, &[crate::ball::Observation])],
+        sync_time: Instant,
+        calibration: &Calibration,
+    ) -> Result<Point3, crate::DomainError> {
+        return crate::camera::tri::triangulate_synced(
+            observations_by_camera,
+            sync_time,
+            calibration,
+        );
+    }
+
+    pub fn views(views: &[(nalgebra::Matrix3x4<f64>, Pixel)]) -> Option<Point3> {
+        return crate::camera::tri::triangulate_views(views);
+    }
+
+    /// 캘리브 + 픽셀 히트 → 월드 점. 카메라 수·params 부족하면 `None`.
+    pub fn pixels(hits: &[(Id, Pixel)], calibration: &Calibration) -> Option<Point3> {
+        if hits.len() < calibration.min_cameras_for_triangulation() {
+            return None;
+        }
+        let views: Vec<_> = hits
+            .iter()
+            .map(|&(id, pix)| {
+                calibration
+                    .params(id)
+                    .map(|params| (params.projection_matrix(), pix))
+            })
+            .collect::<Option<_>>()?;
+        return Self::views(&views);
+    }
+
+    pub fn dlt(views: &[(nalgebra::Matrix3x4<f64>, Pixel)]) -> Option<Point3> {
+        return crate::camera::tri::dlt_triangulate(views);
+    }
+
+    pub fn projections(
+        calibration: &Calibration,
+        camera_ids: &[Id],
+        point: Point3,
+    ) -> Option<Point3> {
+        return crate::camera::tri::triangulate_projections(calibration, camera_ids, point);
+    }
+}

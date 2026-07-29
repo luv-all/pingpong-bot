@@ -8,15 +8,15 @@ use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CameraId, CameraParams, FrameSource, OpenCvCapture, PixelPickMouse, PixelPoint, Point3,
-    Preview, PreviewAction, TABLE_LANDMARK_COUNT, TableLandmark, TablePnp, WorldGridParams,
+    FrameSource, Id, Landmark, OpenCvCapture, Params, Pixel, PixelPickMouse, Point3, Preview,
+    PreviewAction, TABLE_LANDMARK_COUNT, TablePnp, WorldGridParams,
 };
 
 use crate::args::{Args, pending_path, resolve_camera_id, resolve_output};
 use crate::cli;
 
 struct Solved {
-    params: CameraParams,
+    params: Params,
     rmse: f64,
     candidates: usize,
     /// `rmse <= max_rmse` 이면 저장 가능
@@ -56,7 +56,7 @@ pub fn run(args: &Args) -> Result<()> {
     let marks = TablePnp::landmarks();
     let mut frozen = false;
     let mut freeze_img: Option<Mat> = None;
-    let mut clicks: Vec<PixelPoint> = Vec::new();
+    let mut clicks: Vec<Pixel> = Vec::new();
     let mut solved: Option<Solved> = None;
     let mut grid = WorldGridParams::default();
     let mut last_fail_rmse: Option<f64> = None;
@@ -133,7 +133,7 @@ pub fn run(args: &Args) -> Result<()> {
                     if clicks.len() < TABLE_LANDMARK_COUNT {
                         let fx = x - pad;
                         let fy = y - pad;
-                        clicks.push(PixelPoint::new(f64::from(fx), f64::from(fy)));
+                        clicks.push(Pixel::new(f64::from(fx), f64::from(fy)));
                         clicks_changed = true;
                         if clicks.len() == 1 {
                             println!("recalib — baseline overlay off");
@@ -411,7 +411,7 @@ pub fn run(args: &Args) -> Result<()> {
 fn overlay_world_grid(
     panel: &mut Mat,
     frame_img: &Mat,
-    params: &CameraParams,
+    params: &Params,
     grid: WorldGridParams,
     pad: i32,
     img_w: i32,
@@ -433,9 +433,9 @@ fn overlay_world_grid(
 
 fn try_solve(
     args: &Args,
-    cam_id: CameraId,
+    cam_id: Id,
     img: &Mat,
-    clicks: &[PixelPoint],
+    clicks: &[Pixel],
     solved: &mut Option<Solved>,
     last_fail_rmse: &mut Option<f64>,
 ) -> Result<()> {
@@ -476,7 +476,7 @@ fn try_solve(
     return Ok(());
 }
 
-fn print_per_point_residuals(clicks: &[PixelPoint], params: &CameraParams) {
+fn print_per_point_residuals(clicks: &[Pixel], params: &Params) {
     let marks = TablePnp::landmarks();
     let mut parts = Vec::with_capacity(TABLE_LANDMARK_COUNT);
     for (i, click) in clicks.iter().enumerate() {
@@ -492,11 +492,11 @@ fn print_per_point_residuals(clicks: &[PixelPoint], params: &CameraParams) {
     println!("  residuals[px] {}", parts.join(" "));
 }
 
-fn to_canvas(p: PixelPoint, pad: i32) -> PixelPoint {
-    return PixelPoint::new(p.x + f64::from(pad), p.y + f64::from(pad));
+fn to_canvas(p: Pixel, pad: i32) -> Pixel {
+    return Pixel::new(p.x + f64::from(pad), p.y + f64::from(pad));
 }
 
-fn to_canvas_pts(pts: &[PixelPoint], pad: i32) -> Vec<PixelPoint> {
+fn to_canvas_pts(pts: &[Pixel], pad: i32) -> Vec<Pixel> {
     return pts.iter().copied().map(|p| to_canvas(p, pad)).collect();
 }
 
@@ -526,7 +526,7 @@ fn make_padded_canvas(frame: &Mat, pad: i32) -> Result<Mat> {
 
 fn draw_complete_edges(
     panel: &mut Mat,
-    pts: &[PixelPoint],
+    pts: &[Pixel],
     color: Scalar,
     thickness: i32,
 ) -> Result<()> {
@@ -540,12 +540,7 @@ fn draw_complete_edges(
     return Ok(());
 }
 
-fn draw_mesh_edges(
-    panel: &mut Mat,
-    pts: &[PixelPoint],
-    color: Scalar,
-    thickness: i32,
-) -> Result<()> {
+fn draw_mesh_edges(panel: &mut Mat, pts: &[Pixel], color: Scalar, thickness: i32) -> Result<()> {
     for &(a_i, b_i) in TablePnp::landmark_mesh_edges() {
         if a_i >= pts.len() || b_i >= pts.len() {
             continue;
@@ -558,12 +553,7 @@ fn draw_mesh_edges(
 }
 
 /// 클릭 점(녹색) + 현재 꼭짓점 완전연결 메시(주황). `pad`는 캔버스 오프셋.
-fn draw_clicks(
-    panel: &mut Mat,
-    clicks: &[PixelPoint],
-    marks: &[TableLandmark],
-    pad: i32,
-) -> Result<()> {
+fn draw_clicks(panel: &mut Mat, clicks: &[Pixel], marks: &[Landmark], pad: i32) -> Result<()> {
     let pts = to_canvas_pts(clicks, pad);
     draw_complete_edges(panel, &pts, Scalar::new(255.0, 128.0, 0.0, 0.0), 1)?;
 
@@ -597,20 +587,20 @@ fn draw_clicks(
 /// PnP 해의 이상 재투영(마젠타) + 클릭↔이상 잔차(노랑) + 이상 메시.
 fn draw_reproj_overlay(
     panel: &mut Mat,
-    clicks: &[PixelPoint],
-    marks: &[TableLandmark],
-    params: &CameraParams,
+    clicks: &[Pixel],
+    marks: &[Landmark],
+    params: &Params,
     pad: i32,
 ) -> Result<()> {
     if clicks.len() != TABLE_LANDMARK_COUNT {
         return Ok(());
     }
-    let ideals: Vec<Option<PixelPoint>> = marks
+    let ideals: Vec<Option<Pixel>> = marks
         .iter()
         .map(|m| project_unclipped(params, m.world).map(|p| to_canvas(p, pad)))
         .collect();
     let click_pts = to_canvas_pts(clicks, pad);
-    let Some(ideal_pts): Option<Vec<PixelPoint>> = ideals.iter().cloned().collect() else {
+    let Some(ideal_pts): Option<Vec<Pixel>> = ideals.iter().cloned().collect() else {
         draw_residuals_partial(panel, &click_pts, &ideals)?;
         return Ok(());
     };
@@ -620,20 +610,20 @@ fn draw_reproj_overlay(
     return Ok(());
 }
 
-fn project_unclipped(params: &CameraParams, point: Point3) -> Option<PixelPoint> {
+fn project_unclipped(params: &Params, point: Point3) -> Option<Pixel> {
     let x_cam = params.rotation * point.coords + params.translation;
     if x_cam.z <= 0.05 {
         return None;
     }
     let u = params.fx * (x_cam.x / x_cam.z) + params.cx;
     let v = params.fy * (x_cam.y / x_cam.z) + params.cy;
-    return Some(PixelPoint::new(u, v));
+    return Some(Pixel::new(u, v));
 }
 
 fn draw_residuals_partial(
     panel: &mut Mat,
-    clicks: &[PixelPoint],
-    ideals: &[Option<PixelPoint>],
+    clicks: &[Pixel],
+    ideals: &[Option<Pixel>],
 ) -> Result<()> {
     let residual = Scalar::new(0.0, 255.0, 255.0, 0.0); // yellow
     let ideal_pt = Scalar::new(255.0, 0.0, 255.0, 0.0); // magenta

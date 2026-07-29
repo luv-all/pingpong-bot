@@ -1,69 +1,57 @@
-//! 탁구대 규격 랜드마크 (solvePnP 외참용 SSOT).
-//!
-//! 원점 = 로봇 쪽 꼭짓점(바닥 아님, **테이블 면** `SURFACE_Z`).  
-//! +X 너비, +Y 길이, +Z up — [`crate::constants::table`].
+//! 탁구대 랜드마크 목록·메시.
 
 use crate::Point3;
 use crate::constants::table;
 
+use super::Landmark;
+
 pub use crate::constants::camera::TABLE_LANDMARK_COUNT;
 pub use crate::defaults::calib::MAX_REPROJ_RMSE_PX;
-
-/// 고정 월드 랜드마크 하나.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TableLandmark {
-    /// 짧은 영문 id (로그·UI)
-    pub id: &'static str,
-    /// 클릭 안내 문구 (ASCII — Hershey)
-    pub prompt: &'static str,
-    /// 월드 좌표 [m]
-    pub world: Point3,
-}
 
 /// 팀 규약 8점 (순서 고정 — 클릭도 이 순서).
 ///
 /// 1–4 꼭짓점, 5–7 내부(중앙선 Y=L/4, L/2, 3L/4), 8 로봇쪽 변 중점.
-pub fn table_landmarks() -> [TableLandmark; TABLE_LANDMARK_COUNT] {
+pub fn table_landmarks() -> [Landmark; TABLE_LANDMARK_COUNT] {
     let z = table::SURFACE_Z;
     let w = table::WIDTH_X;
     let l = table::LENGTH_Y;
     return [
-        TableLandmark {
+        Landmark {
             id: "c00",
             prompt: "1/8 robot-left corner (0,0)",
             world: Point3::new(0.0, 0.0, z),
         },
-        TableLandmark {
+        Landmark {
             id: "c10",
             prompt: "2/8 robot-right corner (W,0)",
             world: Point3::new(w, 0.0, z),
         },
-        TableLandmark {
+        Landmark {
             id: "c11",
             prompt: "3/8 far-right corner (W,L)",
             world: Point3::new(w, l, z),
         },
-        TableLandmark {
+        Landmark {
             id: "c01",
             prompt: "4/8 far-left corner (0,L)",
             world: Point3::new(0.0, l, z),
         },
-        TableLandmark {
+        Landmark {
             id: "center",
             prompt: "5/8 table center (W/2,L/2)",
             world: Point3::new(w * 0.5, l * 0.5, z),
         },
-        TableLandmark {
+        Landmark {
             id: "inner_robot",
             prompt: "6/8 inner robot-half (W/2,L/4)",
             world: Point3::new(w * 0.5, l * 0.25, z),
         },
-        TableLandmark {
+        Landmark {
             id: "inner_far",
             prompt: "7/8 inner far-half (W/2,3L/4)",
             world: Point3::new(w * 0.5, l * 0.75, z),
         },
-        TableLandmark {
+        Landmark {
             id: "mid_robot",
             prompt: "8/8 robot-side mid-edge (W/2,0)",
             world: Point3::new(w * 0.5, 0.0, z),

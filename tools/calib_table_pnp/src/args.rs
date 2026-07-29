@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use pingpong_bot::defaults::calibration_pending_path;
 use pingpong_bot::{
-    CamCliArgs, CameraId, DEFAULT_CALIBRATION_PATH, DEFAULT_FOV_Y_DEG, MAX_REPROJ_RMSE_PX,
+    CamCliArgs, DEFAULT_CALIBRATION_PATH, DEFAULT_FOV_Y_DEG, Id, MAX_REPROJ_RMSE_PX,
 };
 
 #[derive(Parser, Debug)]
@@ -50,7 +50,7 @@ pub struct Args {
     pub validate: Option<PathBuf>,
 }
 
-pub fn resolve_camera_id(args: &Args) -> Result<CameraId, String> {
+pub fn resolve_camera_id(args: &Args) -> Result<Id, String> {
     return args.cam.camera_id();
 }
 

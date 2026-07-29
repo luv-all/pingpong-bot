@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use opencv::prelude::*;
 use pingpong_bot::{
-    CamRigConfig, CameraId, CaptureBackend, FrameSource, OpenCvCapture, Preview, PreviewAction,
+    CamRigConfig, CaptureBackend, FrameSource, Id, OpenCvCapture, Preview, PreviewAction,
 };
 
 #[derive(Parser, Debug)]
@@ -93,8 +93,8 @@ fn probe_backend(backend: CaptureBackend, max_index: i32, preview: bool) -> Resu
     let mut found = 0usize;
 
     for index in 0..max_index {
-        // CameraId는 논리 id — 프로브에선 인덱스와 같게 둠 (0..255)
-        let id = CameraId(index.clamp(0, 255) as u8);
+        // Id는 논리 id — 프로브에선 인덱스와 같게 둠 (0..255)
+        let id = Id(index.clamp(0, 255) as u8);
         match OpenCvCapture::from_device_with_backend(id, index, backend) {
             Ok(mut cap) => {
                 let summary = cap.stream_summary();

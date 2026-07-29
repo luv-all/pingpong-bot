@@ -7,17 +7,17 @@ use opencv::core::Mat;
 use opencv::prelude::*;
 use opencv::videoio::{self, VideoCapture, VideoCaptureTrait, VideoCaptureTraitConst};
 
-use crate::{CameraId, PixelPoint};
+use crate::{Id, Pixel};
 
 /// BGR 이미지 한 장 + 메타.
 pub struct Frame {
-    pub camera_id: CameraId,
+    pub camera_id: Id,
     pub image: Mat,
     pub timestamp: Instant,
 }
 
 impl Frame {
-    pub fn new(camera_id: CameraId, image: Mat, timestamp: Instant) -> Self {
+    pub fn new(camera_id: Id, image: Mat, timestamp: Instant) -> Self {
         return Self {
             camera_id,
             image,
@@ -30,12 +30,12 @@ impl Frame {
 pub trait FrameSource: Send {
     fn next_frame(&mut self) -> Option<Frame>;
 
-    fn camera_id(&self) -> CameraId;
+    fn camera_id(&self) -> Id;
 }
 
 /// sim·구 경로: 이미 아는 픽셀 힌트 (검출기 우회).
 pub trait HintSource: Send {
-    fn next_hint(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)>;
+    fn next_hint(&mut self) -> Option<(Id, Option<Pixel>, Instant)>;
 }
 
 /// OpenCV `VideoCapture` API 백엔드.
@@ -142,7 +142,7 @@ pub fn format_stream_mismatch(
 
 /// OpenCV `VideoCapture` (장치 인덱스 또는 경로).
 pub struct OpenCvCapture {
-    camera_id: CameraId,
+    camera_id: Id,
     cap: VideoCapture,
     frame_index: u64,
     /// `Some((epoch, fps))` 이면 `epoch + n/fps` 타임스탬프 (파일 재생).
@@ -152,12 +152,12 @@ pub struct OpenCvCapture {
 
 impl OpenCvCapture {
     /// [`CaptureBackend::recommended`]로 연다 (Windows → MSMF).
-    pub fn from_device(camera_id: CameraId, device: i32) -> Result<Self, String> {
+    pub fn from_device(camera_id: Id, device: i32) -> Result<Self, String> {
         return Self::from_device_with_backend(camera_id, device, CaptureBackend::recommended());
     }
 
     pub fn from_device_with_backend(
-        camera_id: CameraId,
+        camera_id: Id,
         device: i32,
         backend: CaptureBackend,
     ) -> Result<Self, String> {
@@ -186,7 +186,7 @@ impl OpenCvCapture {
         return Ok(out);
     }
 
-    pub fn from_path(camera_id: CameraId, path: &Path) -> Result<Self, String> {
+    pub fn from_path(camera_id: Id, path: &Path) -> Result<Self, String> {
         let path_str = path
             .to_str()
             .ok_or_else(|| format!("non-utf8 path: {}", path.display()))?;
@@ -211,7 +211,7 @@ impl OpenCvCapture {
         });
     }
 
-    pub fn camera_id(&self) -> CameraId {
+    pub fn camera_id(&self) -> Id {
         return self.camera_id;
     }
 
@@ -459,14 +459,14 @@ impl FrameSource for OpenCvCapture {
         return Some(Frame::new(self.camera_id, image, timestamp));
     }
 
-    fn camera_id(&self) -> CameraId {
+    fn camera_id(&self) -> Id {
         return self.camera_id;
     }
 }
 
 /// 디렉터리의 이미지를 정렬된 순서로 한 장씩 낸다 (`detect_*` 실험용).
 pub struct ImageDirSource {
-    camera_id: CameraId,
+    camera_id: Id,
     paths: Vec<PathBuf>,
     index: usize,
     epoch: Instant,
@@ -475,7 +475,7 @@ pub struct ImageDirSource {
 }
 
 impl ImageDirSource {
-    pub fn open(camera_id: CameraId, dir: &Path) -> Result<Self, String> {
+    pub fn open(camera_id: Id, dir: &Path) -> Result<Self, String> {
         let mut paths: Vec<_> = std::fs::read_dir(dir)
             .map_err(|e| format!("read_dir: {e}"))?
             .filter_map(|e| e.ok())
@@ -515,7 +515,7 @@ impl FrameSource for ImageDirSource {
         return Some(Frame::new(self.camera_id, image, timestamp));
     }
 
-    fn camera_id(&self) -> CameraId {
+    fn camera_id(&self) -> Id {
         return self.camera_id;
     }
 }

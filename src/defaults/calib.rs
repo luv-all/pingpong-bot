@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::camera::{
-    CamCliArgs, CamRigConfig, CamStreamArgs, CameraId, CameraRole, CharucoBoardSpec,
-    StereoCamCliArgs, StereoPairCliArgs,
+    BoardSpec, CamCliArgs, CamRigConfig, CamStreamArgs, Id, Role, StereoCamCliArgs,
+    StereoPairCliArgs,
 };
 use crate::constants::camera::arducam_b0332;
 
@@ -73,7 +73,7 @@ pub const RIGHT_CAMERA_ID: u8 = 1;
 pub const MAX_REPROJ_RMSE_PX: f64 = 7.0;
 pub const MIN_CHARUCO_CORNERS: usize = 4;
 
-pub const DEFAULT_STEREO_CAM_ROLES: [CameraRole; 2] = [CameraRole::Left, CameraRole::Right];
+pub const DEFAULT_STEREO_CAM_ROLES: [Role; 2] = [Role::Left, Role::Right];
 
 pub const CHARUCO_SQUARES_X: i32 = 5;
 pub const CHARUCO_SQUARES_Y: i32 = 7;
@@ -99,8 +99,8 @@ impl Default for CamRigConfig {
         return Self {
             left_device: LEFT_DEVICE,
             right_device: RIGHT_DEVICE,
-            left_id: CameraId(LEFT_CAMERA_ID),
-            right_id: CameraId(RIGHT_CAMERA_ID),
+            left_id: Id(LEFT_CAMERA_ID),
+            right_id: Id(RIGHT_CAMERA_ID),
         };
     }
 }
@@ -131,7 +131,7 @@ impl Default for StereoPairCliArgs {
     }
 }
 
-impl Default for CharucoBoardSpec {
+impl Default for BoardSpec {
     fn default() -> Self {
         return Self {
             squares_x: CHARUCO_SQUARES_X,
