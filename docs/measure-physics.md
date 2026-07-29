@@ -64,8 +64,8 @@ v_{\mathrm{out}}\cdot n = (1+e)\,v_r\cdot n - e\,v_{\mathrm{in}}\cdot n
 
 | 파라미터 | 필드 | 지금 값 | 비고 |
 |----------|------|---------|------|
-| 모터 위치 게인 \(k\) | `sim_motor().position_stiffness` | 5000 | **미실측.** MX-64 내부 위치 루프의 Rapier 모사 |
-| 모터 감쇠 \(d\) | `sim_motor().position_damping` | 10 | **미실측.** 임계감쇠 \(2\sqrt{kI}\) 기준으로 잡은 값 |
+| 모터 위치 게인 \(k_i\) | `sim_motor().position_stiffness` | [134920, 64680, 57160, 8784] | **미실측.** MX-64 내부 위치 루프의 Rapier 모사. 관절별 \(k_i=\omega_n^2 I_i\) |
+| 모터 감쇠 \(d_i\) | `sim_motor().position_damping` | [134.9, 64.7, 57.2, 8.78] | **미실측.** 관절별 임계감쇠 \(2\sqrt{k_i I_i}=2\omega_n I_i\) |
 
 물리 계수가 아니라 **제어 루프 모델**이다. 실물에는 이 값이 나가지 않는다
 (Goal Position + Goal Current만 나가고 위치 루프는 서보 펌웨어가 돈다).
@@ -154,19 +154,37 @@ Rapier는 매 스텝 이 토크를 내고 `motor_max_force`(= RNEA \(\tau\))로 
 4. \(M_p\)에서 감쇠비를 얻는다. \(\zeta = \dfrac{-\ln M_p}{\sqrt{\pi^2 + \ln^2 M_p}}\)
    (오버슈트가 없으면 \(\zeta \ge 1\) — 상승시간으로 맞춘다.)
 5. \(t_r\)에서 고유진동수 \(\omega_n \approx 1.8 / t_r\)를 얻는다.
-6. 관절 유효 관성 \(I\)(`control().joint_inertia` ≈ 0.015)로 환산한다.
-   \(k = I\,\omega_n^2\), \(d = 2\zeta\sqrt{kI}\).
-7. `SimMotorParams::default()`에 넣는다.
+6. **관절별** 유효 관성 \(I_i\)로 환산한다 — `robot::dynamics::mass_matrix`의
+   대각 \(M_{ii}\)(하위 링크·라켓의 반사 관성 포함), 상수는
+   `JOINT_EFFECTIVE_INERTIA_4DOF`. \(k_i = I_i\,\omega_n^2\),
+   \(d_i = 2\zeta\sqrt{k_i I_i}\).
+7. `SimMotorParams::default()`에 넣는다 (관절별 `[f64; 4]` 배열).
 
 교차 검증: 같은 계단 입력을 시뮬에 주고 \(t_r\)·\(M_p\)가 실물과 맞는지 본다.
 스윙 중 추종 오차는 `tests/diag_weak_return.rs`의 `diag_motor_tracking`으로
 관절별로 볼 수 있다.
 
-> 현재 값(k=5000, d=10)은 **실측이 아니다.** 이 팔의 관절 유효 관성
-> (링크 0.04~0.08 kg → \(I\approx\)5e-3~1.5e-2)에서 \(2\sqrt{kI}\)가 10~17이라
-> 임계감쇠 하단으로 잡았다. 이전 값 200은 \(\zeta\approx\)12~20의 과감쇠라
-> 라켓이 명령 속도의 28%밖에 못 따라갔다. 실측 전까지 **시뮬 성공률을
-> 하드웨어 준비도로 해석하면 안 된다.**
+> 현재 값(\(\omega_n\)=2000, \(\zeta\)=1 → 위 표)은 **실측이 아니다.**
+> 관절별 반사 관성만 실제 모델(`mass_matrix`)에서 가져왔고, \(\omega_n\)은
+> Rapier 추종 오차 실측으로 고른 값이다.
+>
+> 이전 균일 게인 (k=5000, d=10)은 **링크 하나의 국소 질량**
+> (0.04~0.08 kg → \(I\approx\)5e-3~1.5e-2)만 보고 잡은 값이라, base/shoulder가
+> 하위 링크 전체를 함께 가속해야 한다는 사실(실제 \(I_0\)=3.4e-2)을 놓쳤다.
+> 그래서 관절별 \(\zeta\)가 0.39(base)~1.51(wrist)로 4배 흩어졌다. 그보다
+> 이전 값 200은 \(\zeta\approx\)12~20의 과감쇠라 라켓이 명령 속도의 28%밖에
+> 못 따라갔다.
+>
+> 모터 토크가 `motor_max_force`로 클램프돼 스윙 대부분이 **포화 구간**이라,
+> 임팩트 시점 추종 오차는 \(k\)·\(d\)의 절대 크기가 아니라 비
+> \(d/k = 2\zeta/\omega_n\)에 \(\dot q\)를 곱한 값으로 붙는다 — 가장 빠른
+> 관절이 가장 뒤처진다. `607790e`가 임팩트 속도 부담을 base로 옮긴 뒤
+> base가 가장 빨라져서 그 desync가 눈에 보이게 됐다.
+>
+> 실측 전까지 **시뮬 성공률을 하드웨어 준비도로 해석하면 안 된다.**
+>
+> `control().joint_inertia`(0.015, `robot/state.rs`)는 아직 관절 공통 스칼라
+> 근사로 남아 있다 — 같은 방식으로 관절별화할 후속 과제.
 
 ---
 

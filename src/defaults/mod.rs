@@ -75,7 +75,9 @@ pub use sim::{
     RANDOM_SHOT_SPEED_MAX_MPS, RANDOM_SHOT_SPEED_MIN_MPS, RANDOM_SHOT_TARGET_PADDING_M,
     RANDOM_SHOT_TOPSPIN_MAX, RANDOM_SHOT_TOPSPIN_MIN,
 };
-pub use sim_motor::SimMotorParams;
+pub use sim_motor::{
+    JOINT_EFFECTIVE_INERTIA_4DOF, SIM_MOTOR_BANDWIDTH_RAD_S, SIM_MOTOR_JOINTS, SimMotorParams,
+};
 pub use vision::{
     MOTION_DIFF_THRESH, MOTION_WEIGHT, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, camera_params_for,
     colormask_for, detector_for,

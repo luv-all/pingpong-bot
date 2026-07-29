@@ -124,6 +124,41 @@ pub struct SimWorld {
     bang_bang_worker: super::bang_bang_worker::BangBangWorker,
 }
 
+/// commit 전 coarse 추종에서 회전 관절을 예측 임팩트 자세 쪽으로 **얼마나**
+/// 미리 옮길지 (0 = 레일만, 1 = 완전 선추종). 레일은 이 값과 무관하게 항상
+/// 선추종한다.
+///
+/// 두 회귀 사이의 트레이드오프 손잡이다:
+/// - **1.0(완전 선추종)**: commit 시점 잔여 Δq가 0에 가까워 quintic이 잘
+///   풀리지만, 임팩트 직전 구간이 flick으로 붕괴해 사용자가 보고한 "칠 때는
+///   마지막 관절만 움직이고 나머지는 친 뒤에 따라온다" 증상이 나온다.
+/// - **0.0(레일만)**: 회전 관절 Δq가 통째로 commit 창(0.125~0.175 s)에 남아
+///   quintic이 못 들어온다 —
+///   `.omc/research/known-regressions-realistic-joint-speed.md` §1의 회귀 재현.
+///
+/// 실측 스윕 ([`diag_swing_commit_rate_across_shot_grid`] 67샷 격자 +
+/// [`diag_pre_vs_post_contact_commanded_travel`] 기본 샷 접촉 전 명령 이동량):
+///
+/// | fraction | 커밋률(67샷) | yaw pre | elbow pre | wrist pre |
+/// |----------|-------------|---------|-----------|-----------|
+/// | 1.00     | 91%         | 0.52°   | 9.10°     |  4.55°    |
+/// | 0.85     | 91%         | 3.02°   | 9.32°     | 11.97°    |
+/// | **0.80** | **91%**     | **3.91°** | **9.78°** | **14.60°** |
+/// | 0.75     | 91%         | 4.80°   | 10.30°    | 17.27°    |
+/// | 0.70     | 90%         | 1.98°   | 14.61°    | 19.74°    |
+/// | 0.50     | 50%         | 7.31°   |  8.03°    |  6.89°    |
+/// | 0.00     | 20%         | — (커밋 없음) | — | — |
+///
+/// 0.80을 고른 이유: 커밋률이 완전 선추종(1.0)과 **동일한 91%** 인 구간
+/// (0.75~1.0)의 한가운데라 절벽(0.70에서 열화 시작, 0.50에서 반토막)까지
+/// 여유가 있으면서, base 선회량을 0.52° → 3.91°로 **7.5배** 되살린다.
+/// 관절별 pre/post 비도 0.028/0.261/0.079(들쭉날쭉)에서
+/// 0.213/0.281/0.253(고름)으로 모인다 — 팔 전체가 임팩트에 동기해 움직인다.
+///
+/// **이 상수를 만질 때는 추종 오차가 아니라 커밋률을 먼저 본다.** 낮출수록
+/// 증상은 좋아 보이지만 어느 지점에서 로봇이 아예 안 친다.
+const COARSE_TRACK_JOINT_FRACTION: f64 = 0.80;
+
 impl SimWorld {
     /// 탁구대·슈터·주차된 공·로봇 라켓을 배치한다.
     ///
@@ -595,22 +630,28 @@ impl SimWorld {
             if let Some(prediction) = predictions.first() {
                 self.set_debug_prediction(Some(prediction.clone()));
             }
-            if let Some(pose) = swing::Planner::plan_coarse_track(&self.arm, &predictions) {
-                // 레일(느리고 이동거리 긴 lateral 축)과 **팔 관절**을 모두 예측
-                // 임팩트 쪽으로 미리 옮긴다. 실제 이동은 rate-limited·범위
-                // 클램프된 추종 루프(`step_toward_targets`)가 하므로
-                // `max_joint_speed`/`rail.max_speed`·충돌 안전을 자동 상속한다.
-                //
-                // 예전에는 여기서 레일만 옮기고 관절은 일부러 두었다 — "미리
-                // 펴 두면 commit 스윙의 windup이 줄어 리턴이 약해진다"는 이유.
-                // 그 대가가 너무 컸다: 임팩트 자세까지의 관절공간 이동거리
-                // Δq 전부가 commit 창(0.125~0.175s)으로 떠넘겨졌고, 재보정된
-                // 관절속도(~2.88 rad/s)로는 quintic이 그 안에 절대 못 들어와
-                // **스윙이 아예 시작되지 않았다**(실측: 5,152 랠리 커밋 0회,
-                // `.omc/research/known-regressions-realistic-joint-speed.md` §1).
-                // 약한 리턴이 스윙 못 하는 것보다 낫다.
-                self.robot.set_rail_target(pose.rail_x);
-                self.robot.set_targets(pose.joints.clone());
+            // 레일은 항상 선추종한다 — 레일 x는 IK를 안
+            // 풀고 `rail.clamp_x` 순수 기하로만 내므로 IK가 수렴 못 해도
+            // 레일 추종이 죽지 않는다(전체 포즈 IK에 묶여 있던 예전 동작보다
+            // 견고하다).
+            let coarse = swing::Planner::plan_coarse_track_targets(&self.arm, &predictions);
+            if let Some((rail_x, _)) = coarse.as_ref() {
+                self.robot.set_rail_target(*rail_x);
+            }
+            // 회전 관절은 예측 임팩트 자세 쪽으로 **부분만** 미리 옮긴다
+            // ([`COARSE_TRACK_JOINT_FRACTION`]). 실제 이동은 rate-limited·범위
+            // 클램프된 추종 루프가 하므로 `max_joint_speed`·충돌 안전을 자동
+            // 상속한다.
+            if COARSE_TRACK_JOINT_FRACTION > 0.0
+                && let Some((_, Some(joints))) = coarse
+            {
+                let rest = &self.arm.default_joints;
+                let mut blended = joints;
+                for (i, value) in blended.values.iter_mut().enumerate() {
+                    let from = rest.values.get(i).copied().unwrap_or(*value);
+                    *value = from + (*value - from) * COARSE_TRACK_JOINT_FRACTION;
+                }
+                self.robot.set_targets(blended);
             }
             return;
         }
@@ -1031,6 +1072,30 @@ impl SimWorld {
     /// 네트 **실격** — 네트에 맞은 경우 (위로 클리어하면 접촉 없음).
     pub fn ball_net_fault(&self) -> bool {
         return self.ball_intersects_net();
+    }
+
+    /// 공-라켓 실제 접촉 여부 (Rapier `ContactPair` 실측 — 계획된
+    /// `impact_time_secs`와는 무관하다, 실제 조인트 자세가 그 순간 어디에
+    /// 있든 라켓 형상이 공을 쓸고 지나가면 바로 발동한다). `swing_bench
+    /// --sim-verify`가 "진짜 임팩트 프레임"을 찾는 데 쓴다 —
+    /// `ground_truth_rally_contacts_racket_clears_net_and_bounces_near_center`
+    /// 테스트의 인라인 콜라이더 탐색과 같은 방식.
+    pub fn ball_racket_contact_active(&self) -> bool {
+        let collider_for_body = |body_handle: RigidBodyHandle| {
+            self.collider_set.iter().find_map(|(handle, collider)| {
+                (collider.parent() == Some(body_handle)).then_some(handle)
+            })
+        };
+        let Some(ball_collider) = collider_for_body(self.ball_handle) else {
+            return false;
+        };
+        let Some(racket_collider) = collider_for_body(self.racket_handle) else {
+            return false;
+        };
+        return self
+            .narrow_phase
+            .contact_pair(ball_collider, racket_collider)
+            .is_some_and(ContactPair::has_any_active_contact);
     }
 
     /// 슈터 본체 위치·회전 (kiss3d 동기화용).
@@ -2611,5 +2676,426 @@ mod tests {
         let link = mbodies.link(link_id).expect("link");
         let revolute = link.joint.data.as_revolute().expect("revolute");
         return revolute.motor().map(|m| m.max_force).unwrap_or(0.0);
+    }
+
+    // ---- 실제 접촉 프레임 관절 추종 (임팩트 타이밍 동기) ----
+
+    fn collider_of(world: &SimWorld, body: RigidBodyHandle) -> ColliderHandle {
+        return world
+            .collider_set
+            .iter()
+            .find_map(|(handle, collider)| (collider.parent() == Some(body)).then_some(handle))
+            .expect("collider");
+    }
+
+    /// 한 스텝의 관절 명령 vs 실측.
+    struct TrackFrame {
+        swinging: bool,
+        measured: Vec<f64>,
+        commanded: Vec<f64>,
+    }
+
+    /// 실제 Rapier 공–라켓 접촉이 일어난 스윙 한 발의 요약.
+    struct ContactTracking {
+        /// 접촉 **직전** 스텝의 관절별 |q_measured − q_commanded| [rad].
+        ///
+        /// 접촉 프레임 자체가 아니라 그 한 스텝 앞을 본다 — 접촉 프레임에서는
+        /// 공 충격 반작용이 이미 관절을 밀어낸 뒤라(손목에서 0.2 mrad →
+        /// 6.5 mrad로 튄다) 추종 오차와 충격 변형이 섞인다. "팔이 명령
+        /// 자세에 도착한 상태로 공을 만났는가"를 재려면 충격 직전이 맞다.
+        err_before_contact: Vec<f64>,
+        /// 커밋 스윙 중에 접촉했는지 (스윙 없이 스친 공은 판정 대상 아님).
+        swinging_at_contact: bool,
+    }
+
+    /// 샷 한 발을 실제 공–라켓 접촉까지 굴리고 접촉 직전 추종 오차를 낸다.
+    ///
+    /// 계획의 `impact_time_secs`가 아니라 **진짜 `ContactPair`** 를 기준으로
+    /// 삼는다 — 접촉은 실제로 시뮬된 라켓 자세에서 일어나므로 계획된 임팩트
+    /// 시각과 몇 ms 어긋날 수 있다(실측: 접촉 t=0.495 vs 계획 임팩트
+    /// t=0.500).
+    fn track_shot_to_contact(settings: &shooter::Settings) -> Option<ContactTracking> {
+        let mut world = SimWorld::new(test_robot());
+        world.set_use_ground_truth(true);
+        world.shoot_ball(settings);
+        let ball_collider = collider_of(&world, world.ball_handle);
+        let racket_collider = collider_of(&world, world.racket_handle);
+
+        let mut previous: Option<TrackFrame> = None;
+        for _ in 0..3_000 {
+            world.step(1.0 / 1000.0, None);
+            let frame = TrackFrame {
+                swinging: world.robot().is_swinging(),
+                measured: world.robot().joints().values.clone(),
+                commanded: world.robot().targets().values.clone(),
+            };
+            let contact = world
+                .narrow_phase
+                .contact_pair(ball_collider, racket_collider)
+                .is_some_and(ContactPair::has_any_active_contact);
+            if contact {
+                let before = previous.as_ref().unwrap_or(&frame);
+                return Some(ContactTracking {
+                    err_before_contact: before
+                        .measured
+                        .iter()
+                        .zip(before.commanded.iter())
+                        .map(|(q, target)| (q - target).abs())
+                        .collect(),
+                    swinging_at_contact: frame.swinging && before.swinging,
+                });
+            }
+            previous = Some(frame);
+        }
+        return None;
+    }
+
+    /// [진단] 랜덤 샷 속도 하한이 "로봇에 닿는 공"인지 검증한다.
+    ///
+    /// `RANDOM_SHOT_SPEED_MIN_MPS`가 너무 낮으면 공이 로봇 앞에서 굴러 멈춰
+    /// hit plane(가장 먼 y=0.35)에 아예 도달하지 못한다 — 그러면
+    /// `predict_impact`가 100% `None`이라 로봇이 커밋도 포기도 못 한다.
+    /// 좌우/yaw 코너일수록 비행거리가 길어 더 빠른 속도가 필요하므로
+    /// **격자 전체의 최악값**으로 하한을 잡아야 한다.
+    #[test]
+    #[ignore = "순수 진단(속도 하한 근거). 실행: cargo test --release --lib diag_random_shot_speed_reachability -- --ignored --nocapture"]
+    fn diag_random_shot_speed_reachability() {
+        // 가장 먼 hit plane. 이보다 min-y가 크면 공이 로봇에 못 닿는다.
+        let farthest_plane_y = SimWorld::new(test_robot())
+            .intercept
+            .hit_planes()
+            .iter()
+            .map(|p| p.y)
+            .fold(f64::MIN, f64::max);
+        println!("가장 먼 hit plane y = {farthest_plane_y:.3}");
+        println!(
+            "{:>6} {:>10} {:>12} {:>10}",
+            "speed", "도달/전체", "worst_min_y", "margin"
+        );
+        for speed_x10 in 55..=68 {
+            let speed = f64::from(speed_x10) / 10.0;
+            let mut reached = 0;
+            let mut total = 0;
+            let mut worst_min_y = f64::MIN;
+            for lateral in [-0.5_f64, -0.25, 0.0, 0.25, 0.5] {
+                let (yaw_min, yaw_max) = shooter::Settings::yaw_range_for_lateral_deg(lateral);
+                for frac in [0.0_f64, 0.25, 0.5, 0.75, 1.0] {
+                    let yaw = yaw_min + (yaw_max - yaw_min) * frac;
+                    let settings = shooter::Settings {
+                        lateral_offset_m: lateral,
+                        yaw_deg: yaw,
+                        speed_mps: speed,
+                        ..shooter::Settings::default()
+                    };
+                    let mut world = SimWorld::new(test_robot());
+                    world.set_use_ground_truth(false); // 순수 탄도 (팔 개입 없음)
+                    world.shoot_ball(&settings);
+                    let mut min_y = f64::MAX;
+                    for _ in 0..6_000 {
+                        world.step(1.0 / 1000.0, None);
+                        min_y = min_y.min(f64::from(world.ball_position().y));
+                        if world.ball_state != crate::ball::State::InFlight {
+                            break;
+                        }
+                    }
+                    total += 1;
+                    if min_y <= farthest_plane_y {
+                        reached += 1;
+                    }
+                    worst_min_y = worst_min_y.max(min_y);
+                }
+            }
+            println!(
+                "{:>6.1} {:>10} {:>12.4} {:>10.4}",
+                speed,
+                format!("{reached}/{total}"),
+                worst_min_y,
+                farthest_plane_y - worst_min_y,
+            );
+        }
+    }
+
+    /// [진단] 원래 사용자 증상의 직접 측정: 관절별 **명령각** 이동량을
+    /// 실제 공–라켓 접촉 전/후로 나눠 잰다.
+    ///
+    /// 증상은 "치는 순간엔 마지막 관절만 움직이고 base/shoulder는 타격 뒤에야
+    /// 따라온다"였다. 그 말은 곧 `pre`(스윙 커밋~접촉)가 `post`(접촉~팔로스루
+    /// 끝)에 비해 터무니없이 작다는 뜻이다. `pre/post` 비가 관절마다 고를수록
+    /// 팔 전체가 임팩트에 동기해 움직인다.
+    #[test]
+    #[ignore = "순수 진단: 증상 계량용. 실행: cargo test --lib diag_pre_vs_post_contact_commanded_travel -- --ignored --nocapture"]
+    fn diag_pre_vs_post_contact_commanded_travel() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+        let defaults = shooter::Settings::default();
+        let mut shots: Vec<(String, shooter::Settings)> =
+            vec![("default".into(), defaults.clone())];
+        for k in 0..4 {
+            shots.push((format!("rand{k}"), defaults.randomized_aim(&mut rng)));
+        }
+        for (label, settings) in &shots {
+            println!("== {label} ==");
+            pre_post_travel_for_shot(settings);
+        }
+    }
+
+    fn pre_post_travel_for_shot(settings: &shooter::Settings) {
+        let names = ["yaw", "shoulder", "elbow", "wrist"];
+        let mut world = SimWorld::new(test_robot());
+        world.set_use_ground_truth(true);
+        world.shoot_ball(settings);
+        let ball_collider = collider_of(&world, world.ball_handle);
+        let racket_collider = collider_of(&world, world.racket_handle);
+
+        let n = world.arm.joint_count();
+        let mut committed = false;
+        let mut contacted = false;
+        let (mut pre_lo, mut pre_hi) = (vec![f64::MAX; n], vec![f64::MIN; n]);
+        let (mut post_lo, mut post_hi) = (vec![f64::MAX; n], vec![f64::MIN; n]);
+        let (mut commit_t, mut contact_t) = (None, None);
+
+        for _ in 0..3_000 {
+            world.step(1.0 / 1000.0, None);
+            let commanded = world.robot().targets().values.clone();
+            let swinging = world.robot().is_swinging();
+            if swinging && !committed {
+                committed = true;
+                commit_t = Some(world.sim_time);
+            }
+            let contact = world
+                .narrow_phase
+                .contact_pair(ball_collider, racket_collider)
+                .is_some_and(ContactPair::has_any_active_contact);
+            if contact && !contacted {
+                contacted = true;
+                contact_t = Some(world.sim_time);
+            }
+            if committed && !contacted {
+                for i in 0..n {
+                    pre_lo[i] = pre_lo[i].min(commanded[i]);
+                    pre_hi[i] = pre_hi[i].max(commanded[i]);
+                }
+            }
+            if contacted {
+                for i in 0..n {
+                    post_lo[i] = post_lo[i].min(commanded[i]);
+                    post_hi[i] = post_hi[i].max(commanded[i]);
+                }
+            }
+            if contacted && !swinging {
+                break;
+            }
+        }
+
+        println!(
+            "commit_t={:?} contact_t={:?}",
+            commit_t.map(|v: f64| (v * 1e4).round() / 1e4),
+            contact_t.map(|v: f64| (v * 1e4).round() / 1e4)
+        );
+        println!(
+            "{:9} {:>12} {:>12} {:>12} {:>10}",
+            "joint", "pre[rad]", "pre[deg]", "post[rad]", "pre/post"
+        );
+        for i in 0..n {
+            let span = |lo: f64, hi: f64| if lo > hi { 0.0 } else { hi - lo };
+            let pre = span(pre_lo[i], pre_hi[i]);
+            let post = span(post_lo[i], post_hi[i]);
+            println!(
+                "{:9} {:12.4} {:12.2} {:12.4} {:>10}",
+                names.get(i).copied().unwrap_or("?"),
+                pre,
+                pre.to_degrees(),
+                post,
+                if post > 1e-9 {
+                    format!("{:.3}", pre / post)
+                } else {
+                    "--".to_string()
+                },
+            );
+        }
+    }
+
+    /// [진단] 커밋률 회귀 가드의 계량판 —
+    /// `.omc/research/known-regressions-realistic-joint-speed.md` §1의
+    /// "5,152 랠리 커밋 0회" 시나리오를 축소 재현한다.
+    ///
+    /// coarse 추종에서 회전 관절 선추종을 줄이면 임팩트까지의 Δq가 commit
+    /// 창으로 넘어가 quintic이 못 들어올 수 있다. 샷 격자를 돌려 **커밋률**을
+    /// 센다 — 이 경로를 만질 때 추종 오차만 보고 커밋률을 안 보면 "안 치는
+    /// 로봇"을 만들고도 통과한다.
+    #[test]
+    #[ignore = "순수 진단(느림: 샷 격자 전체 시뮬). 실행: COARSE_GRID_ROUNDS=60 cargo test --release --lib diag_swing_commit_rate_across_shot_grid -- --ignored --nocapture"]
+    fn diag_swing_commit_rate_across_shot_grid() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let defaults = shooter::Settings::default();
+
+        let mut shots: Vec<(String, shooter::Settings)> =
+            vec![("default".into(), defaults.clone())];
+        for speed in [5.8_f64, 6.0, 6.5, 7.0, 8.0, 9.0] {
+            shots.push((
+                format!("speed{speed:.1}"),
+                shooter::Settings {
+                    speed_mps: speed,
+                    ..defaults.clone()
+                },
+            ));
+        }
+        let rounds: usize = std::env::var("COARSE_GRID_ROUNDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(13);
+        for k in 0..rounds {
+            shots.push((format!("rand{k}"), defaults.randomized_aim(&mut rng)));
+        }
+
+        let (mut committed, mut abandoned, mut neither, mut contacted) = (0, 0, 0, 0);
+        let total = shots.len();
+        for (label, settings) in &shots {
+            let mut world = SimWorld::new(test_robot());
+            world.set_use_ground_truth(true);
+            world.shoot_ball(settings);
+            let ball_collider = collider_of(&world, world.ball_handle);
+            let racket_collider = collider_of(&world, world.racket_handle);
+            let (mut did_swing, mut did_contact) = (false, false);
+            for _ in 0..4_000 {
+                world.step(1.0 / 1000.0, None);
+                if world.robot().is_swinging() || world.swing_committed {
+                    did_swing = true;
+                }
+                if world
+                    .narrow_phase
+                    .contact_pair(ball_collider, racket_collider)
+                    .is_some_and(ContactPair::has_any_active_contact)
+                {
+                    did_contact = true;
+                }
+                if world.ball_state == crate::ball::State::Parked && !world.robot().is_swinging() {
+                    break;
+                }
+            }
+            if did_contact {
+                contacted += 1;
+            }
+            if did_swing {
+                committed += 1;
+            } else if world.swing_abandoned {
+                abandoned += 1;
+                println!("  [{label}] 포기(abandon) — 커밋 없음");
+            } else {
+                neither += 1;
+                println!("  [{label}] **결정 없음** — 커밋도 포기도 안 함");
+            }
+        }
+        println!(
+            "샷 {total}개: 커밋={committed} ({:.0}%) 포기={abandoned} 무결정={neither} 접촉={contacted}",
+            100.0 * committed as f64 / total as f64
+        );
+    }
+
+    /// 임팩트 타이밍 동기화 회귀: 실제 공–라켓 접촉 직전에 **모든** 관절이
+    /// 명령 자세에 도착해 있어야 한다.
+    ///
+    /// 사용자 증상은 "공을 맞히는 순간 마지막 관절(손목)만 명령 자세에
+    /// 들어와 있고 base/shoulder/elbow는 타격 뒤에야 따라온다"였다. 이
+    /// 테스트는 그 증상의 **시뮬 추종 성분**을 잠근다 — 관절별로 명령각
+    /// 도착 오차가 [`TOL_RAD`] 이내여야 하고, 특정 관절만 뒤처지는 걸
+    /// 허용하지 않는다.
+    ///
+    /// 왜 절대 상한인가: "base/shoulder/elbow가 wrist와 같은 대역 안"이라는
+    /// 상대 판정은 **옛 균일 게인에서도 통과한다** — 옛 코드에서도 접촉
+    /// 프레임 오차는 wrist(6.2 mrad)가 가장 크고 base/shoulder/elbow가
+    /// 오히려 작았다(공 충격이 wrist에 실리기 때문). 그래서 관절별 절대
+    /// 상한으로 잠근다.
+    ///
+    /// 임계값 근거 — 관절별 게인(`defaults::sim_motor`) 도입 전/후 실측
+    /// (접촉 직전 |q−q_cmd|, mrad):
+    ///
+    /// | 샷 | 관절 | 옛 균일 (5000, 10) | 관절별 게인 |
+    /// |----|------|-------------------|-------------|
+    /// | default | elbow    | **1.810** | 0.417 |
+    /// | rand0   | shoulder | **1.249** | 0.173 |
+    /// | rand2   | shoulder | **1.803** | 0.407 |
+    /// | rand3   | shoulder | **1.924** | 0.414 |
+    /// | rand2   | elbow    | **1.910** | 0.431 |
+    /// | speed8  | yaw      | **1.744** | 0.217 |
+    /// | speed12 | yaw      | **1.781** | 0.248 |
+    ///
+    /// 옛 게인의 최댓값은 1.924 mrad, 관절별 게인의 최댓값은 0.431 mrad —
+    /// 1.0 mrad 상한은 옛 코드에서 **모든 커밋 샷이 실패**하고 현재 코드는
+    /// 2.3배 여유로 통과한다. 게인을 옛 균일값으로 되돌리면 이 테스트가
+    /// 잡는다.
+    #[test]
+    fn every_joint_reaches_commanded_pose_at_real_ball_contact() {
+        /// 접촉 직전 관절별 명령각 도착 오차 상한 [rad].
+        const TOL_RAD: f64 = 1.0e-3;
+        /// 실제로 스윙 중 접촉이 잡혀야 하는 최소 샷 수 — 접촉이 사라져서
+        /// 판정이 공허하게 통과하는 걸 막는 가드.
+        const MIN_JUDGED_SHOTS: usize = 5;
+
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+        let defaults = shooter::Settings::default();
+        let names = ["yaw", "shoulder", "elbow", "wrist"];
+
+        // 기본 샷 + 더 빠른 공(코스 추종 시간이 짧아 커밋 창이 촉박한 경우)
+        // + 조준 랜덤화 샷.
+        let mut shots: Vec<(String, shooter::Settings)> =
+            vec![("default".to_string(), defaults.clone())];
+        for speed in [8.0_f64, 12.0] {
+            shots.push((
+                format!("speed{speed:.0}"),
+                shooter::Settings {
+                    speed_mps: speed,
+                    ..defaults.clone()
+                },
+            ));
+        }
+        for k in 0..4 {
+            shots.push((format!("rand{k}"), defaults.randomized_aim(&mut rng)));
+        }
+
+        let mut judged = 0_usize;
+        let mut worst = 0.0_f64;
+        let mut failures = Vec::new();
+        for (label, settings) in &shots {
+            let Some(tracking) = track_shot_to_contact(settings) else {
+                continue;
+            };
+            // 스윙을 커밋하지 않은 채 스친 공은 추종 판정 대상이 아니다
+            // (그건 "스윙을 아예 안 한다"는 별개 문제 — 다른 테스트 담당).
+            if !tracking.swinging_at_contact {
+                continue;
+            }
+            judged += 1;
+            for (joint, &err) in tracking.err_before_contact.iter().enumerate() {
+                worst = worst.max(err);
+                if err > TOL_RAD {
+                    failures.push(format!(
+                        "{label}/{}: {:.3} mrad",
+                        names.get(joint).copied().unwrap_or("?"),
+                        err * 1e3
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            judged >= MIN_JUDGED_SHOTS,
+            "스윙 중 실제 접촉이 잡힌 샷이 {judged}개뿐 — 판정이 공허하다 \
+             (접촉/커밋 자체가 깨졌는지 확인)"
+        );
+        assert!(
+            failures.is_empty(),
+            "접촉 직전 명령 자세에 도착하지 못한 관절 (상한 {:.1} mrad): {}",
+            TOL_RAD * 1e3,
+            failures.join(", ")
+        );
+        assert!(
+            worst <= TOL_RAD,
+            "worst={:.3} mrad > {:.1} mrad",
+            worst * 1e3,
+            TOL_RAD * 1e3
+        );
     }
 }

@@ -61,6 +61,13 @@ impl Planner {
         return physics::plan_coarse_track(arm, predictions);
     }
 
+    pub fn plan_coarse_track_targets(
+        arm: &Arm,
+        predictions: &[Prediction],
+    ) -> Option<(f64, Option<robot::Joints>)> {
+        return physics::plan_coarse_track_targets(arm, predictions);
+    }
+
     pub fn return_to_center(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
         return physics::plan_return_to_center(arm, start);
     }

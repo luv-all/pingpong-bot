@@ -38,7 +38,10 @@ use pingpong_bot::defaults;
 use pingpong_bot::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
 use pingpong_bot::planner::Impact;
 use pingpong_bot::robot::{self, Arm, Joints, MountPreset, RobotBuilder};
+use pingpong_bot::shooter;
+use pingpong_bot::sim::SimWorld;
 use pingpong_bot::swing;
+use serde::Serialize;
 
 use args::Args;
 use report::Report;
@@ -58,8 +61,40 @@ const RACKET_SPEED_RATIO_TOLERANCE: f64 = 0.15;
 /// 라켓 속도 방향 허용오차 [deg].
 const RACKET_DIRECTION_TOLERANCE_DEG: f64 = 15.0;
 
+
+/// `--sim-verify` 대기 예산 — 스윙 커밋까지. 기본 슈터 설정의 비행시간(<1s)
+/// 보다 넉넉하게 잡아 스윙이 늦게 커밋돼도 놓치지 않는다.
+const SIM_VERIFY_MAX_WAIT_STEPS: usize = 4_000;
+/// `--sim-verify` 대기 예산 — 커밋 이후 실제 접촉까지. `impact_time_secs`는
+/// 보통 이보다 훨씬 짧지만(수백 ms), PD 지연으로 늦게 맞는 경우까지 커버.
+const SIM_VERIFY_MAX_CONTACT_STEPS: usize = 3_000;
+
+/// `--sim-verify` 관절별 결과 한 줄.
+#[derive(Debug, Serialize)]
+struct ContactVerifyJointRow {
+    joint: usize,
+    tracking_error_at_contact_rad: Option<f64>,
+    tracking_error_at_planned_impact_rad: Option<f64>,
+    peak_commanded_speed_rad_s: f64,
+}
+
+/// `--sim-verify` 결과.
+#[derive(Debug, Serialize)]
+struct ContactVerifyReport {
+    swing_committed: bool,
+    contact_detected: bool,
+    planned_impact_time_secs: f64,
+    contact_elapsed_secs: Option<f64>,
+    contact_vs_planned_delta_secs: Option<f64>,
+    joints: Vec<ContactVerifyJointRow>,
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.sim_verify {
+        return run_sim_verify(args.dt, args.json);
+    }
 
     let scenario = match &args.scenario {
         Some(path) => {
@@ -470,4 +505,133 @@ fn print_human(robot_id: &str, report: &Report) {
         report.peak_rail_speed_m_s,
         report.peak_rail_speed_ratio_to_cap * 100.0
     );
+}
+
+/// `--sim-verify`: 기본 4-dof 로봇으로 기본 슈터 설정 스윙 하나를 실제
+/// Rapier `SimWorld`(ground-truth 자동 스윙 경로, `plan_best_swing`)로 진짜
+/// ball-paddle 접촉까지 물리 스텝을 돌려, 계획된 quintic 궤적 대비 관절별
+/// PD 추종 오차를 실측한다.
+///
+/// 위 `simulate`(기본 벤치 경로)는 `step_racket_guidance`의 이상적인
+/// ZEM/ZEV 폐루프를 순수 토크로 적분할 뿐 Rapier PD 모터 모델을 전혀 거치지
+/// 않는다 — 그래서 PD 추종 지연(base/shoulder가 실제 임팩트 순간 명령각에
+/// 못 미치는 문제)을 볼 수 없다. 이 모드가 그 blind spot을 메운다.
+fn run_sim_verify(dt: f64, json: bool) -> Result<()> {
+    let robot = defaults::primitive_4dof().map_err(|e| anyhow!("기본 4-dof 로봇 빌드 실패: {e}"))?;
+    let mut world = SimWorld::new(robot);
+    world.set_use_ground_truth(true);
+    world.shoot_ball(&shooter::Settings::default());
+
+    let mut committed_trajectory = None;
+    for _ in 0..SIM_VERIFY_MAX_WAIT_STEPS {
+        world.step(dt, None);
+        if world.robot().is_swinging()
+            && let Some(trajectory) = world.robot().active_trajectory()
+        {
+            committed_trajectory = Some(trajectory.clone());
+            break;
+        }
+    }
+    let Some(trajectory) = committed_trajectory else {
+        bail!(
+            "sim-verify: {SIM_VERIFY_MAX_WAIT_STEPS}스텝 안에 스윙이 커밋되지 않음 \
+             (기본 슈터 설정이 바뀌었거나 자동 스윙 로직에 회귀가 있을 수 있음)"
+        );
+    };
+
+    let n = trajectory.start.values.len();
+    let mut contact_frame: Option<(f64, Vec<f64>, Vec<f64>)> = None;
+    let mut planned_frame: Option<(f64, Vec<f64>, Vec<f64>)> = None;
+    let mut elapsed = 0.0;
+
+    for _ in 0..SIM_VERIFY_MAX_CONTACT_STEPS {
+        world.step(dt, None);
+        elapsed += dt;
+        let actual = world.robot().joints().values.clone();
+        let commanded = trajectory.sample_at(elapsed).values;
+
+        if planned_frame.is_none() && elapsed >= trajectory.impact_time_secs {
+            planned_frame = Some((elapsed, actual.clone(), commanded.clone()));
+        }
+        if contact_frame.is_none() && world.ball_racket_contact_active() {
+            contact_frame = Some((elapsed, actual, commanded));
+        }
+        if contact_frame.is_some() && planned_frame.is_some() {
+            break;
+        }
+    }
+
+    let peak_commanded_speed = trajectory.peak_joint_speeds();
+    let tracking_error = |frame: &Option<(f64, Vec<f64>, Vec<f64>)>, joint: usize| {
+        frame
+            .as_ref()
+            .map(|(_, actual, commanded)| (actual[joint] - commanded[joint]).abs())
+    };
+
+    let report = ContactVerifyReport {
+        swing_committed: true,
+        contact_detected: contact_frame.is_some(),
+        planned_impact_time_secs: trajectory.impact_time_secs,
+        contact_elapsed_secs: contact_frame.as_ref().map(|(t, ..)| *t),
+        contact_vs_planned_delta_secs: contact_frame
+            .as_ref()
+            .map(|(t, ..)| *t - trajectory.impact_time_secs),
+        joints: (0..n)
+            .map(|joint| ContactVerifyJointRow {
+                joint,
+                tracking_error_at_contact_rad: tracking_error(&contact_frame, joint),
+                tracking_error_at_planned_impact_rad: tracking_error(&planned_frame, joint),
+                peak_commanded_speed_rad_s: peak_commanded_speed.get(joint).copied().unwrap_or(0.0),
+            })
+            .collect(),
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_sim_verify_human(&report);
+    }
+    return Ok(());
+}
+
+fn print_sim_verify_human(report: &ContactVerifyReport) {
+    println!("swing-bench --sim-verify — 실제 Rapier PD 추종 vs 계획된 quintic 궤적");
+    println!("  swing committed: {}", report.swing_committed);
+    println!(
+        "  planned impact_time_secs: {:.4}s",
+        report.planned_impact_time_secs
+    );
+    match (
+        report.contact_elapsed_secs,
+        report.contact_vs_planned_delta_secs,
+    ) {
+        (Some(t), Some(delta)) => {
+            let timing = if delta > 1e-4 {
+                "계획보다 늦음"
+            } else if delta < -1e-4 {
+                "계획보다 이름"
+            } else {
+                "계획과 거의 동시"
+            };
+            println!("  actual contact at: {t:.4}s ({delta:+.4}s, {timing})");
+        }
+        _ => println!(
+            "  [주의] 접촉 대기창({SIM_VERIFY_MAX_CONTACT_STEPS}스텝) 안에 실제 \
+             ball-racket ContactPair를 감지하지 못함"
+        ),
+    }
+    println!("  --- per-joint tracking error |q_actual - q_commanded| (real Rapier PD sim) ---");
+    for row in &report.joints {
+        let at_contact = row
+            .tracking_error_at_contact_rad
+            .map_or_else(|| "n/a".to_string(), |v| format!("{v:.5} rad"));
+        let at_planned = row
+            .tracking_error_at_planned_impact_rad
+            .map_or_else(|| "n/a".to_string(), |v| format!("{v:.5} rad"));
+        println!(
+            "    joint {}: at real contact={at_contact}, at planned impact={at_planned}, \
+             peak commanded speed={:.3} rad/s",
+            row.joint, row.peak_commanded_speed_rad_s
+        );
+    }
 }

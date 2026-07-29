@@ -49,4 +49,10 @@ pub struct Args {
     /// 사람이 읽는 표 대신 JSON으로 출력.
     #[arg(long)]
     pub json: bool,
+
+    /// [느린 검증 모드] Rapier `SimWorld`로 기본 스윙 한 번을 ball-paddle
+    /// 접촉까지 물리 스텝으로 돌려 quintic 대비 PD 추종 지연을 실측한다.
+    /// 이 플래그가 있으면 다른 시나리오 인자는 무시한다.
+    #[arg(long)]
+    pub sim_verify: bool,
 }
