@@ -79,8 +79,8 @@ pub use sim_motor::{
     JOINT_EFFECTIVE_INERTIA_4DOF, SIM_MOTOR_BANDWIDTH_RAD_S, SIM_MOTOR_JOINTS, SimMotorParams,
 };
 pub use vision::{
-    MOTION_DIFF_THRESH, MOTION_WEIGHT, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, camera_params_for,
-    colormask_for, detector_for,
+    FLIGHT_BAND_M, MOTION_DIFF_THRESH, MOTION_WEIGHT, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM,
+    camera_params_for, colormask_for, detector_for,
 };
 
 #[cfg(test)]

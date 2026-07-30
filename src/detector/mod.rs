@@ -3,7 +3,7 @@
 //! - [`appearance`] — colormask / contour / `.then` 체인
 //! - [`scoring`] — candidate · scorer
 //! - [`motion`] — `MotionPrior`
-//! - [`spatial`] — floor mask · 면적 밴드
+//! - [`spatial`] — floor mask · 테이블 복도 · 면적 밴드
 //! - [`builder`] — [`Detector`] 조립
 //!
 //! **조립 SSOT:** [`crate::defaults::detector_for`].
@@ -30,8 +30,8 @@ pub use roi_params::RoiParams;
 pub use scoring::candidate::{self as candidate, Candidate};
 pub use scoring::params::ScorerParams;
 pub use scoring::scorer::{self as scorer, Scorer};
-pub use spatial::FloorEdgeMask;
 pub(crate) use spatial::scorer_params_from_calib;
+pub use spatial::{FloorEdgeMask, SpatialMask, TableCorridorMask};
 pub use track::RoiTrack;
 pub(crate) use undistort::undistort_frame;
 

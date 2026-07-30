@@ -4,13 +4,13 @@ use anyhow::Result;
 
 use crate::camera;
 use crate::camera::Frame;
-use crate::detector::spatial::FloorEdgeMask;
+use crate::detector::spatial::SpatialMask;
 use crate::detector::{RoiTrack, ScorerParams};
 
 use super::builder::DetectorBuilder;
 
 pub struct Detector {
-    pub mask: FloorEdgeMask,
+    pub mask: SpatialMask,
     pub roi: RoiTrack,
     /// 면적 밴드 HUD용 스냅샷.
     pub scorer: ScorerParams,

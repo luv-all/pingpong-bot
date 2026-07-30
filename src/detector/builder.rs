@@ -3,8 +3,10 @@
 //! ```ignore
 //! let color = ColormaskDetector::new(params);
 //! let edges = ContourDetector::from(&scorer);
+//! let floor = FloorEdgeMask::from_params(cam_id, &cam)?;
+//! let corridor = TableCorridorMask::from_params(&cam, FLIGHT_BAND_M)?;
 //! Detector::builder()
-//!     .mask(FloorEdgeMask::from_params(cam_id, &cam)?)
+//!     .mask(SpatialMask::with_corridor(floor, corridor)?)
 //!     .then(color)
 //!     .then(edges)
 //!     .scorer(Scorer::from(&scorer).with_motion_weight(0.5))
@@ -14,14 +16,14 @@
 
 use anyhow::{Result, bail};
 
-use crate::detector::spatial::FloorEdgeMask;
+use crate::detector::spatial::SpatialMask;
 use crate::detector::{AppearanceChain, AppearanceLayer, RoiParams, Scorer, ScorerParams, track};
 
 use super::detector::Detector;
 
 #[derive(Default)]
 pub struct DetectorBuilder {
-    mask: Option<FloorEdgeMask>,
+    mask: Option<SpatialMask>,
     appearance: AppearanceChain,
     fuse_scorer: Option<Scorer>,
     scorer_params: Option<ScorerParams>,
@@ -29,8 +31,9 @@ pub struct DetectorBuilder {
 }
 
 impl DetectorBuilder {
-    pub fn mask(mut self, mask: FloorEdgeMask) -> Self {
-        self.mask = Some(mask);
+    /// 공간 keep. [`FloorEdgeMask`] 하나만 줘도 `From`으로 받는다.
+    pub fn mask(mut self, mask: impl Into<SpatialMask>) -> Self {
+        self.mask = Some(mask.into());
         return self;
     }
 

@@ -7,9 +7,12 @@ use crate::camera::Calibration;
 use crate::defaults::calib::{calibration_path, colormask_path};
 use crate::detector::{
     ColormaskDetector, ColormaskParams, ContourDetector, Detector, FloorEdgeMask, RoiParams,
-    Scorer, ScorerParams, load_colormask_set,
+    Scorer, ScorerParams, SpatialMask, TableCorridorMask, load_colormask_set,
 };
 
+/// 테이블 상판 위 공 비행 높이 keep [m] — 복도 마스크 프리즘 높이.
+/// 공이 상판 1 m 위로 가지 않는다는 전제. 배경 컷 편의로 낮추지 않는다.
+pub const FLIGHT_BAND_M: f64 = 1.0;
 /// scorer motion 가중.
 pub const MOTION_WEIGHT: f64 = 0.5;
 /// MotionPrior absdiff 이진화 임계.
@@ -80,9 +83,11 @@ fn assemble(
 ) -> Result<Detector> {
     let circ = ScorerParams::default().min_circularity;
     let scorer = ScorerParams::from_calib(cam, circ)?;
+    let floor = FloorEdgeMask::from_params(camera_id, cam)?;
+    let corridor = TableCorridorMask::from_params(cam, FLIGHT_BAND_M)?;
 
     return Detector::builder()
-        .mask(FloorEdgeMask::from_params(camera_id, cam)?)
+        .mask(SpatialMask::with_corridor(floor, corridor)?)
         .then(ColormaskDetector::new(color))
         .then(ContourDetector::from(&scorer))
         .scorer(Scorer::from(&scorer).with_motion_weight(MOTION_WEIGHT))
@@ -90,7 +95,7 @@ fn assemble(
         .build();
 }
 
-/// 본선: mask → color → contour → scorer + ROI track.
+/// 본선: spatial keep(floor ∧ corridor) → color → contour → scorer + ROI track.
 /// 캘리브·colormask SSOT 필수.
 pub fn detector_for(camera_id: camera::Id) -> Result<Detector> {
     let cam = camera_params_for(camera_id)?;

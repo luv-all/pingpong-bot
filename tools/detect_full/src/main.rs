@@ -1,6 +1,6 @@
-//! Detector 본선 디버그 — floor-edge 마스크 + adaptive ROI + 누적 파이프라인 패널.
+//! Detector 본선 디버그 — 공간 keep(floor ∧ corridor) + adaptive ROI + 누적 파이프라인 패널.
 //!
-//! 스텝: `0 raw → 1 floor-mask → 2 colormask → 3 +contour → 4 roi`
+//! 스텝: `0 raw → 1 spatial-keep → 2 colormask → 3 +contour → 4 roi`
 //! track 중이면 2·3은 ROI 크롭에서만 계산(본선과 동일).
 //! 키: `r` ROI · `[` `]` radius_scale · `,` `.` motion_scale · `-` `=` padding · `p` paste · `q`/ESC
 
@@ -196,7 +196,7 @@ fn main() -> Result<()> {
         .then(ContourDetector::from(&scorer_params));
 
     println!(
-        "{detector} (cam{} raw → mask → color → contour → ROI) area=[{:.0},{:.0}]",
+        "{detector} (cam{} raw → spatial → color → contour → ROI) area=[{:.0},{:.0}]",
         cam_id.0, scorer_params.min_area_px, scorer_params.max_area_px
     );
     println!("keys: r ROI  [ ] radius_scale  , . motion_scale  - = padding  p paste  q/ESC quit");
@@ -222,7 +222,7 @@ fn main() -> Result<()> {
         let masked_img = detector
             .mask
             .apply_bgr(&frame.image)
-            .context("floor-mask apply")?;
+            .context("spatial keep apply")?;
         let masked_frame = Frame {
             camera_id: frame.camera_id,
             image: masked_img
@@ -245,9 +245,11 @@ fn main() -> Result<()> {
             .try_clone()
             .map_err(|e| anyhow::anyhow!("raw clone: {e}"))?;
         let mut mask_panel = masked_img;
-        detector
-            .mask
-            .draw_edge_line(&mut mask_panel, Scalar::new(255.0, 255.0, 0.0, 0.0), 2)?;
+        detector.mask.draw_overlay(
+            &mut mask_panel,
+            Scalar::new(255.0, 255.0, 0.0, 0.0), // cyan: floor cut line
+            Scalar::new(255.0, 0.0, 255.0, 0.0), // magenta: corridor hull
+        )?;
 
         if let Some(r) = detector.roi.last_roi {
             let cyan = Scalar::new(255.0, 255.0, 0.0, 0.0);
@@ -343,13 +345,11 @@ fn main() -> Result<()> {
         let appearance_pixel = step_px.or(pixel);
         let colormask_nonzero = nonzero_bgr(&cm_panel);
         let contour_nonzero = nonzero_bgr(&ct_panel);
-        let keep_nonzero = opencv::core::count_non_zero(&detector.mask.keep).unwrap_or(0);
-        let total_pixels = detector
-            .mask
-            .width
-            .saturating_mul(detector.mask.height)
-            .max(1);
-        let cut_percent = 100.0 * f64::from(total_pixels - keep_nonzero) / f64::from(total_pixels);
+        let keep_percent = detector.mask.keep_percent();
+        let corridor_hud = match &detector.mask.corridor {
+            Some(c) => format!("corridor band={:.2}m  margin={:.3}m", c.band_m, c.margin_m),
+            None => "corridor off".to_string(),
+        };
 
         // BGR: white / cyan / green / orange / yellow
         let white = Scalar::new(255.0, 255.0, 255.0, 0.0);
@@ -377,16 +377,16 @@ fn main() -> Result<()> {
         draw_panel_hud(
             &mut mask_panel,
             &[
-                "floor-edge keep".to_string(),
+                "spatial keep".to_string(),
                 format!(
-                    "cut_x={:.3}m  margin={:.3}m",
-                    detector.mask.cut_x, detector.mask.margin_m
+                    "floor cut_x={:.3}m  margin={:.3}m",
+                    detector.mask.floor.cut_x, detector.mask.floor.margin_m
                 ),
+                corridor_hud,
                 format!(
-                    "edge y=({:.0},{:.0})",
-                    detector.mask.line_y_at_left, detector.mask.line_y_at_right
+                    "keep={keep_percent:.0}%  (cut={:.0}%)",
+                    100.0 - keep_percent
                 ),
-                format!("cut={cut_percent:.0}%  keep={keep_nonzero}/{total_pixels}"),
             ],
             cyan,
         )?;
@@ -436,7 +436,7 @@ fn main() -> Result<()> {
         )?;
 
         Preview::draw_cam_label(&mut raw, "0 raw", white)?;
-        Preview::draw_cam_label(&mut mask_panel, "1 floor-mask", cyan)?;
+        Preview::draw_cam_label(&mut mask_panel, "1 spatial-keep", cyan)?;
         Preview::draw_cam_label(&mut cm_panel, "2 colormask", green)?;
         Preview::draw_cam_label(&mut ct_panel, "3 +contour", orange)?;
         Preview::draw_cam_label(&mut roi_panel, roi_label, yellow)?;

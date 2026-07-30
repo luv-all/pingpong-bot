@@ -6,11 +6,13 @@
 
 ## 파이프라인 패널
 
-| 0 raw | 1 floor-mask | 2 colormask | 3 +contour | 4 roi |
-|-------|--------------|-------------|------------|-------|
+| 0 raw | 1 spatial-keep | 2 colormask | 3 +contour | 4 roi |
+|-------|----------------|-------------|------------|-------|
 
 - **0**: 원본 — hit rate / mode HUD
-- **1**: 테이블 옆변을 `MAX_REPROJ_RMSE_PX`만큼 바깥(`x=-δ` / `x=W+δ`)으로 민 투영으로 바닥 제거 — cut_x / margin / keep
+- **1**: 공간 keep = **floor-edge 컷 ∧ 테이블 복도** — floor cut_x / margin, corridor band / margin, keep%
+  - floor-edge: 테이블 옆변을 `MAX_REPROJ_RMSE_PX`만큼 바깥(`x=-δ` / `x=W+δ`)으로 민 투영으로 바닥 제거 (시안 선)
+  - corridor: 상판 XY + `FLIGHT_BAND_M` 프리즘의 투영 convex hull (마젠타 외곽선)
 - **2→3**: appearance (color→contour) — nonzero / area / circularity
 - **4**: ROI 박스 · radius_scale / motion_scale / padding
 - track 중이면 2·3도 ROI 크롭에서 계산
