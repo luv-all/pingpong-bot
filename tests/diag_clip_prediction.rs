@@ -326,6 +326,27 @@ fn diag_clip_prediction_error() {
         );
     }
 
+    // **보정도(calibration)** — 필터가 말하는 σ가 실제 오차를 제대로 예측하는가.
+    //
+    // σ는 공분산에서 나오는데, 공분산은 필터가 **가정한** 노이즈 모델(R·Q)의 결과다.
+    // R을 실제보다 작게 잡으면 필터가 과신해 σ가 실제 오차보다 작아지고, σ 게이트가
+    // 부정확한 예측까지 통과시킨다. 비율이 1 근처여야 게이트를 믿을 수 있다.
+    let ratios: Vec<f64> = errors
+        .iter()
+        .filter(|(lead, _, sigma)| (0.20..=0.60).contains(lead) && *sigma > 1e-6)
+        .map(|(_, error, sigma)| error / sigma)
+        .collect();
+    if !ratios.is_empty() {
+        let mean = ratios.iter().sum::<f64>() / ratios.len() as f64;
+        let worst = ratios.iter().copied().fold(0.0_f64, f64::max);
+        println!(
+            "보정도 오차/σ: 평균 {:.2} · 최대 {:.2} ({}회) — 1 근처여야 σ를 믿을 수 있다",
+            mean,
+            worst,
+            ratios.len()
+        );
+    }
+
     // σ 게이트를 걸면 커밋 창 오차가 어떻게 되는지 — 임계를 데이터로 정하려는 것.
     for threshold in [0.30_f64, 0.20, 0.15, 0.10] {
         let kept: Vec<&(f64, f64, f64)> = errors
