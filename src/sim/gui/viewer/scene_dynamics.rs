@@ -24,8 +24,8 @@ use crate::defaults::sim::RANDOM_SHOT_TARGET_PADDING_M;
 use crate::error::SwingPlanError;
 use crate::robot::urdf::{UrdfLinkVisual, UrdfModel};
 use crate::sim::gui::ball;
-use crate::sim::gui::shooter;
 use crate::sim::gui::debug::CommitPhase;
+use crate::sim::gui::shooter;
 use crate::sim::physics::world::SimWorld;
 use tracing::info;
 

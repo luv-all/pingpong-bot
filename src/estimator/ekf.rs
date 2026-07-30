@@ -469,12 +469,14 @@ mod tests {
             if outcome == GateOutcome::Reset {
                 resets += 1;
             }
-            let (np, nv, _) = estimator::Kinematics::step(pos, vel, Vector3::zeros(), 0.008, &physics);
+            let (np, nv, _) =
+                estimator::Kinematics::step(pos, vel, Vector3::zeros(), 0.008, &physics);
             pos = np;
             vel = nv;
             // 테이블 반발 — 위치는 이어지고 vz만 뒤집힌다
             if pos.z <= table::SURFACE_Z && vel.z < 0.0 {
-                let (bv, _) = estimator::Kinematics::bounce_on_table(vel, Vector3::zeros(), &physics);
+                let (bv, _) =
+                    estimator::Kinematics::bounce_on_table(vel, Vector3::zeros(), &physics);
                 vel = bv;
             }
         }

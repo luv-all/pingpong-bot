@@ -347,7 +347,10 @@ mod tests {
         // pad 0이면 프레임 안으로만
         let b0 = pixel_bounds(640, 480, 0);
         assert_eq!(moved_point(px(0.0, 0.0), -5.0, -5.0, b0), px(0.0, 0.0));
-        assert_eq!(moved_point(px(639.0, 479.0), 5.0, 5.0, b0), px(639.0, 479.0));
+        assert_eq!(
+            moved_point(px(639.0, 479.0), 5.0, 5.0, b0),
+            px(639.0, 479.0)
+        );
     }
 
     #[test]
@@ -451,7 +454,10 @@ mod tests {
         );
         for (i, p) in out.clicks.iter().enumerate() {
             let d = dist(*p, anchor[i]);
-            assert!(d <= radius + 1e-6, "point {i} escaped radius: {d} > {radius}");
+            assert!(
+                d <= radius + 1e-6,
+                "point {i} escaped radius: {d} > {radius}"
+            );
         }
         assert!(out.solves <= MAX_SOLVES, "solves {} over cap", out.solves);
     }

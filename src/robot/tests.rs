@@ -212,16 +212,25 @@ fn diag_wp4a_elbow_up_sign_convention() {
     let base = crate::defaults::READY_JOINTS_4DOF;
 
     println!("READY_JOINTS_4DOF = {base:?}");
-    let base_joints = Joints { values: base.to_vec() };
-    let base_pose = arm.forward_kinematics_with_rail(rail_x, &base_joints).expect("FK base");
+    let base_joints = Joints {
+        values: base.to_vec(),
+    };
+    let base_pose = arm
+        .forward_kinematics_with_rail(rail_x, &base_joints)
+        .expect("FK base");
     let base_chain = arm.chain_points(rail_x, &base_joints).expect("chain base");
     println!("base racket z = {:.4}", base_pose.position.coords.z);
-    println!("base chain points (mount..ee): {:?}", base_chain.iter().map(|p| p.z).collect::<Vec<_>>());
+    println!(
+        "base chain points (mount..ee): {:?}",
+        base_chain.iter().map(|p| p.z).collect::<Vec<_>>()
+    );
 
     for delta in [0.2_f64, -0.2] {
         let mut perturbed = base;
         perturbed[2] += delta;
-        let joints = Joints { values: perturbed.to_vec() };
+        let joints = Joints {
+            values: perturbed.to_vec(),
+        };
         let Some(pose) = arm.forward_kinematics_with_rail(rail_x, &joints) else {
             println!("q2={delta:+.2}: FK 실패");
             continue;
@@ -236,7 +245,10 @@ fn diag_wp4a_elbow_up_sign_convention() {
     }
 
     if let Some(limit) = arm.joint_limit(2) {
-        println!("q2(elbow) 관절한계: min={:.4} max={:.4}", limit.min, limit.max);
+        println!(
+            "q2(elbow) 관절한계: min={:.4} max={:.4}",
+            limit.min, limit.max
+        );
     } else {
         println!("q2(elbow) 관절한계: continuous(무제한)");
     }

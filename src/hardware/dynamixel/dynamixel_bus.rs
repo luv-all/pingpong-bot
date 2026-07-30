@@ -85,7 +85,8 @@ impl DynamixelBus {
     pub fn last_operating_mode(&self) -> Option<u8> {
         return match &self.backend {
             BusBackend::DryRun {
-                last_operating_mode, ..
+                last_operating_mode,
+                ..
             } => *last_operating_mode,
             #[cfg(feature = "real")]
             BusBackend::Real(_) => None,
@@ -107,7 +108,8 @@ impl DynamixelBus {
     pub fn last_current_limits(&self) -> Option<&[(u8, u16)]> {
         return match &self.backend {
             BusBackend::DryRun {
-                last_current_limits, ..
+                last_current_limits,
+                ..
             } => Some(last_current_limits.as_slice()),
             #[cfg(feature = "real")]
             BusBackend::Real(_) => None,
@@ -278,7 +280,8 @@ impl DynamixelBus {
         let mode = self.mapping.config.operating_mode;
         match &mut self.backend {
             BusBackend::DryRun {
-                last_operating_mode, ..
+                last_operating_mode,
+                ..
             } => {
                 *last_operating_mode = Some(mode);
             }
@@ -334,7 +337,8 @@ impl DynamixelBus {
         }
         match &mut self.backend {
             BusBackend::DryRun {
-                last_current_limits, ..
+                last_current_limits,
+                ..
             } => {
                 *last_current_limits = limits;
             }

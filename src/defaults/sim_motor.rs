@@ -172,7 +172,6 @@ mod tests {
         SimMotorParams::default().validate().expect("sim_motor");
     }
 
-
     /// 하드코딩한 [`JOINT_EFFECTIVE_INERTIA_4DOF`]가 실제 팔의 질량 행렬
     /// 대각과 여전히 맞는지 — 링크 관성/CAD가 바뀌면 게인도 다시 뽑아야 한다.
     #[test]

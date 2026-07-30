@@ -167,5 +167,8 @@ fn diag_table_penetration_live_positive_control() {
     .expect("테이블 아래 지점 IK");
     let depth = table_penetration(arm, rail_x, &bad_joints);
     println!("positive control depth = {depth}");
-    assert!(depth > 0.0, "계측 함수가 알려진 관통 자세를 못 잡음: depth={depth}");
+    assert!(
+        depth > 0.0,
+        "계측 함수가 알려진 관통 자세를 못 잡음: depth={depth}"
+    );
 }

@@ -633,8 +633,8 @@ mod tests {
 
         let accel = vec![120.0, -80.0, 45.0, -200.0];
         let rigid = required_joint_torques(&arm, &joints, &velocities, &accel);
-        let with_rotor =
-            required_torque_with_rotor(&arm, &joints.values, &velocities, &accel).expect("길이 일치");
+        let with_rotor = required_torque_with_rotor(&arm, &joints.values, &velocities, &accel)
+            .expect("길이 일치");
         for i in 0..n {
             let expected = rigid[i] + arm.joint_reflected_inertias[i] * accel[i];
             assert!(
@@ -653,7 +653,10 @@ mod tests {
         // (수치 SSOT 검증은 `defaults::sim_motor`의
         // `inertia_matches_mass_matrix_diagonal`이 따로 한다.)
         let arm = competition_arm();
-        assert!(arm.joint_reflected_inertias[0] > 1e-3, "반사관성이 채워진 팔");
+        assert!(
+            arm.joint_reflected_inertias[0] > 1e-3,
+            "반사관성이 채워진 팔"
+        );
         let m = mass_matrix(&arm, &arm.default_joints);
         let n = arm.joint_count();
         let zero = vec![0.0; n];

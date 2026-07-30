@@ -152,8 +152,7 @@ pub fn run(args: &Args) -> Result<()> {
             m.sync(display_scale, canvas_w, canvas_h);
             if frozen {
                 for (x, y) in m.drain_clicks() {
-                    let target =
-                        camera::Pixel::new(f64::from(x - pad), f64::from(y - pad));
+                    let target = camera::Pixel::new(f64::from(x - pad), f64::from(y - pad));
                     if clicks.len() < TABLE_LANDMARK_COUNT {
                         clicks.push(target);
                         clicks_changed = true;
@@ -168,8 +167,7 @@ pub fn run(args: &Args) -> Result<()> {
                             target.y,
                             marks[clicks.len() - 1].id
                         );
-                    } else if let Some(i) =
-                        adjust::nearest_click(&clicks, target, adjust::SNAP_PX)
+                    } else if let Some(i) = adjust::nearest_click(&clicks, target, adjust::SNAP_PX)
                     {
                         // 기존 점 근처 클릭 = 잡기. 이동은 방향키/Enter로.
                         adj.select(i);
@@ -267,21 +265,13 @@ pub fn run(args: &Args) -> Result<()> {
                 if s.accepted {
                     overlay_world_grid(&mut panel, &frame_img, &s.params, grid, pad, img_w, img_h)?;
                 }
-                overlay::draw_reproj_overlay(
-                    &mut panel, &clicks, &marks, &s.params, pad, adj.sel,
-                )?;
+                overlay::draw_reproj_overlay(&mut panel, &clicks, &marks, &s.params, pad, adj.sel)?;
             } else if clicks.is_empty() {
                 if let Some(ref b) = baseline {
                     overlay_world_grid(&mut panel, &frame_img, b, grid, pad, img_w, img_h)?;
                 }
             }
-            overlay::draw_anchor_bound(
-                &mut panel,
-                &adj.anchor,
-                pad,
-                adj.sel,
-                args.refine_radius,
-            )?;
+            overlay::draw_anchor_bound(&mut panel, &adj.anchor, pad, adj.sel, args.refine_radius)?;
             overlay::draw_clicks(&mut panel, &clicks, &marks, pad, adj.sel)?;
 
             if let Some(ref s) = solved {
@@ -305,7 +295,11 @@ pub fn run(args: &Args) -> Result<()> {
                         &lines,
                         Scalar::new(0.0, 255.0, 0.0, 0.0),
                     )?;
-                    Preview::draw_help_lines(&mut panel, &adjust_help(), Scalar::new(0.0, 255.0, 80.0, 0.0))?;
+                    Preview::draw_help_lines(
+                        &mut panel,
+                        &adjust_help(),
+                        Scalar::new(0.0, 255.0, 80.0, 0.0),
+                    )?;
                 } else {
                     let lines = [
                         format!(
@@ -323,7 +317,11 @@ pub fn run(args: &Args) -> Result<()> {
                         &lines,
                         Scalar::new(0.0, 128.0, 255.0, 0.0),
                     )?;
-                    Preview::draw_help_lines(&mut panel, &adjust_help(), Scalar::new(0.0, 255.0, 80.0, 0.0))?;
+                    Preview::draw_help_lines(
+                        &mut panel,
+                        &adjust_help(),
+                        Scalar::new(0.0, 255.0, 80.0, 0.0),
+                    )?;
                 }
             } else if clicks.is_empty() && baseline.is_some() {
                 let lines = [
@@ -427,10 +425,9 @@ pub fn run(args: &Args) -> Result<()> {
 
                 if frozen {
                     // 대문자 HJKL을 arrow_delta보다 먼저 — arrow_delta는 대소문자를 같게 본다.
-                    if let (Some(i), Some((dx, dy))) = (
-                        adj.sel.filter(|_| adjusting),
-                        coarse_delta(key),
-                    ) {
+                    if let (Some(i), Some((dx, dy))) =
+                        (adj.sel.filter(|_| adjusting), coarse_delta(key))
+                    {
                         if shift_selected(
                             &mut clicks,
                             &mut adj,
@@ -543,11 +540,7 @@ pub fn run(args: &Args) -> Result<()> {
                 } else if key == i32::from(b'u') || key == i32::from(b'U') {
                     if let Some(snap) = adj.undo() {
                         clicks = snap.clicks;
-                        println!(
-                            "undo — {} left, fov_y={:.1}",
-                            adj.history_len(),
-                            adj.fov_y
-                        );
+                        println!("undo — {} left, fov_y={:.1}", adj.history_len(), adj.fov_y);
                         resolve_now(
                             cam_id,
                             freeze_img.as_ref().expect("freeze_img"),
@@ -561,9 +554,7 @@ pub fn run(args: &Args) -> Result<()> {
                     } else {
                         println!("undo — 되돌릴 조정 없음");
                     }
-                } else if adjusting
-                    && (key == i32::from(b'f') || key == i32::from(b'F'))
-                {
+                } else if adjusting && (key == i32::from(b'f') || key == i32::from(b'F')) {
                     let delta = if key == i32::from(b'F') {
                         adjust::FOV_STEP_DEG
                     } else {
@@ -908,8 +899,14 @@ mod tests {
     #[test]
     fn arrow_key_codes_do_not_alias_letter_shortcuts() {
         let arrows = [
-            0xF700, 0xF701, 0xF702, 0xF703, // Cocoa
-            0xFF51, 0xFF52, 0xFF53, 0xFF54, // X11
+            0xF700,
+            0xF701,
+            0xF702,
+            0xF703, // Cocoa
+            0xFF51,
+            0xFF52,
+            0xFF53,
+            0xFF54, // X11
             0x25 << 16,
             0x26 << 16,
             0x27 << 16,

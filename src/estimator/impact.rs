@@ -303,7 +303,11 @@ mod tests {
     #[test]
     fn rally_return_min_effort_grazes_net_exactly() {
         for (x, y, z) in [
-            (table::WIDTH_X * 0.5, table::DEFAULT_HIT_PLANE_Y, table::SURFACE_Z + 0.08),
+            (
+                table::WIDTH_X * 0.5,
+                table::DEFAULT_HIT_PLANE_Y,
+                table::SURFACE_Z + 0.08,
+            ),
             (table::WIDTH_X * 0.2, 0.10, table::SURFACE_Z + 0.15),
             (table::WIDTH_X * 0.8, 0.30, table::SURFACE_Z + 0.30),
         ] {

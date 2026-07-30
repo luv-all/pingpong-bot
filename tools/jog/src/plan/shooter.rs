@@ -86,7 +86,10 @@ mod tests {
                 .iter()
                 .any(|p| motion_physics::in_swing_commit_window(p.time_to_impact_secs)),
             "커밋 창 안 후보가 하나도 없다: {:?}",
-            preds.iter().map(|p| p.time_to_impact_secs).collect::<Vec<_>>()
+            preds
+                .iter()
+                .map(|p| p.time_to_impact_secs)
+                .collect::<Vec<_>>()
         );
     }
 

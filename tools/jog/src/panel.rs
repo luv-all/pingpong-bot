@@ -204,12 +204,7 @@ fn draw_motion(
     }
 }
 
-fn draw_swing(
-    ui: &mut egui::Ui,
-    app: &JogApp,
-    plan: Option<&SwingPlan>,
-    plan_error: Option<&str>,
-) {
+fn draw_swing(ui: &mut egui::Ui, app: &JogApp, plan: Option<&SwingPlan>, plan_error: Option<&str>) {
     ui.label(
         RichText::new("타점·라켓 각도·임팩트 속도는 시뮬과 같은 planner가 고릅니다")
             .weak()
@@ -235,7 +230,10 @@ fn draw_swing(
     let p = plan.prediction.impact_position.coords;
     let v = plan.prediction.incoming_velocity;
     ui.label(format!("타점 = ({:.3}, {:.3}, {:.3}) m", p.x, p.y, p.z));
-    ui.label(format!("입사 속도 = ({:.2}, {:.2}, {:.2}) m/s", v.x, v.y, v.z));
+    ui.label(format!(
+        "입사 속도 = ({:.2}, {:.2}, {:.2}) m/s",
+        v.x, v.y, v.z
+    ));
     ui.label(format!(
         "커밋 후 리드 시간 = {:.3} s",
         plan.prediction.time_to_impact_secs

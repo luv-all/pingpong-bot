@@ -13,8 +13,7 @@ use nalgebra::Vector3;
 use pingpong_bot::defaults;
 use pingpong_bot::robot::motion::InterceptWindow;
 use pingpong_bot::sim::eval::{
-    LaunchParams as EvalLaunchParams, LiveObserver as LiveShotObserver, Mode as EvalMode,
-    Protocol,
+    LaunchParams as EvalLaunchParams, LiveObserver as LiveShotObserver, Mode as EvalMode, Protocol,
 };
 use pingpong_bot::sim::launch::{Layout as ShooterLayout, Settings as BallShooterSettings};
 use pingpong_bot::sim::physics::SimWorld;
@@ -171,7 +170,8 @@ fn eval_grid(window: InterceptWindow) -> GridStats {
     let mut rng = rand::rngs::StdRng::seed_from_u64(EVAL_SEED);
     let mut stats = GridStats::default();
     for (zone, index_in_zone) in Protocol::shot_schedule(EvalMode::Alternating) {
-        let settings = Protocol::settings_for_zone_shot_jittered(&launch, zone, index_in_zone, &mut rng);
+        let settings =
+            Protocol::settings_for_zone_shot_jittered(&launch, zone, index_in_zone, &mut rng);
         stats.push(run_shot(window, &settings));
     }
     return stats;
@@ -395,7 +395,8 @@ fn diag_wp1_selected_plane_distribution() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(EVAL_SEED);
         let mut impact_ys: Vec<f64> = Vec::new();
         for (zone, index_in_zone) in Protocol::shot_schedule(EvalMode::Alternating) {
-            let settings = Protocol::settings_for_zone_shot_jittered(&launch, zone, index_in_zone, &mut rng);
+            let settings =
+                Protocol::settings_for_zone_shot_jittered(&launch, zone, index_in_zone, &mut rng);
             let robot = defaults::robot().expect("robot");
             let mut world = SimWorld::with_physics(robot, defaults::PhysicsParams::default());
             world.set_use_ground_truth(true);

@@ -217,7 +217,8 @@ impl Settings {
     }
 
     fn sample_randomized_params(&self, rng: &mut impl Rng) -> Self {
-        let yaw_deg = RANDOM_SHOT_FIXED_YAW_DEGS[rng.gen_range(0..RANDOM_SHOT_FIXED_YAW_DEGS.len())];
+        let yaw_deg =
+            RANDOM_SHOT_FIXED_YAW_DEGS[rng.gen_range(0..RANDOM_SHOT_FIXED_YAW_DEGS.len())];
         let mut shot = self.with_fixed_random_geometry(yaw_deg);
         shot.speed_mps = rng.gen_range(RANDOM_SHOT_SPEED_MIN_MPS..=RANDOM_SHOT_SPEED_MAX_MPS);
         shot.topspin_rad_s = rng.gen_range(RANDOM_SHOT_TOPSPIN_MIN..=RANDOM_SHOT_TOPSPIN_MAX);
@@ -268,7 +269,8 @@ impl Settings {
         }
         // 최후: 고정 기하 + 이산 yaw, 속도·스핀은 Rapier 통과가 확인된 기본값.
         let defaults = Self::default();
-        let yaw_deg = RANDOM_SHOT_FIXED_YAW_DEGS[rng.gen_range(0..RANDOM_SHOT_FIXED_YAW_DEGS.len())];
+        let yaw_deg =
+            RANDOM_SHOT_FIXED_YAW_DEGS[rng.gen_range(0..RANDOM_SHOT_FIXED_YAW_DEGS.len())];
         let mut shot = self.with_fixed_random_geometry(yaw_deg);
         shot.topspin_rad_s = defaults.topspin_rad_s;
         shot.sidespin_rad_s = defaults.sidespin_rad_s;
@@ -574,14 +576,14 @@ mod tests {
                 muzzle.x
             );
             assert!(
-                (f64::from(muzzle.y) - (table::LENGTH_Y - RANDOM_SHOT_FIXED_MUZZLE_INSET_Y_M)).abs()
+                (f64::from(muzzle.y) - (table::LENGTH_Y - RANDOM_SHOT_FIXED_MUZZLE_INSET_Y_M))
+                    .abs()
                     < 1e-4,
                 "y={}",
                 muzzle.y
             );
             assert!(
-                (f64::from(muzzle.z)
-                    - (table::SURFACE_Z + RANDOM_SHOT_FIXED_MUZZLE_HEIGHT_Z_M))
+                (f64::from(muzzle.z) - (table::SURFACE_Z + RANDOM_SHOT_FIXED_MUZZLE_HEIGHT_Z_M))
                     .abs()
                     < 1e-4,
                 "z={}",

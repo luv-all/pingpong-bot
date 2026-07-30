@@ -868,8 +868,7 @@ impl Arm {
         } else {
             (0.0, 0)
         };
-        let mut joint_velocities: Vec<f64> =
-            velocities.iter().skip(offset).copied().collect();
+        let mut joint_velocities: Vec<f64> = velocities.iter().skip(offset).copied().collect();
 
         // WP11(2026-07-30, 사용자 제안) — 레일은 그대로 두고, 팔 관절
         // 4개만의 3×4 부분 자코비안 자체운동(self-motion, 널스페이스
@@ -951,7 +950,11 @@ fn minimize_peak_via_self_motion(q0: &[f64], null_vec: &[f64]) -> (f64, Vec<f64>
         }
     }
     let s = 0.5 * (lo + hi);
-    let improved: Vec<f64> = q0.iter().zip(null_vec.iter()).map(|(&q, &n)| q + s * n).collect();
+    let improved: Vec<f64> = q0
+        .iter()
+        .zip(null_vec.iter())
+        .map(|(&q, &n)| q + s * n)
+        .collect();
     return (peak(s), improved);
 }
 

@@ -6,9 +6,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use tracing::{debug, error};
 #[cfg(not(all(windows, feature = "real")))]
 use tracing::warn;
+use tracing::{debug, error};
 
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::AxlRail;
@@ -295,9 +295,8 @@ mod tests {
             .expect("position mode");
         bus.enable_torque(true).expect("torque");
         let arm = Arc::new((*crate::defaults::urdf_4dof().expect("urdf").arm).clone());
-        let mut hardware =
-            RealHardware::from_bus(bus, stream_hz, Some(test_rail()), false, arm)
-                .expect("hardware");
+        let mut hardware = RealHardware::from_bus(bus, stream_hz, Some(test_rail()), false, arm)
+            .expect("hardware");
         assert_eq!(hardware.read_pose().expect("pose").rail_x, 0.0);
     }
 

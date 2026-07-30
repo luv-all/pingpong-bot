@@ -62,8 +62,11 @@ impl QuinticSegment {
         let t5 = t4 * t;
 
         let q = self.q0 + self.c1 * t + self.c2 * t2 + self.c3 * t3 + self.c4 * t4 + self.c5 * t5;
-        let qd =
-            self.c1 + 2.0 * self.c2 * t + 3.0 * self.c3 * t2 + 4.0 * self.c4 * t3 + 5.0 * self.c5 * t4;
+        let qd = self.c1
+            + 2.0 * self.c2 * t
+            + 3.0 * self.c3 * t2
+            + 4.0 * self.c4 * t3
+            + 5.0 * self.c5 * t4;
         let qdd = 2.0 * self.c2 + 6.0 * self.c3 * t + 12.0 * self.c4 * t2 + 20.0 * self.c5 * t3;
         return (q, qd, qdd);
     }
@@ -277,7 +280,8 @@ mod tests {
             (-1.0, 2.0, 0.5, -1.0, 0.15, 0.2, 0.0, 0.35),
         ];
         for (q0, v0, q1, v1, t1, q2, v2, t2) in cases {
-            let a = QuinticSegment::jerk_minimizing_knot_acceleration(q0, v0, q1, v1, t1, q2, v2, t2);
+            let a =
+                QuinticSegment::jerk_minimizing_knot_acceleration(q0, v0, q1, v1, t1, q2, v2, t2);
             assert!(a.is_finite(), "a={a} for case starting at q0={q0}");
         }
     }

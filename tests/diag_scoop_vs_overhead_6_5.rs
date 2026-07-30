@@ -17,9 +17,9 @@
 //! 실행:
 //!   cargo test --release --test diag_scoop_vs_overhead_6_5 -- --ignored --nocapture
 
+use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use rand::Rng;
 
 use pingpong_bot::defaults;
 use pingpong_bot::robot::motion::InterceptWindow;

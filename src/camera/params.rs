@@ -210,8 +210,13 @@ mod tests {
         // 프레임 오른쪽 밖 -> clip은 None, unclipped는 width 초과 좌표.
         let outside = Point3::new(4.0, 0.0, 2.0);
         assert!(cam.project_world(outside).is_none());
-        let raw = cam.project_world_unclipped(outside).expect("still projects");
-        assert!(raw.x >= f64::from(cam.width), "expected u >= width, got {raw:?}");
+        let raw = cam
+            .project_world_unclipped(outside)
+            .expect("still projects");
+        assert!(
+            raw.x >= f64::from(cam.width),
+            "expected u >= width, got {raw:?}"
+        );
 
         // 카메라 뒤 -> 둘 다 None.
         let behind = Point3::new(0.0, 0.0, -1.0);

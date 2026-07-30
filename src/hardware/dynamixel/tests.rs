@@ -111,8 +111,7 @@ fn dry_run_mirrors_slave_goal_around_zero_tick() {
 #[test]
 fn dry_run_configures_position_mode_with_max_effort() {
     let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
-    bus.configure_position_mode_max_effort()
-        .expect("configure");
+    bus.configure_position_mode_max_effort().expect("configure");
     assert_eq!(bus.last_operating_mode(), Some(3));
     let pwm = bus.last_pwm_limits().expect("pwm");
     assert!(pwm.iter().all(|(_, v)| *v == 885));

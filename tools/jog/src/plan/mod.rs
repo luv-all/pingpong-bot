@@ -179,8 +179,7 @@ pub fn plan_swing(
 
     let mut segments = Vec::with_capacity(2);
     if let Some(pose) = &track_pose {
-        ensure_max_delta(&start.joints, &pose.joints, max_delta_deg)
-            .context("코스 추종 이동")?;
+        ensure_max_delta(&start.joints, &pose.joints, max_delta_deg).context("코스 추종 이동")?;
         segments.push(move_traj(
             arm,
             start,

@@ -26,7 +26,9 @@ use pingpong_bot::constants::geometry::{RACKET_HALF_X, RACKET_HALF_Y, RACKET_HAL
 use pingpong_bot::constants::{BALL_RADIUS, table};
 use pingpong_bot::defaults;
 use pingpong_bot::estimator::Impact;
-use pingpong_bot::sim::eval::{LaunchParams as EvalLaunchParams, Mode as EvalMode, Protocol, Zone as EvalZone};
+use pingpong_bot::sim::eval::{
+    LaunchParams as EvalLaunchParams, Mode as EvalMode, Protocol, Zone as EvalZone,
+};
 use pingpong_bot::sim::launch::Settings as BallShooterSettings;
 use pingpong_bot::sim::physics::{BallState, SimWorld};
 
@@ -395,10 +397,8 @@ fn diag_contact_timing_trace() {
         };
         let impact = prediction.impact_position.coords;
         let normal = {
-            let v_out = Impact::rally_return(
-                prediction.impact_position,
-                prediction.incoming_velocity,
-            );
+            let v_out =
+                Impact::rally_return(prediction.impact_position, prediction.incoming_velocity);
             (v_out - prediction.incoming_velocity).normalize()
         };
         let planned_center = impact - normal * (BALL_RADIUS + RACKET_HALF_Z);
@@ -420,7 +420,17 @@ fn diag_contact_timing_trace() {
         );
         println!(
             "{:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8} {:>6}",
-            "elapsed", "ball_y", "d_ball_y", "d_ball_z", "cen_y", "d_cen_y", "cmd_y", "u", "v", "gap", "touch"
+            "elapsed",
+            "ball_y",
+            "d_ball_y",
+            "d_ball_z",
+            "cen_y",
+            "d_cen_y",
+            "cmd_y",
+            "u",
+            "v",
+            "gap",
+            "touch"
         );
         let mut elapsed = 0.0;
         let mut rows: Vec<String> = Vec::new();
@@ -550,7 +560,14 @@ fn diag_predictor_vs_rapier_divergence() {
             if step % 25 == 0 || near_impact {
                 println!(
                     "{elapsed:>8.4} {:>8.4} {:>8.4} {:>8.4} {:>+8.4} {:>8.3} {:>8.3} {:>8.2} {:>8.2}",
-                    rap.y, rap.z, pos.z, pos.z - rap.z, rap_v.y, vel.y, rap_w.x, omega.x,
+                    rap.y,
+                    rap.z,
+                    pos.z,
+                    pos.z - rap.z,
+                    rap_v.y,
+                    vel.y,
+                    rap_w.x,
+                    omega.x,
                 );
             }
             if elapsed >= impact_time || ball_touches_racket(&world) {

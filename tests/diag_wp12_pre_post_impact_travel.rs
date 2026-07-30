@@ -80,7 +80,11 @@ fn run_shot(settings: &BallShooterSettings) -> Option<Vec<JointSample>> {
                         pre_travel: snap.pre_impact_travel[i],
                         post_travel: snap.follow_through_travel[i],
                         impact_speed_ratio: if peak > 1e-9 { impact / peak } else { 0.0 },
-                        impact_acceleration: snap.impact_acceleration.get(i).copied().unwrap_or(0.0),
+                        impact_acceleration: snap
+                            .impact_acceleration
+                            .get(i)
+                            .copied()
+                            .unwrap_or(0.0),
                     }
                 })
                 .collect();

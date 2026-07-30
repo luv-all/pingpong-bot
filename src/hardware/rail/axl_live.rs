@@ -114,13 +114,7 @@ impl AxlLive {
             (self.ffi.axm_mot_set_abs_rel_mode)(config.axis, 0)
         })?;
         check_axl("AxmMoveStartPos", unsafe {
-            (self.ffi.axm_move_start_pos)(
-                config.axis,
-                commanded_m,
-                vel,
-                config.accel,
-                config.decel,
-            )
+            (self.ffi.axm_move_start_pos)(config.axis, commanded_m, vel, config.accel, config.decel)
         })?;
         return Ok(());
     }

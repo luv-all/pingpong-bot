@@ -98,7 +98,9 @@ pub(crate) fn best_impact_candidate_for_outgoing(
 
     let mut best: Option<ImpactCandidate> = None;
     let mut last_error = None;
-    let try_hint = |hint: Joints, best: &mut Option<ImpactCandidate>, last_error: &mut Option<SwingPlanError>| {
+    let try_hint = |hint: Joints,
+                    best: &mut Option<ImpactCandidate>,
+                    last_error: &mut Option<SwingPlanError>| {
         let solved = match arm.inverse_pose_with_rail(
             racket_center,
             desired_normal,
@@ -221,7 +223,11 @@ mod tests {
         );
         let mut worst_spread = 0.0_f64;
         for hit_y in window.hit_planes().into_iter().map(|plane| plane.y) {
-            for impact_x in [table::WIDTH_X * 0.25, table::WIDTH_X * 0.5, table::WIDTH_X * 0.75] {
+            for impact_x in [
+                table::WIDTH_X * 0.25,
+                table::WIDTH_X * 0.5,
+                table::WIDTH_X * 0.75,
+            ] {
                 for v_in_y in [-5.0_f64, -7.0] {
                     let prediction = Prediction {
                         time_to_impact_secs: 0.30,
@@ -238,8 +244,8 @@ mod tests {
                     let v_in = prediction.incoming_velocity;
                     let v_out = Impact::rally_return(prediction.impact_position, v_in);
                     let desired_normal = (v_out - v_in).normalize();
-                    let Ok(base_hint) =
-                        arm.with_wrist_open(&start.joints, Arm::wrist_open_for_return(v_out - v_in))
+                    let Ok(base_hint) = arm
+                        .with_wrist_open(&start.joints, Arm::wrist_open_for_return(v_out - v_in))
                     else {
                         continue;
                     };
@@ -265,7 +271,8 @@ mod tests {
                         {
                             continue;
                         }
-                        let Some(pose) = arm.forward_kinematics_with_rail(solved.rail_x, &solved.joints)
+                        let Some(pose) =
+                            arm.forward_kinematics_with_rail(solved.rail_x, &solved.joints)
                         else {
                             continue;
                         };
@@ -282,7 +289,10 @@ mod tests {
                         else {
                             continue;
                         };
-                        let r = joint_velocities.iter().map(|v| v.abs()).fold(0.0_f64, f64::max)
+                        let r = joint_velocities
+                            .iter()
+                            .map(|v| v.abs())
+                            .fold(0.0_f64, f64::max)
                             / arm.max_joint_speed;
                         rows.push((r, v_r.norm()));
                     }
@@ -333,7 +343,11 @@ mod tests {
             "y", "x", "v_in_y", "r", "q0", "q1", "q2", "q3"
         );
         for hit_y in window.hit_planes().into_iter().map(|plane| plane.y) {
-            for impact_x in [table::WIDTH_X * 0.25, table::WIDTH_X * 0.5, table::WIDTH_X * 0.75] {
+            for impact_x in [
+                table::WIDTH_X * 0.25,
+                table::WIDTH_X * 0.5,
+                table::WIDTH_X * 0.75,
+            ] {
                 for v_in_y in [-5.0_f64, -7.0] {
                     let impact = crate::Point3::new(impact_x, hit_y, table::SURFACE_Z + 0.18);
                     let prediction = Prediction {
@@ -420,9 +434,11 @@ mod tests {
             let mut ik_ok = 0usize;
             let mut total = 0usize;
             for hit_y in window.hit_planes().into_iter().map(|plane| plane.y) {
-                for impact_x in
-                    [table::WIDTH_X * 0.25, table::WIDTH_X * 0.5, table::WIDTH_X * 0.75]
-                {
+                for impact_x in [
+                    table::WIDTH_X * 0.25,
+                    table::WIDTH_X * 0.5,
+                    table::WIDTH_X * 0.75,
+                ] {
                     for v_in_y in [-5.0_f64, -7.0] {
                         total += 1;
                         let impact = crate::Point3::new(impact_x, hit_y, table::SURFACE_Z + 0.18);
@@ -491,10 +507,10 @@ mod tests {
         let mut elbow_down_count = 0usize;
 
         let score_hints = |hints: Vec<Joints>,
-                            racket_center: crate::Point3,
-                            desired_normal: Vector3<f64>,
-                            v_in: Vector3<f64>,
-                            v_out: Vector3<f64>|
+                           racket_center: crate::Point3,
+                           desired_normal: Vector3<f64>,
+                           v_in: Vector3<f64>,
+                           v_out: Vector3<f64>|
          -> Option<f64> {
             let mut best: Option<f64> = None;
             for hint in hints {
@@ -527,7 +543,10 @@ mod tests {
                 else {
                     continue;
                 };
-                let r = joint_velocities.iter().map(|v| v.abs()).fold(0.0_f64, f64::max)
+                let r = joint_velocities
+                    .iter()
+                    .map(|v| v.abs())
+                    .fold(0.0_f64, f64::max)
                     / arm.max_joint_speed;
                 if best.is_none_or(|b| r < b) {
                     best = Some(r);
@@ -537,9 +556,13 @@ mod tests {
         };
 
         for hit_y in window.hit_planes().into_iter().map(|plane| plane.y) {
-            for impact_x in
-                [table::WIDTH_X * 0.2, table::WIDTH_X * 0.35, table::WIDTH_X * 0.5, table::WIDTH_X * 0.65, table::WIDTH_X * 0.8]
-            {
+            for impact_x in [
+                table::WIDTH_X * 0.2,
+                table::WIDTH_X * 0.35,
+                table::WIDTH_X * 0.5,
+                table::WIDTH_X * 0.65,
+                table::WIDTH_X * 0.8,
+            ] {
                 for v_in_y in [-4.0_f64, -5.5, -7.0] {
                     total += 1;
                     let impact = crate::Point3::new(impact_x, hit_y, table::SURFACE_Z + 0.18);
@@ -597,7 +620,10 @@ mod tests {
         };
         let max = |v: &[f64]| v.iter().cloned().fold(0.0_f64, f64::max);
 
-        println!("총 {total}개 지오메트리 (both-succeed={}, single만 실패={single_fail_multi_ok}, 둘 다 실패={both_fail})", single_r.len());
+        println!(
+            "총 {total}개 지오메트리 (both-succeed={}, single만 실패={single_fail_multi_ok}, 둘 다 실패={both_fail})",
+            single_r.len()
+        );
         println!(
             "base_hint(시작=default_joints) 수렴 부호: elbow-up(q2<0)={elbow_up_count}  elbow-down(q2>=0)={elbow_down_count}"
         );
@@ -607,13 +633,23 @@ mod tests {
         );
         println!(
             "{:>10} {:>9.6} {:>7.1} {:>9.6}",
-            "single", mean(&single_r), over(&single_r), max(&single_r)
+            "single",
+            mean(&single_r),
+            over(&single_r),
+            max(&single_r)
         );
         println!(
             "{:>10} {:>9.6} {:>7.1} {:>9.6}",
-            "multi", mean(&multi_r), over(&multi_r), max(&multi_r)
+            "multi",
+            mean(&multi_r),
+            over(&multi_r),
+            max(&multi_r)
         );
-        let diffs: Vec<f64> = single_r.iter().zip(multi_r.iter()).map(|(s, m)| s - m).collect();
+        let diffs: Vec<f64> = single_r
+            .iter()
+            .zip(multi_r.iter())
+            .map(|(s, m)| s - m)
+            .collect();
         let improved = diffs.iter().filter(|d| **d > 1e-6).count();
         let max_improvement = diffs.iter().cloned().fold(0.0_f64, f64::max);
         let mean_improvement_when_improved = if improved > 0 {
@@ -649,15 +685,27 @@ mod tests {
             .hit_planes()
             .into_iter()
             .flat_map(|plane| {
-                [table::WIDTH_X * 0.2, table::WIDTH_X * 0.35, table::WIDTH_X * 0.5, table::WIDTH_X * 0.65, table::WIDTH_X * 0.8]
-                    .into_iter()
-                    .flat_map(move |x| {
-                        [-4.0_f64, -5.5, -7.0].into_iter().map(move |v_in_y| Prediction {
+                [
+                    table::WIDTH_X * 0.2,
+                    table::WIDTH_X * 0.35,
+                    table::WIDTH_X * 0.5,
+                    table::WIDTH_X * 0.65,
+                    table::WIDTH_X * 0.8,
+                ]
+                .into_iter()
+                .flat_map(move |x| {
+                    [-4.0_f64, -5.5, -7.0]
+                        .into_iter()
+                        .map(move |v_in_y| Prediction {
                             time_to_impact_secs: 0.30,
-                            impact_position: crate::Point3::new(x, plane.y, table::SURFACE_Z + 0.18),
+                            impact_position: crate::Point3::new(
+                                x,
+                                plane.y,
+                                table::SURFACE_Z + 0.18,
+                            ),
                             incoming_velocity: Vector3::new(0.0, v_in_y, 0.7),
                         })
-                    })
+                })
             })
             .collect();
 
@@ -674,7 +722,8 @@ mod tests {
         // 강제 다중시드 비교군 — candidate_ik_hints 전체를 항상 돈다
         // (best_impact_candidate_for_outgoing 이전 구현과 동등).
         let force_multi = |prediction: &Prediction| {
-            let v_out = Impact::rally_return(prediction.impact_position, prediction.incoming_velocity);
+            let v_out =
+                Impact::rally_return(prediction.impact_position, prediction.incoming_velocity);
             let v_in = prediction.incoming_velocity;
             let desired_normal = (v_out - v_in).normalize();
             let Ok(base_hint) =
@@ -685,15 +734,19 @@ mod tests {
             let racket_center = crate::Point3::from(
                 prediction.impact_position.coords
                     - desired_normal
-                        * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z),
+                        * (crate::constants::BALL_RADIUS
+                            + crate::constants::geometry::RACKET_HALF_Z),
             );
             for hint in candidate_ik_hints(arm, &base_hint) {
-                let Ok(solved) =
-                    arm.inverse_pose_with_rail(racket_center, desired_normal, &robot::Pose::new(start.rail_x, hint))
-                else {
+                let Ok(solved) = arm.inverse_pose_with_rail(
+                    racket_center,
+                    desired_normal,
+                    &robot::Pose::new(start.rail_x, hint),
+                ) else {
                     continue;
                 };
-                let _ = crate::robot::collision::table_penetration(arm, solved.rail_x, &solved.joints);
+                let _ =
+                    crate::robot::collision::table_penetration(arm, solved.rail_x, &solved.joints);
                 if let Some(pose) = arm.forward_kinematics_with_rail(solved.rail_x, &solved.joints)
                     && let Ok(v_r) = Impact::required_racket_velocity(
                         v_in,

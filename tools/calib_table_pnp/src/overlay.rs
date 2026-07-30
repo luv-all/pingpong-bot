@@ -154,7 +154,15 @@ pub fn draw_anchor_bound(
         return Ok(());
     };
     let p = pt(to_canvas(*a, pad));
-    imgproc::draw_marker(panel, p, GRAY, imgproc::MARKER_TILTED_CROSS, 8, 1, imgproc::LINE_AA)?;
+    imgproc::draw_marker(
+        panel,
+        p,
+        GRAY,
+        imgproc::MARKER_TILTED_CROSS,
+        8,
+        1,
+        imgproc::LINE_AA,
+    )?;
     if radius >= 1.0 {
         imgproc::circle(
             panel,
@@ -214,7 +222,15 @@ fn draw_residuals_partial(
         let c = pt(*click);
         let p = pt(ideal);
         imgproc::line(panel, c, p, YELLOW, 1, imgproc::LINE_AA, 0)?;
-        imgproc::draw_marker(panel, p, MAGENTA, imgproc::MARKER_CROSS, 14, 2, imgproc::LINE_AA)?;
+        imgproc::draw_marker(
+            panel,
+            p,
+            MAGENTA,
+            imgproc::MARKER_CROSS,
+            14,
+            2,
+            imgproc::LINE_AA,
+        )?;
         let du = click.x - ideal.x;
         let dv = click.y - ideal.y;
         let err = (du * du + dv * dv).sqrt();
@@ -236,10 +252,7 @@ fn draw_residuals_partial(
 }
 
 /// 클릭↔이상 재투영 거리 [px]. 카메라 뒤로 가면 `None`.
-pub fn per_point_residuals(
-    clicks: &[camera::Pixel],
-    params: &camera::Params,
-) -> Vec<Option<f64>> {
+pub fn per_point_residuals(clicks: &[camera::Pixel], params: &camera::Params) -> Vec<Option<f64>> {
     let marks = TablePnp::landmarks();
     return clicks
         .iter()

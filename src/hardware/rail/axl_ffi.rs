@@ -115,9 +115,7 @@ impl AxlFfi {
                     .get(b"AxmStatusReadInMotion\0")
                     .map_err(symbol_error)?,
                 axm_move_pos: *library.get(b"AxmMovePos\0").map_err(symbol_error)?,
-                axm_move_start_pos: *library
-                    .get(b"AxmMoveStartPos\0")
-                    .map_err(symbol_error)?,
+                axm_move_start_pos: *library.get(b"AxmMoveStartPos\0").map_err(symbol_error)?,
                 _library: ManuallyDrop::new(library),
             });
         }

@@ -10,8 +10,8 @@
 
 use pingpong_bot::defaults;
 use pingpong_bot::estimator::Prediction;
-use pingpong_bot::robot::motion::Planner;
 use pingpong_bot::robot;
+use pingpong_bot::robot::motion::Planner;
 use pingpong_bot::sim::eval;
 use pingpong_bot::sim::physics::SimWorld;
 
@@ -184,7 +184,10 @@ fn print_trace(t: &StageTrace) {
         "  prediction impact_x: first={:?}  last={:?}  home_to_target_dist={:?}",
         t.first_prediction_impact_x, t.last_prediction_impact, t.home_to_target_dist
     );
-    println!("  feasible_from_rest (rail already at home x=0): {:?}", t.feasible_from_rest);
+    println!(
+        "  feasible_from_rest (rail already at home x=0): {:?}",
+        t.feasible_from_rest
+    );
     println!(
         "  feasible_from_target_rail (rail pre-positioned at target x): {:?}",
         t.feasible_from_target_rail
