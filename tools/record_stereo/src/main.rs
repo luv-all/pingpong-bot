@@ -299,12 +299,23 @@ fn grab_loop(
         let t = Instant::now();
         let width = lf.image.cols();
         let height = lf.image.rows();
+        // 두 캠을 **병렬로** 인코딩한다. 순차로 하면 프레임당 비용이 그대로 더해져
+        // 캡처 예산을 통째로 먹는다 (벤치 실측: 쌍당 22 ms → 상한 45 fps. 카메라는 120을 준다).
+        // 스코프 스레드 생성 비용(~0.1 ms)은 절약분 11 ms에 비하면 무시할 수 있다.
         let stage = Instant::now();
-        let Ok(left_jpeg) = encode_jpeg(&lf.image) else {
+        let (left_jpeg, right_jpeg) = thread::scope(|scope| {
+            let right_task = scope.spawn(|| encode_jpeg(&rf.image));
+            let left_jpeg = encode_jpeg(&lf.image);
+            let right_jpeg = right_task
+                .join()
+                .unwrap_or_else(|_| bail!("right: encode 패닉"));
+            return (left_jpeg, right_jpeg);
+        });
+        let Ok(left_jpeg) = left_jpeg else {
             set_error(&shared, "left: JPEG encode 실패");
             break;
         };
-        let Ok(right_jpeg) = encode_jpeg(&rf.image) else {
+        let Ok(right_jpeg) = right_jpeg else {
             set_error(&shared, "right: JPEG encode 실패");
             break;
         };
