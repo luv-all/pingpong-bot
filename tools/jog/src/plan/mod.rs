@@ -1,4 +1,4 @@
-//! 조그 모션 조합 — 씬이 아닌 툴에서 `motion::Trajectory`를 만든다.
+//! 조그 입력 → 궤적 조합. 툴에서 `robot::motion::Trajectory`를 만든다.
 
 mod draft;
 mod kind;
@@ -11,8 +11,8 @@ use pingpong_bot::estimator::Impact;
 use pingpong_bot::robot::motion;
 use pingpong_bot::robot::{self, Arm, Joints, RacketPose};
 
-pub use draft::MotionDraft;
-pub use kind::MotionKind;
+pub use draft::Draft;
+pub use kind::Kind;
 
 /// 4-dof 관절 표시 이름 — sim joint windows 오버레이와 동일 (`j0`…`j3`).
 pub const JOINT_LABELS: [&str; 4] = ["j0", "j1", "j2", "j3"];
@@ -30,12 +30,12 @@ pub fn joint_label(index: usize) -> String {
 pub fn compose(
     arm: &Arm,
     start: &robot::Pose,
-    draft: &MotionDraft,
+    draft: &Draft,
     duration_secs: f64,
     max_delta_deg: f64,
 ) -> Result<motion::Trajectory> {
     return match draft.kind {
-        MotionKind::Joint => {
+        Kind::Joint => {
             ensure!(
                 draft.joint_index < start.joints.values.len(),
                 "joint out of range"
@@ -52,7 +52,7 @@ pub fn compose(
                 max_delta_deg,
             )
         }
-        MotionKind::Angles => {
+        Kind::Angles => {
             ensure!(
                 draft.angles_deg.len() == start.joints.values.len(),
                 "need {} angles",
@@ -71,7 +71,7 @@ pub fn compose(
                 max_delta_deg,
             )
         }
-        MotionKind::RailAbs => {
+        Kind::RailAbs => {
             ensure!(draft.rail_x.is_finite(), "rail finite");
             move_traj(
                 arm,
@@ -82,7 +82,7 @@ pub fn compose(
                 max_delta_deg,
             )
         }
-        MotionKind::Ik => {
+        Kind::Ik => {
             let target = reach_target(arm, start, draft.reach_dxyz)?;
             let linear = arm
                 .rail
@@ -99,7 +99,7 @@ pub fn compose(
                 max_delta_deg,
             )
         }
-        MotionKind::Pose => {
+        Kind::Pose => {
             let (target, normal) = reach_pose_target(arm, start, draft)?;
             let solved = arm
                 .inverse_pose_with_rail(target, normal, start)
@@ -113,8 +113,8 @@ pub fn compose(
                 max_delta_deg,
             )
         }
-        MotionKind::Swing => swing_traj(arm, start, draft, duration_secs, max_delta_deg),
-        MotionKind::AimBall => {
+        Kind::Swing => swing_traj(arm, start, draft, duration_secs, max_delta_deg),
+        Kind::AimBall => {
             let (target, normal) = ball_aim_target(arm, start, draft)?;
             let solved = arm
                 .inverse_pose_with_rail(target, normal, start)
@@ -128,14 +128,14 @@ pub fn compose(
                 max_delta_deg,
             )
         }
-        MotionKind::SwingBall => swing_ball_traj(arm, start, draft, duration_secs, max_delta_deg),
+        Kind::SwingBall => swing_ball_traj(arm, start, draft, duration_secs, max_delta_deg),
     };
 }
 
 /// 미리보기용: 상대 목표가 IK로 풀리는지.
-pub fn reach_ok(arm: &Arm, start: &robot::Pose, draft: &MotionDraft) -> bool {
+pub fn reach_ok(arm: &Arm, start: &robot::Pose, draft: &Draft) -> bool {
     return match draft.kind {
-        MotionKind::Ik => {
+        Kind::Ik => {
             let Ok(target) = reach_target(arm, start, draft.reach_dxyz) else {
                 return false;
             };
@@ -145,19 +145,19 @@ pub fn reach_ok(arm: &Arm, start: &robot::Pose, draft: &MotionDraft) -> bool {
             arm.inverse_kinematics_with_rail(&linear, start.rail_x, target, Some(&start.joints))
                 .is_ok()
         }
-        MotionKind::Pose => {
+        Kind::Pose => {
             let Ok((target, normal)) = reach_pose_target(arm, start, draft) else {
                 return false;
             };
             arm.inverse_pose_with_rail(target, normal, start).is_ok()
         }
-        MotionKind::Swing => {
+        Kind::Swing => {
             let Ok((target, normal)) = reach_pose_target(arm, start, draft) else {
                 return false;
             };
             arm.inverse_pose_with_rail(target, normal, start).is_ok()
         }
-        MotionKind::AimBall | MotionKind::SwingBall => {
+        Kind::AimBall | Kind::SwingBall => {
             let Ok((target, normal)) = ball_aim_target(arm, start, draft) else {
                 return false;
             };
@@ -170,7 +170,7 @@ pub fn reach_ok(arm: &Arm, start: &robot::Pose, draft: &MotionDraft) -> bool {
 fn swing_ball_traj(
     arm: &Arm,
     start: &robot::Pose,
-    draft: &MotionDraft,
+    draft: &Draft,
     duration_secs: f64,
     max_delta_deg: f64,
 ) -> Result<motion::Trajectory> {
@@ -207,7 +207,7 @@ fn swing_ball_traj(
 fn swing_traj(
     arm: &Arm,
     start: &robot::Pose,
-    draft: &MotionDraft,
+    draft: &Draft,
     duration_secs: f64,
     max_delta_deg: f64,
 ) -> Result<motion::Trajectory> {
@@ -284,12 +284,12 @@ fn build_follow_through_swing(
 fn ball_aim_target(
     arm: &Arm,
     start: &robot::Pose,
-    draft: &MotionDraft,
+    draft: &Draft,
 ) -> Result<(Point3, Vector3<f64>)> {
     let target = point3(draft.arrival_xyz)?;
     let base_normal = {
         let vin = Vector3::new(draft.ball_vin[0], draft.ball_vin[1], draft.ball_vin[2]);
-        if draft.kind == MotionKind::SwingBall && vin.norm() > 1e-3 {
+        if draft.kind == Kind::SwingBall && vin.norm() > 1e-3 {
             -vin.normalize()
         } else if let Ok(racket) = current_racket(arm, start) {
             racket.normal.normalize()
@@ -319,7 +319,7 @@ fn reach_target(arm: &Arm, start: &robot::Pose, dxyz: [f64; 3]) -> Result<Point3
 fn reach_pose_target(
     arm: &Arm,
     start: &robot::Pose,
-    draft: &MotionDraft,
+    draft: &Draft,
 ) -> Result<(Point3, Vector3<f64>)> {
     let racket = current_racket(arm, start)?;
     let p = racket.position.coords;
@@ -422,8 +422,8 @@ mod tests {
     fn joint_preview_respects_maxdelta() {
         let built = defaults::robot().expect("robot");
         let start = robot::Pose::new(0.0, built.arm.default_joints.clone());
-        let mut draft = MotionDraft::default();
-        draft.kind = MotionKind::Joint;
+        let mut draft = Draft::default();
+        draft.kind = Kind::Joint;
         draft.joint_index = 0;
         draft.joint_deg = start.joints.values[0].to_degrees() + 40.0;
         let err = compose(&built.arm, &start, &draft, 1.0, 15.0).unwrap_err();
@@ -434,8 +434,8 @@ mod tests {
     fn zero_reach_delta_is_reachable() {
         let built = defaults::robot().expect("robot");
         let start = robot::Pose::new(0.0, built.arm.default_joints.clone());
-        let mut draft = MotionDraft::default();
-        draft.kind = MotionKind::Ik;
+        let mut draft = Draft::default();
+        draft.kind = Kind::Ik;
         assert!(reach_ok(&built.arm, &start, &draft));
     }
 }

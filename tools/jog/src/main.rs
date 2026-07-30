@@ -5,8 +5,8 @@
 
 mod args;
 mod jog_ui;
-mod motion;
 mod panel;
+mod plan;
 mod state;
 
 use std::sync::{Arc, Mutex};

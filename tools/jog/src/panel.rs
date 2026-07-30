@@ -4,7 +4,7 @@ use kiss3d::egui::{self, Color32, RichText};
 use pingpong_bot::constants::table;
 use pingpong_bot::robot::motion::InterceptWindow;
 
-use crate::motion::{MotionKind, REACH_DELTA_M, joint_label, reach_ok};
+use crate::plan::{Kind, REACH_DELTA_M, joint_label, reach_ok};
 use crate::state::{Action, JogApp, try_action};
 
 pub fn draw(ctx: &egui::Context, app: &mut JogApp) {
@@ -91,14 +91,14 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
         .width(ui.available_width().min(320.0))
         .show_ui(ui, |ui| {
             for kind in [
-                MotionKind::Joint,
-                MotionKind::Angles,
-                MotionKind::RailAbs,
-                MotionKind::Ik,
-                MotionKind::Pose,
-                MotionKind::Swing,
-                MotionKind::AimBall,
-                MotionKind::SwingBall,
+                Kind::Joint,
+                Kind::Angles,
+                Kind::RailAbs,
+                Kind::Ik,
+                Kind::Pose,
+                Kind::Swing,
+                Kind::AimBall,
+                Kind::SwingBall,
             ] {
                 ui.selectable_value(&mut app.draft.kind, kind, kind.label());
             }
@@ -107,7 +107,7 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
     let (rail_min, rail_max) = rail_range(&app.arm);
 
     match app.draft.kind {
-        MotionKind::Joint => {
+        Kind::Joint => {
             ui.horizontal(|ui| {
                 ui.label("관절");
                 egui::ComboBox::from_id_salt("joint_pick")
@@ -133,7 +133,7 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
                 0.5,
             );
         }
-        MotionKind::Angles => {
+        Kind::Angles => {
             for i in 0..app.draft.angles_deg.len() {
                 let (min, max) =
                     joint_jog_deg_range(&app.arm, i, app.synced_pose.as_ref(), app.max_delta_deg);
@@ -147,7 +147,7 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
                 );
             }
         }
-        MotionKind::RailAbs => {
+        Kind::RailAbs => {
             ranged(
                 ui,
                 "레일 위치 [m]",
@@ -157,13 +157,13 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
                 0.005,
             );
         }
-        MotionKind::Ik => {
+        Kind::Ik => {
             draw_reach(ui, app, false);
         }
-        MotionKind::Pose => {
+        Kind::Pose => {
             draw_reach(ui, app, true);
         }
-        MotionKind::Swing => {
+        Kind::Swing => {
             draw_reach(ui, app, true);
             ranged(
                 ui,
@@ -174,10 +174,10 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
                 0.05,
             );
         }
-        MotionKind::AimBall => {
+        Kind::AimBall => {
             draw_arrival(ui, app, false);
         }
-        MotionKind::SwingBall => {
+        Kind::SwingBall => {
             draw_arrival(ui, app, true);
         }
     }

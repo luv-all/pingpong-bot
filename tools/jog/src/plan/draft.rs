@@ -2,12 +2,12 @@
 
 use pingpong_bot::constants::table;
 
-use super::kind::MotionKind;
+use super::kind::Kind;
 
 /// egui 입력 초안.
 #[derive(Debug, Clone)]
-pub struct MotionDraft {
-    pub kind: MotionKind,
+pub struct Draft {
+    pub kind: Kind,
     pub joint_index: usize,
     pub joint_deg: f64,
     pub angles_deg: [f64; 4],
@@ -24,10 +24,10 @@ pub struct MotionDraft {
     pub ball_vin: [f64; 3],
 }
 
-impl Default for MotionDraft {
+impl Default for Draft {
     fn default() -> Self {
         return Self {
-            kind: MotionKind::Joint,
+            kind: Kind::Joint,
             joint_index: 0,
             joint_deg: 0.0,
             angles_deg: [0.0; 4],

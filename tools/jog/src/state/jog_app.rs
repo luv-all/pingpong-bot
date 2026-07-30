@@ -5,11 +5,12 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result, ensure};
 use pingpong_bot::Point3;
 use pingpong_bot::hardware::{Hardware, RealHardware};
+use pingpong_bot::robot::motion;
 use pingpong_bot::robot::{self, Arm};
 use pingpong_bot::sim::gui;
 use pingpong_bot::sim::gui::ball;
 
-use crate::motion::{self, MotionDraft, MotionKind};
+use crate::plan::{self, Draft, Kind};
 
 use super::action::Action;
 use super::phase::Phase;
@@ -23,10 +24,10 @@ pub struct JogApp {
     pub phase: Phase,
     /// Sync 시점 포즈 — 미리보기 시작점·Discard 복원.
     pub synced_pose: Option<robot::Pose>,
-    pub staged: Option<pingpong_bot::robot::motion::Trajectory>,
+    pub staged: Option<motion::Trajectory>,
     pub duration_secs: f64,
     pub max_delta_deg: f64,
-    pub draft: MotionDraft,
+    pub draft: Draft,
     pub error: Option<String>,
 }
 
@@ -43,7 +44,7 @@ impl JogApp {
             staged: None,
             duration_secs: 1.0,
             max_delta_deg: 15.0,
-            draft: MotionDraft::default(),
+            draft: Draft::default(),
             error: None,
         };
     }
@@ -61,11 +62,11 @@ impl JogApp {
         let Some(ball) = &self.ball else {
             return;
         };
-        let show = matches!(self.draft.kind, MotionKind::AimBall | MotionKind::SwingBall);
+        let show = matches!(self.draft.kind, Kind::AimBall | Kind::SwingBall);
         if show {
             let [x, y, z] = self.draft.arrival_xyz;
             ball.set_position(Some(Point3::new(x, y, z)));
-            if self.draft.kind == MotionKind::SwingBall {
+            if self.draft.kind == Kind::SwingBall {
                 ball.set_velocity(Some(self.draft.ball_vin));
             } else {
                 ball.set_velocity(None);
@@ -153,7 +154,7 @@ impl JogApp {
             .synced_pose
             .clone()
             .ok_or_else(|| anyhow::anyhow!("synced pose 없음"))?;
-        let traj = motion::compose(
+        let traj = plan::compose(
             &self.arm,
             &start,
             &self.draft,

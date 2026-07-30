@@ -1,7 +1,7 @@
 //! 조그 모션 종류.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MotionKind {
+pub enum Kind {
     Joint,
     Angles,
     RailAbs,
@@ -14,7 +14,7 @@ pub enum MotionKind {
     SwingBall,
 }
 
-impl MotionKind {
+impl Kind {
     pub fn label(self) -> &'static str {
         return match self {
             Self::Joint => "관절 하나",
