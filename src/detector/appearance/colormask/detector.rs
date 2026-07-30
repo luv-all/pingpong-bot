@@ -28,22 +28,7 @@ impl ColormaskDetector {
 
     /// 색 마스크 (단일 채널). cascade·디버그용.
     pub fn color_mask(&self, frame: &Frame) -> Option<Mat> {
-        let mut converted = Mat::default();
-        let code = match self.params.space {
-            ColorSpace::Ycrcb => imgproc::COLOR_BGR2YCrCb,
-            ColorSpace::Hsv => imgproc::COLOR_BGR2HSV,
-        };
-        if imgproc::cvt_color(
-            &frame.image,
-            &mut converted,
-            code,
-            0,
-            opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
-        )
-        .is_err()
-        {
-            return None;
-        }
+        let converted = self.params.space.convert(&frame.image).ok()?;
 
         let lo = Scalar::new(
             f64::from(self.params.c0_min),

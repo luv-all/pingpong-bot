@@ -82,47 +82,37 @@ fn bgr_to_space(bgr: [u8; 3], space: ColorSpace) -> Result<[u8; 3]> {
         opencv::core::CV_8UC3,
         Scalar::new(f64::from(bgr[0]), f64::from(bgr[1]), f64::from(bgr[2]), 0.0),
     )?;
-    let mut out = Mat::default();
-    let code = match space {
-        ColorSpace::Ycrcb => imgproc::COLOR_BGR2YCrCb,
-        ColorSpace::Hsv => imgproc::COLOR_BGR2HSV,
-    };
-    imgproc::cvt_color(
-        &pixel,
-        &mut out,
-        code,
-        0,
-        opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
-    )?;
+    let out = space.convert(&pixel)?;
     let v: Vec3b = *out.at_2d(0, 0)?;
     return Ok([v[0], v[1], v[2]]);
 }
 
-fn ranges_from_samples(
+/// 지금 보고 있는 공간의 AABB. 공간을 바꾸면 같은 샘플로 다시 계산한다.
+fn range_from_samples(
     samples: &[Sample],
+    space: ColorSpace,
     margin: u8,
     trim_pct: f64,
-) -> Result<(Option<ChannelRange>, Option<ChannelRange>)> {
+) -> Result<Option<ChannelRange>> {
     if samples.is_empty() {
-        return Ok((None, None));
+        return Ok(None);
     }
-    let mut ycrcb = Vec::with_capacity(samples.len());
-    let mut hsv = Vec::with_capacity(samples.len());
+    let mut values = Vec::with_capacity(samples.len());
     for s in samples {
-        ycrcb.push(bgr_to_space(s.bgr, ColorSpace::Ycrcb)?);
-        hsv.push(bgr_to_space(s.bgr, ColorSpace::Hsv)?);
+        values.push(bgr_to_space(s.bgr, space)?);
     }
-    return Ok((
-        ChannelRange::from_channels(&ycrcb, margin, trim_pct),
-        ChannelRange::from_channels(&hsv, margin, trim_pct),
-    ));
+    return Ok(ChannelRange::from_channels(&values, margin, trim_pct));
 }
 
-fn space_label(space: ColorSpace) -> &'static str {
-    return match space {
-        ColorSpace::Ycrcb => "Y/Cr/Cb",
-        ColorSpace::Hsv => "H/S/V",
-    };
+fn space_label(space: ColorSpace) -> String {
+    return space.channel_names().join("/");
+}
+
+/// `s` 키 — 색공간 순환.
+fn next_space(space: ColorSpace) -> ColorSpace {
+    let all = ColorSpace::all();
+    let index = all.iter().position(|s| *s == space).unwrap_or(0);
+    return all[(index + 1) % all.len()];
 }
 
 fn upsert_colormask(
@@ -194,18 +184,7 @@ fn hint_existing(cam_id: camera::Id, n_samples: usize) {
 }
 
 fn make_mask_bgr(bgr: &Mat, space: ColorSpace, range: ChannelRange) -> Result<Mat> {
-    let mut converted = Mat::default();
-    let code = match space {
-        ColorSpace::Ycrcb => imgproc::COLOR_BGR2YCrCb,
-        ColorSpace::Hsv => imgproc::COLOR_BGR2HSV,
-    };
-    imgproc::cvt_color(
-        bgr,
-        &mut converted,
-        code,
-        0,
-        opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
-    )?;
+    let converted = space.convert(bgr)?;
     let lo = Scalar::new(
         f64::from(range.c0_min),
         f64::from(range.c1_min),
@@ -236,10 +215,7 @@ fn empty_bgr_like(bgr: &Mat) -> Result<Mat> {
 }
 
 fn space_axis_names(space: ColorSpace) -> [&'static str; 3] {
-    return match space {
-        ColorSpace::Ycrcb => ["Y", "Cr", "Cb"],
-        ColorSpace::Hsv => ["H", "S", "V"],
-    };
+    return space.channel_names();
 }
 
 /// 채널 값 0..=255 → 축 픽셀. `lo_px`가 0, `hi_px`가 255.
@@ -686,11 +662,7 @@ fn main() -> Result<()> {
             }
         }
 
-        let (range_y, range_h) = ranges_from_samples(&samples, margin, trim_pct)?;
-        let active_range = match space {
-            ColorSpace::Ycrcb => range_y,
-            ColorSpace::Hsv => range_h,
-        };
+        let active_range = range_from_samples(&samples, space, margin, trim_pct)?;
 
         let mut original = frame_img
             .try_clone()
@@ -784,10 +756,7 @@ fn main() -> Result<()> {
                     frozen = !frozen;
                     println!("{}", if frozen { "frozen" } else { "live" });
                 } else if key == i32::from(b's') || key == i32::from(b'S') {
-                    space = match space {
-                        ColorSpace::Ycrcb => ColorSpace::Hsv,
-                        ColorSpace::Hsv => ColorSpace::Ycrcb,
-                    };
+                    space = next_space(space);
                     println!("space={space}");
                 } else if key == i32::from(b'z') || key == i32::from(b'Z') || key == 8 {
                     if samples.pop().is_some() {
@@ -797,11 +766,7 @@ fn main() -> Result<()> {
                     samples.clear();
                     println!("cleared");
                 } else if key == i32::from(b'p') || key == i32::from(b'P') {
-                    let (y, h) = ranges_from_samples(&samples, margin, trim_pct)?;
-                    let active = match space {
-                        ColorSpace::Ycrcb => y,
-                        ColorSpace::Hsv => h,
-                    };
+                    let active = range_from_samples(&samples, space, margin, trim_pct)?;
                     if let Some(r) = active {
                         upsert_colormask(cam_id, space, r, &samples)?;
                     } else {
@@ -819,11 +784,7 @@ fn main() -> Result<()> {
 
     // 종료 시 저장
     if !samples.is_empty() {
-        let (y, h) = ranges_from_samples(&samples, margin, trim_pct)?;
-        let active = match space {
-            ColorSpace::Ycrcb => y,
-            ColorSpace::Hsv => h,
-        };
+        let active = range_from_samples(&samples, space, margin, trim_pct)?;
         if let Some(r) = active {
             upsert_colormask(cam_id, space, r, &samples)?;
         }
