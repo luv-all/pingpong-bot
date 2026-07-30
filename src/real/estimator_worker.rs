@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use pingpong_bot::camera;
 use pingpong_bot::camera::Calibration;
+use pingpong_bot::detector;
 use pingpong_bot::estimator::{Ekf, Estimator, GateOutcome, Prediction, Triangulate};
 use pingpong_bot::robot::motion::{InterceptWindow, Planner};
 use tracing::{debug, info_span};
@@ -19,28 +20,41 @@ use super::{
     VisionEvent, decide,
 };
 
-/// 스테레오 쌍으로 인정할 최대 타임스탬프 차 [s].
+/// 카메라당 보관할 관측 수 — `Triangulate::synced`가 보간에 쓸 앞뒤 프레임.
+const SERIES_CAPACITY: usize = 8;
+
+/// 캠 간 최신 관측 시각이 이보다 벌어지면 삼각측량하지 않는다.
 ///
-/// UVC 캠은 하드웨어 동기가 없다 (`TODO.md` §3 "멀티캠 동기 — 비범위"). 120 fps 기준 두 프레임
-/// 간격까지는 붙여서 삼각측량하고, 실제 skew는 통계로 남겨 얼마나 나쁜지 수치로 본다.
-const MAX_STEREO_SKEW_SECS: f64 = 0.020;
+/// 한쪽이 검출을 놓치는 동안 그 캠의 마지막 관측이 시계열에 남아 `sync_time`을 과거로
+/// 끌어당기는 걸 막는다. 30 fps에서 한 프레임이 33 ms이므로 그 안쪽으로 잡는다 —
+/// 넉넉하게 두면 낡은 시선이 다시 들어온다.
+const MAX_SYNC_LAG: Duration = Duration::from_millis(35);
+
+/// 생 삼각측량 마커를 화면에 남겨두는 시간. 지나면 지운다 — 멈춘 점을 살아있는 값으로
+/// 오해하지 않게 한다.
+const RAW_MARKER_TTL: Duration = Duration::from_millis(150);
+
+/// 시계열에서 이보다 오래된 관측은 버린다 (보간 구간이 공백을 건너뛰지 않게).
+const MAX_OBSERVATION_AGE: Duration = Duration::from_millis(250);
 
 const RECV_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// `--debug` 진척 로그 주기.
 const PROGRESS_PERIOD: Duration = Duration::from_secs(1);
 
-/// 카메라 1대의 마지막 검출.
-struct Track {
-    pixel: camera::Pixel,
-    at: Instant,
-}
-
 /// 종료 요약용 추정 통계.
 #[derive(Debug, Clone, Default)]
 pub struct EstimatorStats {
     pub triangulated: u64,
+    /// 보정 전 좌/우 최신 프레임 시각 차 [s] — 리그 동기 품질.
     pub skew_samples: Vec<f64>,
+    /// 삼각측량 재투영 오차 [px] — 3D 복원 품질.
+    pub reprojection_samples: Vec<f64>,
+    /// 두 캠 다 관측이 있는데도 삼각측량을 건너뛴 프레임 수.
+    ///
+    /// 대부분 `MAX_SYNC_LAG` 초과(한 캠이 검출을 놓쳐 뒤처짐)다. 이 값이 크면 한쪽 캠의
+    /// 검출률이 떨어지고 있다는 뜻이다.
+    pub stale_skipped: u64,
     pub accepted: u64,
     pub rejected: u64,
     pub seeded: u64,
@@ -60,15 +74,14 @@ impl EstimatorStats {
         }
     }
 
-    /// 정렬된 skew 표본의 백분위수 [s]. 표본이 없으면 `None`.
+    /// skew 백분위수 [s].
     pub fn skew_percentile(&self, q: f64) -> Option<f64> {
-        if self.skew_samples.is_empty() {
-            return None;
-        }
-        let mut sorted = self.skew_samples.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let index = ((sorted.len() - 1) as f64 * q).round() as usize;
-        return sorted.get(index).copied();
+        return percentile(&self.skew_samples, q);
+    }
+
+    /// 재투영 오차 백분위수 [px].
+    pub fn reprojection_percentile(&self, q: f64) -> Option<f64> {
+        return percentile(&self.reprojection_samples, q);
     }
 }
 
@@ -88,11 +101,20 @@ pub fn spawn(
         let _span = info_span!("estimator").entered();
         let mut stats = EstimatorStats::default();
         let mut ekf = Ekf::default();
-        let mut tracks: Vec<(camera::Id, Option<Track>)> = calibration
+        let mut series: Vec<(camera::Id, Vec<detector::Observation>)> = calibration
             .cameras
             .iter()
-            .map(|params| (params.camera_id, None))
+            .map(|params| (params.camera_id, Vec::with_capacity(SERIES_CAPACITY)))
             .collect();
+        // 필터를 거치지 않은 생 삼각측량 점 — EKF 추정과 나란히 띄워 "필터가 뭉갠 건지
+        // 입력이 이미 튄 건지"를 눈으로 가른다. 삼각측량이 멎으면 **같이 사라져야** 한다 —
+        // 붙들고 있으면 멈춘 점이 살아있는 값처럼 보여 진단을 헷갈리게 한다.
+        let mut last_raw: Option<(pingpong_bot::Point3, Instant)> = None;
+        // 마지막으로 EKF에 넣은 측정 시각. `sync_time`은 **뒤처진 캠이 갱신될 때만**
+        // 전진하므로, 이걸 안 보면 앞선 캠이 프레임을 받을 때마다 같은 측정을 다시
+        // 주입하게 된다 — dt=0이라 예측 단계 없이 칼만 갱신만 반복돼 공분산이 실제보다
+        // 작아지고, 과신한 게이트가 멀쩡한 새 측정을 거부한다.
+        let mut last_sync: Option<Instant> = None;
         let required = calibration.min_cameras_for_triangulation();
         let planes = intercept.hit_planes();
         let mut accepting = false;
@@ -125,19 +147,40 @@ pub fn spawn(
                 Err(RecvTimeoutError::Disconnected) => break,
             };
 
-            if let Some(pixel) = event.pixel {
-                let at = event.frame.timestamp;
-                if let Some(slot) = tracks
+            if let Some(pixel) = event.pixel
+                && let Some((_, observations)) = series
                     .iter_mut()
                     .find(|(id, _)| *id == event.frame.camera_id)
-                {
-                    slot.1 = Some(Track { pixel, at });
+            {
+                let now = event.frame.timestamp;
+                observations.push(detector::Observation {
+                    pixel,
+                    camera_id: event.frame.camera_id,
+                    timestamp: now,
+                });
+                // 공백을 가로질러 보간하지 않도록 낡은 관측을 버린다.
+                observations.retain(|observation| {
+                    now.saturating_duration_since(observation.timestamp) <= MAX_OBSERVATION_AGE
+                });
+                if observations.len() > SERIES_CAPACITY {
+                    let drop = observations.len() - SERIES_CAPACITY;
+                    observations.drain(0..drop);
                 }
             }
 
-            if let Some((point, sync_time, skew)) = fuse(&tracks, required, &calibration) {
+            let fused = fuse(&series, required, &calibration)
+                // 새 시각이 아니면 버린다 — 같은 측정을 두 번 세지 않는다.
+                .filter(|fused| last_sync.is_none_or(|last| fused.sync_time > last));
+            if fused.is_none() && series.iter().all(|(_, o)| !o.is_empty()) {
+                stats.stale_skipped += 1;
+            }
+            if let Some(fused) = fused {
+                let (point, sync_time) = (fused.point, fused.sync_time);
+                last_sync = Some(sync_time);
+                last_raw = Some((point, Instant::now()));
                 stats.triangulated += 1;
-                stats.skew_samples.push(skew);
+                stats.skew_samples.push(fused.skew);
+                stats.reprojection_samples.push(fused.reprojection_px);
                 let outcome = ekf.update_position(point, sync_time);
                 stats.record(outcome);
                 // 버려진 측정만 찍는다 — Accepted는 초당 100건이라 요약 카운트로 충분하다.
@@ -149,7 +192,8 @@ pub fn spawn(
                         x = f2(point.coords.x),
                         y = f2(point.coords.y),
                         z = f2(point.coords.z),
-                        skew_ms = f2(skew * 1e3),
+                        skew_ms = f2(fused.skew * 1e3),
+                        reproj_px = f2(fused.reprojection_px),
                         "측정 거부"
                     );
                 }
@@ -247,6 +291,10 @@ pub fn spawn(
                 // 벤치에서 진단이 된다 (접수 평면 y 0.08~0.35는 로봇 코앞이라 화각을
                 // 벗어나기 쉽다).
                 let params = calibration.params(event.frame.camera_id);
+                let raw_pixel = last_raw
+                    .filter(|(_, at)| at.elapsed() <= RAW_MARKER_TTL)
+                    .zip(params)
+                    .and_then(|((point, _), params)| params.project_world_unclipped(point));
                 let impact_pixel = shown.zip(params).and_then(|(prediction, params)| {
                     params.project_world_unclipped(prediction.impact_position)
                 });
@@ -258,12 +306,19 @@ pub fn spawn(
                             || pixel.y >= f64::from(params.height)
                     })
                 });
-                let hud = hud_lines(&ekf, &decision, shown.as_ref(), impact_offscreen);
+                let hud = hud_lines(
+                    &ekf,
+                    &decision,
+                    shown.as_ref(),
+                    impact_offscreen,
+                    stats.reprojection_samples.last().copied(),
+                );
                 let preview = PreviewEvent {
                     frame: event.frame,
                     pixel: event.pixel,
                     impact_pixel,
                     impact_offscreen,
+                    raw_pixel,
                     hud,
                 };
                 if let Err(TrySendError::Full(_)) = preview_tx.try_send(preview) {
@@ -281,34 +336,113 @@ pub fn spawn(
     });
 }
 
-/// 충분히 동시각인 검출만 모아 삼각측량한다. `(점, 동기 시각, skew [s])`.
+/// 정렬 후 백분위수. 표본이 없으면 `None`.
+fn percentile(samples: &[f64], q: f64) -> Option<f64> {
+    if samples.is_empty() {
+        return None;
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let index = ((sorted.len() - 1) as f64 * q).round() as usize;
+    return sorted.get(index).copied();
+}
+
+/// 한 번의 삼각측량 결과.
+pub struct Fused {
+    pub point: pingpong_bot::Point3,
+    /// 보간 기준 시각 — EKF에 넘길 측정 시각.
+    pub sync_time: Instant,
+    /// 보정 **전** 좌/우 최신 프레임의 시각 차 [s]. 리그 동기 품질 계측용.
+    pub skew: f64,
+    /// 복원한 3D 점을 각 카메라로 되쏘았을 때의 최대 오차 [px].
+    ///
+    /// 검출(2D)은 멀쩡한데 3D가 나쁜 경우를 잡아낸다 — 그러면 원인은 검출기가 아니라
+    /// 캘리브레이션이나 동기다.
+    pub reprojection_px: f64,
+}
+
+/// 카메라별 관측 시계열을 **공통 시각으로 보간해** 삼각측량한다.
+///
+/// 예전에는 각 캠의 최신 픽셀을 그대로 짝지었다(`Triangulate::pixels`). UVC 캠은 하드웨어
+/// 동기가 없어서 그 둘이 최대 20 ms까지 어긋나는데, 5 m/s 공이면 그동안 10 cm를 간다 —
+/// 서로 다른 순간의 시선을 교차시키니 3D 점이 **체계적으로** 밀렸다 (실측 skew p95 18.9 ms).
+/// `Triangulate::synced`는 각 캠 시계열을 `sync_time`으로 선형 보간해 그 편향을 없앤다.
+///
+/// `sync_time`은 **캠별 최신 시각 중 가장 이른 것**이다 — 그래야 모든 캠이 그 시각을 감싸
+/// 외삽이 아니라 보간이 된다. 대가는 지연 최대 한 프레임.
+///
+/// # 신선도
+///
+/// 한 캠이 검출을 놓치면 그 시계열의 마지막 관측이 그대로 남는다. 만료시키지 않으면
+/// `sync_time`이 그 낡은 시각에 고정돼 **멀쩡한 캠을 몇 초 전으로 보간**하게 된다
+/// (실측: skew p50 2.7 s, p95 44 s — 예측이 간헐적으로 완전히 튀던 원인).
+/// 그래서 모든 캠의 최신 관측이 [`MAX_SYNC_LAG`] 안에 있을 때만 삼각측량한다.
 fn fuse(
-    tracks: &[(camera::Id, Option<Track>)],
+    series: &[(camera::Id, Vec<detector::Observation>)],
     required: usize,
     calibration: &Calibration,
-) -> Option<(pingpong_bot::Point3, Instant, f64)> {
-    let newest = tracks
+) -> Option<Fused> {
+    let ready: Vec<(camera::Id, &[detector::Observation])> = series
         .iter()
-        .filter_map(|(_, track)| track.as_ref().map(|t| t.at))
-        .max()?;
-
-    let mut hits: Vec<(camera::Id, camera::Pixel)> = Vec::with_capacity(tracks.len());
-    let mut oldest = newest;
-    for (id, track) in tracks {
-        let Some(track) = track else { continue };
-        if newest.duration_since(track.at).as_secs_f64() > MAX_STEREO_SKEW_SECS {
-            continue;
-        }
-        oldest = oldest.min(track.at);
-        hits.push((*id, track.pixel));
-    }
-    if hits.len() < required {
+        .filter(|(_, observations)| !observations.is_empty())
+        .map(|(id, observations)| (*id, observations.as_slice()))
+        .collect();
+    if ready.len() < required {
         return None;
     }
 
-    let point = Triangulate::pixels(&hits, calibration)?;
-    let skew = newest.duration_since(oldest).as_secs_f64();
-    return Some((point, newest, skew));
+    let latest: Vec<Instant> = ready
+        .iter()
+        .filter_map(|(_, observations)| observations.last().map(|o| o.timestamp))
+        .collect();
+    // 한 캠이라도 뒤처져 있으면 이번 프레임은 버린다 — 낡은 시선으로 만든 3D 점이
+    // EKF를 통째로 흔든다.
+    let newest = latest.iter().copied().max()?;
+    let oldest = latest.iter().copied().min()?;
+    if newest.saturating_duration_since(oldest) > MAX_SYNC_LAG {
+        return None;
+    }
+    let sync_time = latest.iter().copied().min()?;
+    let skew = latest
+        .iter()
+        .copied()
+        .max()?
+        .duration_since(sync_time)
+        .as_secs_f64();
+
+    let point = Triangulate::synced(&ready, sync_time, calibration).ok()?;
+    let reprojection_px = reprojection_error_px(&ready, sync_time, calibration, point);
+    return Some(Fused {
+        point,
+        sync_time,
+        skew,
+        reprojection_px,
+    });
+}
+
+/// 복원한 점을 각 카메라로 되쏘아 보간 픽셀과의 최대 거리 [px].
+fn reprojection_error_px(
+    ready: &[(camera::Id, &[detector::Observation])],
+    sync_time: Instant,
+    calibration: &Calibration,
+    point: pingpong_bot::Point3,
+) -> f64 {
+    let mut worst = 0.0_f64;
+    for (camera_id, observations) in ready {
+        let Some(params) = calibration.params(*camera_id) else {
+            continue;
+        };
+        let (Some(measured), Some(projected)) = (
+            Triangulate::sample_at(observations, sync_time),
+            params.project_world_unclipped(point),
+        ) else {
+            continue;
+        };
+        let dx = projected.x - measured.x;
+        let dy = projected.y - measured.y;
+        worst = worst.max(dx.hypot(dy));
+    }
+    return worst;
 }
 
 /// 게이트가 바뀐 순간의 스냅샷. 커밋까지 못 간 샷을 로그만으로 진단하는 근거다.
@@ -358,6 +492,7 @@ fn hud_lines(
     decision: &Decision,
     shown: Option<&Prediction>,
     impact_offscreen: bool,
+    reprojection_px: Option<f64>,
 ) -> Vec<String> {
     let state = match decision {
         Decision::Attempt => "ATTEMPT plan request".to_owned(),
@@ -389,6 +524,10 @@ fn hud_lines(
     }
     if let Some(d2) = ekf.last_gate_d2() {
         lines.push(format!("gate   d2 {d2:.1}  reject {}", ekf.reject_streak()));
+    }
+    // 3D 복원 품질 — 초록(검출)과 흰 원(생 삼각측량 재투영)이 벌어진 픽셀 거리.
+    if let Some(px) = reprojection_px {
+        lines.push(format!("reproj {px:.1} px"));
     }
     return lines;
 }
