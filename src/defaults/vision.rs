@@ -13,6 +13,8 @@ use crate::detector::{
 /// 테이블 상판 위 공 비행 높이 keep [m] — 복도 마스크 프리즘 높이.
 /// 공이 상판 1 m 위로 가지 않는다는 전제. 배경 컷 편의로 낮추지 않는다.
 pub const FLIGHT_BAND_M: f64 = 1.0;
+/// 스틸 GT hit 판정 반경 [px].
+pub const STILL_HIT_RADIUS_PX: f64 = 20.0;
 /// scorer motion 가중.
 pub const MOTION_WEIGHT: f64 = 0.5;
 /// MotionPrior absdiff 이진화 임계.

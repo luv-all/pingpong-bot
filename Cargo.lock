@@ -2204,6 +2204,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "label-stills"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "opencv",
+ "pingpong-bot",
+]
+
+[[package]]
 name = "lalrpop"
 version = "0.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

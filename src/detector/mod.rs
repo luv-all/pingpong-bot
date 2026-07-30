@@ -4,6 +4,7 @@
 //! - [`scoring`] — candidate · scorer
 //! - [`motion`] — `MotionPrior`
 //! - [`spatial`] — floor mask · 테이블 복도 · 면적 밴드
+//! - [`stills`] — 정량 eval용 스틸 GT manifest
 //! - [`builder`] — [`Detector`] 조립
 //!
 //! **조립 SSOT:** [`crate::defaults::detector_for`].
@@ -16,6 +17,7 @@ mod observation;
 mod roi_params;
 pub mod scoring;
 pub mod spatial;
+pub mod stills;
 mod track;
 mod undistort;
 
@@ -32,6 +34,7 @@ pub use scoring::params::ScorerParams;
 pub use scoring::scorer::{self as scorer, Scorer};
 pub(crate) use spatial::scorer_params_from_calib;
 pub use spatial::{FloorEdgeMask, SpatialMask, TableCorridorMask};
+pub use stills::{StillItem, StillsManifest};
 pub use track::RoiTrack;
 pub(crate) use undistort::undistort_frame;
 

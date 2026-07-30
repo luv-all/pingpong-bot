@@ -29,6 +29,10 @@ pub const DEFAULT_CALIBRATION_PENDING_NAME: &str = "calibration.pending.json";
 pub const DEFAULT_COLORMASK_PATH: &str = "data/colormask.json";
 /// `record-stereo` 오프라인 클립 루트 (`{scene}_{nn}/left.avi` …).
 pub const DEFAULT_CLIPS_DIR: &str = "data/clips";
+/// 정량 eval용 스틸 GT 루트 (`manifest.json` + PNG).
+pub const DEFAULT_DETECT_STILLS_DIR: &str = "data/detect_stills";
+/// 스틸 GT manifest SSOT.
+pub const DEFAULT_DETECT_STILLS_MANIFEST: &str = "data/detect_stills/manifest.json";
 
 /// [`DEFAULT_CALIBRATION_PATH`]의 `PathBuf`.
 pub fn calibration_path() -> PathBuf {
@@ -38,6 +42,16 @@ pub fn calibration_path() -> PathBuf {
 /// [`DEFAULT_COLORMASK_PATH`]의 `PathBuf`.
 pub fn colormask_path() -> PathBuf {
     return PathBuf::from(DEFAULT_COLORMASK_PATH);
+}
+
+/// [`DEFAULT_DETECT_STILLS_DIR`]의 `PathBuf`.
+pub fn detect_stills_dir() -> PathBuf {
+    return PathBuf::from(DEFAULT_DETECT_STILLS_DIR);
+}
+
+/// [`DEFAULT_DETECT_STILLS_MANIFEST`]의 `PathBuf`.
+pub fn detect_stills_manifest_path() -> PathBuf {
+    return PathBuf::from(DEFAULT_DETECT_STILLS_MANIFEST);
 }
 
 /// `-o`가 있으면 그 부모 옆 pending, 없으면 [`DEFAULT_DATA_DIR`] 아래.
