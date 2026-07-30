@@ -284,7 +284,12 @@ pub fn plan_coarse_track(arm: &Arm, predictions: &[Prediction]) -> Option<robot:
     // 기본 중앙 포즈를 힌트로 단일 IK. 실제 이동은 rate-limited 추종 루프가 함.
     let hint = robot::Pose::new(rail.default_x(), arm.default_joints.clone());
     return arm
-        .inverse_pose_with_rail(target.reachable, target.desired_normal, &hint)
+        .inverse_pose_with_rail(
+            target.reachable,
+            target.desired_normal,
+            &hint,
+            robot::IkSearch::Local,
+        )
         .ok();
 }
 
@@ -308,7 +313,12 @@ pub fn plan_coarse_track_targets(
     let rail = arm.rail.as_ref()?;
     let hint = robot::Pose::new(rail.default_x(), arm.default_joints.clone());
     let joints = arm
-        .inverse_pose_with_rail(target.reachable, target.desired_normal, &hint)
+        .inverse_pose_with_rail(
+            target.reachable,
+            target.desired_normal,
+            &hint,
+            robot::IkSearch::Local,
+        )
         .ok()
         .map(|pose| pose.joints);
     return Some((target.rail_x, joints));
@@ -345,7 +355,12 @@ pub fn plan_coarse_track_targets_for_plane(
         .or_else(|| coarse_track_geometry(arm, predictions))?;
     let hint = robot::Pose::new(rail.default_x(), arm.default_joints.clone());
     let joints = arm
-        .inverse_pose_with_rail(target.reachable, target.desired_normal, &hint)
+        .inverse_pose_with_rail(
+            target.reachable,
+            target.desired_normal,
+            &hint,
+            robot::IkSearch::Local,
+        )
         .ok()
         .map(|pose| pose.joints);
     return Some((target.rail_x, joints));
@@ -1685,7 +1700,8 @@ mod tests {
         };
         return match err {
             SwingPlanError::InsufficientTime { .. } => "시간부족(게이트)".to_string(),
-            SwingPlanError::InverseKinematicsNoSolution { .. } => "IK 해없음".to_string(),
+            SwingPlanError::InverseKinematicsNoSolution { .. } => "위치 도달불가".to_string(),
+            SwingPlanError::RacketOrientationUnreachable { .. } => "면 방향 불가".to_string(),
             SwingPlanError::ReturnVelocityUnreachable { .. } => "리턴속도불가".to_string(),
             SwingPlanError::NearSingularity { joint_index, .. } => {
                 format!("특이점근접(q{joint_index})")

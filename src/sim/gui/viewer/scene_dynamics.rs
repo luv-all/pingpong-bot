@@ -452,6 +452,7 @@ fn impact_marker_color(world: &SimWorld) -> Color {
     if let Some(err) = &snap.last_fail {
         return match err {
             SwingPlanError::InverseKinematicsNoSolution { .. }
+            | SwingPlanError::RacketOrientationUnreachable { .. }
             | SwingPlanError::NearSingularity { .. } => rgba(colors::IK),
             SwingPlanError::InsufficientTime { .. } => rgba(colors::TIME),
             SwingPlanError::ReturnVelocityUnreachable { .. } => rgba(colors::RETURN),

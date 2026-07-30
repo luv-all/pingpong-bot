@@ -99,12 +99,14 @@ pub(crate) fn best_impact_candidate_for_outgoing(
     let mut best: Option<ImpactCandidate> = None;
     let mut last_error = None;
     let try_hint = |hint: Joints,
+                    search: robot::IkSearch,
                     best: &mut Option<ImpactCandidate>,
                     last_error: &mut Option<SwingPlanError>| {
         let solved = match arm.inverse_pose_with_rail(
             racket_center,
             desired_normal,
             &robot::Pose::new(start.rail_x, hint),
+            search,
         ) {
             Ok(solved) => solved,
             Err(error) => {
@@ -172,11 +174,28 @@ pub(crate) fn best_impact_candidate_for_outgoing(
     // 실패시에만 대안 시드 폴백")대로. `diag_wp4a_single_vs_multi_seed`가
     // 150개 표본에서 이 폴백이 필요했던 사례는 0건이었지만, 그 표본이
     // 못 덮는 기하가 있을 수 있어 안전망으로 남긴다.
-    try_hint(base_hint.clone(), &mut best, &mut last_error);
+    try_hint(
+        base_hint.clone(),
+        robot::IkSearch::Local,
+        &mut best,
+        &mut last_error,
+    );
     if best.is_none() {
         for hint in candidate_ik_hints(arm, &base_hint).into_iter().skip(1) {
-            try_hint(hint, &mut best, &mut last_error);
+            try_hint(hint, robot::IkSearch::Local, &mut best, &mut last_error);
         }
+    }
+    // 반사 시드가 전부 막혔을 때만 관절공간 전역 스윕. 바깥 반사 시드는 **서로 다른
+    // 해를 열거해 조작성을 비교**하려는 것이고 전역 스윕은 **아무 해라도 찾으려는**
+    // 것이라 목적이 다르다 — 둘을 곱하면(반사 4 x 확산 16) 한 표적에 76갈래를 돌게
+    // 되어 bang-bang 워커가 CPU를 독점한다. 전역은 마지막 한 번으로 족하다.
+    if best.is_none() {
+        try_hint(
+            base_hint.clone(),
+            robot::IkSearch::Global,
+            &mut best,
+            &mut last_error,
+        );
     }
 
     return best.ok_or_else(|| {
@@ -260,6 +279,7 @@ mod tests {
                             racket_center,
                             desired_normal,
                             &robot::Pose::new(start.rail_x, hint),
+                            robot::IkSearch::Local,
                         ) else {
                             continue;
                         };
@@ -518,6 +538,7 @@ mod tests {
                     racket_center,
                     desired_normal,
                     &robot::Pose::new(start.rail_x, hint),
+                    robot::IkSearch::Local,
                 ) else {
                     continue;
                 };
@@ -742,6 +763,7 @@ mod tests {
                     racket_center,
                     desired_normal,
                     &robot::Pose::new(start.rail_x, hint),
+                    robot::IkSearch::Local,
                 ) else {
                     continue;
                 };

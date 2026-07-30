@@ -16,6 +16,7 @@ pub mod state;
 pub mod urdf;
 
 mod arm;
+mod ik_search;
 mod joint_limit;
 mod joints;
 mod link_inertial;
@@ -30,6 +31,7 @@ mod tests;
 pub use arm::Arm;
 pub use build::{ArmBuildError, ArmBuilder, MountPreset, Robot, RobotBuildError, RobotBuilder};
 pub use collision::OrientedBox;
+pub use ik_search::IkSearch;
 pub use joint_limit::JointLimit;
 pub use joints::Joints;
 pub use link_inertial::LinkInertial;

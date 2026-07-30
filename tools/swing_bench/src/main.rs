@@ -249,6 +249,7 @@ fn compute_target(
             racket_center,
             desired_normal,
             &robot::Pose::new(start.rail_x, ik_hint),
+            robot::IkSearch::Global,
         )
         .map_err(|e| anyhow!("임팩트 IK 실패: {e}"))?;
     let pose = arm

@@ -8,7 +8,7 @@ use crate::error::SwingPlanError;
 use super::build::{ArmBuildError, ArmBuilder};
 use super::dynamics;
 use super::serial::SerialChain;
-use super::{JointLimit, Joints, LinearRail, LinkInertial, Pose, RacketPose, State};
+use super::{IkSearch, JointLimit, Joints, LinearRail, LinkInertial, Pose, RacketPose, State};
 
 /// 로봇 팔 불변 모델. sim/real/plan_swing이 같은 `Arm`을 참조한다.
 #[derive(Debug, Clone, PartialEq)]
@@ -318,6 +318,7 @@ impl Arm {
         target: Point3,
         target_normal: Vector3<f64>,
         hint: &Pose,
+        search: IkSearch,
     ) -> Result<Pose, SwingPlanError> {
         const MAX_ITERS: usize = 250;
         const POSITION_TOLERANCE: f64 = 2e-4;
@@ -335,6 +336,33 @@ impl Arm {
                 target_z: target.coords.z,
             });
         }
+        // 값싼 필요조건 — 레일선에서 표적까지의 최소거리가 팔을 최대로 뻗은 길이를 넘으면
+        // 어떤 관절각으로도 닿을 수 없다. 아래 시드 스윕이 19갈래라 **도달 불가 표적의
+        // 실패 비용이 6.3 ms**까지 가는데, 1 kHz `plan_coarse_track`이 이걸 매 틱 물면
+        // 물리 스텝을 블로킹한다 (실측: 가드 테스트가 28.9 ms/step, 허용 20 ms).
+        // 이 검사는 `sqrt` 한 번이고, 통과해도 해를 보장하지 않는 **필요조건일 뿐**이라
+        // 도달 가능한 표적을 잘라낼 위험이 없다 (`reach_bound_never_rejects_a_reachable_pose`).
+        let max_reach = self.link_lengths.iter().sum::<f64>()
+            + crate::constants::geometry::RACKET_HANDLE_LENGTH
+            + crate::constants::geometry::RACKET_HALF_X;
+        let mount_distance = match &self.rail {
+            // 레일은 (mount_y, mount_z)에서 x축과 나란한 선분 — 표적까지의 최소거리.
+            Some(rail) => {
+                let dx = target.coords.x - rail.clamp_x(target.coords.x);
+                let dy = target.coords.y - rail.mount_y;
+                let dz = target.coords.z - rail.mount_z;
+                (dx * dx + dy * dy + dz * dz).sqrt()
+            }
+            None => (target.coords - self.base.coords).norm(),
+        };
+        if mount_distance > max_reach {
+            return Err(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: target.coords.x,
+                target_y: target.coords.y,
+                target_z: target.coords.z,
+            });
+        }
+
         let target_normal = target_normal.normalize();
         let reference = if target_normal.z.abs() < 0.9 {
             Vector3::z()
@@ -385,8 +413,61 @@ impl Arm {
             ));
             seeds.push(make_values(rail.default_x(), &self.default_joints));
         }
+        // 위 세 시드는 전부 `hint` 아니면 `default_joints` 근처다. 팔+레일 5축에 5차원
+        // 과제(위치 3 + 법선 2)라 **여유자유도가 없어** 해가 이산 분기로 갈리는데, 한 분기
+        // 근처에서만 출발하면 나머지 분기의 해를 영영 못 본다. DLS는 지역 수렴이라 그때
+        // "해 없음"을 반환하지만 해는 존재한다.
+        //
+        // 관절 한계를 고르게 덮는 저불일치(황금비) 시드로 보강한다. 측정
+        // (`tests/diag_ik_roundtrip.rs`, FK가 만들어 해가 보장된 표적 256개):
+        //
+        // | 시드 | 복원률 |
+        // |------|--------|
+        // | 1    | 54.3%  |
+        // | 4    | 71.1%  |
+        // | 8    | 85.9%  |
+        // | 16   | 100.0% |
+        //
+        // 한계 중앙 기준 반사 시드(팔꿈치 위/아래를 노린 것)도 재봤지만 8개로 61.7%에
+        // 그쳐 무작위 8개(85.9%)보다 나빴고, 무작위와 합쳐도 커버리지가 늘지 않았다 —
+        // 실제 분기 구조와 안 맞는다.
+        //
+        // 비용은 늘지 않는다. **실패가 성공보다 31배 비싸서**(1.048 ms vs 0.034 ms,
+        // 전체 시간의 96%) 시드를 늘려 실패를 성공으로 바꾸면 평균이 오히려 내려간다.
+        // 첫 시드가 맞으면 나머지는 아예 돌지 않는다.
+        //
+        // 그래서 이 스윕은 `IkSearch::Global`에서만 돈다 — 자세한 판단 기준은 [`IkSearch`].
+        const SPREAD_SEEDS: usize = 16;
+        const GOLDEN_RATIO: f64 = 0.618_033_988_749_895;
+        let spread_count = match search {
+            IkSearch::Local => 0,
+            IkSearch::Global => SPREAD_SEEDS,
+        };
+        let spread_rail_x = self
+            .rail
+            .as_ref()
+            .map_or(hint.rail_x, |rail| rail.clamp_x(target.coords.x));
+        let spread = (1..=spread_count).map(|index| {
+            let values = (0..self.joint_count())
+                .map(|joint| {
+                    // continuous 관절(`None`)은 한계가 없으니 ±90°만 훑는다.
+                    let (min, max) = self.joint_limit(joint).map_or(
+                        (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+                        |limit| (limit.min, limit.max),
+                    );
+                    let fraction = ((index as f64) * GOLDEN_RATIO * ((joint + 1) as f64)).fract();
+                    min + (max - min) * fraction
+                })
+                .collect();
+            make_values(spread_rail_x, &Joints { values })
+        });
+
         let mut best: Option<(f64, Pose)> = None;
-        for mut values in seeds {
+        for mut values in seeds.into_iter().chain(spread) {
+            // 이 시드에서의 최고 점수 — 개선이 멈추면 남은 반복을 태우지 않고 다음 시드로
+            // 넘어간다. 실패 시드가 매번 MAX_ITERS를 다 도는 것이 위 1.048 ms의 정체다.
+            let mut seed_best_score = f64::INFINITY;
+            let mut stalled_iters = 0usize;
             for _ in 0..MAX_ITERS {
                 let (rail_x, joints) = decode(&values);
                 let Some(pose) = self.forward_kinematics_with_rail(rail_x, &joints) else {
@@ -403,6 +484,18 @@ impl Arm {
                 }
                 if position_error <= POSITION_TOLERANCE && normal_error <= NORMAL_TOLERANCE {
                     return Ok(Pose::new(rail_x, joints));
+                }
+                // DLS는 평탄 구간을 지나 다시 내려가기도 하므로 즉시 포기하지 않고
+                // STALL_ITERS만큼 지켜본다.
+                const STALL_ITERS: usize = 12;
+                if score < seed_best_score - 1e-9 {
+                    seed_best_score = score;
+                    stalled_iters = 0;
+                } else {
+                    stalled_iters += 1;
+                    if stalled_iters >= STALL_ITERS {
+                        break;
+                    }
                 }
 
                 let error = task(pose);
@@ -467,6 +560,31 @@ impl Arm {
             {
                 return Ok(candidate);
             }
+        }
+        // 여기까지 왔으면 자세를 못 맞춘 것인데, 원인이 **위치**인지 **법선**인지는 아직
+        // 모른다. 위치만 따로 풀어 갈라준다 — 실패 경로에서만 도는 IK 한 번이라 성공
+        // 경로는 그대로다. 뭉뚱그리면 위치는 닿는데도 "도달 범위 밖"이라 보고해
+        // 마운트·법선이 진짜 원인일 때 팔 길이를 의심하게 만든다.
+        let position_reachable = match &self.rail {
+            Some(rail) => self
+                .inverse_kinematics_with_rail(
+                    rail,
+                    rail.clamp_x(target.coords.x),
+                    target,
+                    Some(&hint.joints),
+                )
+                .is_ok(),
+            None => self.inverse_kinematics(target).is_ok(),
+        };
+        if position_reachable {
+            return Err(SwingPlanError::RacketOrientationUnreachable {
+                target_x: target.coords.x,
+                target_y: target.coords.y,
+                target_z: target.coords.z,
+                normal_x: target_normal.x,
+                normal_y: target_normal.y,
+                normal_z: target_normal.z,
+            });
         }
         return Err(SwingPlanError::InverseKinematicsNoSolution {
             target_x: target.coords.x,

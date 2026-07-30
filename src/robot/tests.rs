@@ -119,7 +119,7 @@ fn pose_ik_round_trips_position_and_face_normal_with_rail() {
     let hint = Pose::new(0.35, arm.default_joints.clone());
 
     let solved = arm
-        .inverse_pose_with_rail(target.position, target.normal, &hint)
+        .inverse_pose_with_rail(target.position, target.normal, &hint, IkSearch::Global)
         .expect("pose IK");
     let actual = arm
         .forward_kinematics_with_rail(solved.rail_x, &solved.joints)

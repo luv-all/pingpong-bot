@@ -13,6 +13,24 @@ pub enum SwingPlanError {
         target_y: f64,
         target_z: f64,
     },
+    /// 위치에는 닿지만 그 지점에서 라켓 면을 요구 법선으로 세울 관절 조합이 없음.
+    ///
+    /// [`Self::InverseKinematicsNoSolution`]과 반드시 구분해야 한다 — 실측
+    /// (fly_05·fly_07, 2026-07-31)에서 실패 표적 4개 중 3개는 **위치 IK는 성공**했다.
+    /// 하나로 뭉뚱그리면 "팔이 짧다/레일이 짧다"는 엉뚱한 결론으로 샌다. 실제 대책은
+    /// 마운트·리턴 법선 쪽이다.
+    #[error(
+        "라켓 면 방향 불가 - 위치 ({target_x:.3}, {target_y:.3}, {target_z:.3}) m 에는 닿지만 \
+         요구 법선 ({normal_x:.2}, {normal_y:.2}, {normal_z:.2}) 을 만들 관절 조합이 없음"
+    )]
+    RacketOrientationUnreachable {
+        target_x: f64,
+        target_y: f64,
+        target_z: f64,
+        normal_x: f64,
+        normal_y: f64,
+        normal_z: f64,
+    },
     /// 임팩트 시각까지 남은 시간이 최소 스윙 소요 시간보다 짧음
     #[error("임팩트까지 {time_to_impact_secs:.3}s 남음 - 최소 스윙 {min_swing_secs:.3}s 필요")]
     InsufficientTime {
@@ -94,6 +112,12 @@ impl SwingPlanError {
                 target_x,
                 target_y,
                 target_z,
+            }
+            | Self::RacketOrientationUnreachable {
+                target_x,
+                target_y,
+                target_z,
+                ..
             }
             | Self::TablePenetration {
                 target_x,

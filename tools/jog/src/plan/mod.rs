@@ -102,7 +102,7 @@ pub fn compose(
         Kind::Pose => {
             let (target, normal) = reach_pose_target(arm, start, draft)?;
             let solved = arm
-                .inverse_pose_with_rail(target, normal, start)
+                .inverse_pose_with_rail(target, normal, start, robot::IkSearch::Global)
                 .context("pose ik")?;
             move_traj(
                 arm,
@@ -134,7 +134,8 @@ pub fn reach_ok(arm: &Arm, start: &robot::Pose, draft: &Draft) -> bool {
             let Ok((target, normal)) = reach_pose_target(arm, start, draft) else {
                 return false;
             };
-            arm.inverse_pose_with_rail(target, normal, start).is_ok()
+            arm.inverse_pose_with_rail(target, normal, start, robot::IkSearch::Global)
+                .is_ok()
         }
         Kind::Swing => true,
         _ => true,
