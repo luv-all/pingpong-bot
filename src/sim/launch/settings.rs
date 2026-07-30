@@ -18,6 +18,8 @@ use crate::sim::physics::arm_bodies::{
 };
 
 pub use crate::defaults::sim::{
+    RANDOM_SHOT_FIXED_MUZZLE_HEIGHT_Z_M, RANDOM_SHOT_FIXED_MUZZLE_INSET_Y_M,
+    RANDOM_SHOT_FIXED_PITCH_DEG, RANDOM_SHOT_FIXED_ROLL_DEG, RANDOM_SHOT_FIXED_YAW_DEGS,
     RANDOM_SHOT_HEIGHT_MAX_M, RANDOM_SHOT_HEIGHT_MIN_M, RANDOM_SHOT_LATERAL_MAX_M,
     RANDOM_SHOT_LATERAL_MIN_M, RANDOM_SHOT_NET_GATE_MAX_TRIES, RANDOM_SHOT_PITCH_MAX_DEG,
     RANDOM_SHOT_PITCH_MIN_DEG, RANDOM_SHOT_ROLL_MAX_DEG, RANDOM_SHOT_ROLL_MIN_DEG,
@@ -215,19 +217,48 @@ impl Settings {
     }
 
     fn sample_randomized_params(&self, rng: &mut impl Rng) -> Self {
-        let mut shot = self.randomized_aim(rng);
-        shot.height_offset_m = rng.gen_range(RANDOM_SHOT_HEIGHT_MIN_M..=RANDOM_SHOT_HEIGHT_MAX_M);
+        let yaw_deg = RANDOM_SHOT_FIXED_YAW_DEGS[rng.gen_range(0..RANDOM_SHOT_FIXED_YAW_DEGS.len())];
+        let mut shot = self.with_fixed_random_geometry(yaw_deg);
+        shot.speed_mps = rng.gen_range(RANDOM_SHOT_SPEED_MIN_MPS..=RANDOM_SHOT_SPEED_MAX_MPS);
         shot.topspin_rad_s = rng.gen_range(RANDOM_SHOT_TOPSPIN_MIN..=RANDOM_SHOT_TOPSPIN_MAX);
         shot.sidespin_rad_s = rng.gen_range(RANDOM_SHOT_SIDESPIN_MIN..=RANDOM_SHOT_SIDESPIN_MAX);
-        shot.pitch_deg = rng.gen_range(RANDOM_SHOT_PITCH_MIN_DEG..=RANDOM_SHOT_PITCH_MAX_DEG);
-        shot.roll_deg = rng.gen_range(RANDOM_SHOT_ROLL_MIN_DEG..=RANDOM_SHOT_ROLL_MAX_DEG);
         return shot;
     }
 
-    /// 좌우·높이·yaw·pitch·roll·속도·스핀을 안전 범위 안에서 랜덤화한 새 설정.
+    /// GUI Random용 고정 발사구·자세 — 발사구를 `(W/2, L−inset, 면+height)`에
+    /// 두고 pitch/roll을 고정한다. yaw만 호출자가 고른다.
+    ///
+    /// `BARREL_FORWARD_M` 때문에 조준각이 바뀌면 발사구가 움직이므로, 마운트
+    /// 오프셋으로 보정해서 발사구 절대 좌표를 유지한다.
+    fn with_fixed_random_geometry(&self, yaw_deg: f64) -> Self {
+        let mut shot = self.clone();
+        shot.yaw_deg = yaw_deg;
+        shot.pitch_deg = RANDOM_SHOT_FIXED_PITCH_DEG;
+        shot.roll_deg = RANDOM_SHOT_FIXED_ROLL_DEG;
+        shot.lateral_offset_m = 0.0;
+        shot.height_offset_m = 0.0;
+
+        let muzzle_x = table::WIDTH_X * 0.5;
+        let muzzle_y = table::LENGTH_Y - RANDOM_SHOT_FIXED_MUZZLE_INSET_Y_M;
+        let muzzle_z = table::SURFACE_Z + RANDOM_SHOT_FIXED_MUZZLE_HEIGHT_Z_M;
+        // height=lateral=0 → muzzle = mount + barrel·forward
+        let forward = shot.aim_direction();
+        let barrel = layout::Layout::BARREL_FORWARD_M as f32;
+        let mount_x = muzzle_x as f32 - forward.x * barrel;
+        let mount_y = muzzle_y as f32 - forward.y * barrel;
+        let mount_z = muzzle_z as f32 - forward.z * barrel;
+
+        shot.pos_offset_x_m = f64::from(mount_x) - layout::Layout::MOUNT_X;
+        shot.pos_offset_y_m = f64::from(mount_y) - layout::Layout::MOUNT_Y;
+        shot.pos_offset_z_m =
+            f64::from(mount_z) - (table::SURFACE_Z + layout::Layout::BODY_HEIGHT * 0.5);
+        return shot;
+    }
+
+    /// 위치·자세는 실측 고정값, yaw∈{−10,0,10}, 속도·스핀만 랜덤.
     ///
     /// ballistics 네트 게이트 **그리고** Rapier 네트 비접촉을 통과한 샘플만 반환.
-    /// drill·마운트 `pos_offset_*`는 호출 시점 값 그대로 유지된다.
+    /// drill spin은 호출 시점 값 그대로 유지된다.
     pub fn randomized(&self, rng: &mut impl Rng) -> Self {
         for _ in 0..RANDOM_SHOT_NET_GATE_MAX_TRIES {
             let shot = self.sample_randomized_params(rng);
@@ -235,12 +266,10 @@ impl Settings {
                 return shot;
             }
         }
-        // 최후: 조준만 랜덤, pitch/높이/스핀은 Rapier 통과가 확인된 기본값.
+        // 최후: 고정 기하 + 이산 yaw, 속도·스핀은 Rapier 통과가 확인된 기본값.
         let defaults = Self::default();
-        let mut shot = self.randomized_aim(rng);
-        shot.pitch_deg = defaults.pitch_deg;
-        shot.roll_deg = defaults.roll_deg;
-        shot.height_offset_m = defaults.height_offset_m;
+        let yaw_deg = RANDOM_SHOT_FIXED_YAW_DEGS[rng.gen_range(0..RANDOM_SHOT_FIXED_YAW_DEGS.len())];
+        let mut shot = self.with_fixed_random_geometry(yaw_deg);
         shot.topspin_rad_s = defaults.topspin_rad_s;
         shot.sidespin_rad_s = defaults.sidespin_rad_s;
         shot.speed_mps = defaults.speed_mps;
@@ -493,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn randomized_varies_aim_height_spin() {
+    fn randomized_pins_muzzle_pose_and_varies_speed_spin() {
         let base = Settings {
             pitch_deg: -7.0,
             roll_deg: 12.0,
@@ -501,21 +530,17 @@ mod tests {
             topspin_rad_s: 3.0,
             sidespin_rad_s: -2.0,
             drill_spin_rad_s: 1.0,
+            pos_offset_x_m: 0.1,
+            pos_offset_y_m: -0.1,
+            pos_offset_z_m: 0.05,
             ..Default::default()
         };
         let mut rng = rand::thread_rng();
-        for _ in 0..50 {
+        let mut seen_yaw = [false; 3];
+        for _ in 0..60 {
             let shot = base.randomized(&mut rng);
             assert!(
-                (RANDOM_SHOT_LATERAL_MIN_M..=RANDOM_SHOT_LATERAL_MAX_M)
-                    .contains(&shot.lateral_offset_m)
-            );
-            assert!(
                 (RANDOM_SHOT_SPEED_MIN_MPS..=RANDOM_SHOT_SPEED_MAX_MPS).contains(&shot.speed_mps)
-            );
-            assert!(
-                (RANDOM_SHOT_HEIGHT_MIN_M..=RANDOM_SHOT_HEIGHT_MAX_M)
-                    .contains(&shot.height_offset_m)
             );
             assert!(
                 (RANDOM_SHOT_TOPSPIN_MIN..=RANDOM_SHOT_TOPSPIN_MAX).contains(&shot.topspin_rad_s)
@@ -524,16 +549,45 @@ mod tests {
                 (RANDOM_SHOT_SIDESPIN_MIN..=RANDOM_SHOT_SIDESPIN_MAX)
                     .contains(&shot.sidespin_rad_s)
             );
+            assert!((shot.pitch_deg - RANDOM_SHOT_FIXED_PITCH_DEG).abs() < 1e-12);
+            assert!((shot.roll_deg - RANDOM_SHOT_FIXED_ROLL_DEG).abs() < 1e-12);
+            assert!((shot.lateral_offset_m).abs() < 1e-12);
+            assert!((shot.height_offset_m).abs() < 1e-12);
             assert!(
-                (RANDOM_SHOT_PITCH_MIN_DEG..=RANDOM_SHOT_PITCH_MAX_DEG).contains(&shot.pitch_deg)
+                RANDOM_SHOT_FIXED_YAW_DEGS
+                    .iter()
+                    .any(|&y| (shot.yaw_deg - y).abs() < 1e-12),
+                "yaw must be one of {:?}, got {}",
+                RANDOM_SHOT_FIXED_YAW_DEGS,
+                shot.yaw_deg
             );
-            assert!((RANDOM_SHOT_ROLL_MIN_DEG..=RANDOM_SHOT_ROLL_MAX_DEG).contains(&shot.roll_deg));
-            let (yaw_min, yaw_max) = Settings::yaw_range_for_lateral_deg(shot.lateral_offset_m);
-            assert!(shot.yaw_deg >= yaw_min - 1e-9 && shot.yaw_deg <= yaw_max + 1e-9);
+            for (i, &y) in RANDOM_SHOT_FIXED_YAW_DEGS.iter().enumerate() {
+                if (shot.yaw_deg - y).abs() < 1e-12 {
+                    seen_yaw[i] = true;
+                }
+            }
 
-            assert_eq!(shot.pos_offset_x_m, base.pos_offset_x_m);
-            assert_eq!(shot.pos_offset_y_m, base.pos_offset_y_m);
-            assert_eq!(shot.pos_offset_z_m, base.pos_offset_z_m);
+            let muzzle = shot.muzzle_position();
+            assert!(
+                (f64::from(muzzle.x) - table::WIDTH_X * 0.5).abs() < 1e-4,
+                "x={}",
+                muzzle.x
+            );
+            assert!(
+                (f64::from(muzzle.y) - (table::LENGTH_Y - RANDOM_SHOT_FIXED_MUZZLE_INSET_Y_M)).abs()
+                    < 1e-4,
+                "y={}",
+                muzzle.y
+            );
+            assert!(
+                (f64::from(muzzle.z)
+                    - (table::SURFACE_Z + RANDOM_SHOT_FIXED_MUZZLE_HEIGHT_Z_M))
+                    .abs()
+                    < 1e-4,
+                "z={}",
+                muzzle.z
+            );
+
             assert_eq!(shot.drill_spin_rad_s, base.drill_spin_rad_s);
             assert!(
                 shot.clears_incoming_net_gate(),
@@ -544,6 +598,10 @@ mod tests {
                 "randomized는 Rapier 네트 비접촉 샷만 반환해야 함: {shot:?}"
             );
         }
+        assert!(
+            seen_yaw.iter().all(|&v| v),
+            "60회면 세 yaw를 모두 봐야 함: {seen_yaw:?}"
+        );
     }
 
     #[test]
@@ -553,10 +611,12 @@ mod tests {
         let mut raw_clips = 0;
         for _ in 0..80 {
             let raw = base.sample_randomized_params(&mut rng);
-            // 의도적으로 낮은 높이로 내려 미달을 만든다.
+            // 의도적으로 낮은 높이·pitch로 내려 미달을 만든다.
             let mut low = raw;
-            low.height_offset_m = 0.15;
+            low.height_offset_m = -0.20;
             low.pitch_deg = -5.0;
+            // 마운트 보정을 깨서 낮은 탄도로 만든다.
+            low.pos_offset_z_m -= 0.30;
             if !low.clears_incoming_net_gate() || !low.clears_incoming_rapier_net() {
                 raw_clips += 1;
             }
