@@ -12,10 +12,11 @@ use pingpong_bot::estimator::{Ekf, Estimator, GateOutcome, Prediction, Triangula
 use pingpong_bot::robot::motion::{InterceptWindow, Planner};
 use tracing::{debug, info_span};
 
+use super::ball_receding::{BallReceding, MIN_DELTA_Y, MIN_SAMPLES};
 use super::fmt::f2;
 use super::{
-    CommitRequest, Decision, PreviewEvent, ShotEvent, Shutdown, SimUpdate, Throttle, VisionEvent,
-    decide,
+    CommitRequest, ControlStatus, Decision, PreviewEvent, ShotEvent, Shutdown, SimUpdate, Throttle,
+    VisionEvent, decide,
 };
 
 /// 스테레오 쌍으로 인정할 최대 타임스탬프 차 [s].
@@ -77,6 +78,7 @@ pub fn spawn(
     calibration: Calibration,
     intercept: InterceptWindow,
     commit_tx: Sender<CommitRequest>,
+    status_rx: Receiver<ControlStatus>,
     preview_tx: Option<Sender<PreviewEvent>>,
     sim_tx: Option<Sender<SimUpdate>>,
     event_tx: Sender<ShotEvent>,
@@ -93,11 +95,30 @@ pub fn spawn(
             .collect();
         let required = calibration.min_cameras_for_triangulation();
         let planes = intercept.hit_planes();
+        let mut accepting = false;
+        let mut shot_seq: u64 = 0;
+        let mut receding = BallReceding::new(MIN_DELTA_Y, MIN_SAMPLES);
         let mut announced_track = false;
         let mut last_decision: Option<Decision> = None;
         let mut progress = Throttle::new(PROGRESS_PERIOD);
 
         while !shutdown.is_down() {
+            while let Ok(status) = status_rx.try_recv() {
+                match status {
+                    ControlStatus::Ready { shot_seq: seq } => {
+                        accepting = true;
+                        shot_seq = seq;
+                        announced_track = false;
+                        last_decision = None;
+                        receding.reset();
+                        ekf.reset();
+                    }
+                    ControlStatus::Recovering { .. } => {
+                        accepting = false;
+                    }
+                }
+            }
+
             let event = match rx.recv_timeout(RECV_TIMEOUT) {
                 Ok(event) => event,
                 Err(RecvTimeoutError::Timeout) => continue,
@@ -134,18 +155,37 @@ pub fn spawn(
                 }
             }
 
+            let mut ball_y = ekf.position().map(|position| position.coords.y);
+
+            // 공 y가 로봇에서 멀어지면(증가) 새 급구 루프 — EKF를 새로 시드한다.
+            if accepting
+                && let Some(y) = ball_y
+                && receding.observe(y)
+            {
+                ekf.reset();
+                announced_track = false;
+                last_decision = None;
+                receding.reset();
+                ball_y = None;
+                debug!(shot = shot_seq, y = f2(y), "공 y 증가 — EKF 리셋 (새 루프)");
+            }
+
             let tracking = ekf.is_tracking();
+            if ball_y.is_none() {
+                ball_y = ekf.position().map(|position| position.coords.y);
+            }
+
             if tracking && !announced_track {
                 announced_track = true;
                 if let (Some(position), Some(velocity)) = (ekf.position(), ekf.velocity()) {
                     let _ = event_tx.send(ShotEvent::Tracking {
+                        shot_seq,
                         position,
                         speed: velocity.norm(),
                     });
                 }
             }
 
-            let ball_y = ekf.position().map(|position| position.coords.y);
             let predictions: Vec<Prediction> = if tracking {
                 planes
                     .iter()
@@ -168,6 +208,8 @@ pub fn spawn(
                     accepted = stats.accepted,
                     rejected = stats.rejected,
                     tracking,
+                    accepting,
+                    shot = shot_seq,
                     decision = ?decision,
                     "추정 진척"
                 );
@@ -177,7 +219,7 @@ pub fn spawn(
             let shown = display_candidate(&predictions);
 
             match decision {
-                Decision::Attempt => {
+                Decision::Attempt if accepting => {
                     let request = CommitRequest {
                         predictions,
                         ball_y: ball_y.unwrap_or(f64::NAN),
@@ -188,7 +230,7 @@ pub fn spawn(
                         stats.commit_dropped += 1;
                     }
                 }
-                Decision::Wait(_) => {}
+                Decision::Attempt | Decision::Wait(_) => {}
             }
 
             if let Some(sim_tx) = &sim_tx {
