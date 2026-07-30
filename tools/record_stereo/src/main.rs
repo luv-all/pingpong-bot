@@ -145,7 +145,10 @@ fn main() -> Result<()> {
 
         let left_lines = [
             format!("{}#{}", left_r.role, left_r.camera_id.0),
-            format!("grab {:.1}", prev.grab_fps),
+            format!(
+                "grab {:.1}  cam {:.0}/{:.0}",
+                prev.grab_fps, prev.capture_fps.0, prev.capture_fps.1
+            ),
             format!("ring {:.1}s ({} pairs)", prev.ring_secs, prev.ring_pairs),
         ];
         let right_lines = [
@@ -311,6 +314,7 @@ fn grab_loop(
                 left: lf.image,
                 right: rf.image,
                 grab_fps,
+                capture_fps: (left.capture_fps(), right.capture_fps()),
                 ring_secs,
                 ring_pairs: ring.len(),
             });

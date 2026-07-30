@@ -136,6 +136,30 @@ fn diag_clip_detection_per_camera() {
         );
     }
 
+    // JPEG 인코딩 비용 — `record_stereo`가 링에 담기 전에 프레임마다 돌린다.
+    {
+        use opencv::core::Vector;
+        let mut source =
+            OpenCvCapture::from_path(camera::Id(0), &dir.join("left.avi")).expect("클립 열기");
+        let (mut ns, mut n) = (0_u128, 0_u32);
+        while let Some(frame) = source.next_frame() {
+            let mut buf = Vector::<u8>::new();
+            let mut params = Vector::<i32>::new();
+            params.push(opencv::imgcodecs::IMWRITE_JPEG_QUALITY);
+            params.push(90);
+            let start = std::time::Instant::now();
+            let _ = opencv::imgcodecs::imencode(".jpg", &frame.image, &mut buf, &params);
+            ns += start.elapsed().as_nanos();
+            n += 1;
+        }
+        let per = ns as f64 / n as f64 / 1e6;
+        println!(
+            "JPEG 인코딩 {:.2} ms/frame → 캠 2대 순차면 {:.0} fps 상한",
+            per,
+            1000.0 / (per * 2.0)
+        );
+    }
+
     println!("검출 비용:");
     time_detection(&dir.join("left.avi"), camera::Id(0));
     time_detection(&dir.join("right.avi"), camera::Id(1));
