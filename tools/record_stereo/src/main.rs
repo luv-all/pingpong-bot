@@ -357,6 +357,15 @@ fn grab_loop(
             // **인코딩은 별도 스레드로.** 여기서 바로 쓰면 400프레임 × 2개 AVI를 인코딩하는
             // 동안 grab이 멈춰 링이 비고, 다음 테이크의 프리롤이 깨진다 — 연속 촬영이
             // 사실상 불가능했던 이유다. 캡처는 계속 돌게 두고 쓰기만 넘긴다.
+            // 캡처(프리롤+포스트롤 수집)는 여기서 끝났다 — 쓰기를 기다리지 않고 바로 다음
+            // 테이크를 받을 수 있게 상태를 먼저 올린다. 안 그러면 인코딩이 끝날 때까지
+            // Space가 막혀 연속 촬영이 답답해진다.
+            if let Ok(mut g) = shared.lock() {
+                g.last_status = Some(format!(
+                    "writing {}…",
+                    dir.file_name().and_then(|s| s.to_str()).unwrap_or("?")
+                ));
+            }
             let writer_shared = Arc::clone(&shared);
             let preroll_secs = preroll.as_secs_f64();
             let postroll_secs = postroll.as_secs_f64();
