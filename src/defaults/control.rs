@@ -45,7 +45,8 @@ pub struct ControlParams {
     pub max_joint_torques: [f64; 4],
     pub joint_inertia: f64,
     pub racket_open_pitch: f64,
-    /// Real: Goal Current FF (Current-based Position). 기본 off.
+    /// Real: 미사용(실기는 항상 Position Mode + max PWM/Current Limit).
+    /// Sim: RNEA로 다물체 `motor_max_force` 상한 갱신.
     pub torque_feedforward: bool,
 }
 

@@ -72,9 +72,21 @@ pub(crate) fn best_impact_candidate(
     prediction: &Prediction,
     start: &robot::Pose,
 ) -> Result<ImpactCandidate, SwingPlanError> {
+    let v_out = Impact::rally_return(prediction.impact_position, prediction.incoming_velocity);
+    return best_impact_candidate_for_outgoing(arm, prediction, start, v_out);
+}
+
+/// [`best_impact_candidate`]와 같으나 `Impact::rally_return`으로 출사속도를
+/// 다시 계산하지 않고 `v_out`을 그대로 받는다 — WP3 진단이 랠리 리턴
+/// 목표(`rally_target_y_frac`)를 바꿔 가며 같은 IK/시드 탐색을 재사용한다.
+pub(crate) fn best_impact_candidate_for_outgoing(
+    arm: &Arm,
+    prediction: &Prediction,
+    start: &robot::Pose,
+    v_out: Vector3<f64>,
+) -> Result<ImpactCandidate, SwingPlanError> {
     let impact_position = prediction.impact_position;
     let v_in = prediction.incoming_velocity;
-    let v_out = Impact::rally_return(impact_position, v_in);
     let desired_normal = (v_out - v_in).normalize();
 
     let base_hint = arm.with_wrist_open(&start.joints, Arm::wrist_open_for_return(v_out - v_in))?;
@@ -274,5 +286,159 @@ mod tests {
             }
         }
         println!("\n같은 타점 내 시드 간 |v_r| 최대 상대 산포 = {worst_spread:.4}%");
+    }
+
+    /// 사용자 질문(2026-07-30) 검증용 임시 계측 — impact 속도 IK가 만드는
+    /// `joint_velocities` 4개가 한계 대비 **얼마나 고르게 쓰이는가**.
+    ///
+    /// 질문: "방향만 유지하고 세기를 `min(robot_max, required)`로 클램프하면
+    /// 되지 않나?" — 답: 이미 `impact_target_from_candidate`의 `1/r`
+    /// 사전축소가 정확히 그 역할이다(v_r을 균일하게 스케일하는 건 선형
+    /// 사상이라 "이 방향으로 갈 수 있는 최대치"와 동치). 다만 그 축소가
+    /// 기준으로 삼는 `q̇`는 **가중 최소노름**(`linear_velocities_for_
+    /// racket_velocity`) 해 하나뿐이다 — 4관절·3속도제약이라 널스페이스가
+    /// 1차원 남는데, 최소노름 해가 그 자유도를 안 쓰고 있어서, 한 관절만
+    /// 포화되고 나머지는 여유가 남는 상황이면 널스페이스로 여유 관절에
+    /// 부하를 옮겨 **같은 방향으로 더 큰 크기**를 낼 여지가 있는지가
+    /// 관건이다. 이 계측은 그 여지의 크기를 잰다(구현 전 확인).
+    #[test]
+    #[ignore = "진단용 계측 — 수치를 stdout으로 뽑는다"]
+    fn diag_joint_utilization_at_impact_peak() {
+        let robot = crate::defaults::robot().expect("robot");
+        let arm = &*robot.arm;
+        let rail_x = arm.rail.as_ref().map(|r| r.default_x()).unwrap_or(0.0);
+        let start = robot::Pose::new(rail_x, arm.default_joints.clone());
+        let window = InterceptWindow::default();
+
+        println!(
+            "{:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>8}",
+            "y", "x", "v_in_y", "r", "q0", "q1", "q2", "q3"
+        );
+        for hit_y in window.hit_planes().into_iter().map(|plane| plane.y) {
+            for impact_x in [table::WIDTH_X * 0.25, table::WIDTH_X * 0.5, table::WIDTH_X * 0.75] {
+                for v_in_y in [-5.0_f64, -7.0] {
+                    let impact = crate::Point3::new(impact_x, hit_y, table::SURFACE_Z + 0.18);
+                    let prediction = Prediction {
+                        time_to_impact_secs: 0.30,
+                        impact_position: impact,
+                        incoming_velocity: Vector3::new(0.0, v_in_y, 0.7),
+                    };
+                    let Ok(candidate) = best_impact_candidate(arm, &prediction, &start) else {
+                        continue;
+                    };
+                    let util: Vec<f64> = candidate
+                        .joint_velocities
+                        .iter()
+                        .map(|v| v.abs() / arm.max_joint_speed)
+                        .collect();
+                    println!(
+                        "{hit_y:>6.2} {impact_x:>6.2} {v_in_y:>7.1} {:>7.3} {:>7.3} {:>7.3} {:>7.3} {:>8.3}",
+                        candidate.peak_joint_speed_ratio,
+                        util.first().copied().unwrap_or(f64::NAN),
+                        util.get(1).copied().unwrap_or(f64::NAN),
+                        util.get(2).copied().unwrap_or(f64::NAN),
+                        util.get(3).copied().unwrap_or(f64::NAN),
+                    );
+                }
+            }
+        }
+    }
+
+    /// WP3 계측 — 고정목표(2점 BVP, y_frac 스윕) vs 최소속도 네트클리어
+    /// 공식(사용자 지적, 2026-07-30)이 `peak_joint_speed_ratio`(r)를 얼마나
+    /// 낮추는가. WP10이 좁힌 세기 병목("270개 후보 전부 r>2.5, 평균
+    /// r=4.114")의 후속 레버 후보였다.
+    ///
+    /// **결론(기각)**: `min_effort`가 `|v_r|`은 비슷하거나 낮췄지만(1.785→
+    /// 1.846, ~3%↑) `r`은 오히려 나빠졌다(2.076→2.721 평균, 3.555→4.822
+    /// 최대) — `fixed@0.75`(현 프로덕션 기본값)가 스윕 전체에서 최선이었다.
+    /// 원인: `r`을 좌우하는 건 `v_r` 크기가 아니라 그 임팩트 포즈의
+    /// 자코비안과 방향이 얼마나 맞는가다(상세: `rally_return_velocity`
+    /// doc comment, `docs/wp3-rally-target-distance.md`). `min_effort`는
+    /// 프로덕션 기본값에서 제외됐고, 이 스윕은 그 반증 데이터를 재현
+    /// 가능하게 남겨 둔다.
+    ///
+    /// ```text
+    /// cargo test --lib diag_wp3_target_distance_sweep -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "진단용 계측 — 수치를 stdout으로 뽑는다"]
+    fn diag_wp3_target_distance_sweep() {
+        let robot = crate::defaults::robot().expect("robot");
+        let arm = &*robot.arm;
+        let rail_x = arm.rail.as_ref().map(|r| r.default_x()).unwrap_or(0.0);
+        let start = robot::Pose::new(rail_x, arm.default_joints.clone());
+        let window = InterceptWindow::default();
+
+        println!(
+            "{:>12} {:>6} {:>7} {:>7} {:>7} {:>9} {:>8} {:>8}",
+            "scheme", "total", "r_mean", "r>2.5%", "r_max", "|vr|mean", "net_ok%", "ik_ok%"
+        );
+
+        // 클로저 하나로 (scheme_label, v_out 계산기)를 스윕한다.
+        let fixed = |y_frac: f64| {
+            move |impact: crate::Point3| -> Vector3<f64> {
+                let cfg = defaults::ImpactParams {
+                    rally_target_y_frac: y_frac,
+                    ..defaults::ImpactParams::default()
+                };
+                Impact::rally_return_fixed_point(impact, &cfg)
+            }
+        };
+        let schemes: Vec<(String, Box<dyn Fn(crate::Point3) -> Vector3<f64>>)> = vec![
+            ("fixed@0.75".to_string(), Box::new(fixed(0.75))),
+            ("fixed@0.65".to_string(), Box::new(fixed(0.65))),
+            ("fixed@0.55".to_string(), Box::new(fixed(0.55))),
+            (
+                "min_effort".to_string(),
+                Box::new(|impact| Impact::rally_return(impact, Vector3::zeros())),
+            ),
+        ];
+
+        for (label, v_out_of) in &schemes {
+            let mut r_values: Vec<f64> = Vec::new();
+            let mut vr_norms: Vec<f64> = Vec::new();
+            let mut net_ok = 0usize;
+            let mut ik_ok = 0usize;
+            let mut total = 0usize;
+            for hit_y in window.hit_planes().into_iter().map(|plane| plane.y) {
+                for impact_x in
+                    [table::WIDTH_X * 0.25, table::WIDTH_X * 0.5, table::WIDTH_X * 0.75]
+                {
+                    for v_in_y in [-5.0_f64, -7.0] {
+                        total += 1;
+                        let impact = crate::Point3::new(impact_x, hit_y, table::SURFACE_Z + 0.18);
+                        let v_out = v_out_of(impact);
+                        if Impact::clears_net(impact, v_out) {
+                            net_ok += 1;
+                        }
+                        let prediction = Prediction {
+                            time_to_impact_secs: 0.30,
+                            impact_position: impact,
+                            incoming_velocity: Vector3::new(0.0, v_in_y, 0.7),
+                        };
+                        let Ok(candidate) =
+                            best_impact_candidate_for_outgoing(arm, &prediction, &start, v_out)
+                        else {
+                            continue;
+                        };
+                        ik_ok += 1;
+                        r_values.push(candidate.peak_joint_speed_ratio);
+                        vr_norms.push(candidate.racket_velocity.norm());
+                    }
+                }
+            }
+            let r_mean = r_values.iter().sum::<f64>() / r_values.len().max(1) as f64;
+            let r_over = 100.0 * r_values.iter().filter(|&&r| r > 2.5).count() as f64
+                / r_values.len().max(1) as f64;
+            let r_max = r_values.iter().cloned().fold(0.0_f64, f64::max);
+            let vr_mean = vr_norms.iter().sum::<f64>() / vr_norms.len().max(1) as f64;
+            println!(
+                "{label:>12} {total:>6} {r_mean:>7.3} {r_over:>7.1} {r_max:>7.3} {vr_mean:>9.3} \
+                 {:>8.1} {:>8.1}",
+                100.0 * net_ok as f64 / total as f64,
+                100.0 * ik_ok as f64 / total as f64,
+            );
+        }
     }
 }

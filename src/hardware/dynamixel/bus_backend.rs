@@ -7,8 +7,12 @@ pub(super) enum BusBackend {
         ticks: Vec<i32>,
         /// 마지막 Goal SyncWrite 전체 (미러 슬레이브 포함).
         last_bus_goals: Vec<(u8, i32)>,
-        /// 마지막 Goal Current (논리 모터 순서, signed units).
-        last_goal_currents: Vec<i16>,
+        /// 마지막 Operating Mode 값.
+        last_operating_mode: Option<u8>,
+        /// 마지막 PWM Limit SyncWrite (버스 ID, 값).
+        last_pwm_limits: Vec<(u8, u16)>,
+        /// 마지막 Current Limit SyncWrite (MX-64 ID만).
+        last_current_limits: Vec<(u8, u16)>,
     },
     #[cfg(feature = "real")]
     Real(RealBackend),

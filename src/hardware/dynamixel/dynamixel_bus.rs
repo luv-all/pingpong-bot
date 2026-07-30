@@ -20,9 +20,9 @@ fn pack_u8(value: u8) -> Vec<u8> {
     vec![value]
 }
 
-/// Goal Current (signed 16-bit) 패킹.
+/// PWM Limit / Current Limit (unsigned 16-bit) 패킹.
 #[cfg(feature = "real")]
-fn pack_i16(value: i16) -> Vec<u8> {
+fn pack_u16(value: u16) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
 
@@ -62,7 +62,9 @@ impl DynamixelBus {
             backend: BusBackend::DryRun {
                 ticks,
                 last_bus_goals: Vec::new(),
-                last_goal_currents: Vec::new(),
+                last_operating_mode: None,
+                last_pwm_limits: Vec::new(),
+                last_current_limits: Vec::new(),
             },
             torque_enabled: false,
         });
@@ -77,12 +79,34 @@ impl DynamixelBus {
         };
     }
 
-    /// dry-run 전용: 마지막 Goal Current (논리 모터 순서).
-    pub fn last_goal_currents(&self) -> Option<&[i16]> {
+    /// dry-run 전용: 마지막 Operating Mode.
+    pub fn last_operating_mode(&self) -> Option<u8> {
         return match &self.backend {
             BusBackend::DryRun {
-                last_goal_currents, ..
-            } => Some(last_goal_currents.as_slice()),
+                last_operating_mode, ..
+            } => *last_operating_mode,
+            #[cfg(feature = "real")]
+            BusBackend::Real(_) => None,
+        };
+    }
+
+    /// dry-run 전용: 마지막 PWM Limit (버스 ID, 값).
+    pub fn last_pwm_limits(&self) -> Option<&[(u8, u16)]> {
+        return match &self.backend {
+            BusBackend::DryRun {
+                last_pwm_limits, ..
+            } => Some(last_pwm_limits.as_slice()),
+            #[cfg(feature = "real")]
+            BusBackend::Real(_) => None,
+        };
+    }
+
+    /// dry-run 전용: 마지막 Current Limit (MX-64 ID만).
+    pub fn last_current_limits(&self) -> Option<&[(u8, u16)]> {
+        return match &self.backend {
+            BusBackend::DryRun {
+                last_current_limits, ..
+            } => Some(last_current_limits.as_slice()),
             #[cfg(feature = "real")]
             BusBackend::Real(_) => None,
         };
@@ -185,99 +209,30 @@ impl DynamixelBus {
         self.write_raw_goal_ticks(&ticks, 0.0)
     }
 
-    /// RNEA \(\tau\) [N·m] → Goal Current SyncWrite (논리 모터 + 미러는 마스터와 동일 부호 전류).
-    pub fn write_goal_currents_from_torques(&mut self, torques_nm: &[f64]) -> Result<(), HwError> {
-        let joint_count = self.mapping.config.motor_ids.len();
-        if torques_nm.len() != joint_count {
-            return Err(command_transport_error(
-                0.0,
-                torques_nm.len(),
-                format!(
-                    "토크 벡터 길이 불일치: got {} want {joint_count}",
-                    torques_nm.len()
-                ),
-            ));
-        }
-        let unit = self.mapping.config.nm_per_goal_current_unit.max(1e-9);
-        let currents: Vec<i16> = torques_nm
-            .iter()
-            .map(|&tau| {
-                let raw = (tau / unit).round();
-                raw.clamp(i16::MIN as f64, i16::MAX as f64) as i16
-            })
-            .collect();
-        return self.write_raw_goal_currents(&currents);
-    }
-
-    fn write_raw_goal_currents(&mut self, currents: &[i16]) -> Result<(), HwError> {
-        let joint_count = self.mapping.config.motor_ids.len();
-        if currents.len() != joint_count {
-            return Err(command_transport_error(
-                0.0,
-                currents.len(),
-                format!(
-                    "Goal Current 길이 불일치: got {} want {joint_count}",
-                    currents.len()
-                ),
-            ));
-        }
-        // 미러 슬레이브: 마스터와 같은 Goal Current (반대 방향 기구는 위치 미러로 처리).
-        let mut bus: Vec<(u8, i16)> = self
-            .mapping
-            .config
-            .motor_ids
-            .iter()
-            .zip(currents.iter())
-            .map(|(&id, &c)| (id, c))
-            .collect();
-        for pair in &self.mapping.config.mirror_slaves {
-            let Some(master_index) = self
-                .mapping
-                .config
-                .motor_ids
-                .iter()
-                .position(|&id| id == pair.master_id)
-            else {
-                continue;
-            };
-            bus.push((pair.slave_id, currents[master_index]));
-        }
-        match &mut self.backend {
-            BusBackend::DryRun {
-                last_goal_currents, ..
-            } => {
-                *last_goal_currents = currents.to_vec();
-            }
-            #[cfg(feature = "real")]
-            BusBackend::Real(real) => {
-                let ids: Vec<u8> = bus.iter().map(|(id, _)| *id).collect();
-                let data: Vec<Vec<u8>> = bus.iter().map(|(_, c)| pack_i16(*c)).collect();
-                let address = self.mapping.config.addr_goal_current;
-                let retries = self.mapping.config.comm_retries;
-                let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
-                real.sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
-                    .map_err(|error| {
-                        command_transport_error(
-                            0.0,
-                            joint_count,
-                            format!("Goal Current sync_write 실패 (addr={address}): {error}"),
-                        )
-                    })?;
-            }
-        }
-        return Ok(());
-    }
-
-    /// Torque OFF → Operating Mode = Current-based Position → (호출측에서 Torque ON).
-    pub fn set_current_based_position_mode(&mut self) -> Result<(), HwError> {
+    /// Torque OFF → Position Control + PWM/Current Limit 최대 → (호출측에서 Torque ON).
+    ///
+    /// Position 모드(3)에서는 Goal Current가 쓰이지 않고, 출력 상한은 PWM Limit이다.
+    /// MX-64 Current Limit도 스펙 최대로 맞춰 둔다(MX-28에는 해당 레지스터 없음).
+    pub fn configure_position_mode_max_effort(&mut self) -> Result<(), HwError> {
         if self.torque_enabled {
             self.enable_torque(false)?;
         }
+        self.write_operating_mode()?;
+        self.write_max_pwm_limits()?;
+        self.write_max_current_limits()?;
+        return Ok(());
+    }
+
+    fn write_operating_mode(&mut self) -> Result<(), HwError> {
+        let mode = self.mapping.config.operating_mode;
         match &mut self.backend {
-            BusBackend::DryRun { .. } => {}
+            BusBackend::DryRun {
+                last_operating_mode, ..
+            } => {
+                *last_operating_mode = Some(mode);
+            }
             #[cfg(feature = "real")]
             BusBackend::Real(real) => {
-                let mode = self.mapping.config.operating_mode_current_position;
                 let address = self.mapping.config.addr_operating_mode;
                 let ids = self.mapping.config.bus_ids();
                 let data: Vec<Vec<u8>> = ids.iter().map(|_| pack_u8(mode)).collect();
@@ -287,6 +242,62 @@ impl DynamixelBus {
                     .map_err(|error| {
                         read_transport_error(format!(
                             "Operating Mode sync_write 실패 (addr={address}, mode={mode}): {error}"
+                        ))
+                    })?;
+            }
+        }
+        return Ok(());
+    }
+
+    fn write_max_pwm_limits(&mut self) -> Result<(), HwError> {
+        let limit = self.mapping.config.pwm_limit_max;
+        let ids = self.mapping.config.bus_ids();
+        let limits: Vec<(u8, u16)> = ids.iter().map(|&id| (id, limit)).collect();
+        match &mut self.backend {
+            BusBackend::DryRun {
+                last_pwm_limits, ..
+            } => {
+                *last_pwm_limits = limits;
+            }
+            #[cfg(feature = "real")]
+            BusBackend::Real(real) => {
+                let address = self.mapping.config.addr_pwm_limit;
+                let data: Vec<Vec<u8>> = limits.iter().map(|(_, v)| pack_u16(*v)).collect();
+                let retries = self.mapping.config.comm_retries;
+                let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
+                real.sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
+                    .map_err(|error| {
+                        read_transport_error(format!(
+                            "PWM Limit sync_write 실패 (addr={address}): {error}"
+                        ))
+                    })?;
+            }
+        }
+        return Ok(());
+    }
+
+    fn write_max_current_limits(&mut self) -> Result<(), HwError> {
+        let limits = self.mapping.config.current_limit_max_by_id.clone();
+        if limits.is_empty() {
+            return Ok(());
+        }
+        match &mut self.backend {
+            BusBackend::DryRun {
+                last_current_limits, ..
+            } => {
+                *last_current_limits = limits;
+            }
+            #[cfg(feature = "real")]
+            BusBackend::Real(real) => {
+                let address = self.mapping.config.addr_current_limit;
+                let ids: Vec<u8> = limits.iter().map(|(id, _)| *id).collect();
+                let data: Vec<Vec<u8>> = limits.iter().map(|(_, v)| pack_u16(*v)).collect();
+                let retries = self.mapping.config.comm_retries;
+                let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
+                real.sync_write_with_retry(&ids, address, &data, retries, retry_delay_ms)
+                    .map_err(|error| {
+                        read_transport_error(format!(
+                            "Current Limit sync_write 실패 (addr={address}): {error}"
                         ))
                     })?;
             }

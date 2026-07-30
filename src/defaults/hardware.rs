@@ -18,10 +18,15 @@ impl Default for DynamixelConfig {
             addr_present_position: 132,
             addr_profile_acceleration: 108,
             addr_profile_velocity: 112,
-            addr_goal_current: 102,
             addr_operating_mode: 11,
-            operating_mode_current_position: 5,
-            nm_per_goal_current_unit: 1.0 / 1.4 / 1000.0 / 2.0,
+            // Position Control Mode — e-Manual MX-64/MX-28 Protocol 2.0.
+            operating_mode: 3,
+            addr_pwm_limit: 36,
+            // 100% PWM (unit ≈ 0.113%). Position 모드의 실질 출력 천장.
+            pwm_limit_max: 885,
+            addr_current_limit: 38,
+            // MX-64만 Current Limit 보유(기본·최대 1941). MX-28(ID 4·5)에는 레지스터 없음.
+            current_limit_max_by_id: vec![(1, 1941), (2, 1941), (3, 1941)],
             profile_acceleration: 20,
             profile_velocity: 80,
             comm_retries: 5,

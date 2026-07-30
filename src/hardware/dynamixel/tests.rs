@@ -109,13 +109,16 @@ fn dry_run_mirrors_slave_goal_around_zero_tick() {
 }
 
 #[test]
-fn dry_run_goal_current_from_torque() {
+fn dry_run_configures_position_mode_with_max_effort() {
     let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
-    let unit = bus.mapping.config().nm_per_goal_current_unit;
-    bus.write_goal_currents_from_torques(&[unit * 10.0, 0.0, -unit * 3.0, unit])
-        .expect("currents");
-    let currents = bus.last_goal_currents().expect("dry-run currents");
-    assert_eq!(currents, &[10, 0, -3, 1]);
+    bus.configure_position_mode_max_effort()
+        .expect("configure");
+    assert_eq!(bus.last_operating_mode(), Some(3));
+    let pwm = bus.last_pwm_limits().expect("pwm");
+    assert!(pwm.iter().all(|(_, v)| *v == 885));
+    assert_eq!(pwm.len(), 5); // motor_ids 4 + mirror slave
+    let current = bus.last_current_limits().expect("current");
+    assert_eq!(current, &[(1, 1941), (2, 1941), (3, 1941)]);
 }
 
 #[test]
