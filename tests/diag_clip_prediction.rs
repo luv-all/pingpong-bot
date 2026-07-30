@@ -165,6 +165,63 @@ fn ballistic_residual_rms(track: &[Sample]) -> Option<[f64; 3]> {
     ]);
 }
 
+/// 등가속 포물선 최소자승 — `(가속도, 축별 잔차 RMS)`.
+///
+/// 바운스 전 구간만 넘겨야 한다.
+fn fit_constant_accel(track: &[Sample]) -> Option<(Vector3<f64>, Vector3<f64>)> {
+    // z가 다시 오르기 전(첫 바운스 전)까지만.
+    let mut window: Vec<&Sample> = Vec::new();
+    for sample in track {
+        if let Some(last) = window.last()
+            && sample.point.coords.z > last.point.coords.z + 0.02
+        {
+            break;
+        }
+        window.push(sample);
+    }
+    if window.len() < 6 {
+        return None;
+    }
+
+    let t0 = window[0].t;
+    let mut ata = Matrix3::zeros();
+    let mut atb = [Vector3::zeros(); 3];
+    for sample in &window {
+        let t = sample.t - t0;
+        let basis = Vector3::new(t * t, t, 1.0);
+        ata += basis * basis.transpose();
+        for axis in 0..3 {
+            atb[axis] += basis * sample.point.coords[axis];
+        }
+    }
+    let inverse = ata.try_inverse()?;
+    let coefficients: Vec<Vector3<f64>> = atb.iter().map(|b| inverse * b).collect();
+
+    let mut sums = [0.0_f64; 3];
+    for sample in &window {
+        let t = sample.t - t0;
+        let basis = Vector3::new(t * t, t, 1.0);
+        for axis in 0..3 {
+            let residual = sample.point.coords[axis] - coefficients[axis].dot(&basis);
+            sums[axis] += residual * residual;
+        }
+    }
+    let n = window.len() as f64;
+    // p = a t² + b t + c 이므로 가속도는 2a.
+    return Some((
+        Vector3::new(
+            2.0 * coefficients[0][0],
+            2.0 * coefficients[1][0],
+            2.0 * coefficients[2][0],
+        ),
+        Vector3::new(
+            (sums[0] / n).sqrt(),
+            (sums[1] / n).sqrt(),
+            (sums[2] / n).sqrt(),
+        ),
+    ));
+}
+
 /// 실측 궤적이 평면 `y`를 **로봇 쪽으로** 지나는 지점과 시각.
 fn actual_crossing(track: &[Sample], plane_y: f64) -> Option<(f64, Point3)> {
     for pair in track.windows(2) {
@@ -263,12 +320,106 @@ fn diag_clip_prediction_error() {
         impact_position: cross_point,
         incoming_velocity: incoming,
     };
+    // 두 가지를 **분리해서** 본다. `Planner::feasibility`는 "리턴까지 낼 수 있는가"라
+    // 입사 속도 추정에 의존한다 — 그게 틀리면 요구 법선이 어긋나 IK가 실패하고, 그걸
+    // "작업영역 밖"으로 오독하게 된다.
+    //
+    // 1) 순수 위치 도달성 — 라켓을 그 점에 **놓을 수 있는가** (법선·속도 무관).
+    let linear = robot.arm.rail.expect("rail");
+    let mut reachable_at: Option<f64> = None;
+    // 레일을 훑는다 — 플래너도 레일을 움직여 푼다.
+    let mut rail_x = linear.x_min;
+    while rail_x <= linear.x_max {
+        if robot
+            .arm
+            .inverse_kinematics_with_rail(
+                &linear,
+                rail_x,
+                cross_point,
+                Some(&robot.arm.default_joints),
+            )
+            .is_ok()
+        {
+            reachable_at = Some(rail_x);
+            break;
+        }
+        rail_x += 0.05;
+    }
+    match reachable_at {
+        Some(rail) => println!("  위치 도달 O (레일 x={rail:.2} m)"),
+        None => println!("  **위치 도달 X** — 레일 전 구간에서 이 점에 라켓을 못 놓는다"),
+    }
+
+    // 2) 리턴까지 포함한 실현 가능성.
     match pingpong_bot::robot::motion::Planner::feasibility(&robot.arm, &at_impact, &start) {
         Some(feasibility) => println!(
-            "  IK 도달 O — 관절속도 비율 {:.2} · 레일 {:.2} (1.0 초과면 한계 밖)",
+            "  리턴 O — 관절속도 비율 {:.2} · 레일 {:.2} (1.0 초과면 한계 밖)",
             feasibility.peak_joint_speed_ratio, feasibility.peak_rail_speed_ratio
         ),
-        None => println!("  **IK 도달 X** — 이 지점은 팔 작업영역 밖이다"),
+        None => println!("  리턴 X — 요구 라켓 속도/법선을 못 낸다"),
+    }
+
+    // 실측 가속도 — 궤적에 등가속 포물선을 맞춰 축별 가속을 뽑는다.
+    //
+    // 공기력이 없으면 (0, 0, -9.81)이어야 한다. 벗어나는 만큼이 항력+Magnus의 실제 몫이고,
+    // 잔차가 측정 노이즈(σ ~1 cm) 수준이면 포물선으로 충분하다는 뜻 — 스핀 추정을 만들어도
+    // 얻을 게 없다.
+    if let Some((accel, residual)) = fit_constant_accel(&track) {
+        println!(
+            "실측 가속도 [m/s²]: x {:+.2} · y {:+.2} · z {:+.2}  (중력만이면 0,0,-9.81)",
+            accel.x, accel.y, accel.z
+        );
+        println!(
+            "  포물선 잔차 RMS: x {:.1} · y {:.1} · z {:.1} cm  (측정 노이즈 σ와 비교)",
+            residual.x * 100.0,
+            residual.y * 100.0,
+            residual.z * 100.0
+        );
+    }
+
+    // 항력 스윕 — 기본 `drag = 0`은 "Rapier에 항력이 없어서"지 물리적 근거가 아니다.
+    // 탁구공 이론값은 k = 0.5·ρ·C_d·A/m ≈ 0.126 (ρ1.2, C_d0.45, R20mm, m2.7g)이고
+    // v=5 m/s에서 3.1 m/s²라 0.4초 외삽에 크게 실린다.
+    println!("항력 스윕 (커밋 창 σ≤0.15 예측 오차):");
+    for drag in [0.0_f64, 0.06, 0.126, 0.20] {
+        let base = Instant::now();
+        let mut ekf = Ekf::new(drag);
+        let mut kept: Vec<f64> = Vec::new();
+        for sample in &track {
+            if sample.t >= cross_t {
+                break;
+            }
+            ekf.update_position(sample.point, base + Duration::from_secs_f64(sample.t));
+            let Some(prediction) = ekf.predict_to(HitPlane { y: plane.y }) else {
+                continue;
+            };
+            let lead = cross_t - sample.t;
+            if !(0.20..=0.60).contains(&lead) {
+                continue;
+            }
+            let sigma = match (ekf.position_sigma(), ekf.velocity_sigma()) {
+                (Some(sp), Some(sv)) => sp.hypot(sv * lead),
+                _ => continue,
+            };
+            if sigma > pingpong_bot::defaults::EstimatorParams::default().max_impact_sigma {
+                continue;
+            }
+            let dx = prediction.impact_position.coords.x - cross_point.coords.x;
+            let dz = prediction.impact_position.coords.z - cross_point.coords.z;
+            kept.push(dx.hypot(dz));
+        }
+        if kept.is_empty() {
+            println!("  drag {drag:.3} → 통과 예측 없음");
+            continue;
+        }
+        let mean = kept.iter().sum::<f64>() / kept.len() as f64;
+        let worst = kept.iter().copied().fold(0.0_f64, f64::max);
+        println!(
+            "  drag {drag:.3} → {}회, 평균 {:.1} cm · 최대 {:.1} cm",
+            kept.len(),
+            mean * 100.0,
+            worst * 100.0
+        );
     }
 
     // 런타임과 같은 필터에 같은 순서로 먹인다.
