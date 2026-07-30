@@ -18,6 +18,11 @@ pub struct Trajectory {
     pub end_velocity: Vec<f64>,
     /// 팔로스루 종료 관절 속도.
     pub follow_through_velocity: Vec<f64>,
+    /// 임팩트 knot 관절 가속도 — 타격-전 세그먼트의 끝과 팔로스루 세그먼트의
+    /// 시작이 공유하는 값(연속성). `0.0`이면 예전(타격 순간 가속도 강제 0)
+    /// 동작과 동일하다. `Trajectory::new`(단순 점대점 이동)는 항상 `0.0`.
+    /// 상세: `.omc/plans/2026-07-31-nonzero-impact-knot-acceleration.md`.
+    pub impact_acceleration: Vec<f64>,
     pub impact_time_secs: f64,
     pub duration_secs: f64,
     /// 시작→임팩트 레일 운동.
@@ -36,6 +41,7 @@ impl Trajectory {
         duration_secs: f64,
         rail: Rail,
     ) -> Self {
+        let n = end_velocity.len();
         return Self {
             start,
             follow_through: end.clone(),
@@ -43,6 +49,7 @@ impl Trajectory {
             start_velocity,
             follow_through_velocity: end_velocity.clone(),
             end_velocity,
+            impact_acceleration: vec![0.0; n],
             impact_time_secs: duration_secs,
             duration_secs,
             follow_through_rail_x: rail.end,
@@ -59,6 +66,7 @@ impl Trajectory {
         start_velocity: Vec<f64>,
         impact_velocity: Vec<f64>,
         end_velocity: Vec<f64>,
+        impact_acceleration: Vec<f64>,
         impact_time_secs: f64,
         duration_secs: f64,
         rail: Rail,
@@ -72,6 +80,7 @@ impl Trajectory {
             start_velocity,
             end_velocity: impact_velocity,
             follow_through_velocity: end_velocity,
+            impact_acceleration,
             impact_time_secs,
             duration_secs,
             rail,
@@ -100,11 +109,14 @@ impl Trajectory {
         assert_eq!(self.end_velocity.len(), n, "impact velocity count");
         let mut segments = Vec::with_capacity(n);
         for i in 0..n {
+            let impact_accel = self.impact_acceleration.get(i).copied().unwrap_or(0.0);
             segments.push(QuinticSegment::new(
                 self.start.values[i],
                 self.end.values[i],
                 self.start_velocity[i],
                 self.end_velocity[i],
+                0.0,
+                impact_accel,
                 self.impact_time_secs,
             ));
         }
@@ -119,11 +131,14 @@ impl Trajectory {
         let duration = (self.duration_secs - self.impact_time_secs).max(f64::EPSILON);
         let mut segments = Vec::with_capacity(n);
         for i in 0..n {
+            let impact_accel = self.impact_acceleration.get(i).copied().unwrap_or(0.0);
             segments.push(QuinticSegment::new(
                 self.end.values[i],
                 self.follow_through.values[i],
                 self.end_velocity[i],
                 self.follow_through_velocity[i],
+                impact_accel,
+                0.0,
                 duration,
             ));
         }
@@ -136,6 +151,8 @@ impl Trajectory {
             self.rail.end,
             self.rail.start_velocity,
             self.rail.end_velocity,
+            0.0,
+            0.0,
             self.impact_time_secs,
         );
     }
@@ -146,6 +163,8 @@ impl Trajectory {
             self.follow_through_rail_x,
             self.rail.end_velocity,
             self.follow_through_rail_velocity,
+            0.0,
+            0.0,
             (self.duration_secs - self.impact_time_secs).max(f64::EPSILON),
         );
     }
@@ -313,6 +332,7 @@ mod tests {
             vec![0.0],
             vec![0.8],
             vec![0.0],
+            vec![0.0],
             0.40,
             0.50,
             Rail {
@@ -339,5 +359,36 @@ mod tests {
         let velocity = (after - before) / (2.0 * dt);
         assert!((velocity - 0.8).abs() < 1e-3);
         assert!((trajectory.sample_rail_at(trajectory.duration_secs) - 0.51).abs() < 1e-6);
+    }
+
+    /// `impact_acceleration`이 0이 아니면 타격-전 세그먼트의 끝과 팔로스루
+    /// 세그먼트의 시작이 그 값을 그대로 공유해 knot에서 가속도가 연속이어야
+    /// 한다(예전처럼 항상 0으로 꺾이지 않아야 함) —
+    /// `.omc/plans/2026-07-31-nonzero-impact-knot-acceleration.md`.
+    #[test]
+    fn nonzero_impact_acceleration_is_continuous_through_the_knot() {
+        let trajectory = Trajectory::with_follow_through(
+            Joints::from_slice(&[0.0]),
+            Joints::from_slice(&[1.0]),
+            Joints::from_slice(&[1.08]),
+            vec![0.0],
+            vec![0.8],
+            vec![0.0],
+            vec![3.5],
+            0.40,
+            0.50,
+            Rail {
+                start: 0.2,
+                end: 0.5,
+                start_velocity: 0.0,
+                end_velocity: 0.1,
+            },
+            0.51,
+            0.0,
+        );
+        let just_before = trajectory.sample_acceleration_at(trajectory.impact_time_secs - 1e-9)[0];
+        let just_after = trajectory.sample_acceleration_at(trajectory.impact_time_secs + 1e-9)[0];
+        assert!((just_before - 3.5).abs() < 1e-3, "before={just_before}");
+        assert!((just_after - 3.5).abs() < 1e-3, "after={just_after}");
     }
 }
