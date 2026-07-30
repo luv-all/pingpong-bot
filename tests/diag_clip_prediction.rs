@@ -249,7 +249,9 @@ fn diag_clip_prediction_error() {
     // 런타임과 같은 필터에 같은 순서로 먹인다.
     let base = Instant::now();
     let mut ekf = Ekf::default();
-    println!("  리드[s]   예측 x    예측 z    오차[cm]");
+    // σ_impact ≈ hypot(σ_p, σ_v·리드) — 필터가 스스로 말하는 도달점 불확실성.
+    // 이게 실제 오차와 같이 움직이면 "믿어도 되는가"의 게이트로 쓸 수 있다.
+    println!("  리드[s]   예측 x    오차[cm]   σ예상[cm]");
     let mut errors = Vec::new();
     for sample in &track {
         if sample.t >= cross_t {
@@ -263,12 +265,16 @@ fn diag_clip_prediction_error() {
         let dx = prediction.impact_position.coords.x - cross_point.coords.x;
         let dz = prediction.impact_position.coords.z - cross_point.coords.z;
         let error = dx.hypot(dz);
-        errors.push((lead, error));
+        let sigma = match (ekf.position_sigma(), ekf.velocity_sigma()) {
+            (Some(sp), Some(sv)) => sp.hypot(sv * lead),
+            _ => f64::NAN,
+        };
+        errors.push((lead, error, sigma));
         println!(
-            "  {lead:>6.3}  {:>8.3}  {:>8.3}  {:>8.1}",
+            "  {lead:>6.3}  {:>8.3}  {:>8.1}  {:>9.1}",
             prediction.impact_position.coords.x,
-            prediction.impact_position.coords.z,
-            error * 100.0
+            error * 100.0,
+            sigma * 100.0
         );
     }
 
@@ -279,8 +285,8 @@ fn diag_clip_prediction_error() {
     // 커밋 창(0.2~0.6 s) 안에서의 오차가 실제로 스윙 정확도를 좌우한다.
     let in_window: Vec<f64> = errors
         .iter()
-        .filter(|(lead, _)| (0.20..=0.60).contains(lead))
-        .map(|(_, error)| *error)
+        .filter(|(lead, _, _)| (0.20..=0.60).contains(lead))
+        .map(|(_, error, _)| *error)
         .collect();
     if in_window.is_empty() {
         println!("커밋 창(0.20~0.60 s) 안에 예측이 없다");
@@ -292,6 +298,29 @@ fn diag_clip_prediction_error() {
             mean * 100.0,
             worst * 100.0,
             in_window.len()
+        );
+    }
+
+    // σ 게이트를 걸면 커밋 창 오차가 어떻게 되는지 — 임계를 데이터로 정하려는 것.
+    for threshold in [0.30_f64, 0.20, 0.15, 0.10] {
+        let kept: Vec<&(f64, f64, f64)> = errors
+            .iter()
+            .filter(|(lead, _, sigma)| (0.20..=0.60).contains(lead) && *sigma <= threshold)
+            .collect();
+        if kept.is_empty() {
+            println!("  σ ≤ {:.2} m → 커밋 창에 남는 예측 없음", threshold);
+            continue;
+        }
+        let mean = kept.iter().map(|(_, e, _)| e).sum::<f64>() / kept.len() as f64;
+        let worst = kept.iter().map(|(_, e, _)| *e).fold(0.0_f64, f64::max);
+        let earliest = kept.iter().map(|(lead, _, _)| *lead).fold(0.0_f64, f64::max);
+        println!(
+            "  σ ≤ {:.2} m → {}회 남음, 평균 {:.1} cm · 최대 {:.1} cm, 가장 이른 리드 {:.3}s",
+            threshold,
+            kept.len(),
+            mean * 100.0,
+            worst * 100.0,
+            earliest
         );
     }
 }

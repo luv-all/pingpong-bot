@@ -160,6 +160,32 @@ impl Ekf {
         return Some(self.velocity);
     }
 
+    /// 속도 추정의 불확실성 σ [m/s] — 공분산 속도 블록 대각의 최댓값.
+    ///
+    /// 속도는 측정되지 않고 위치 차분에서 나오므로 시드 직후에는 매우 크다(σ 1~2 m/s).
+    /// 측정이 쌓이며 줄어든다. 예측 도달점 오차는 대략 `σ_v × 리드타임`이므로, 이 값이
+    /// "지금 예측을 믿어도 되는가"의 근거가 된다.
+    pub fn velocity_sigma(&self) -> Option<f64> {
+        if !self.initialized || !self.velocity_seeded {
+            return None;
+        }
+        let worst = (3..6)
+            .map(|axis| self.covariance[(axis, axis)])
+            .fold(0.0_f64, f64::max);
+        return Some(worst.max(0.0).sqrt());
+    }
+
+    /// 위치 추정의 불확실성 σ [m].
+    pub fn position_sigma(&self) -> Option<f64> {
+        if !self.initialized {
+            return None;
+        }
+        let worst = (0..3)
+            .map(|axis| self.covariance[(axis, axis)])
+            .fold(0.0_f64, f64::max);
+        return Some(worst.max(0.0).sqrt());
+    }
+
     /// 테스트/sim ground truth 경로용: 상태 직접 설정.
     pub fn set_state(&mut self, position: Vector3<f64>, velocity: Vector3<f64>, time: Instant) {
         self.position = position;

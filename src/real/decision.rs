@@ -11,6 +11,7 @@
 //!
 //! [`SimWorld::try_auto_swing`]: https://github.com/luv-all/pingpong-bot/blob/main/src/sim/physics/world.rs
 
+use pingpong_bot::defaults::EstimatorParams;
 use pingpong_bot::estimator::Prediction;
 use pingpong_bot::robot::motion::Planner;
 
@@ -25,6 +26,8 @@ pub enum WaitReason {
     BeforeMidcourt,
     /// 커밋 창(`(0, swing_commit_max_secs]`) 밖 — 아직 너무 이르다.
     OutOfWindow,
+    /// 예측 도달점 불확실성이 아직 크다 — 필터가 확신하지 못한다.
+    Uncertain,
 }
 
 impl WaitReason {
@@ -36,6 +39,7 @@ impl WaitReason {
             Self::NoPrediction => "WAIT no prediction",
             Self::BeforeMidcourt => "WAIT before midcourt",
             Self::OutOfWindow => "WAIT out of commit window",
+            Self::Uncertain => "WAIT uncertain prediction",
         };
     }
 }
@@ -52,7 +56,16 @@ pub enum Decision {
 /// 게이트를 순서대로 통과시킨다.
 ///
 /// `ball_y`는 EKF가 추정한 현재 공 y [m]. `None`이면 아직 추적 전으로 본다.
-pub fn decide(tracking: bool, ball_y: Option<f64>, predictions: &[Prediction]) -> Decision {
+///
+/// `impact_sigma`는 필터가 스스로 말하는 도달점 불확실성 [m]
+/// (`hypot(σ_p, σ_v × 리드타임)`). 속도는 측정되지 않고 위치 차분에서 나오므로 시드 직후엔
+/// 미터 단위로 틀린다 — 확신이 설 때까지 기다린다. `None`이면 아직 못 잰 것으로 보고 기다린다.
+pub fn decide(
+    tracking: bool,
+    ball_y: Option<f64>,
+    predictions: &[Prediction],
+    impact_sigma: Option<f64>,
+) -> Decision {
     if !tracking {
         return Decision::Wait(WaitReason::NoTrack);
     }
@@ -75,6 +88,13 @@ pub fn decide(tracking: bool, ball_y: Option<f64>, predictions: &[Prediction]) -
         .any(|prediction| Planner::in_commit_window(prediction.time_to_impact_secs))
     {
         return Decision::Wait(WaitReason::OutOfWindow);
+    }
+
+    // 마지막 관문 — 필터가 확신할 때만 친다. 시드 직후 예측은 미터 단위로 틀리고,
+    // 커밋은 되돌릴 수 없다.
+    let limit = EstimatorParams::default().max_impact_sigma;
+    if !impact_sigma.is_some_and(|sigma| sigma <= limit) {
+        return Decision::Wait(WaitReason::Uncertain);
     }
     return Decision::Attempt;
 }
@@ -113,6 +133,11 @@ mod tests {
         };
     }
 
+    /// 게이트를 통과하는 확신도 — 한계보다 넉넉히 작다.
+    fn confident() -> Option<f64> {
+        return Some(EstimatorParams::default().max_impact_sigma * 0.1);
+    }
+
     /// 커밋 창 한가운데 tti.
     fn in_window_secs() -> f64 {
         let control = ControlParams::default();
@@ -127,13 +152,14 @@ mod tests {
             false,
             Some(past_midcourt_y()),
             &[prediction(in_window_secs())],
+            confident(),
         );
         assert_eq!(decision, Decision::Wait(WaitReason::NoTrack));
     }
 
     #[test]
     fn waits_when_no_hit_plane_yields_a_prediction() {
-        let decision = decide(true, Some(past_midcourt_y()), &[]);
+        let decision = decide(true, Some(past_midcourt_y()), &[], confident());
         assert_eq!(decision, Decision::Wait(WaitReason::NoPrediction));
     }
 
@@ -143,6 +169,7 @@ mod tests {
             true,
             Some(before_midcourt_y()),
             &[prediction(in_window_secs())],
+            confident(),
         );
         assert_eq!(decision, Decision::Wait(WaitReason::BeforeMidcourt));
     }
@@ -164,6 +191,7 @@ mod tests {
             true,
             Some(past_midcourt_y()),
             &[prediction(very_late), prediction(very_late * 0.5)],
+            confident(),
         );
         assert_eq!(
             decision,
@@ -178,7 +206,12 @@ mod tests {
         let degenerate = pingpong_bot::defaults::MIN_TIME_TO_GO_SECS * 0.5;
         assert!(!Planner::in_commit_window(degenerate));
 
-        let decision = decide(true, Some(past_midcourt_y()), &[prediction(degenerate)]);
+        let decision = decide(
+            true,
+            Some(past_midcourt_y()),
+            &[prediction(degenerate)],
+            confident(),
+        );
         assert_eq!(decision, Decision::Wait(WaitReason::OutOfWindow));
     }
 
@@ -187,8 +220,40 @@ mod tests {
         let too_early = ControlParams::default().swing_commit_max_secs * 2.0;
         assert!(!Planner::in_commit_window(too_early));
 
-        let decision = decide(true, Some(past_midcourt_y()), &[prediction(too_early)]);
+        let decision = decide(
+            true,
+            Some(past_midcourt_y()),
+            &[prediction(too_early)],
+            confident(),
+        );
         assert_eq!(decision, Decision::Wait(WaitReason::OutOfWindow));
+    }
+
+    /// 필터가 확신하지 못하면 커밋하지 않는다.
+    ///
+    /// 속도는 측정되지 않고 위치 차분에서 나와 시드 직후 σ_v가 1~2 m/s다 — 그 상태의
+    /// 도달점 예측은 미터 단위로 틀린다 (fly_04 실측 245 cm). 커밋은 되돌릴 수 없으므로
+    /// 필터가 스스로 좁혔다고 말할 때까지 기다린다.
+    #[test]
+    fn waits_while_the_predicted_impact_is_uncertain() {
+        let limit = EstimatorParams::default().max_impact_sigma;
+
+        let uncertain = decide(
+            true,
+            Some(past_midcourt_y()),
+            &[prediction(in_window_secs())],
+            Some(limit * 2.0),
+        );
+        assert_eq!(uncertain, Decision::Wait(WaitReason::Uncertain));
+
+        // 아직 재지 못한 경우도 기다린다 — 모르면 치지 않는다.
+        let unknown = decide(
+            true,
+            Some(past_midcourt_y()),
+            &[prediction(in_window_secs())],
+            None,
+        );
+        assert_eq!(unknown, Decision::Wait(WaitReason::Uncertain));
     }
 
     #[test]
@@ -197,6 +262,7 @@ mod tests {
             true,
             Some(past_midcourt_y()),
             &[prediction(in_window_secs())],
+            confident(),
         );
         assert_eq!(decision, Decision::Attempt);
     }

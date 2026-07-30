@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use pingpong_bot::camera;
 use pingpong_bot::camera::Calibration;
+use pingpong_bot::defaults::EstimatorParams;
 use pingpong_bot::detector;
 use pingpong_bot::estimator::{Ekf, Estimator, GateOutcome, Prediction, Triangulate};
 use pingpong_bot::robot::motion::{InterceptWindow, Planner};
@@ -258,7 +259,12 @@ pub fn spawn(
                 Vec::new()
             };
 
-            let decision = decide(tracking, ball_y, &predictions);
+            // 대표 후보의 리드타임으로 도달점 불확실성을 낸다 — 리드가 길수록 σ_v가 크게 실린다.
+            let impact_sigma = display_candidate(&predictions).and_then(|prediction| {
+                let (sp, sv) = (ekf.position_sigma()?, ekf.velocity_sigma()?);
+                Some(sp.hypot(sv * prediction.time_to_impact_secs))
+            });
+            let decision = decide(tracking, ball_y, &predictions, impact_sigma);
             // 게이트가 **바뀔 때만** 찍는다 — "왜 안 쳤나"를 로그만으로 되짚을 수 있게.
             // 매 틱 찍으면 초당 수백 줄이라 쓸 수 없다.
             if last_decision != Some(decision) {
@@ -331,6 +337,7 @@ pub fn spawn(
                     shown.as_ref(),
                     impact_offscreen,
                     stats.reprojection_samples.last().copied(),
+                    impact_sigma,
                 );
                 let preview = PreviewEvent {
                     frame: event.frame,
@@ -524,6 +531,7 @@ fn hud_lines(
     shown: Option<&Prediction>,
     impact_offscreen: bool,
     reprojection_px: Option<f64>,
+    impact_sigma: Option<f64>,
 ) -> Vec<String> {
     let state = match decision {
         Decision::Attempt => "ATTEMPT plan request".to_owned(),
@@ -555,6 +563,13 @@ fn hud_lines(
     }
     if let Some(d2) = ekf.last_gate_d2() {
         lines.push(format!("gate   d2 {d2:.1}  reject {}", ekf.reject_streak()));
+    }
+    if let Some(sigma) = impact_sigma {
+        lines.push(format!(
+            "sigma  {:.0} cm (limit {:.0})",
+            sigma * 100.0,
+            EstimatorParams::default().max_impact_sigma * 100.0
+        ));
     }
     // 3D 복원 품질 — 초록(검출)과 흰 원(생 삼각측량 재투영)이 벌어진 픽셀 거리.
     if let Some(px) = reprojection_px {
