@@ -59,6 +59,28 @@ impl Planner {
         return physics::plan_coarse_track_targets(arm, predictions);
     }
 
+    /// coarse 추종이 선호할 평면의 y를 최종 커밋과 같은 WP2b 점수로 고른다.
+    /// 평면마다 IK가 필요해 비싸다 — 스로틀된 주기로만 부르고
+    /// [`Planner::plan_coarse_track_targets_for_plane`]에 캐시해 넘길 것.
+    pub fn best_scored_coarse_plane_y(
+        arm: &Arm,
+        predictions: &[Prediction],
+        start: &robot::Pose,
+    ) -> Option<f64> {
+        return physics::best_scored_coarse_plane_y(arm, predictions, start);
+    }
+
+    /// [`Planner::plan_coarse_track_targets`]와 같은 비용(매 틱 IK 1회)이지만
+    /// `preferred_y`(있으면, [`Planner::best_scored_coarse_plane_y`]가 고른 값)에
+    /// 가장 가까운 평면을 쫓는다. `None`이면 기존 로봇-최근접 기하로 폴백한다.
+    pub fn plan_coarse_track_targets_for_plane(
+        arm: &Arm,
+        predictions: &[Prediction],
+        preferred_y: Option<f64>,
+    ) -> Option<(f64, Option<robot::Joints>)> {
+        return physics::plan_coarse_track_targets_for_plane(arm, predictions, preferred_y);
+    }
+
     pub fn return_to_center(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
         return physics::plan_return_to_center(arm, start);
     }

@@ -36,6 +36,19 @@ pub struct SimDebugSnapshot {
     pub net_gate_ok: Option<bool>,
     pub commit_phase: CommitPhase,
     pub omega: [f64; 3],
+    /// 관절별 `|commit 시점 자세 → 임팩트 자세|` (WP12, 타격 전 이동량).
+    pub pre_impact_travel: Vec<f64>,
+    /// 관절별 `|임팩트 자세 → 팔로스루 종료 자세|` (WP12, 타격 후 이동량).
+    pub follow_through_travel: Vec<f64>,
+    /// 관절별 임팩트 순간 명령 각속도 [rad/s] (부호 있음, WP12).
+    pub impact_velocity: Vec<f64>,
+    /// 관절별 궤적 전 구간(타격 전+후) peak |q̇| [rad/s] (WP12, 정규화 기준).
+    pub peak_joint_speed_overall: Vec<f64>,
+    /// 관절별 임팩트 knot 공유 명령 각가속도 [rad/s²] (부호 있음).
+    /// `0.0`이면 예전(타격 순간 가속도 강제 0) 동작과 동일 — 이 값이 0이
+    /// 아니게 만드는 게 바로 이 수정의 목적이다. 상세:
+    /// `.omc/plans/2026-07-31-nonzero-impact-knot-acceleration.md`.
+    pub impact_acceleration: Vec<f64>,
     /// `set_torque_now`용 RNEA 스크래치 — 매 틱(최대 1kHz) 재할당을 피하려고
     /// 재사용한다 (`src/planner/swing/physics.rs`의 스크래치 재사용 패턴과 동일).
     torque_scratch: crate::robot::dynamics::RneaScratch,
@@ -60,6 +73,11 @@ impl SimDebugSnapshot {
         self.net_gate_ok = None;
         self.commit_phase = CommitPhase::Idle;
         self.omega = [0.0; 3];
+        self.pre_impact_travel.clear();
+        self.follow_through_travel.clear();
+        self.impact_velocity.clear();
+        self.peak_joint_speed_overall.clear();
+        self.impact_acceleration.clear();
     }
 
     pub fn record_fail(&mut self, err: &SwingPlanError) {
@@ -82,6 +100,27 @@ impl SimDebugSnapshot {
 
     pub fn set_committed_path(&mut self, arm: &Arm, trajectory: &motion::Trajectory) {
         self.committed_racket_path = sample_racket_path(arm, trajectory, GHOST_SAMPLES);
+        // WP12: 커밋 시점 자세 → 임팩트 자세(타격 전), 임팩트 자세 → 팔로스루
+        // 종료 자세(타격 후)의 관절별 이동량. `COARSE_TRACK_JOINT_FRACTION`이
+        // 타격 전 구간의 Δq를 얼마나 남겨두는지(=사용자 보고 "타격 순간 멈춤"
+        // 증상의 직접 지표) 재는 용도 — world.rs의 상수 doc comment 참고.
+        self.pre_impact_travel = trajectory
+            .start
+            .values
+            .iter()
+            .zip(trajectory.end.values.iter())
+            .map(|(a, b)| (b - a).abs())
+            .collect();
+        self.follow_through_travel = trajectory
+            .end
+            .values
+            .iter()
+            .zip(trajectory.follow_through.values.iter())
+            .map(|(a, b)| (b - a).abs())
+            .collect();
+        self.impact_velocity = trajectory.end_velocity.clone();
+        self.peak_joint_speed_overall = trajectory.peak_joint_speeds();
+        self.impact_acceleration = trajectory.impact_acceleration.clone();
         let control = defaults::ControlParams::default();
         let duration = trajectory.duration_secs.max(f64::EPSILON);
         let samples = ((duration / 0.005).ceil() as usize).max(24);

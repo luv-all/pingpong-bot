@@ -16,6 +16,7 @@ use crate::robot::{self, Joints};
 use super::impact_candidate::{ImpactCandidate, best_impact_candidate};
 use super::impact_target::{impact_target_from_candidate, solve_impact_target};
 use super::planned_intercept::PlannedIntercept;
+use super::quintic_segment::QuinticSegment;
 use super::rail::Rail;
 use super::trajectory::Trajectory;
 
@@ -305,6 +306,43 @@ pub fn plan_coarse_track_targets(
     return Some((target.rail_x, joints));
 }
 
+/// [`plan_coarse_track_targets`]와 같은 반환값·같은 틱당 비용(IK 1회)이지만,
+/// 쫓을 평면을 로봇 최근접 대신 `preferred_y`(있으면)로 고른다 — 호출자가
+/// [`best_scored_coarse_plane_y`]를 스로틀된 주기로만 재계산해 넘기는 사용을
+/// 전제로 한다. `preferred_y`에 가장 가까운 `y`를 가진 예측을 그대로 쓰므로
+/// `predictions`가 매 틱 갱신돼도(같은 평면의 최신 탄도) IK는 항상 최신
+/// 값으로 1회만 돈다.
+///
+/// `preferred_y`가 `None`이거나(아직 스코어링 전) 그 평면이 이번 틱
+/// `predictions`에 없으면(예: 창이 바뀜) 기존 최근접 기하([`coarse_track_geometry`])로
+/// 폴백한다 — rough 목표는 실패보다 "이번 틱은 예전 기준으로"가 안전하다.
+pub fn plan_coarse_track_targets_for_plane(
+    arm: &Arm,
+    predictions: &[Prediction],
+    preferred_y: Option<f64>,
+) -> Option<(f64, Option<Joints>)> {
+    let rail = arm.rail.as_ref()?;
+    let target = preferred_y
+        .and_then(|y| {
+            predictions
+                .iter()
+                .min_by(|left, right| {
+                    (left.impact_position.coords.y - y)
+                        .abs()
+                        .partial_cmp(&(right.impact_position.coords.y - y).abs())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .and_then(|prediction| coarse_track_target_for(arm, prediction))
+        })
+        .or_else(|| coarse_track_geometry(arm, predictions))?;
+    let hint = robot::Pose::new(rail.default_x(), arm.default_joints.clone());
+    let joints = arm
+        .inverse_pose_with_rail(target.reachable, target.desired_normal, &hint)
+        .ok()
+        .map(|pose| pose.joints);
+    return Some((target.rail_x, joints));
+}
+
 /// coarse 추종 목표 기하 — IK 이전 단계까지.
 struct CoarseTrackTarget {
     /// 레일 목표 x [m] (`rail.clamp_x` 순수 기하 — IK 불필요).
@@ -315,26 +353,10 @@ struct CoarseTrackTarget {
     desired_normal: Vector3<f64>,
 }
 
-fn coarse_track_geometry(arm: &Arm, predictions: &[Prediction]) -> Option<CoarseTrackTarget> {
-    // 예측 hit plane들 중 로봇에 가장 가까운(= 가장 도달 가능성 높은) 하나를
-    // 고른다. 가장 먼 평면은 공이 아직 높이 떠 있어 팔 도달권 밖이라, rough
-    // 추종엔 base에 제일 가까운 임팩트가 "가장 관련 있는" 목표다. 레일이 x를
-    // 담당하므로 거리 비교에서 x는 빼고 y-z 오프셋만 본다(레일로 못 줄이는 축).
-    let prediction = predictions
-        .iter()
-        .filter(|prediction| {
-            prediction.time_to_impact_secs.is_finite() && prediction.time_to_impact_secs > 0.0
-        })
-        .min_by(|left, right| {
-            let cost = |prediction: &Prediction| {
-                let impact = prediction.impact_position.coords;
-                (impact.y - arm.base.coords.y).hypot(impact.z - arm.base.coords.z)
-            };
-            cost(left)
-                .partial_cmp(&cost(right))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })?;
-
+/// `prediction` 하나로 coarse 추종 목표 기하를 낸다 — 평면을 어떤 기준으로
+/// 고르든(로봇 최근접 [`coarse_track_geometry`] 또는 WP2b 점수
+/// [`best_scored_coarse_plane_y`]) 이 계산은 공통이라 뽑아냈다.
+fn coarse_track_target_for(arm: &Arm, prediction: &Prediction) -> Option<CoarseTrackTarget> {
     let impact_position = prediction.impact_position;
     let v_in = prediction.incoming_velocity;
     let v_out = Impact::rally_return(impact_position, v_in);
@@ -358,6 +380,84 @@ fn coarse_track_geometry(arm: &Arm, predictions: &[Prediction]) -> Option<Coarse
         reachable,
         desired_normal,
     });
+}
+
+fn nearest_prediction<'a>(arm: &Arm, predictions: &'a [Prediction]) -> Option<&'a Prediction> {
+    // 예측 hit plane들 중 로봇에 가장 가까운(= 가장 도달 가능성 높은) 하나를
+    // 고른다. 가장 먼 평면은 공이 아직 높이 떠 있어 팔 도달권 밖이라, rough
+    // 추종엔 base에 제일 가까운 임팩트가 "가장 관련 있는" 목표다. 레일이 x를
+    // 담당하므로 거리 비교에서 x는 빼고 y-z 오프셋만 본다(레일로 못 줄이는 축).
+    return predictions
+        .iter()
+        .filter(|prediction| {
+            prediction.time_to_impact_secs.is_finite() && prediction.time_to_impact_secs > 0.0
+        })
+        .min_by(|left, right| {
+            let cost = |prediction: &Prediction| {
+                let impact = prediction.impact_position.coords;
+                (impact.y - arm.base.coords.y).hypot(impact.z - arm.base.coords.z)
+            };
+            cost(left)
+                .partial_cmp(&cost(right))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+}
+
+fn coarse_track_geometry(arm: &Arm, predictions: &[Prediction]) -> Option<CoarseTrackTarget> {
+    let prediction = nearest_prediction(arm, predictions)?;
+    return coarse_track_target_for(arm, prediction);
+}
+
+/// coarse 추종이 쫓을 평면을 최종 커밋([`plan_best_swing`])과 **같은 기준**
+/// (WP2b 복합 점수, [`candidate_score`])으로 골라 그 평면의 `y`만 반환한다
+/// (캐시하기 좋은 값만 뽑아낸 얇은 래퍼). `predictions`가 비었거나 전부 IK
+/// 실패면 `None`.
+///
+/// 배경: 기존 [`coarse_track_geometry`](로봇 베이스에서 y-z 거리가 가장
+/// 가까운 평면)와 `plan_best_swing`의 랭킹은 서로 다른 걸 최적화한다 —
+/// 전자는 순수 기하, 후자는 "요구 라켓 속도 × 관절 여유"다. 이 둘이
+/// 갈리는 샷에서는 사전 추종이 비행 내내(약 0.1~0.3초) 최종 커밋과 다른
+/// 타점을 쫓다가, 커밋 순간 갑자기 실제 타점으로 크게 보정하게 된다.
+/// 실측(6.5 m/s 가운데 샷, `tests/diag_scoop_vs_overhead_6_5.rs`): 사전
+/// 추종·최종 커밋 타점의 y가 평균 0.11~0.12 m 어긋나면 net-clear율이
+/// 0~8%로 붕괴하고, 그 어긋남이 0.02 m 수준으로 좁혀지면(=우연히 같은
+/// 평면대만 후보였던 경우) 100%로 뛰었다 — 자세 자체(위/아래)가 아니라
+/// 이 어긋남 자체가 원인이었다(같은 실험에서 접촉 높이 z는 두 조건에서
+/// 거의 동일했음).
+///
+/// 평면마다 IK(최대 4회 폴백, [`best_impact_candidate`])가 필요해
+/// [`coarse_track_geometry`]보다 눈에 띄게 비싸다 — 매 물리 틱(1kHz) 직접
+/// 부르면 안 되고, 호출자가 낮은 주기로만 불러 그 결과를 캐시했다가
+/// [`plan_coarse_track_targets_for_plane`](매 틱, IK 1회)에 넘기는 2단계
+/// 사용을 전제로 설계했다.
+pub fn best_scored_coarse_plane_y(
+    arm: &Arm,
+    predictions: &[Prediction],
+    start: &robot::Pose,
+) -> Option<f64> {
+    return best_scored_prediction(arm, predictions, start)
+        .map(|prediction| prediction.impact_position.coords.y);
+}
+
+fn best_scored_prediction(
+    arm: &Arm,
+    predictions: &[Prediction],
+    start: &robot::Pose,
+) -> Option<Prediction> {
+    let mut best: Option<(Prediction, f64)> = None;
+    for prediction in predictions {
+        if !(prediction.time_to_impact_secs.is_finite() && prediction.time_to_impact_secs > 0.0) {
+            continue;
+        }
+        let Ok(candidate) = best_impact_candidate(arm, prediction, start) else {
+            continue;
+        };
+        let score = candidate_score(&candidate);
+        if best.as_ref().is_none_or(|(_, best_score)| score > *best_score) {
+            best = Some((*prediction, score));
+        }
+    }
+    return best.map(|(prediction, _)| prediction);
 }
 
 /// 스윙(혹은 랠리) 뒤 로봇을 중앙 포즈(관절 `default_joints`, 레일 `default_x`
@@ -539,6 +639,17 @@ pub(crate) fn trajectory_with_follow_through(
             *value = (*value).clamp(limit.min, limit.max);
         }
     }
+    let follow_through_velocity = vec![0.0; impact.values.len()];
+    let impact_acceleration = impact_knot_accelerations(
+        start,
+        &start_velocity,
+        impact,
+        &impact_velocity,
+        impact_time,
+        &end_values,
+        &follow_through_velocity,
+        follow_time,
+    );
     let follow_rail_x = arm.rail.as_ref().map_or(rail.end, |linear| {
         linear.clamp_x(rail.end + rail.end_velocity * follow_time * 0.5)
     });
@@ -548,13 +659,53 @@ pub(crate) fn trajectory_with_follow_through(
         Joints { values: end_values },
         start_velocity,
         impact_velocity,
-        vec![0.0; impact.values.len()],
+        follow_through_velocity,
+        impact_acceleration,
         impact_time,
         impact_time + follow_time,
         rail,
         follow_rail_x,
         0.0,
     );
+}
+
+/// 타격-전/팔로스루 두 세그먼트가 임팩트 knot에서 공유할 관절별 가속도 —
+/// `QuinticSegment::jerk_minimizing_knot_acceleration`로 저크 최소화 값을
+/// 구하고, 실기 가속 한계(`max_joint_accel`)의 보수적 비율(50%)로 클램프한다.
+/// 궤적 **전체**의 피크 가속·토크는 `kinematic_limit_violation`/
+/// `peak_torque_utilization`이 별도로 다시 검증하므로(quintic은 경계값
+/// 사이에서 그보다 큰 값을 낼 수 있다), 이 클램프는 knot 경계값 자체에
+/// 대한 1차 안전장치일 뿐 — 이 클램프만으로 전체 궤적의 안전을 보장하지
+/// 않는다. 실물 로봇 벤치 검증 전 보수적으로 시작하기 위한 조치.
+/// 상세: `.omc/plans/2026-07-31-nonzero-impact-knot-acceleration.md`.
+#[allow(clippy::too_many_arguments)]
+fn impact_knot_accelerations(
+    start: &Joints,
+    start_velocity: &[f64],
+    impact: &Joints,
+    impact_velocity: &[f64],
+    impact_time: f64,
+    end: &[f64],
+    end_velocity: &[f64],
+    follow_time: f64,
+) -> Vec<f64> {
+    let clamp_bound = 0.5 * defaults::ControlParams::default().max_joint_accel;
+    let n = impact.values.len();
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let a = QuinticSegment::jerk_minimizing_knot_acceleration(
+            start.values[i],
+            start_velocity[i],
+            impact.values[i],
+            impact_velocity[i],
+            impact_time,
+            end[i],
+            end_velocity[i],
+            follow_time,
+        );
+        out.push(a.clamp(-clamp_bound, clamp_bound));
+    }
+    return out;
 }
 
 fn trajectory_collision_free(arm: &Arm, trajectory: &Trajectory) -> bool {
@@ -1763,6 +1914,79 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(", "),
             1.875 * baseline_worst / arm.max_joint_speed,
+        );
+    }
+
+    /// `impact_knot_accelerations`이 저크 최소화 결과를 그대로 내보내지
+    /// 않고 `max_joint_accel`의 보수적 비율(50%)로 클램프하는지 확인한다 —
+    /// `.omc/plans/2026-07-31-nonzero-impact-knot-acceleration.md` 리스크
+    /// 완화 항목.
+    #[test]
+    fn impact_knot_accelerations_clamps_to_conservative_bound() {
+        let arm = sample_three_dof_arm();
+        let n = arm.joint_count();
+        let start = Joints {
+            values: vec![0.0; n],
+        };
+        let start_velocity = vec![0.0; n];
+        // 극히 짧은 시간에 큰 속도 변화를 요구 — 저크 최소화가 knot
+        // 가속도를 크게 원하도록 만드는 극단적 경계조건.
+        let impact = Joints {
+            values: vec![0.001; n],
+        };
+        let impact_velocity = vec![20.0; n];
+        let end = vec![0.002; n];
+        let end_velocity = vec![0.0; n];
+        let accelerations = impact_knot_accelerations(
+            &start,
+            &start_velocity,
+            &impact,
+            &impact_velocity,
+            0.001,
+            &end,
+            &end_velocity,
+            0.001,
+        );
+        let bound = 0.5 * defaults::ControlParams::default().max_joint_accel;
+        for a in accelerations {
+            assert!(a.abs() <= bound + 1e-9, "a={a} exceeds bound={bound}");
+        }
+    }
+
+    /// 방어 심층 테스트 — knot 가속도 클램프가 없다고 가정했을 때, 궤적
+    /// 전체의 기존 안전장치(`kinematic_limit_violation`)가 여전히 극단적인
+    /// 값을 잡아내는지 확인한다. `plan_swing`의 실제 경로는 항상
+    /// `impact_knot_accelerations`의 클램프를 거치므로 이 값이 그대로
+    /// 나가지는 않지만, 그 안전장치 자체의 유효성은 별도로 검증해 둔다 —
+    /// `.omc/plans/2026-07-31-nonzero-impact-knot-acceleration.md`
+    /// Implementation Step 7.
+    #[test]
+    fn extreme_knot_acceleration_trips_kinematic_limit_violation() {
+        let arm = sample_three_dof_arm();
+        let n = arm.joint_count();
+        let rail_x = arm.rail.as_ref().map_or(0.0, |r| r.default_x());
+        let start = arm.default_joints.clone();
+        let mut impact = start.clone();
+        impact.values[0] += 0.05;
+        let end = impact.clone();
+        let huge_accel = defaults::ControlParams::default().max_joint_accel * 100.0;
+        let trajectory = Trajectory::with_follow_through(
+            start,
+            impact,
+            end,
+            vec![0.0; n],
+            vec![0.0; n],
+            vec![0.0; n],
+            vec![huge_accel; n],
+            0.1,
+            0.15,
+            Rail::fixed(rail_x),
+            rail_x,
+            0.0,
+        );
+        assert!(
+            kinematic_limit_violation(&arm, &trajectory).is_some(),
+            "극단적 knot 가속도는 기존 기구학 한계 검사에 걸려야 한다"
         );
     }
 }
