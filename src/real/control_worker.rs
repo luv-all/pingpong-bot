@@ -21,9 +21,7 @@ use pingpong_bot::robot::{self, Arm};
 use tracing::{debug, info, info_span, warn};
 
 use super::fmt::{f2, f2_slice};
-use super::{
-    CommitRequest, ControlStatus, PoseMsg, ShotEvent, Shutdown, SimUpdate, SwingMsg,
-};
+use super::{CommitRequest, ControlStatus, PoseMsg, ShotEvent, Shutdown, SimUpdate, SwingMsg};
 
 /// 예측의 `time_to_impact_secs`는 요청 시각 기준이다. 계획을 시작할 때 이미 이만큼 낡았으면
 /// 그 예측으로 세운 궤적은 임팩트 시점이 어긋난다 — 버리고 다음 요청을 기다린다.

@@ -25,6 +25,11 @@ pub struct Args {
     /// real: 시작 시 센터(ready) 자세로 이동. 끄려면 `--home=false`
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub home: bool,
+    /// real: 라이브 캠 대신 녹화 클립을 재생한다 (`fly_02` 또는 디렉터리).
+    ///
+    /// `data/clips/{scene}_{nn}/`. 녹화 당시 fps로 페이싱해 라이브와 같은 타이밍으로 돈다.
+    #[arg(long, value_name = "NAME|DIR")]
+    pub clip: Option<std::path::PathBuf>,
     /// real: 관전용 sim 창 (테이블·로봇·예측 도달점). 끄려면 `--sim=false`
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub sim: bool,

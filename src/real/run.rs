@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use crossbeam_channel::{Receiver, bounded, unbounded};
-use pingpong_bot::camera::{Calibration, CamCliArgs, CamStreamArgs};
+use pingpong_bot::camera::{Calibration, CamCliArgs, CamStreamArgs, StereoOfflineArgs};
 use pingpong_bot::defaults::{
     self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, detector_for, robot,
 };
@@ -22,8 +22,8 @@ use super::camera_worker::{self, CameraStats};
 use super::estimator_worker::{self, EstimatorStats};
 use super::fmt::{f2, f2_slice};
 use super::{
-    ControlStatus, Options, PreviewEvent, PreviewWindow, ShotEvent, ShutdownGuard, control_worker,
-    shutdown_channel, sim_host,
+    ControlStatus, Options, PacedSource, PreviewEvent, PreviewWindow, ShotEvent, ShutdownGuard,
+    control_worker, shutdown_channel, sim_host,
 };
 
 /// 카메라 → 추정 버퍼. 실시간이라 크게 잡을 이유가 없다 (밀리면 어차피 버린다).
@@ -44,7 +44,7 @@ pub fn run(args: &Args) -> Result<()> {
 
     let hardware = open_hardware(&options, &arm)?;
     let calibration = load_calibration()?;
-    let sources = open_cameras()?;
+    let sources = open_cameras(&options)?;
     ensure!(
         sources.len() >= calibration.min_cameras_for_triangulation(),
         "삼각측량에 카메라 {}대가 필요한데 {}대만 열렸다",
@@ -326,15 +326,52 @@ type OpenedCameras = Vec<(
     Box<dyn pingpong_bot::camera::FrameSource>,
 )>;
 
-fn open_cameras() -> Result<OpenedCameras> {
+/// 라이브 캠, 또는 `--clip`이면 녹화 클립.
+///
+/// 클립은 **녹화 당시 fps로 페이싱**해서 재생한다 ([`PacedSource`]) — 그래야 계획 스로틀·
+/// 커밋 신선도·하드웨어 `stream_hz` 같은 벽시계 로직이 라이브와 같은 조건에서 돈다.
+fn open_cameras(options: &Options) -> Result<OpenedCameras> {
     let cams = CamCliArgs {
         cam: DEFAULT_STEREO_CAM_ROLES.to_vec(),
         stream: CamStreamArgs::default(),
     };
-    return cams
-        .open_sources()
+    let Some(clip) = &options.clip else {
+        return cams
+            .open_sources()
+            .map_err(anyhow::Error::msg)
+            .context("실캠 열기");
+    };
+
+    let offline = StereoOfflineArgs {
+        clip: Some(clip.clone()),
+    };
+    let resolved = offline
+        .resolve()
         .map_err(anyhow::Error::msg)
-        .context("실캠 열기");
+        .context("클립 해석")?
+        .context("클립을 찾지 못했다")?;
+    resolved.log();
+    info!(
+        dir = %resolved.dir.display(),
+        meas_fps = resolved.meas_fps.map(f2),
+        "클립 재생 — 라이브 캠 대신"
+    );
+
+    // 파일 소스는 `--cam` 역할 순서대로 camera::Id를 받는다 (left → Id(0), right → Id(1)).
+    let sources = cams
+        .open_file_sources(&resolved.paths(), resolved.meas_fps)
+        .map_err(anyhow::Error::msg)
+        .context("클립 열기")?;
+    let resolved_cams = cams.resolve().map_err(anyhow::Error::msg)?;
+    return Ok(resolved_cams
+        .into_iter()
+        .zip(sources)
+        .map(|(cam, source)| {
+            let paced: Box<dyn pingpong_bot::camera::FrameSource> =
+                Box::new(PacedSource::new(source));
+            (cam, paced)
+        })
+        .collect());
 }
 
 fn log_event(event: &ShotEvent) {
@@ -380,8 +417,7 @@ fn log_event(event: &ShotEvent) {
         ShotEvent::Infeasible { shot_seq, reason } => {
             info!(
                 shot = shot_seq,
-                reason,
-                "real shot: 포기 — 관절·토크 한계 (모터 보호)"
+                reason, "real shot: 포기 — 관절·토크 한계 (모터 보호)"
             )
         }
         ShotEvent::PlanFailed { shot_seq, reason } => {
