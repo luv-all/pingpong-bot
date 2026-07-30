@@ -9,10 +9,10 @@
 //! 파고들 가능성은 남아 있다.
 
 use pingpong_bot::defaults;
-use pingpong_bot::planner::collision::table_penetration;
-use pingpong_bot::sim::eval_protocol::{EvalLaunchParams, EvalMode, settings_for_zone_shot, shot_schedule};
-use pingpong_bot::sim::physics::BallShooterSettings;
-use pingpong_bot::sim::{BallState, SimWorld};
+use pingpong_bot::robot::collision::table_penetration;
+use pingpong_bot::sim::eval::{LaunchParams as EvalLaunchParams, Mode as EvalMode, Protocol};
+use pingpong_bot::sim::launch::Settings as BallShooterSettings;
+use pingpong_bot::sim::physics::{BallState, SimWorld};
 
 const DT: f64 = 1.0 / 1000.0;
 const MAX_STEPS: usize = 4_000;
@@ -43,7 +43,7 @@ fn sweep_shot(label: String, settings: &BallShooterSettings) -> PenetrationResul
             .arm_bodies
             .read_joint_angles(&world.multibody_joint_set)
             .values;
-        let joints = pingpong_bot::Joints { values: measured };
+        let joints = pingpong_bot::robot::Joints { values: measured };
         let rail_x = world.robot().rail_x();
         let depth = table_penetration(world.arm(), rail_x, &joints);
         if depth > worst_depth {
@@ -74,11 +74,11 @@ fn sweep_shot(label: String, settings: &BallShooterSettings) -> PenetrationResul
 #[ignore = "진단 전용"]
 fn diag_table_penetration_live_eval_grid() {
     let launch = EvalLaunchParams::default();
-    let results: Vec<PenetrationResult> = shot_schedule(EvalMode::Block)
+    let results: Vec<PenetrationResult> = Protocol::shot_schedule(EvalMode::Block)
         .into_iter()
         .enumerate()
         .map(|(i, (zone, index_in_zone))| {
-            let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+            let settings = Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
             sweep_shot(format!("{}#{}", zone.label(), i + 1), &settings)
         })
         .collect();
