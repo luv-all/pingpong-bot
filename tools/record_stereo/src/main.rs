@@ -37,6 +37,9 @@ const WINDOW: &str = "record_stereo";
 const JPEG_QUALITY: i32 = 85;
 const RING_MARGIN_SECS: f64 = 1.0;
 
+/// 프리뷰 갱신 주기 — 캡처 속도와 무관하게 사람이 보기 충분한 정도.
+const PREVIEW_PERIOD: Duration = Duration::from_millis(33);
+
 fn main() -> Result<()> {
     let args = Args::parse();
     if args.preroll <= 0.0 || args.postroll < 0.0 {
@@ -120,28 +123,25 @@ fn main() -> Result<()> {
             }
         }
 
+        // 락 안에서는 **꺼내기만** 한다. 예전에는 여기서 `try_clone()`으로 6 MB를 복사했고,
+        // grab 루프는 매 프레임 같은 락으로 프리뷰를 넣으려다 그 복사가 끝날 때까지 막혔다
+        // (실측: 카메라는 120 fps를 주는데 루프는 42.6 fps).
         let (preview, status) = {
-            let Ok(g) = shared.lock() else {
+            let Ok(mut g) = shared.lock() else {
                 thread::sleep(Duration::from_millis(20));
                 continue;
             };
-            let preview = g.preview.as_ref().map(|p| p.try_clone()).transpose()?;
-            (preview, g.last_status.clone())
+            (g.preview.take(), g.last_status.clone())
         };
 
         let Some(prev) = preview else {
-            thread::sleep(Duration::from_millis(20));
+            thread::sleep(Duration::from_millis(5));
             continue;
         };
 
-        let mut left = prev
-            .left
-            .try_clone()
-            .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
-        let mut right = prev
-            .right
-            .try_clone()
-            .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
+        // 꺼내 왔으니 그대로 쓴다 — 복사본을 또 만들 이유가 없다.
+        let mut left = prev.left;
+        let mut right = prev.right;
 
         let left_lines = [
             format!("{}#{}", left_r.role, left_r.camera_id.0),
@@ -246,6 +246,7 @@ fn grab_loop(
     let mut ring: VecDeque<PairSample> = VecDeque::new();
     let mut pending: Option<CaptureCmd> = None;
     let mut last_pair: Option<(Instant, Instant)> = None;
+    let mut preview_tick = Instant::now() - PREVIEW_PERIOD;
     let mut fps_window_start = Instant::now();
     let mut fps_window_count = 0u64;
     let mut grab_fps = 0.0f64;
@@ -309,7 +310,12 @@ fn grab_loop(
             .front()
             .map(|f| t.duration_since(f.t).as_secs_f64())
             .unwrap_or(0.0);
-        if let Ok(mut g) = shared.lock() {
+        // 프리뷰는 사람이 보는 것이라 120 fps가 필요 없다. 매 프레임 락을 잡고 Mat을
+        // 넘기면 그 자체가 캡처를 깎는다 — 표시용으로 충분한 주기로만 올린다.
+        if preview_tick.elapsed() >= PREVIEW_PERIOD
+            && let Ok(mut g) = shared.lock()
+        {
+            preview_tick = Instant::now();
             g.preview = Some(PreviewSlot {
                 left: lf.image,
                 right: rf.image,
