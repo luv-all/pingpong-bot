@@ -1,5 +1,6 @@
 //! Dynamixel 4축 실물 하드웨어 어댑터와 선택적 AXL 레일 동기 재생.
 
+use crate::robot;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -10,7 +11,11 @@ use tracing::{debug, error};
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::AxlRail;
 use super::rail::RailConfig;
-use crate::{Arm, Hardware, HwError, RobotPose, SwingTrajectory, defaults};
+use crate::defaults;
+use crate::error::HwError;
+use crate::hardware::Hardware;
+use crate::robot::Arm;
+use crate::robot::motion;
 
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
@@ -146,7 +151,7 @@ impl RealHardware {
 }
 
 impl Hardware for RealHardware {
-    fn command(&mut self, trajectory: &SwingTrajectory) -> Result<(), HwError> {
+    fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
         self.reap_executor();
         if self.busy.swap(true, Ordering::AcqRel) {
             debug!("Dynamixel 스윙 실행 중 — 중복 명령 무시");
@@ -197,9 +202,7 @@ impl Hardware for RealHardware {
                 if torque_ff {
                     let qd = trajectory.sample_velocity_at(sample_time);
                     let qdd = trajectory.sample_acceleration_at(sample_time);
-                    if let Some(tau) =
-                        crate::robot::required_torque(&arm, &joints.values, &qd, &qdd)
-                    {
+                    if let Some(tau) = arm.required_torque(&joints.values, &qd, &qdd) {
                         let _ = bus.lock().map(|mut bus| {
                             let _ = bus.write_goal_currents_from_torques(&tau);
                         });
@@ -229,7 +232,7 @@ impl Hardware for RealHardware {
         return Ok(());
     }
 
-    fn read_pose(&mut self) -> Result<RobotPose, HwError> {
+    fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
         self.reap_executor();
         let joints = self
             .bus
@@ -238,7 +241,7 @@ impl Hardware for RealHardware {
                 reason: "Dynamixel bus mutex poisoned".into(),
             })?
             .read_joints()?;
-        return Ok(RobotPose::new(self.read_rail_x_m()?, joints));
+        return Ok(robot::Pose::new(self.read_rail_x_m()?, joints));
     }
 
     fn is_busy(&mut self) -> bool {
@@ -257,10 +260,9 @@ impl Drop for RealHardware {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Joints;
-    use crate::RailMotion;
     use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
+    use crate::robot::Joints;
 
     fn test_rail() -> RailConfig {
         return RailConfig {
@@ -289,13 +291,13 @@ mod tests {
             ..DynamixelConfig::default()
         };
         let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
-        let trajectory = SwingTrajectory::new(
+        let trajectory = motion::Trajectory::new(
             Joints::from_slice(&[0.0; 4]),
             Joints::from_slice(&[0.1; 4]),
             vec![0.0; 4],
             vec![0.0; 4],
             0.03,
-            RailMotion::fixed(0.0),
+            motion::Rail::fixed(0.0),
         );
 
         hardware.command(&trajectory).expect("command");
@@ -318,13 +320,13 @@ mod tests {
         };
         let mut hardware =
             RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
-        let trajectory = SwingTrajectory::new(
+        let trajectory = motion::Trajectory::new(
             Joints::from_slice(&[0.0; 4]),
             Joints::from_slice(&[0.05; 4]),
             vec![0.0; 4],
             vec![0.0; 4],
             0.04,
-            RailMotion {
+            motion::Rail {
                 start: 0.0,
                 end: 0.25,
                 start_velocity: 0.0,
@@ -350,13 +352,13 @@ mod tests {
             ..DynamixelConfig::default()
         };
         let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
-        let trajectory = SwingTrajectory::new(
+        let trajectory = motion::Trajectory::new(
             Joints::from_slice(&[0.0; 4]),
             Joints::from_slice(&[0.1; 4]),
             vec![0.0; 4],
             vec![0.0; 4],
             2.0,
-            RailMotion::fixed(0.0),
+            motion::Rail::fixed(0.0),
         );
         hardware.command(&trajectory).expect("command");
 

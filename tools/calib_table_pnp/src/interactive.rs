@@ -7,18 +7,19 @@ use opencv::core::{Mat, Point, Rect, Scalar, Vec3b};
 use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
-use pingpong_bot::{
-    CameraId, CameraParams, FrameSource, OpenCvCapture, PixelPickMouse, PixelPoint, Point3,
-    PreviewAction, TABLE_LANDMARK_COUNT, TableLandmark, WorldGridParams, apply_grid_key,
-    arrow_delta, calibrate_table_pnp, destroy_window, draw_debug_lines, draw_help_lines,
-    draw_pixel_loupe, draw_world_grid, show_bgr, table_landmark_mesh_edges, table_landmarks,
+use pingpong_bot::Point3;
+use pingpong_bot::camera;
+use pingpong_bot::camera::Landmark;
+use pingpong_bot::camera::{
+    FrameSource, OpenCvCapture, PixelPickMouse, Preview, PreviewAction, TablePnp, WorldGridParams,
 };
+use pingpong_bot::constants::TABLE_LANDMARK_COUNT;
 
 use crate::args::{Args, pending_path, resolve_camera_id, resolve_output};
 use crate::cli;
 
 struct Solved {
-    params: CameraParams,
+    params: camera::Params,
     rmse: f64,
     candidates: usize,
     /// `rmse <= max_rmse` 이면 저장 가능
@@ -55,10 +56,10 @@ pub fn run(args: &Args) -> Result<()> {
         )?;
     }
 
-    let marks = table_landmarks();
+    let marks = TablePnp::landmarks();
     let mut frozen = false;
     let mut freeze_img: Option<Mat> = None;
-    let mut clicks: Vec<PixelPoint> = Vec::new();
+    let mut clicks: Vec<camera::Pixel> = Vec::new();
     let mut solved: Option<Solved> = None;
     let mut grid = WorldGridParams::default();
     let mut last_fail_rmse: Option<f64> = None;
@@ -135,7 +136,7 @@ pub fn run(args: &Args) -> Result<()> {
                     if clicks.len() < TABLE_LANDMARK_COUNT {
                         let fx = x - pad;
                         let fy = y - pad;
-                        clicks.push(PixelPoint::new(f64::from(fx), f64::from(fy)));
+                        clicks.push(camera::Pixel::new(f64::from(fx), f64::from(fy)));
                         clicks_changed = true;
                         if clicks.len() == 1 {
                             println!("recalib — baseline overlay off");
@@ -210,8 +211,12 @@ pub fn run(args: &Args) -> Result<()> {
                             grid.xy_step, grid.z_step, grid.z_layers
                         ),
                     ];
-                    draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 0.0, 0.0))?;
-                    draw_help_lines(
+                    Preview::draw_debug_lines(
+                        &mut panel,
+                        &lines,
+                        Scalar::new(0.0, 255.0, 0.0, 0.0),
+                    )?;
+                    Preview::draw_help_lines(
                         &mut panel,
                         &[
                             "+/- xy  [] layers  ., z",
@@ -229,8 +234,12 @@ pub fn run(args: &Args) -> Result<()> {
                         ),
                         "pull green toward magenta (z/c) or --fov-y".to_string(),
                     ];
-                    draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 128.0, 255.0, 0.0))?;
-                    draw_help_lines(
+                    Preview::draw_debug_lines(
+                        &mut panel,
+                        &lines,
+                        Scalar::new(0.0, 128.0, 255.0, 0.0),
+                    )?;
+                    Preview::draw_help_lines(
                         &mut panel,
                         &[
                             "yellow = residual",
@@ -249,8 +258,8 @@ pub fn run(args: &Args) -> Result<()> {
                         grid.xy_step, grid.z_step, grid.z_layers
                     ),
                 ];
-                draw_debug_lines(&mut panel, &lines, Scalar::new(255.0, 128.0, 0.0, 0.0))?;
-                draw_help_lines(
+                Preview::draw_debug_lines(&mut panel, &lines, Scalar::new(255.0, 128.0, 0.0, 0.0))?;
+                Preview::draw_help_lines(
                     &mut panel,
                     &[
                         "+/- xy  [] layers  ., z",
@@ -272,8 +281,8 @@ pub fn run(args: &Args) -> Result<()> {
                     format!("REVIEW clicks={}/{}", clicks.len(), TABLE_LANDMARK_COUNT),
                     next,
                 ];
-                draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-                draw_help_lines(
+                Preview::draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+                Preview::draw_help_lines(
                     &mut panel,
                     &[
                         "LMB/Enter click",
@@ -287,28 +296,28 @@ pub fn run(args: &Args) -> Result<()> {
 
             if let Some((hx, hy)) = hover {
                 let src = loupe_src.as_ref().unwrap_or(&frame_img);
-                let _ = draw_pixel_loupe(&mut panel, src, hx, hy);
+                let _ = Preview::draw_pixel_loupe(&mut panel, src, hx, hy);
             }
         } else {
             if let Some(ref b) = baseline {
-                draw_world_grid(&mut panel, b, grid)?;
+                Preview::draw_world_grid(&mut panel, b, &grid)?;
                 let lines = [
                     format!("LIVE — existing cam{} overlay", cam_id.0),
                     "Space freeze · first click starts recalib".into(),
                 ];
-                draw_debug_lines(&mut panel, &lines, Scalar::new(255.0, 128.0, 0.0, 0.0))?;
-                draw_help_lines(
+                Preview::draw_debug_lines(&mut panel, &lines, Scalar::new(255.0, 128.0, 0.0, 0.0))?;
+                Preview::draw_help_lines(
                     &mut panel,
                     &["+/- [] ., grid", "Space freeze", "q quit"],
                     Scalar::new(0.0, 255.0, 80.0, 0.0),
                 )?;
             } else {
-                draw_debug_lines(
+                Preview::draw_debug_lines(
                     &mut panel,
                     &["LIVE - Space to freeze"],
                     Scalar::new(0.0, 255.0, 255.0, 0.0),
                 )?;
-                draw_help_lines(
+                Preview::draw_help_lines(
                     &mut panel,
                     &["Space freeze", "q quit"],
                     Scalar::new(0.0, 255.0, 80.0, 0.0),
@@ -317,7 +326,7 @@ pub fn run(args: &Args) -> Result<()> {
         }
 
         let wait = if frozen { 30 } else { 1 };
-        let shown = show_bgr(window, &panel, wait)?;
+        let shown = Preview::show_bgr(window, &panel, wait)?;
         display_scale = shown.scale;
         match shown.action {
             PreviewAction::Quit => {
@@ -330,7 +339,7 @@ pub fn run(args: &Args) -> Result<()> {
             PreviewAction::Continue => {}
             PreviewAction::Key(k) => {
                 if frozen {
-                    if let Some((dx, dy)) = arrow_delta(k) {
+                    if let Some((dx, dy)) = Preview::arrow_delta(k) {
                         let mut m = mouse.lock().expect("mouse");
                         m.sync(display_scale, canvas_w, canvas_h);
                         m.nudge(dx, dy, canvas_w, canvas_h);
@@ -391,13 +400,13 @@ pub fn run(args: &Args) -> Result<()> {
                 } else if solved.as_ref().is_some_and(|s| s.accepted)
                     || (baseline.is_some() && clicks.is_empty())
                 {
-                    apply_grid_key(&mut grid, key);
+                    Preview::apply_grid_key(&mut grid, key);
                 }
             }
         }
     }
 
-    destroy_window(window);
+    Preview::destroy_window(window);
     return Ok(());
 }
 
@@ -405,7 +414,7 @@ pub fn run(args: &Args) -> Result<()> {
 fn overlay_world_grid(
     panel: &mut Mat,
     frame_img: &Mat,
-    params: &CameraParams,
+    params: &camera::Params,
     grid: WorldGridParams,
     pad: i32,
     img_w: i32,
@@ -415,21 +424,21 @@ fn overlay_world_grid(
         let mut grid_layer = frame_img
             .try_clone()
             .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
-        draw_world_grid(&mut grid_layer, params, grid)?;
+        Preview::draw_world_grid(&mut grid_layer, params, &grid)?;
         let roi = Rect::new(pad, pad, img_w, img_h);
         let mut dst = Mat::roi_mut(panel, roi)?;
         grid_layer.copy_to(&mut dst)?;
     } else {
-        draw_world_grid(panel, params, grid)?;
+        Preview::draw_world_grid(panel, params, &grid)?;
     }
     return Ok(());
 }
 
 fn try_solve(
     args: &Args,
-    cam_id: CameraId,
+    cam_id: camera::Id,
     img: &Mat,
-    clicks: &[PixelPoint],
+    clicks: &[camera::Pixel],
     solved: &mut Option<Solved>,
     last_fail_rmse: &mut Option<f64>,
 ) -> Result<()> {
@@ -441,7 +450,7 @@ fn try_solve(
     let w = img.cols().max(1) as u32;
     let h = img.rows().max(1) as u32;
     let result =
-        calibrate_table_pnp(cam_id, None, w, h, args.fov_y, clicks).map_err(anyhow::Error::msg)?;
+        TablePnp::calibrate(cam_id, None, w, h, args.fov_y, clicks).map_err(anyhow::Error::msg)?;
     println!(
         "PnP candidates={} rmse={:.2}px",
         result.candidates, result.reproj_rmse
@@ -470,8 +479,8 @@ fn try_solve(
     return Ok(());
 }
 
-fn print_per_point_residuals(clicks: &[PixelPoint], params: &CameraParams) {
-    let marks = table_landmarks();
+fn print_per_point_residuals(clicks: &[camera::Pixel], params: &camera::Params) {
+    let marks = TablePnp::landmarks();
     let mut parts = Vec::with_capacity(TABLE_LANDMARK_COUNT);
     for (i, click) in clicks.iter().enumerate() {
         let Some(ideal) = project_unclipped(params, marks[i].world) else {
@@ -486,11 +495,11 @@ fn print_per_point_residuals(clicks: &[PixelPoint], params: &CameraParams) {
     println!("  residuals[px] {}", parts.join(" "));
 }
 
-fn to_canvas(p: PixelPoint, pad: i32) -> PixelPoint {
-    return PixelPoint::new(p.x + f64::from(pad), p.y + f64::from(pad));
+fn to_canvas(p: camera::Pixel, pad: i32) -> camera::Pixel {
+    return camera::Pixel::new(p.x + f64::from(pad), p.y + f64::from(pad));
 }
 
-fn to_canvas_pts(pts: &[PixelPoint], pad: i32) -> Vec<PixelPoint> {
+fn to_canvas_pts(pts: &[camera::Pixel], pad: i32) -> Vec<camera::Pixel> {
     return pts.iter().copied().map(|p| to_canvas(p, pad)).collect();
 }
 
@@ -520,7 +529,7 @@ fn make_padded_canvas(frame: &Mat, pad: i32) -> Result<Mat> {
 
 fn draw_complete_edges(
     panel: &mut Mat,
-    pts: &[PixelPoint],
+    pts: &[camera::Pixel],
     color: Scalar,
     thickness: i32,
 ) -> Result<()> {
@@ -536,11 +545,11 @@ fn draw_complete_edges(
 
 fn draw_mesh_edges(
     panel: &mut Mat,
-    pts: &[PixelPoint],
+    pts: &[camera::Pixel],
     color: Scalar,
     thickness: i32,
 ) -> Result<()> {
-    for &(a_i, b_i) in table_landmark_mesh_edges() {
+    for &(a_i, b_i) in TablePnp::landmark_mesh_edges() {
         if a_i >= pts.len() || b_i >= pts.len() {
             continue;
         }
@@ -554,8 +563,8 @@ fn draw_mesh_edges(
 /// 클릭 점(녹색) + 현재 꼭짓점 완전연결 메시(주황). `pad`는 캔버스 오프셋.
 fn draw_clicks(
     panel: &mut Mat,
-    clicks: &[PixelPoint],
-    marks: &[TableLandmark],
+    clicks: &[camera::Pixel],
+    marks: &[Landmark],
     pad: i32,
 ) -> Result<()> {
     let pts = to_canvas_pts(clicks, pad);
@@ -591,20 +600,20 @@ fn draw_clicks(
 /// PnP 해의 이상 재투영(마젠타) + 클릭↔이상 잔차(노랑) + 이상 메시.
 fn draw_reproj_overlay(
     panel: &mut Mat,
-    clicks: &[PixelPoint],
-    marks: &[TableLandmark],
-    params: &CameraParams,
+    clicks: &[camera::Pixel],
+    marks: &[Landmark],
+    params: &camera::Params,
     pad: i32,
 ) -> Result<()> {
     if clicks.len() != TABLE_LANDMARK_COUNT {
         return Ok(());
     }
-    let ideals: Vec<Option<PixelPoint>> = marks
+    let ideals: Vec<Option<camera::Pixel>> = marks
         .iter()
         .map(|m| project_unclipped(params, m.world).map(|p| to_canvas(p, pad)))
         .collect();
     let click_pts = to_canvas_pts(clicks, pad);
-    let Some(ideal_pts): Option<Vec<PixelPoint>> = ideals.iter().cloned().collect() else {
+    let Some(ideal_pts): Option<Vec<camera::Pixel>> = ideals.iter().cloned().collect() else {
         draw_residuals_partial(panel, &click_pts, &ideals)?;
         return Ok(());
     };
@@ -614,20 +623,20 @@ fn draw_reproj_overlay(
     return Ok(());
 }
 
-fn project_unclipped(params: &CameraParams, point: Point3) -> Option<PixelPoint> {
+fn project_unclipped(params: &camera::Params, point: Point3) -> Option<camera::Pixel> {
     let x_cam = params.rotation * point.coords + params.translation;
     if x_cam.z <= 0.05 {
         return None;
     }
     let u = params.fx * (x_cam.x / x_cam.z) + params.cx;
     let v = params.fy * (x_cam.y / x_cam.z) + params.cy;
-    return Some(PixelPoint::new(u, v));
+    return Some(camera::Pixel::new(u, v));
 }
 
 fn draw_residuals_partial(
     panel: &mut Mat,
-    clicks: &[PixelPoint],
-    ideals: &[Option<PixelPoint>],
+    clicks: &[camera::Pixel],
+    ideals: &[Option<camera::Pixel>],
 ) -> Result<()> {
     let residual = Scalar::new(0.0, 255.0, 255.0, 0.0); // yellow
     let ideal_pt = Scalar::new(255.0, 0.0, 255.0, 0.0); // magenta

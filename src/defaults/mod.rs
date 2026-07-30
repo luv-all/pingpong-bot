@@ -4,7 +4,7 @@
 //! 규격·datasheet(ITTF, CAD, G, B0332, DXL stall)는 [`crate::constants`].
 //!
 //! 패턴:
-//! - `impl Default for Params|Config|CliArgs` — 앱 프리셋
+//! - `impl Default for camera::Params|Config|CliArgs` — 앱 프리셋
 //! - `pub const` — clap `default_value_t`·임계값
 //! - [`detector_for`] / [`robot`] — 조립이 `Result`이거나 파이프라인인 팩토리만 예외
 //!
@@ -20,7 +20,7 @@
 //! | [`hardware`] | DynamixelConfig / RailConfig |
 //! | [`dxl_limits`] | derate·속도·토크 배열 |
 //! | [`planner`] | InterceptWindow + bang-bang consts |
-//! | [`sim`] | BallShooterSettings + 랜덤/eval consts |
+//! | [`sim`] | Settings + 랜덤/eval consts |
 //! | [`sim_motor`] | `SimMotorParams` |
 //!
 //! 활성 로봇을 바꾸려면 [`robot`] 본문만 고친다.
@@ -31,8 +31,8 @@ pub mod dxl_limits;
 mod estimator;
 mod hardware;
 mod impact;
+pub mod motion;
 mod physics;
-pub mod planner;
 mod robot;
 pub mod sim;
 mod sim_motor;
@@ -42,11 +42,10 @@ pub use calib::{
     CHARUCO_MARKER_LENGTH_M, CHARUCO_SQUARE_LENGTH_M, CHARUCO_SQUARES_X, CHARUCO_SQUARES_Y,
     DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME, DEFAULT_CLIPS_DIR,
     DEFAULT_COLORMASK_PATH, DEFAULT_DATA_DIR, DEFAULT_FOV_Y_DEG, DEFAULT_STEREO_CAM_ROLES,
-    DEFAULT_STREAM_BACKEND,
-    DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_THREADED,
-    DEFAULT_STREAM_WIDTH, LEFT_CAMERA_ID, LEFT_DEVICE, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS,
-    RIGHT_CAMERA_ID, RIGHT_DEVICE, calibration_path, calibration_pending_path, colormask_path,
-    ensure_parent_dir,
+    DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT,
+    DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH, LEFT_CAMERA_ID, LEFT_DEVICE, MAX_REPROJ_RMSE_PX,
+    MIN_CHARUCO_CORNERS, RIGHT_CAMERA_ID, RIGHT_DEVICE, calibration_path, calibration_pending_path,
+    colormask_path, ensure_parent_dir,
 };
 pub use control::ControlParams;
 pub use dxl_limits::{
@@ -55,13 +54,13 @@ pub use dxl_limits::{
 };
 pub use estimator::EstimatorParams;
 pub use impact::ImpactParams;
-pub use physics::PhysicsParams;
-pub use planner::{
+pub use motion::{
     JACOBIAN_DAMPING, JDOT_STEP, MAGNUS_OMEGA_MAX, MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS,
     MIN_TIME_TO_GO_SECS, PLAN_DT_SECS, POSITION_TOLERANCE_RAD_OR_M, RACKET_DIRECTION_TOLERANCE_DEG,
     RACKET_SPEED_RATIO_TOLERANCE, RAIL_ACCEL_M_S2, RETURN_TO_CENTER_GROWTH,
     RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS, TIME_TO_GO_BIAS,
 };
+pub use physics::PhysicsParams;
 pub use robot::{
     RAIL_MAX_SPEED, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount, rail_frame,
     robot, shared_robot, urdf_4dof, urdf_test,
@@ -87,11 +86,12 @@ pub use vision::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::camera;
+    use crate::defaults::colormask_for;
     use crate::detector::{RoiParams, ScorerParams};
     use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
-    use crate::planner::InterceptWindow;
-    use crate::{CameraId, colormask_for};
+    use crate::robot::motion::InterceptWindow;
 
     #[test]
     fn presets_validate() {
@@ -101,8 +101,8 @@ mod tests {
         EstimatorParams::default().validate().unwrap();
         InterceptWindow::default().validate().unwrap();
         ScorerParams::default().validate().unwrap();
-        colormask_for(CameraId(0)).unwrap().validate().unwrap();
-        colormask_for(CameraId(1)).unwrap().validate().unwrap();
+        colormask_for(camera::Id(0)).unwrap().validate().unwrap();
+        colormask_for(camera::Id(1)).unwrap().validate().unwrap();
         RoiParams::default().validate().unwrap();
         DynamixelConfig::default().validate().unwrap();
         RailConfig::default().validate().unwrap();

@@ -1,11 +1,15 @@
 //! Sim 런타임 — 세션 스레드·컨트롤·공 추정.
 
+mod clock_handle;
+mod config;
 pub mod controls;
 pub mod estimator;
-mod run;
+mod session;
 
-pub use controls::{SimRuntimeControls, new_shutdown_flag};
-pub use estimator::{SimBallEstimator, predict_impact};
-pub use run::{SimSession, SimSessionConfig};
+pub use config::SimSessionConfig;
+pub use controls::SimRuntimeControls;
+pub use estimator::SimBallEstimator;
+pub(crate) use estimator::predict_impact;
+pub use session::SimSession;
 
-pub(crate) use run::SimClockHandle;
+pub(crate) use clock_handle::SimClockHandle;

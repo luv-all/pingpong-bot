@@ -25,19 +25,33 @@
 //! (반드시 저장소 루트에서 실행 — `--robot`의 URDF 상대경로가 현재 디렉터리
 //! 기준이다, `config/*.toml`과 동일한 관례.)
 
-use std::path::PathBuf;
+mod args;
+mod contact_verify_joint_row;
+mod contact_verify_report;
+mod report;
+mod scenario;
+mod target;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use nalgebra::Vector3;
-use pingpong_bot::{
-    Arm, BallShooterSettings, Joints, MountPreset, Point3, RacketGuidanceScratch, RobotBuilder,
-    RobotPose, SimWorld, defaults, rally_return_velocity, required_racket_velocity,
-    step_racket_guidance,
-};
-use serde::{Deserialize, Serialize};
+use pingpong_bot::Point3;
+use pingpong_bot::defaults;
+use pingpong_bot::defaults::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
+use pingpong_bot::estimator::Impact;
+use pingpong_bot::robot::motion;
+use pingpong_bot::robot::{self, Arm, Joints, MountPreset, RobotBuilder};
+use pingpong_bot::sim::launch;
+use pingpong_bot::sim::physics::SimWorld;
 
-/// 수렴 판정 허용 오차 — `RobotState::is_at_center`의 관례(1e-3)를 따른다.
+use args::Args;
+use contact_verify_joint_row::ContactVerifyJointRow;
+use contact_verify_report::ContactVerifyReport;
+use report::Report;
+use scenario::Scenario;
+use target::Target;
+
+/// 수렴 판정 허용 오차 — `robot::State::is_at_center`의 관례(1e-3)를 따른다.
 const POSITION_TOLERANCE_RAD_OR_M: f64 = 1e-3;
 /// 라켓 속도 크기 허용오차(목표 대비 비율) — 목표의 [1-tol, 1+tol] 안이면 OK.
 ///
@@ -50,139 +64,12 @@ const RACKET_SPEED_RATIO_TOLERANCE: f64 = 0.15;
 /// 라켓 속도 방향 허용오차 [deg].
 const RACKET_DIRECTION_TOLERANCE_DEG: f64 = 15.0;
 
-#[derive(Parser, Debug)]
-#[command(about = "quintic 스윙 모양 제약 없이 순수 토크 한계로 임팩트 도달 시간을 측정한다")]
-struct Args {
-    /// TOML 시나리오 파일. 여기 값들을 아래 CLI 플래그가 덮어쓴다.
-    #[arg(long)]
-    scenario: Option<PathBuf>,
-
-    /// 카탈로그 로봇 id (`competition` | `urdf-test` | `4-dof`).
-    #[arg(long)]
-    robot: Option<String>,
-
-    /// 시작 레일 x [m]. 생략하면 레일 중앙(`default_x()`).
-    #[arg(long)]
-    start_rail_x: Option<f64>,
-
-    #[arg(long, allow_hyphen_values = true)]
-    impact_x: Option<f64>,
-    #[arg(long, allow_hyphen_values = true)]
-    impact_y: Option<f64>,
-    #[arg(long, allow_hyphen_values = true)]
-    impact_z: Option<f64>,
-
-    #[arg(long, allow_hyphen_values = true)]
-    incoming_vx: Option<f64>,
-    #[arg(long, allow_hyphen_values = true)]
-    incoming_vy: Option<f64>,
-    #[arg(long, allow_hyphen_values = true)]
-    incoming_vz: Option<f64>,
-
-    /// 참고용 — 실제 예측이라면 이 안에 들어와야 할 여유 시간 [s]. 결과 판정에는
-    /// 안 쓰고, 리포트에서 achieved_time과 나란히 비교만 한다.
-    #[arg(long)]
-    time_budget_secs: Option<f64>,
-
-    /// 적분 스텝 [s].
-    #[arg(long, default_value_t = 0.001)]
-    dt: f64,
-
-    /// 수렴하지 않을 때 포기하는 최대 시뮬레이션 시간 [s].
-    #[arg(long, default_value_t = 2.0)]
-    max_time_secs: f64,
-
-    /// 사람이 읽는 표 대신 JSON으로 출력.
-    #[arg(long)]
-    json: bool,
-
-    /// [느린 검증 모드] 위 analytic RNEA 벤치(기본 동작, ~0.34ms)는 건드리지
-    /// 않고 별도로 분기 — 실제 Rapier `SimWorld`로 기본 스윙 한 번을 실제
-    /// ball-paddle `ContactPair`까지 물리 스텝으로 돌려, 계획된 quintic
-    /// 궤적 대비 관절별 PD 추종 지연(`|q_actual - q_commanded|`)을 실측한다.
-    /// 이 플래그가 있으면 다른 시나리오 인자(`--impact-*`, `--incoming-*`
-    /// 등)는 무시하고 즉시 이 모드만 실행한다.
-    #[arg(long)]
-    sim_verify: bool,
-}
-
 /// `--sim-verify` 대기 예산 — 스윙 커밋까지. 기본 슈터 설정의 비행시간(<1s)
 /// 보다 넉넉하게 잡아 스윙이 늦게 커밋돼도 놓치지 않는다.
 const SIM_VERIFY_MAX_WAIT_STEPS: usize = 4_000;
 /// `--sim-verify` 대기 예산 — 커밋 이후 실제 접촉까지. `impact_time_secs`는
 /// 보통 이보다 훨씬 짧지만(수백 ms), PD 지연으로 늦게 맞는 경우까지 커버.
 const SIM_VERIFY_MAX_CONTACT_STEPS: usize = 3_000;
-
-/// `--sim-verify` 관절별 결과 한 줄.
-#[derive(Debug, Serialize)]
-struct ContactVerifyJointRow {
-    joint: usize,
-    /// 실제 접촉 프레임에서의 `|q_actual - q_commanded|` [rad]. 접촉을 못
-    /// 찾았으면 `None`.
-    tracking_error_at_contact_rad: Option<f64>,
-    /// 계획된 `impact_time_secs` 프레임에서의 같은 오차 [rad] — 접촉이
-    /// 일찍/늦게/제때 일어났는지 비교용.
-    tracking_error_at_planned_impact_rad: Option<f64>,
-    /// 궤적 전 구간(임팩트+팔로스루) 최대 명령 각속도 [rad/s] — 이 관절이
-    /// "원래 거의 안 움직이는" 건지, "움직이라고 했는데 못 따라가는" 건지
-    /// 구분하는 데 쓴다.
-    peak_commanded_speed_rad_s: f64,
-}
-
-/// `--sim-verify` 결과.
-#[derive(Debug, Serialize)]
-struct ContactVerifyReport {
-    swing_committed: bool,
-    contact_detected: bool,
-    planned_impact_time_secs: f64,
-    /// 실제 접촉이 감지된 스윙 커밋 이후 경과시간 [s] (`None`이면 대기창 안에
-    /// 접촉을 못 찾음).
-    contact_elapsed_secs: Option<f64>,
-    /// `contact_elapsed_secs - planned_impact_time_secs` — 양수면 계획보다
-    /// 늦게, 음수면 일찍 실제 접촉이 일어났다는 뜻.
-    contact_vs_planned_delta_secs: Option<f64>,
-    joints: Vec<ContactVerifyJointRow>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Scenario {
-    robot: Option<String>,
-    start_rail_x: Option<f64>,
-    impact: Option<[f64; 3]>,
-    incoming_velocity: Option<[f64; 3]>,
-    time_budget_secs: Option<f64>,
-}
-
-#[derive(Debug, Serialize)]
-struct Report {
-    robot: String,
-    /// 목표 라켓 속도가 관절/레일 속도 한계를 넘어 실행 전에 잘렸는지.
-    /// true면 아래 결과는 "이상적인 리턴 파워"가 아니라 "낼 수 있는 최대
-    /// 속도로 한 번 자른 뒤" 기준이라는 뜻 — 조용히 숨기지 않는다.
-    target_speed_clamped: bool,
-    feasible: bool,
-    achieved_time_secs: f64,
-    /// 목표 관절속도까지는 못 맞춰도, 위치만 허용오차 안에 처음 들어온 시각
-    /// [s] — 라켓이 "제자리"에는 도착했는지(타점 자체는 맞았는지)를 목표
-    /// 속도 달성 여부와 분리해서 본다. 끝까지 도달 못 하면 `None`.
-    position_reached_time_secs: Option<f64>,
-    max_time_secs: f64,
-    time_budget_secs: Option<f64>,
-    within_time_budget: Option<bool>,
-    position_error: f64,
-    /// 종료 시점 실제 라켓 속도 크기 [m/s] (FK 유한차분 역산).
-    achieved_racket_speed_m_s: f64,
-    /// 목표 라켓 속도 크기 [m/s] (`target_speed_clamped`면 잘린 뒤 값).
-    target_racket_speed_m_s: f64,
-    /// 종료 시점 라켓 속도 방향과 목표 방향의 각도차 [deg].
-    racket_direction_error_deg: f64,
-    peak_joint_torque_utilization: Vec<f64>,
-    peak_joint_speed_rad_s: Vec<f64>,
-    peak_joint_speed_ratio_to_cap: Vec<f64>,
-    peak_rail_speed_m_s: f64,
-    peak_rail_speed_ratio_to_cap: f64,
-}
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -248,7 +135,7 @@ fn main() -> Result<()> {
     })?;
     let start_rail_x = start_rail_x_override.unwrap_or_else(|| rail.default_x());
 
-    let start = RobotPose::new(start_rail_x, arm.default_joints.clone());
+    let start = robot::Pose::new(start_rail_x, arm.default_joints.clone());
     let target = compute_target(
         &arm,
         &start,
@@ -301,23 +188,10 @@ fn resolve_arm(robot_id: &str) -> Result<std::sync::Arc<Arm>> {
         .urdf(&path)
         .ee_link_opt(Some("pingpong_paddle_v5_1"))
         .mount_preset(MountPreset::Rep103AtTableEnd)
-        .max_joint_speed(pingpong_bot::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S)
+        .max_joint_speed(DYNAMIXEL_MAX_JOINT_SPEED_RAD_S)
         .build()
         .with_context(|| format!("로봇 빌드 실패: {}", path.display()))?;
     return Ok(built.arm);
-}
-
-struct Target {
-    rail_x: f64,
-    joints: Joints,
-    rail_velocity: f64,
-    joint_velocities: Vec<f64>,
-    /// 임팩트 순간 라켓이 실제로 내야 하는 속도(월드) — `required_racket_velocity`
-    /// 원본. 수렴 판정은 이걸 기준으로 한다(관절 공간 속도 벡터를 칼같이
-    /// 맞추면 불필요한 백스윙성 왕복이 "최적해"로 나올 수 있어서 — 관절
-    /// 속도는 여러 조합이 같은 라켓 속도를 낼 수 있는데 그중 하나만 목표로
-    /// 못박으면 과잉제약이다).
-    racket_velocity: Vector3<f64>,
 }
 
 /// 목표 관절/레일 속도가 실제 한계를 넘으면 그 한계로 자른다 — 하지만 이제
@@ -353,12 +227,12 @@ fn clamp_target_to_speed_caps(arm: &Arm, target: &mut Target) -> bool {
 /// 도달 시간 자체를 구한다.
 fn compute_target(
     arm: &Arm,
-    start: &RobotPose,
+    start: &robot::Pose,
     impact: Point3,
     incoming_velocity: Vector3<f64>,
 ) -> Result<Target> {
     let v_in = incoming_velocity;
-    let v_out = rally_return_velocity(impact, v_in);
+    let v_out = Impact::rally_return(impact, v_in);
     let desired_normal = (v_out - v_in).normalize();
 
     let ik_hint = arm
@@ -374,14 +248,14 @@ fn compute_target(
         .inverse_pose_with_rail(
             racket_center,
             desired_normal,
-            &RobotPose::new(start.rail_x, ik_hint),
+            &robot::Pose::new(start.rail_x, ik_hint),
         )
         .map_err(|e| anyhow!("임팩트 IK 실패: {e}"))?;
     let pose = arm
         .forward_kinematics_with_rail(solved.rail_x, &solved.joints)
         .ok_or_else(|| anyhow!("IK 해에서 FK 실패"))?;
 
-    let v_r = required_racket_velocity(
+    let v_r = Impact::required_racket_velocity(
         v_in,
         v_out,
         pose.normal,
@@ -429,7 +303,7 @@ fn racket_velocity_estimate(
 
 fn simulate(
     arm: &Arm,
-    start: &RobotPose,
+    start: &robot::Pose,
     target: &Target,
     dt: f64,
     max_time_secs: f64,
@@ -451,7 +325,7 @@ fn simulate(
         .expect("target FK — compute_target이 이미 IK로 검증한 자세")
         .position
         .coords;
-    let mut scratch = RacketGuidanceScratch::new(n);
+    let mut scratch = motion::RacketGuidanceScratch::new(n);
 
     let mut peak_util: Vec<f64> = vec![0.0; n];
     let mut peak_speed: Vec<f64> = vec![0.0; n];
@@ -469,7 +343,7 @@ fn simulate(
         // ZEM/ZEV의 `Tg`(목표 도달까지 남은 시간)로 이 시뮬레이션 자체의
         // 예산(`max_time_secs`)을 쓴다 — 모듈 문서 참고.
         let remaining_secs = max_time_secs - t;
-        let Some(step) = step_racket_guidance(
+        let Some(step) = motion::Planner::step_racket_guidance(
             arm,
             &mut q,
             &mut qdot,
@@ -625,10 +499,11 @@ fn print_human(robot_id: &str, report: &Report) {
 /// 않는다 — 그래서 PD 추종 지연(base/shoulder가 실제 임팩트 순간 명령각에
 /// 못 미치는 문제)을 볼 수 없다. 이 모드가 그 blind spot을 메운다.
 fn run_sim_verify(dt: f64, json: bool) -> Result<()> {
-    let robot = defaults::primitive_4dof().map_err(|e| anyhow!("기본 4-dof 로봇 빌드 실패: {e}"))?;
+    let robot =
+        defaults::primitive_4dof().map_err(|e| anyhow!("기본 4-dof 로봇 빌드 실패: {e}"))?;
     let mut world = SimWorld::new(robot);
     world.set_use_ground_truth(true);
-    world.shoot_ball(&BallShooterSettings::default());
+    world.shoot_ball(&launch::Settings::default());
 
     let mut committed_trajectory = None;
     for _ in 0..SIM_VERIFY_MAX_WAIT_STEPS {

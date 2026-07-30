@@ -3,35 +3,23 @@
 use std::path::Path;
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use opencv::core::Scalar;
 use opencv::prelude::*;
-use pingpong_bot::{
-    BounceEvent, Calibration, CameraId, Detector, FrameSource, PixelPoint, Point3, PreviewAction,
-    StereoOfflineArgs, TrajPoint, destroy_window, detect_bounces, draw_cam_label, draw_circle_px,
-    draw_debug_lines, draw_help_lines, draw_world_velocity, hstack_bgr, mean_bounce_e, show_bgr,
-    triangulate_views,
-};
+use pingpong_bot::camera;
+use pingpong_bot::camera::{Calibration, FrameSource, Preview, PreviewAction, StereoOfflineArgs};
+use pingpong_bot::defaults::detector_for;
+use pingpong_bot::detector::Detector;
+use pingpong_bot::estimator;
 
 pub struct CaptureResult {
-    pub traj: Vec<TrajPoint>,
-    pub bounces: Vec<BounceEvent>,
+    pub traj: Vec<estimator::TrajPoint>,
+    pub bounces: Vec<estimator::BounceEvent>,
     pub e: Option<f64>,
 }
 
-pub fn load_calibration(path: &Path) -> Result<Calibration> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("calibration 읽기: {}", path.display()))?;
-    let cal: Calibration = serde_json::from_str(&text)
-        .with_context(|| format!("calibration JSON: {}", path.display()))?;
-    if cal.camera_count() < 2 {
-        bail!("카메라 ≥2 필요 (got {})", cal.camera_count());
-    }
-    return Ok(cal);
-}
-
 fn open_sources(
-    cam: &pingpong_bot::CamCliArgs,
+    cam: &camera::CamCliArgs,
     offline: &StereoOfflineArgs,
     timeline_fps: Option<f64>,
 ) -> Result<Vec<Box<dyn FrameSource>>> {
@@ -41,32 +29,20 @@ fn open_sources(
     return Ok(sources);
 }
 
-fn triangulate_pixels(
-    hits: &[(CameraId, PixelPoint)],
-    calibration: &Calibration,
-) -> Option<Point3> {
-    if hits.len() < calibration.min_cameras_for_triangulation() {
-        return None;
-    }
-    let mut views = Vec::with_capacity(hits.len());
-    for &(id, pix) in hits {
-        let params = calibration.params(id)?;
-        views.push((params.projection_matrix(), pix));
-    }
-    return triangulate_views(&views);
-}
-
 /// OpenCV: open → read → detect/triangulate/draw → q 종료.
 pub fn run_capture(
     calibration: &Path,
-    cam: &pingpong_bot::CamCliArgs,
+    cam: &camera::CamCliArgs,
     offline: &StereoOfflineArgs,
     preview: bool,
     wait_ms: i32,
     max_frames: usize,
     timeline_fps: Option<f64>,
 ) -> Result<CaptureResult> {
-    let calibration = load_calibration(calibration)?;
+    let calibration = Calibration::load_json(calibration).map_err(anyhow::Error::msg)?;
+    if calibration.camera_count() < 2 {
+        bail!("카메라 ≥2 필요 (got {})", calibration.camera_count());
+    }
     let mut sources = open_sources(cam, offline, timeline_fps)?;
     if sources.len() < 2 {
         bail!("카메라 소스 ≥2 필요");
@@ -82,7 +58,7 @@ pub fn run_capture(
     let ids: Vec<_> = sources.iter().map(|s| s.camera_id()).collect();
     let mut detectors: Vec<Detector> = ids
         .iter()
-        .map(|&id| pingpong_bot::detector_for(id))
+        .map(|&id| detector_for(id))
         .collect::<Result<Vec<_>>>()?;
 
     let window = "measure:restitution";
@@ -110,7 +86,7 @@ pub fn run_capture(
             if i == 0 {
                 frame0_ts = Some(frame.timestamp);
             }
-            let cam_id = CameraId(i as u8);
+            let cam_id = camera::Id(i as u8);
             let pixel = detectors[i].detect(&frame);
             let mut panel = frame
                 .image
@@ -118,9 +94,9 @@ pub fn run_capture(
                 .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
             if let Some(p) = pixel {
                 hits.push((cam_id, p));
-                draw_circle_px(&mut panel, p, 8, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
+                Preview::draw_circle_px(&mut panel, p, 8, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
             }
-            draw_cam_label(
+            Preview::draw_cam_label(
                 &mut panel,
                 &format!("cam{i}"),
                 Scalar::new(255.0, 255.0, 255.0, 0.0),
@@ -140,32 +116,32 @@ pub fn run_capture(
                 0.0
             }
         };
-        if let Some(pos) = triangulate_pixels(&hits, &calibration) {
-            traj.push(TrajPoint {
+        if let Some(pos) = estimator::Triangulate::pixels(&hits, &calibration) {
+            traj.push(estimator::TrajPoint {
                 t: sync_t,
                 pos,
                 pixels: hits.clone(),
             });
         }
 
-        let bounces = detect_bounces(&traj);
-        let e_mean = mean_bounce_e(&bounces);
+        let bounces = estimator::TrajAnalysis::detect_bounces(&traj);
+        let e_mean = estimator::TrajAnalysis::mean_bounce_e(&bounces);
 
         if let Some(ev) = bounces.last() {
             for (i, panel) in panels.iter_mut().enumerate() {
-                let Some(params) = calibration.params(CameraId(i as u8)) else {
+                let Some(params) = calibration.params(camera::Id(i as u8)) else {
                     continue;
                 };
                 if let Some(px) = params.project_world(ev.contact) {
-                    draw_circle_px(panel, px, 12, Scalar::new(255.0, 0.0, 255.0, 0.0), 2)?;
+                    Preview::draw_circle_px(panel, px, 12, Scalar::new(255.0, 0.0, 255.0, 0.0), 2)?;
                 }
                 if let Some(px) = params.project_world(ev.prev) {
-                    draw_circle_px(panel, px, 7, Scalar::new(0.0, 220.0, 255.0, 0.0), 2)?;
+                    Preview::draw_circle_px(panel, px, 7, Scalar::new(0.0, 220.0, 255.0, 0.0), 2)?;
                 }
                 if let Some(px) = params.project_world(ev.next) {
-                    draw_circle_px(panel, px, 7, Scalar::new(0.0, 128.0, 255.0, 0.0), 2)?;
+                    Preview::draw_circle_px(panel, px, 7, Scalar::new(0.0, 128.0, 255.0, 0.0), 2)?;
                 }
-                draw_world_velocity(
+                Preview::draw_world_velocity(
                     panel,
                     params,
                     ev.contact,
@@ -173,7 +149,7 @@ pub fn run_capture(
                     0.08,
                     Scalar::new(0.0, 0.0, 255.0, 0.0),
                 )?;
-                draw_world_velocity(
+                Preview::draw_world_velocity(
                     panel,
                     params,
                     ev.contact,
@@ -211,16 +187,16 @@ pub fn run_capture(
             lines.push(format!("mean e={e:.4}  (n={})", bounces.len()));
         }
 
-        let mut mosaic = hstack_bgr(&panels)?;
-        draw_debug_lines(&mut mosaic, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-        draw_help_lines(
+        let mut mosaic = Preview::hstack_bgr(&panels)?;
+        Preview::draw_debug_lines(&mut mosaic, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        Preview::draw_help_lines(
             &mut mosaic,
             &["q/ESC quit"],
             Scalar::new(0.0, 255.0, 80.0, 0.0),
         )?;
 
         if preview {
-            match show_bgr(window, &mosaic, wait_ms)?.action {
+            match Preview::show_bgr(window, &mosaic, wait_ms)?.action {
                 PreviewAction::Quit => break,
                 PreviewAction::Continue | PreviewAction::Key(_) => {}
             }
@@ -229,12 +205,12 @@ pub fn run_capture(
     }
 
     if preview {
-        destroy_window(window);
+        Preview::destroy_window(window);
     }
 
-    let bounces = detect_bounces(&traj);
+    let bounces = estimator::TrajAnalysis::detect_bounces(&traj);
     return Ok(CaptureResult {
-        e: mean_bounce_e(&bounces),
+        e: estimator::TrajAnalysis::mean_bounce_e(&bounces),
         traj,
         bounces,
     });

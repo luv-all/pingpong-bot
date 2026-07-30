@@ -4,22 +4,21 @@
 //! 짧은 전파와 hit-plane 예측은 반암시적 오일러 (`ballistics`).
 //!
 //! sim Rapier에는 이차 항력이 없어서(기본 drag=0) 파이프라인은
-//! `BallEkf::new(0.0)` 을 쓴다. Magnus는 ω 상태 확장 전까지 예측에서 0.
-//! with_defaults() 는 임베드 `[physics]` 기본값.
+//! `estimator::Ekf::new(0.0)` 을 쓴다. Magnus는 ω 상태 확장 전까지 예측에서 0.
 
 use std::time::Instant;
 
 use nalgebra::{Matrix3, Matrix6, Vector3, Vector6};
 
-use super::ballistics::{predict_hit_plane, semi_implicit_euler};
+use crate::Point3;
 use crate::defaults;
 use crate::defaults::PhysicsParams;
-use crate::estimator::Estimator;
-use crate::{HitPlane, Point3, Prediction};
+use crate::estimator;
+use crate::estimator::{Estimator, HitPlane, Prediction};
 
 /// EKF 상태: 위치/속도 + 공분산.
 #[derive(Debug, Clone)]
-pub struct BallEkf {
+pub struct Ekf {
     position: Vector3<f64>,
     velocity: Vector3<f64>,
     covariance: Matrix6<f64>,
@@ -30,7 +29,7 @@ pub struct BallEkf {
     velocity_seeded: bool,
 }
 
-impl BallEkf {
+impl Ekf {
     /// 항력 계수를 지정해 생성한다 (바운스는 default physics).
     pub fn new(drag_coefficient: f64) -> Self {
         return Self::with_physics(PhysicsParams {
@@ -173,7 +172,7 @@ impl BallEkf {
 
     fn predict_step(&mut self, dt: f64) {
         // ω 추정 전 — 각속도 0으로 전파.
-        let (pos, vel, _) = semi_implicit_euler(
+        let (pos, vel, _) = estimator::Kinematics::step(
             self.position,
             self.velocity,
             Vector3::zeros(),
@@ -202,7 +201,7 @@ fn process_noise(dt: f64) -> Matrix6<f64> {
     return q;
 }
 
-impl Estimator for BallEkf {
+impl Estimator for Ekf {
     fn update(&mut self, position: Point3, timestamp: Instant) {
         self.update_position(position, timestamp);
     }
@@ -211,7 +210,7 @@ impl Estimator for BallEkf {
         if !self.initialized || !self.velocity_seeded {
             return None;
         }
-        return predict_hit_plane(
+        return estimator::Kinematics::predict_to(
             self.position,
             self.velocity,
             Vector3::zeros(),
@@ -227,12 +226,13 @@ mod tests {
 
     use super::*;
     use crate::constants::table;
-    use crate::estimator::ballistics::{predict_hit_plane, semi_implicit_euler};
-    use crate::planner::physics::in_swing_commit_window;
+    use crate::estimator;
+    use crate::estimator::HitPlane;
+    use crate::robot::motion;
 
     #[test]
     fn ekf_predicts_hit_plane_from_state() {
-        let mut ekf = BallEkf::new(0.0);
+        let mut ekf = Ekf::new(0.0);
         let t0 = Instant::now();
         ekf.set_state(
             Vector3::new(table::WIDTH_X * 0.5, 2.0, table::SURFACE_Z + 0.3),
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn ekf_update_accepts_measurements() {
-        let mut ekf = BallEkf::new(0.0);
+        let mut ekf = Ekf::new(0.0);
         let t0 = Instant::now();
         for i in 0..10 {
             ekf.update_position(
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn velocity_seeded_on_second_measurement() {
-        let mut ekf = BallEkf::new(0.0);
+        let mut ekf = Ekf::new(0.0);
         let t0 = Instant::now();
         ekf.update_position(Point3::new(0.7, 2.0, 0.95), t0);
         assert!(ekf.velocity().is_none());
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn jump_reinitializes_filter() {
-        let mut ekf = BallEkf::new(0.0);
+        let mut ekf = Ekf::new(0.0);
         let t0 = Instant::now();
         ekf.set_state(
             Vector3::new(0.2, 0.3, 0.9),
@@ -299,9 +299,10 @@ mod tests {
         let p0 = Vector3::new(table::WIDTH_X * 0.5, 2.4, table::SURFACE_Z + 0.25);
         let v0 = Vector3::new(0.0, -5.5, 0.8);
         let physics = crate::defaults::PhysicsParams::default();
-        let truth0 = predict_hit_plane(p0, v0, Vector3::zeros(), plane, &physics).expect("truth");
+        let truth0 = estimator::Kinematics::predict_to(p0, v0, Vector3::zeros(), plane, &physics)
+            .expect("truth");
 
-        let mut ekf = BallEkf::new(0.0);
+        let mut ekf = Ekf::new(0.0);
         let t0 = Instant::now();
         let dt = Duration::from_millis(8);
         let mut pos = p0;
@@ -313,7 +314,7 @@ mod tests {
             let time = t0 + dt * i;
             ekf.update_position(Point3::from(pos), time);
             if let Some(pred) = ekf.predict_to(plane) {
-                if in_swing_commit_window(pred.time_to_impact_secs)
+                if motion::Planner::in_commit_window(pred.time_to_impact_secs)
                     && pos.y
                         <= table::LENGTH_Y
                             * defaults::ControlParams::default().swing_commit_max_ball_y_frac
@@ -322,7 +323,8 @@ mod tests {
                     best_err = best_err.min(err);
                 }
             }
-            let (np, nv, _) = semi_implicit_euler(pos, vel, Vector3::zeros(), 0.008, &physics);
+            let (np, nv, _) =
+                estimator::Kinematics::step(pos, vel, Vector3::zeros(), 0.008, &physics);
             pos = np;
             vel = nv;
             t += 0.008;

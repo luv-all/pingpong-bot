@@ -4,95 +4,24 @@
 //! - `Space` 동결/해제
 //! - `e` 짧은 노출 시도 (macOS OpenCV/AVFoundation에선 대개 무시됨)
 //!
-//! 모자이크는 `pingpong_bot::hstack_bgr` (최대 높이 + 패딩, 손실 없음).
-//! 표시만 모니터보다 클 때 downscale (`show_bgr`).
+//! 모자이크는 `Preview::hstack_bgr` (최대 높이 + 패딩, 손실 없음).
+//! 표시만 모니터보다 클 때 downscale (`Preview::show_bgr`).
 
-use std::time::Instant;
+mod args;
+mod cam_slot;
+mod fps_meter;
+mod live_source;
 
 use anyhow::{Result, bail};
 use clap::Parser;
 use opencv::core::Scalar;
 use opencv::prelude::*;
-use pingpong_bot::{
-    FrameSource, OpenCvCapture, PreviewAction, StereoCamCliArgs, ThreadedCapture, destroy_window,
-    draw_cam_label, draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
-};
+use pingpong_bot::camera::{OpenCvCapture, Preview, PreviewAction, ThreadedCapture};
 
-#[derive(Parser, Debug)]
-#[command(name = "cam-preview")]
-struct Args {
-    #[command(flatten)]
-    cam: StereoCamCliArgs,
-}
-
-struct FpsMeter {
-    last: Option<Instant>,
-    fps: f64,
-}
-
-impl FpsMeter {
-    fn new() -> Self {
-        return Self {
-            last: None,
-            fps: 0.0,
-        };
-    }
-
-    fn tick(&mut self) {
-        let now = Instant::now();
-        if let Some(prev) = self.last {
-            let dt = now.duration_since(prev).as_secs_f64();
-            if dt > 1e-4 {
-                let instant = 1.0 / dt;
-                self.fps = if self.fps <= 0.0 {
-                    instant
-                } else {
-                    self.fps * 0.85 + instant * 0.15
-                };
-            }
-        }
-        self.last = Some(now);
-    }
-}
-
-enum LiveSource {
-    Direct(OpenCvCapture),
-    Threaded(ThreadedCapture),
-}
-
-impl LiveSource {
-    fn next_frame(&mut self) -> Option<pingpong_bot::Frame> {
-        return match self {
-            Self::Direct(c) => c.next_frame(),
-            Self::Threaded(c) => c.next_frame(),
-        };
-    }
-
-    fn capture_fps(&self) -> Option<f64> {
-        return match self {
-            Self::Threaded(c) => Some(c.capture_fps()),
-            Self::Direct(_) => None,
-        };
-    }
-
-    fn as_capture_mut(&mut self) -> Option<&mut OpenCvCapture> {
-        return match self {
-            Self::Direct(c) => Some(c),
-            Self::Threaded(_) => None,
-        };
-    }
-}
-
-struct CamSlot {
-    label: String,
-    source: LiveSource,
-    fourcc_label: String,
-    reported_fps: Option<f64>,
-    reported_size: Option<(i32, i32)>,
-    exposure_backend: String,
-    meter: FpsMeter,
-    panel: Option<Mat>,
-}
+use args::Args;
+use cam_slot::CamSlot;
+use fps_meter::FpsMeter;
+use live_source::LiveSource;
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -210,8 +139,8 @@ fn main() -> Result<()> {
                 }
             }
 
-            draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-            draw_cam_label(&mut panel, &cam.label, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+            Preview::draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+            Preview::draw_cam_label(&mut panel, &cam.label, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
             cam.panel = Some(panel);
         }
 
@@ -224,12 +153,12 @@ fn main() -> Result<()> {
                 .try_clone()
                 .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
             if frozen {
-                draw_cam_label(&mut shown, "FROZEN", Scalar::new(0.0, 0.0, 255.0, 0.0))?;
+                Preview::draw_cam_label(&mut shown, "FROZEN", Scalar::new(0.0, 0.0, 255.0, 0.0))?;
             }
             panels.push(shown);
         }
 
-        let mut mosaic = hstack_bgr(&panels)?;
+        let mut mosaic = Preview::hstack_bgr(&panels)?;
         let help_exp = if !exp_supported {
             "e N/A(mac)"
         } else if short_exposure {
@@ -238,8 +167,8 @@ fn main() -> Result<()> {
             "e auto"
         };
         let help = ["Space freeze", help_exp, "q/ESC quit"];
-        draw_help_lines(&mut mosaic, &help, Scalar::new(0.0, 255.0, 80.0, 0.0))?;
-        match show_bgr(window, &mosaic, 1)?.action {
+        Preview::draw_help_lines(&mut mosaic, &help, Scalar::new(0.0, 255.0, 80.0, 0.0))?;
+        match Preview::show_bgr(window, &mosaic, 1)?.action {
             PreviewAction::Quit => break,
             PreviewAction::Continue => {}
             PreviewAction::Key(key) if key == i32::from(b' ') => {
@@ -281,7 +210,7 @@ fn main() -> Result<()> {
         }
     }
 
-    destroy_window(window);
+    Preview::destroy_window(window);
     let _ = cams;
     return Ok(());
 }

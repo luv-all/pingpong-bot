@@ -1,7 +1,6 @@
 //! OpenCV left/right — 격자 · 검출 · 삼각 · 재투영 · stdin→sim.
 
 use std::io::Write;
-use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -9,25 +8,17 @@ use opencv::core::{Mat, Point, Scalar};
 use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
-use pingpong_bot::{
-    Calibration, CameraId, Detector, Frame, FrameSource, PixelPoint, Point3, PreviewAction,
-    WorldGridParams, apply_grid_key, calibration_path, destroy_window, detector_for,
-    display_fit_bounds, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines,
-    draw_world_grid, fit_bgr_downscale, triangulate_views,
+use pingpong_bot::Point3;
+use pingpong_bot::camera;
+use pingpong_bot::camera::{
+    Calibration, Frame, FrameSource, Preview, PreviewAction, WorldGridParams,
 };
+use pingpong_bot::defaults::calibration_path;
+use pingpong_bot::defaults::detector_for;
+use pingpong_bot::detector::Detector;
+use pingpong_bot::estimator;
 
 use crate::args::Args;
-
-pub fn load_calibration(path: &Path) -> Result<Calibration> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("calibration 읽기: {}", path.display()))?;
-    let cal: Calibration = serde_json::from_str(&text)
-        .with_context(|| format!("calibration JSON: {}", path.display()))?;
-    if cal.camera_count() < 2 {
-        bail!("카메라 ≥2 필요 (got {})", cal.camera_count());
-    }
-    return Ok(cal);
-}
 
 fn open_sources(args: &Args) -> Result<Vec<Box<dyn FrameSource>>> {
     let cam = args.cam.as_cam_cli();
@@ -37,43 +28,24 @@ fn open_sources(args: &Args) -> Result<Vec<Box<dyn FrameSource>>> {
     return Ok(sources);
 }
 
-fn triangulate_pixels(
-    hits: &[(CameraId, PixelPoint)],
-    calibration: &Calibration,
-) -> Option<Point3> {
-    if hits.len() < calibration.min_cameras_for_triangulation() {
-        return None;
-    }
-    let mut views = Vec::with_capacity(hits.len());
-    for &(id, pix) in hits {
-        let params = calibration.params(id)?;
-        views.push((params.projection_matrix(), pix));
-    }
-    return triangulate_views(&views);
-}
-
 fn reproj_rmse(
     world: Point3,
-    hits: &[(CameraId, PixelPoint)],
+    hits: &[(camera::Id, camera::Pixel)],
     calibration: &Calibration,
 ) -> Option<f64> {
-    if hits.is_empty() {
+    let errs: Vec<f64> = hits
+        .iter()
+        .filter_map(|&(id, pix)| {
+            let ideal = calibration.params(id)?.project_world(world)?;
+            let du = pix.x - ideal.x;
+            let dv = pix.y - ideal.y;
+            Some(du * du + dv * dv)
+        })
+        .collect();
+    if errs.is_empty() {
         return None;
     }
-    let mut sum = 0.0;
-    let mut n = 0usize;
-    for &(id, pix) in hits {
-        let params = calibration.params(id)?;
-        let ideal = params.project_world(world)?;
-        let du = pix.x - ideal.x;
-        let dv = pix.y - ideal.y;
-        sum += du * du + dv * dv;
-        n += 1;
-    }
-    if n == 0 {
-        return None;
-    }
-    return Some((sum / n as f64).sqrt());
+    return Some((errs.iter().sum::<f64>() / errs.len() as f64).sqrt());
 }
 
 fn spawn_sim_child() -> Result<(Child, ChildStdin)> {
@@ -99,8 +71,8 @@ fn send_ball(stdin: &mut ChildStdin, pos: Option<Point3>) {
 }
 
 fn show_panel(window: &str, panel: &Mat, wait_ms: i32) -> Result<PreviewAction> {
-    let (max_w, max_h) = display_fit_bounds().unwrap_or((1920, 1080));
-    let fitted = fit_bgr_downscale(panel, max_w / 2, max_h)?;
+    let (max_w, max_h) = Preview::display_fit_bounds().unwrap_or((1920, 1080));
+    let fitted = Preview::fit_bgr_downscale(panel, max_w / 2, max_h)?;
     highgui::imshow(window, &fitted.image)?;
     let key = highgui::wait_key(wait_ms)?;
     if key < 0 {
@@ -115,17 +87,20 @@ fn show_panel(window: &str, panel: &Mat, wait_ms: i32) -> Result<PreviewAction> 
 
 pub fn run_opencv(args: &Args) -> Result<()> {
     let cal_path = calibration_path();
-    let calibration = load_calibration(&cal_path)?;
+    let calibration = Calibration::load_json(&cal_path).map_err(anyhow::Error::msg)?;
+    if calibration.camera_count() < 2 {
+        bail!("카메라 ≥2 필요 (got {})", calibration.camera_count());
+    }
     let mut sources = open_sources(args)?;
     if sources.len() < 2 {
         bail!("카메라 소스 ≥2 필요 (got {})", sources.len());
     }
 
-    let ids: Vec<CameraId> = sources.iter().map(|s| s.camera_id()).collect();
-    let mut detectors: Vec<Detector> = Vec::with_capacity(ids.len());
-    for &id in &ids {
-        detectors.push(detector_for(id)?);
-    }
+    let ids: Vec<camera::Id> = sources.iter().map(|s| s.camera_id()).collect();
+    let mut detectors: Vec<Detector> = ids
+        .iter()
+        .map(|&id| detector_for(id))
+        .collect::<Result<Vec<_>>>()?;
 
     let win_left = "verify:left";
     let win_right = "verify:right";
@@ -161,48 +136,47 @@ pub fn run_opencv(args: &Args) -> Result<()> {
 
     loop {
         let frames: Vec<Frame> = if frozen {
-            let frozen_frames = freeze_frames.as_ref().expect("freeze");
-            let mut out = Vec::with_capacity(frozen_frames.len());
-            for f in frozen_frames {
-                out.push(Frame::new(
-                    f.camera_id,
-                    f.image
-                        .try_clone()
-                        .map_err(|e| anyhow::anyhow!("clone: {e}"))?,
-                    f.timestamp,
-                ));
-            }
-            out
+            freeze_frames
+                .as_ref()
+                .expect("freeze")
+                .iter()
+                .map(|f| {
+                    Ok(Frame::new(
+                        f.camera_id,
+                        f.image
+                            .try_clone()
+                            .map_err(|e| anyhow::anyhow!("clone: {e}"))?,
+                        f.timestamp,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?
         } else {
-            let mut imgs = Vec::with_capacity(sources.len());
-            let mut ok = true;
-            for source in sources.iter_mut() {
-                let Some(frame) = source.next_frame() else {
-                    ok = false;
-                    break;
-                };
-                imgs.push(frame);
-            }
-            if !ok {
+            let Some(imgs) = sources
+                .iter_mut()
+                .map(|source| source.next_frame())
+                .collect::<Option<Vec<_>>>()
+            else {
                 println!("스트림 종료");
                 break;
-            }
-            let mut stored = Vec::with_capacity(imgs.len());
-            for f in &imgs {
-                stored.push(Frame::new(
-                    f.camera_id,
-                    f.image
-                        .try_clone()
-                        .map_err(|e| anyhow::anyhow!("clone: {e}"))?,
-                    f.timestamp,
-                ));
-            }
-            freeze_frames = Some(stored);
+            };
+            freeze_frames = Some(
+                imgs.iter()
+                    .map(|f| {
+                        Ok(Frame::new(
+                            f.camera_id,
+                            f.image
+                                .try_clone()
+                                .map_err(|e| anyhow::anyhow!("clone: {e}"))?,
+                            f.timestamp,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            );
             imgs
         };
 
-        let mut hits: Vec<(CameraId, PixelPoint)> = Vec::new();
-        let mut panels: Vec<(Mat, CameraId)> = Vec::with_capacity(frames.len());
+        let mut hits: Vec<(camera::Id, camera::Pixel)> = Vec::new();
+        let mut panels: Vec<(Mat, camera::Id)> = Vec::with_capacity(frames.len());
 
         for (i, frame) in frames.iter().enumerate() {
             let id = frame.camera_id;
@@ -215,17 +189,23 @@ pub fn run_opencv(args: &Args) -> Result<()> {
             };
 
             if show_grid {
-                draw_world_grid(&mut panel, params, grid)?;
+                Preview::draw_world_grid(&mut panel, params, &grid)?;
             }
 
             if show_detect {
                 if let Some(p) = detectors[i].detect(frame) {
                     hits.push((id, p));
-                    draw_circle_px(&mut panel, p, 8, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
+                    Preview::draw_circle_px(
+                        &mut panel,
+                        p,
+                        8,
+                        Scalar::new(0.0, 255.0, 0.0, 0.0),
+                        2,
+                    )?;
                 }
             }
 
-            draw_cam_label(
+            Preview::draw_cam_label(
                 &mut panel,
                 &format!("cam{}", id.0),
                 Scalar::new(255.0, 255.0, 255.0, 0.0),
@@ -233,7 +213,7 @@ pub fn run_opencv(args: &Args) -> Result<()> {
             panels.push((panel, id));
         }
 
-        let world = triangulate_pixels(&hits, &calibration);
+        let world = estimator::Triangulate::pixels(&hits, &calibration);
         let rmse = world.and_then(|w| reproj_rmse(w, &hits, &calibration));
 
         if let Some(stdin) = &mut sim_stdin {
@@ -289,8 +269,8 @@ pub fn run_opencv(args: &Args) -> Result<()> {
                     show_grid, show_detect, frozen, grid.xy_step, grid.z_step, grid.z_layers
                 ),
             ];
-            draw_debug_lines(panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-            draw_help_lines(
+            Preview::draw_debug_lines(panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+            Preview::draw_help_lines(
                 panel,
                 &["g grid  d detect  Space freeze", "+/- [] ., grid  q quit"],
                 Scalar::new(0.0, 255.0, 80.0, 0.0),
@@ -316,7 +296,7 @@ pub fn run_opencv(args: &Args) -> Result<()> {
                         freeze_frames = None;
                     }
                 } else {
-                    apply_grid_key(&mut grid, k);
+                    Preview::apply_grid_key(&mut grid, k);
                 }
             }
         }
@@ -330,7 +310,7 @@ pub fn run_opencv(args: &Args) -> Result<()> {
         let _ = child.kill();
         let _ = child.wait();
     }
-    destroy_window(win_left);
-    destroy_window(win_right);
+    Preview::destroy_window(win_left);
+    Preview::destroy_window(win_right);
     return Ok(());
 }

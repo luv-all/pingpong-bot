@@ -10,121 +10,39 @@
 //!
 //! 이 도구는 그 간극을 없앤다: `SimWorld`를 ground-truth 자동 스윙 모드로
 //! 그대로 돌려서(= GUI 앱과 완전히 같은 경로: `predict_impact` →
-//! `plan_best_swing` → `RobotState` 추종) 실제로 라켓에 맞고 네트를 넘겨
+//! `plan_best_swing` → `robot::State` 추종) 실제로 라켓에 맞고 네트를 넘겨
 //! 리턴하는지를 센다. 중간 모델 없이 최종 사용자 관점 성공률이 곧 점수다.
 //!
 //! 사용법 (반드시 저장소 루트에서 — URDF 상대경로가 cwd 기준):
 //!   cargo run -p shot-tune --release -- --robot 4-dof
 //!   cargo run -p shot-tune --release -- --robot 4-dof --json --top-n 10
 
+mod args;
+mod candidate_result;
+mod shot_outcome;
+
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
-use pingpong_bot::sim::{BallShooterSettings, SimWorld};
-use pingpong_bot::{Arm, MountPreset, Robot, RobotBuilder, RobotPose, defaults};
+use pingpong_bot::Point3;
+use pingpong_bot::defaults;
+use pingpong_bot::defaults::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
+use pingpong_bot::estimator::Prediction;
+use pingpong_bot::robot::motion;
+use pingpong_bot::robot::motion::InterceptWindow;
+use pingpong_bot::robot::{self, Arm, Joints, MountPreset, Robot, RobotBuilder};
+use pingpong_bot::sim::launch;
+use pingpong_bot::sim::physics::SimWorld;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use serde::Serialize;
+
+use args::Args;
+use candidate_result::CandidateResult;
+use shot_outcome::ShotOutcome;
 
 /// 한 샷당 최대 물리 스텝 수 (1kHz 기준 4초).
-/// `sim::world` 랠리 테스트들이 쓰는 4_000과 같은 예산.
+/// `sim::physics::world` 랠리 테스트들이 쓰는 4_000과 같은 예산.
 const MAX_STEPS: usize = 4_000;
 const DT: f64 = 1.0 / 1000.0;
-
-#[derive(Parser, Debug)]
-#[command(
-    about = "슈터 발사 기하(speed × pitch × height_offset)를 실제 Rapier 랠리 성공률로 스윕한다"
-)]
-struct Args {
-    /// 로봇 프리셋 id (`4-dof` | `primitive` | `urdf-test`).
-    #[arg(long, default_value = "4-dof")]
-    robot: String,
-
-    #[arg(long, default_value_t = 5.0)]
-    speed_min: f64,
-    #[arg(long, default_value_t = 11.0)]
-    speed_max: f64,
-    #[arg(long, default_value_t = 7)]
-    speed_steps: usize,
-
-    #[arg(long, allow_hyphen_values = true, default_value_t = -12.0)]
-    pitch_min: f64,
-    #[arg(long, allow_hyphen_values = true, default_value_t = 4.0)]
-    pitch_max: f64,
-    #[arg(long, default_value_t = 9)]
-    pitch_steps: usize,
-
-    #[arg(long, allow_hyphen_values = true, default_value_t = 0.0)]
-    height_min: f64,
-    #[arg(long, allow_hyphen_values = true, default_value_t = 0.30)]
-    height_max: f64,
-    #[arg(long, default_value_t = 7)]
-    height_steps: usize,
-
-    /// 로봇 베이스 y [m] 스윕 (URDF 로봇 전용 — `SimRobotMount::
-    /// rep103_z_up_at_table_end_with_mount`). 기본값은 코드의 현재 마운트
-    /// (`REP103_BASE_Y`/`REP103_HEIGHT_OFFSET_M`)와 같게 맞춰 둔다 — 플래그
-    /// 없이 돌리면 "지금 코드가 실제로 하는 동작"이 그대로 측정된다.
-    #[arg(long, allow_hyphen_values = true, default_value_t = -0.10)]
-    base_y_min: f64,
-    #[arg(long, allow_hyphen_values = true, default_value_t = -0.10)]
-    base_y_max: f64,
-    #[arg(long, default_value_t = 1)]
-    base_y_steps: usize,
-
-    /// 로봇 베이스의 탁구대 면 대비 높이 오프셋 [m] 스윕.
-    #[arg(long, allow_hyphen_values = true, default_value_t = 0.05)]
-    mount_height_min: f64,
-    #[arg(long, allow_hyphen_values = true, default_value_t = 0.05)]
-    mount_height_max: f64,
-    #[arg(long, default_value_t = 1)]
-    mount_height_steps: usize,
-
-    /// 후보마다 돌릴 랜덤 샷(좌우 위치·yaw) 개수 — `BallShooterSettings::randomized`
-    /// 와 같은 분포. 0이면 정면(lateral=0, yaw=0) 한 발만 본다.
-    #[arg(long, default_value_t = 12)]
-    shots: usize,
-
-    /// 속도를 스윕값으로 덮어쓰지 않고 `BallShooterSettings::randomized`가 뽑은
-    /// 값(= `RANDOM_SHOT_SPEED_MIN/MAX` 상수)을 그대로 쓴다 — 실제 게임처럼
-    /// 매 샷 속도가 달라지는 조건에서 최종 기본값을 검증할 때.
-    #[arg(long)]
-    use_random_speed: bool,
-
-    /// 랜덤 샷 시드 (재현성).
-    #[arg(long, default_value_t = 20260723)]
-    seed: u64,
-
-    /// 레일 시작 위치를 중앙이 아니라 테이블 중앙(WIDTH_X*0.5)으로 둘지 —
-    /// 실제 GUI에서 이전 샷 뒤 로봇이 멈춰 있는 위치 재현.
-    #[arg(long)]
-    start_from_table_center: bool,
-
-    /// 들어오는 공이 전부 정상 랠리 샷(네트 통과 + 로봇 코트 바운스)인
-    /// 후보만 남긴다. 끄면 적법성과 무관하게 `legal` 열로 분포를 관찰만 한다.
-    #[arg(long)]
-    require_legal: bool,
-
-    /// `success` 대신 `legal` 기준으로 정렬 — 적법한 샷이 존재하는 영역
-    /// 자체를 먼저 찾을 때.
-    #[arg(long)]
-    sort_by_legal: bool,
-
-    /// 스윕 대신 휴지(ready) 자세 탐색을 돌린다 — 대표 임팩트 자세들까지의
-    /// 최악 관절공간 이동거리 Δq를 최소화하는 자세를 찾아 출력한다.
-    #[arg(long)]
-    rest_pose_search: bool,
-
-    /// 스윕 대신 단일 후보 한 발을 돌리며 commit 창의 매 재시도마다
-    /// `plan_best_swing`이 실제로 어떤 오류로 실패하는지 출력한다.
-    #[arg(long)]
-    explain: bool,
-
-    #[arg(long)]
-    json: bool,
-
-    #[arg(long, default_value_t = 12)]
-    top_n: usize,
-}
 
 /// `defaults` 프리셋 dispatch. `mount`가 `Some`이면 프리셋 기본 마운트 대신
 /// 그 위치(테이블 끝 기준 y, 테이블 면 기준 높이)로 로봇을 올린다(마운트 스윕용).
@@ -157,7 +75,7 @@ fn resolve_robot(robot_id: &str, mount: Option<(f64, f64)>) -> Result<Robot> {
     let mut builder = RobotBuilder::new()
         .urdf(&path)
         .ee_link_opt(Some("pingpong_paddle_v5_1"))
-        .max_joint_speed(pingpong_bot::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S);
+        .max_joint_speed(DYNAMIXEL_MAX_JOINT_SPEED_RAD_S);
     builder = match mount {
         Some((base_y, height_offset_m)) => builder.mount(
             pingpong_bot::robot::urdf::SimRobotMount::rep103_z_up_at_table_end_with_mount(
@@ -172,54 +90,20 @@ fn resolve_robot(robot_id: &str, mount: Option<(f64, f64)>) -> Result<Robot> {
         .with_context(|| format!("로봇 빌드 실패: {}", path.display()));
 }
 
-/// 한 발의 결과 — GUI 사용자가 실제로 보는 단계 그대로.
-#[derive(Debug, Default, Clone, Copy)]
-struct ShotOutcome {
-    /// **들어오는** 공이 정상적인 랠리 샷인가 — 네트를 넘어와서 로봇 쪽
-    /// 코트(0 < y < LENGTH_Y/2) 테이블 면에 한 번 바운스했는가.
-    ///
-    /// 이 가드가 없으면 스윕이 "팔이 치기 쉬운" 방향으로만 최적화돼, 테이블
-    /// 위를 아예 넘어가버리는 높은 로브(바운스 없음)나 네트에 맞는 샷을
-    /// 정답으로 고를 수 있다 — 둘 다 실제 탁구 랠리가 아니다.
-    incoming_valid: bool,
-    /// `plan_best_swing`이 실제로 커밋됐는가 (= "로봇이 얼어붙지 않았는가").
-    committed: bool,
-    /// 공–라켓 활성 접촉이 있었는가.
-    contact: bool,
-    /// 접촉 뒤 공이 +y(상대편)로 되돌아갔는가.
-    returned: bool,
-    /// 리턴 공이 네트 윗면 위로 통과했는가.
-    cleared_net: bool,
-    /// 리턴 공이 **상대 코트 테이블 면에 실제로 떨어졌는가**.
-    ///
-    /// `cleared_net`만으로는 부족하다: 네트를 62cm 높이로 넘어 테이블 끝
-    /// (y=2.74)을 지나 2.89까지 날아가는 로브도 `cleared_net`이 켜진다
-    /// (2026-07-23 실측, `ground_truth_rally_contacts_racket_clears_net_and_
-    /// bounces_near_center`가 잡아낸 실제 사례). 그건 랠리가 이어지는
-    /// 리턴이 아니라 아웃이다.
-    returned_in: bool,
-    /// commit 창(네트 통과 후) 동안 관측된 `peak_joint_speed_ratio`의 최소값.
-    ///
-    /// `committed`가 격자 전역에서 0이면 이진 점수로는 어느 방향이 더
-    /// 나은지 알 수 없다(기울기가 없음). 이 연속값은 "얼마나 모자라는가"를
-    /// 준다 — `NEAR_SINGULARITY_SPEED_RATIO`(2.5) 이하로 내려가야 실제로
-    /// commit이 가능해진다.
-    best_peak_ratio: f64,
-}
-
 fn run_shot(
     robot: &Robot,
-    settings: &BallShooterSettings,
+    settings: &launch::Settings,
     start_from_table_center: bool,
 ) -> ShotOutcome {
-    use pingpong_bot::constants::{BALL_RADIUS, table};
+    use ball::RADIUS as BALL_RADIUS;
+    use pingpong_bot::constants::{ball, table};
 
     let arm = &robot.arm;
     let mut world = SimWorld::new(robot.clone());
     world.set_use_ground_truth(true);
     // `SimWorld::with_physics`가 세팅하는 기본 접수 창과 같은 값 — 진단용
     // `swing_feasibility` 샘플링이 실제 commit 경로와 같은 평면을 보게 한다.
-    let intercept = pingpong_bot::InterceptWindow {
+    let intercept = InterceptWindow {
         y_min: 0.20,
         y_max: 0.55,
         sample_step: 0.05,
@@ -295,15 +179,15 @@ fn run_shot(
         // 매 스텝(1kHz) IK를 도는 것보다 20배 빠르다.
         if step % 20 == 0
             && !outcome.contact
-            && world.ball_state == pingpong_bot::BallState::InFlight
-            && pingpong_bot::ball_past_midcourt_for_commit(f64::from(position.y))
+            && world.ball_state == pingpong_bot::sim::physics::BallState::InFlight
+            && motion::Planner::past_midcourt(f64::from(position.y))
         {
-            let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
+            let start = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
             for plane in intercept.hit_planes() {
-                let Some(prediction) = pingpong_bot::sim::predict_impact(&world, plane) else {
+                let Some(prediction) = world.predict_impact(plane) else {
                     continue;
                 };
-                if let Some(f) = pingpong_bot::swing_feasibility(arm, &prediction, &start) {
+                if let Some(f) = motion::Planner::feasibility(arm, &prediction, &start) {
                     outcome.best_peak_ratio = outcome.best_peak_ratio.min(f.peak_joint_speed_ratio);
                 }
             }
@@ -363,9 +247,8 @@ fn run_shot(
 ///
 /// 입사속도는 `tools/shot_tune` 실측에서 실제 랠리가 만들어내는 조성
 /// (수평 6~8 m/s에 완만한 상하 성분)을 대표값으로 쓴다.
-fn rest_pose_scenarios() -> Vec<pingpong_bot::Prediction> {
+fn rest_pose_scenarios() -> Vec<Prediction> {
     use pingpong_bot::constants::table;
-    use pingpong_bot::{Point3, Prediction};
 
     let mut out = Vec::new();
     for &x_frac in &[0.1, 0.3, 0.5, 0.7, 0.9] {
@@ -410,7 +293,7 @@ fn rest_pose_search(arm: &Arm, iterations: usize) {
         let mut solved = 0usize;
         for prediction in &scenarios {
             let Some(pose) =
-                pingpong_bot::plan_coarse_track(&arm, std::slice::from_ref(prediction))
+                motion::Planner::plan_coarse_track(&arm, std::slice::from_ref(prediction))
             else {
                 continue;
             };
@@ -454,13 +337,13 @@ fn rest_pose_search(arm: &Arm, iterations: usize) {
                 lo[j], hi[j], candidate[j]
             );
         }
-        arm.default_joints = pingpong_bot::Joints::from_slice(&candidate);
+        arm.default_joints = Joints::from_slice(&candidate);
     }
 }
 
 /// 한 발을 돌리며 commit 창에서 `plan_best_swing`이 실제로 어떤 오류로
 /// 실패하는지 그대로 출력한다 — "왜 안 되는가"를 추측 대신 확인하기 위함.
-fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
+fn explain_one(robot: &Robot, settings: &launch::Settings) {
     use pingpong_bot::constants::table;
 
     let arm = &robot.arm;
@@ -470,7 +353,7 @@ fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
     // 실제보다 불리하게 평가된다. 커밋에 성공하면 그 시점에 COMMIT이 찍히고
     // 이후 월드가 알아서 스윙하므로, 실패가 계속되는 경우만 길게 출력된다.
     world.set_use_ground_truth(true);
-    let intercept = pingpong_bot::InterceptWindow {
+    let intercept = InterceptWindow {
         y_min: 0.20,
         y_max: 0.55,
         sample_step: 0.05,
@@ -483,27 +366,27 @@ fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
     );
     for step in 0..MAX_STEPS {
         world.step(DT, None);
-        if step % 20 != 0 || world.ball_state != pingpong_bot::BallState::InFlight {
+        if step % 20 != 0 || world.ball_state != pingpong_bot::sim::physics::BallState::InFlight {
             continue;
         }
         let ball_y = f64::from(world.ball_position().y);
-        if !pingpong_bot::ball_past_midcourt_for_commit(ball_y) {
+        if !motion::Planner::past_midcourt(ball_y) {
             continue;
         }
         let predictions: Vec<_> = intercept
             .hit_planes()
             .into_iter()
-            .filter_map(|plane| pingpong_bot::sim::predict_impact(&world, plane))
+            .filter_map(|plane| world.predict_impact(plane))
             .collect();
-        let start = RobotPose::new(world.robot().rail_x(), world.robot().joints().clone());
+        let start = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         // 평면별로 "시간 창(`in_swing_commit_window`)"과 "관절속도 비율
         // (`NEAR_SINGULARITY_SPEED_RATIO`)" 중 무엇이 실제 병목인지 나눠 본다.
         let per_plane: Vec<String> = predictions
             .iter()
             .map(|p| {
                 let t = p.time_to_impact_secs;
-                let in_window = pingpong_bot::in_swing_commit_window(t);
-                let ratio = match pingpong_bot::swing_feasibility(arm, p, &start) {
+                let in_window = motion::Planner::in_commit_window(t);
+                let ratio = match motion::Planner::feasibility(arm, p, &start) {
                     Some(f) => format!("{:.1}", f.peak_joint_speed_ratio),
                     None => "IK✗".to_string(),
                 };
@@ -511,16 +394,14 @@ fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
                 // 마지막 오류만 남기므로, 평면별 `plan_swing`을 직접 부른다.
                 // 여기서 Ok인데 `plan_best_swing`이 실패하면 범인은
                 // `plan_best_swing`의 접촉오차 필터(MAX_CONTACT_ERROR)다.
-                let plan = match pingpong_bot::plan_swing(arm, *p, &start) {
+                let plan = match motion::Planner::plan(arm, *p, &start) {
                     Ok(_) => "ok".to_string(),
                     Err(e) => format!("{e}"),
                 };
                 // 관절공간 이동거리 Δq와, 그걸 quintic(피크 계수 1.875)으로
                 // 관절속도 한계 안에서 소화하는 데 필요한 최소 시간.
-                let travel = pingpong_bot::swing_feasibility(arm, p, &start)
-                    .and(
-                        pingpong_bot::plan_coarse_track(arm, std::slice::from_ref(p))
-                            .map(|target| {
+                let travel = motion::Planner::feasibility(arm, p, &start).and(
+                    motion::Planner::plan_coarse_track(arm, std::slice::from_ref(p)).map(|target| {
                                 let dq = target
                                     .joints
                                     .values
@@ -547,7 +428,7 @@ fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
                 );
             })
             .collect();
-        let outcome = match pingpong_bot::plan_best_swing(arm, &predictions, &start) {
+        let outcome = match motion::Planner::plan_best(arm, &predictions, &start) {
             Ok(_) => "COMMIT".to_string(),
             Err(e) => format!("{e}"),
         };
@@ -564,41 +445,6 @@ fn explain_one(robot: &Robot, settings: &BallShooterSettings) {
     println!("  (table SURFACE_Z={:.3})", table::SURFACE_Z);
 }
 
-#[derive(Debug, Serialize)]
-struct CandidateResult {
-    base_y: f64,
-    mount_height_offset_m: f64,
-    speed_mps: f64,
-    pitch_deg: f64,
-    height_offset_m: f64,
-    shots: usize,
-    /// 들어오는 공이 정상 랠리 샷이었던 횟수 — 이게 `shots`보다 작으면 그
-    /// 후보는 애초에 탁구가 아니다(로브/네트 아웃).
-    incoming_valid: usize,
-    committed: usize,
-    contact: usize,
-    returned: usize,
-    cleared_net: usize,
-    /// 최종 점수 — 로봇이 **실제로 스윙을 커밋하고** 그 결과 공이 네트를
-    /// 넘어갔는가. `cleared_net`만 보면 안 되는 이유: 스윙을 못 해 가만히
-    /// 있는 라켓에 공이 우연히 맞고 튕겨 나가도 `contact`/`returned`/
-    /// `cleared_net`이 모두 켜진다(2026-07-23 실측: 기존 기본값
-    /// speed=5.0/pitch=-2.0/height=0.19에서 commit=0인데 cleared_net=9/12).
-    /// 사용자가 보고한 "로봇이 얼어붙는다"가 정확히 이 상태다.
-    /// `incoming_valid`까지 함께 요구해 "칠 수 없는 공을 안 쏘는" 방향이
-    /// 아니라 "정상 랠리 공을 실제로 받아친다"만 점수로 인정한다.
-    /// 리턴도 네트 통과만이 아니라 **상대 코트에 실제로 떨어질 것**을 요구한다.
-    success: usize,
-    /// 리턴이 상대 코트에 실제로 떨어진 횟수.
-    returned_in: usize,
-    /// 배터리 전체에서 관측된 최선의 `peak_joint_speed_ratio` (낮을수록 좋음,
-    /// 2.5 이하여야 commit 가능).
-    best_peak_ratio: f64,
-    /// 샷별 최선 비율의 중앙값 — 한 발만 운 좋은 경우와 전반적으로 좋은
-    /// 경우를 구분한다.
-    median_peak_ratio: f64,
-}
-
 fn linspace(min: f64, max: f64, steps: usize) -> Vec<f64> {
     if steps <= 1 {
         return vec![min];
@@ -612,9 +458,9 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // 좌우 위치·yaw 배터리는 후보마다 **같은** 시드로 뽑아 공정 비교한다.
-    let base = BallShooterSettings::default();
+    let base = launch::Settings::default();
     let mut rng = StdRng::seed_from_u64(args.seed);
-    let battery: Vec<BallShooterSettings> = if args.shots == 0 {
+    let battery: Vec<launch::Settings> = if args.shots == 0 {
         vec![base.clone()]
     } else {
         (0..args.shots).map(|_| base.randomized(&mut rng)).collect()
@@ -630,11 +476,11 @@ fn main() -> Result<()> {
         let robot = resolve_robot(&args.robot, Some((args.base_y_min, args.mount_height_min)))?;
         explain_one(
             &robot,
-            &BallShooterSettings {
+            &launch::Settings {
                 speed_mps: args.speed_min,
                 pitch_deg: args.pitch_min,
                 height_offset_m: args.height_min,
-                ..BallShooterSettings::default()
+                ..launch::Settings::default()
             },
         );
         return Ok(());
@@ -705,7 +551,7 @@ fn main() -> Result<()> {
                         };
                         let mut ratios = Vec::with_capacity(battery.len());
                         for shot in battery {
-                            let settings = BallShooterSettings {
+                            let settings = launch::Settings {
                                 speed_mps: if random_speed {
                                     shot.speed_mps
                                 } else {

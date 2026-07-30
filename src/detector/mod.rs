@@ -9,30 +9,35 @@
 //! **조립 SSOT:** [`crate::defaults::detector_for`].
 
 pub mod appearance;
-pub mod builder;
+mod builder;
+mod detector;
 pub mod motion;
+mod observation;
 mod roi_params;
 pub mod scoring;
 pub mod spatial;
 mod track;
 mod undistort;
 
-use crate::PixelPoint;
+use crate::camera;
 
 pub use appearance::*;
-pub use builder::{Detector, DetectorBuilder};
+pub use builder::DetectorBuilder;
+pub use detector::Detector;
 pub use motion::MotionPrior;
+pub use observation::Observation;
 pub use roi_params::RoiParams;
 pub use scoring::candidate::{self as candidate, Candidate};
 pub use scoring::params::ScorerParams;
 pub use scoring::scorer::{self as scorer, Scorer};
-pub use spatial::{FloorEdgeMask, scorer_params_from_calib};
+pub use spatial::FloorEdgeMask;
+pub(crate) use spatial::scorer_params_from_calib;
 pub use track::RoiTrack;
-pub use undistort::undistort_frame;
+pub(crate) use undistort::undistort_frame;
 
 pub(crate) use track::track;
 
 /// sim: 카메라가 이미 넣은 힌트 픽셀을 그대로 쓴다.
-pub fn passthrough_detect(hint: Option<PixelPoint>) -> Option<PixelPoint> {
+pub(crate) fn passthrough_detect(hint: Option<camera::Pixel>) -> Option<camera::Pixel> {
     return hint;
 }

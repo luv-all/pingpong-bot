@@ -1,56 +1,30 @@
 //! 인터랙티브 조그 GUI — sim 미리보기 후 Sync/Apply로 실기 전송.
 //!
-//! planner(`plan_swing`)는 쓰지 않는다. 목표 pose → quintic → `RobotHandle::play` /
+//! planner(`plan_swing`)는 쓰지 않는다. 목표 pose → quintic → `robot::Handle::play` /
 //! Apply 시 `Hardware::command`.
 
-mod motion;
+mod args;
+mod jog_ui;
 mod panel;
+mod plan;
 mod state;
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use pingpong_bot::{
-    DynamixelConfig, RailConfig, RealHardware, SceneUiDraw, SimRuntimeControls, SimScene,
-    SimSession, SimSessionConfig, init_tracing, new_shutdown_flag, robot,
-};
+use pingpong_bot::defaults::robot;
+use pingpong_bot::hardware::RealHardware;
+use pingpong_bot::hardware::dynamixel::DynamixelConfig;
+use pingpong_bot::hardware::rail::RailConfig;
+use pingpong_bot::sim::gui::{SceneUiHook, SimScene};
+use pingpong_bot::sim::session::{SimRuntimeControls, SimSession, SimSessionConfig};
+use pingpong_bot::telemetry::init_tracing;
 use tracing::info;
 
-use crate::state::JogApp;
-
-struct JogUi {
-    app: Arc<Mutex<JogApp>>,
-}
-
-impl SceneUiDraw for JogUi {
-    fn draw_ui(&mut self, ctx: &kiss3d::egui::Context) {
-        if let Ok(mut app) = self.app.lock() {
-            panel::draw(ctx, &mut app);
-        }
-    }
-}
-
-#[derive(Parser, Debug)]
-#[command(
-    name = "jog",
-    about = "관절·레일 인터랙티브 조그 GUI (sim 미리보기 + Apply)"
-)]
-struct Args {
-    /// Dynamixel 시리얼 포트 (`DynamixelConfig::default().port` 덮어씀).
-    #[arg(long)]
-    port: Option<String>,
-    /// AXL.dll 경로 (`RailConfig::default().dll_path` 덮어씀).
-    #[arg(long)]
-    dll_path: Option<PathBuf>,
-    /// 시리얼·DLL 없이 변환·IK·executor만.
-    #[arg(long)]
-    dry_run: bool,
-    /// debug 로그 (통신 재시도·AXL 실패 code 등).
-    #[arg(long)]
-    debug: bool,
-}
+use args::Args;
+use jog_ui::JogUi;
+use state::JogApp;
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -101,7 +75,7 @@ fn run(args: Args) -> Result<()> {
     .context("하드웨어 초기화 실패")?;
     let hardware = Arc::new(Mutex::new(hardware));
 
-    let shutdown = new_shutdown_flag();
+    let shutdown = SimRuntimeControls::new_shutdown();
     let controls = Arc::new(Mutex::new(SimRuntimeControls::default()));
     let mut session = SimSession::new(
         SimSessionConfig {
@@ -126,7 +100,7 @@ fn run(args: Args) -> Result<()> {
         args.dry_run,
     )));
 
-    let ui_hook: pingpong_bot::SceneUiHook = Arc::new(Mutex::new(JogUi {
+    let ui_hook: SceneUiHook = Arc::new(Mutex::new(JogUi {
         app: Arc::clone(&app),
     }));
 

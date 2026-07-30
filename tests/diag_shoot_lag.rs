@@ -14,10 +14,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pingpong_bot::defaults;
-use pingpong_bot::sim::gui::{WORLD_LOCK_WAIT, lock_world_for_frame};
-use pingpong_bot::sim::physics::BallShooterSettings;
-use pingpong_bot::sim::world::SimStepInput;
-use pingpong_bot::sim::{BallState, SimWorld};
+use pingpong_bot::sim::gui::{SimViewer, WORLD_LOCK_WAIT};
+use pingpong_bot::sim::launch;
+use pingpong_bot::sim::physics;
+use pingpong_bot::sim::physics::SimWorld;
+use pingpong_bot::sim::physics::world::SimStepInput;
 
 const PHYSICS_DT: f64 = 1.0 / 1000.0;
 const TICK_BUDGET_US: f64 = 1000.0;
@@ -73,7 +74,7 @@ fn sample(world: &SimWorld, t_ms: f64, step_us: f64) -> Tick {
 fn diag_shoot_lag_tick_cost() {
     let mut world = SimWorld::new(defaults::primitive_4dof().expect("4dof"));
     world.set_use_ground_truth(true);
-    let shooter = BallShooterSettings::default();
+    let shooter = launch::Settings::default();
     world.sync_shooter_pose(&shooter);
 
     // (A) 기준선: 공이 주차된(=idle) 상태의 틱 비용.
@@ -99,7 +100,7 @@ fn diag_shoot_lag_tick_cost() {
     let mut worst: Vec<Tick> = Vec::new();
 
     for i in 0..3_000 {
-        if world.ball_state != BallState::InFlight {
+        if world.ball_state != physics::BallState::InFlight {
             break;
         }
         let t = std::time::Instant::now();
@@ -200,7 +201,7 @@ impl Acquire {
     fn get(self, world: &Mutex<SimWorld>) -> Option<std::sync::MutexGuard<'_, SimWorld>> {
         match self {
             Acquire::TryOnce => return world.try_lock().ok(),
-            Acquire::Production => return lock_world_for_frame(world),
+            Acquire::Production => return SimViewer::lock_world_for_frame(world),
             Acquire::BoundedWait(budget) => {
                 let deadline = Instant::now() + budget;
                 loop {
@@ -339,7 +340,7 @@ fn run_judder_probe(mode: Acquire, batch_lock: bool) -> (RenderSample, RenderSam
     let physics_shutdown = Arc::clone(&shutdown);
     let physics_shoot = Arc::clone(&shoot_flag);
     let physics = std::thread::spawn(move || {
-        let shooter = BallShooterSettings::default();
+        let shooter = launch::Settings::default();
         let mut last_wall = Instant::now();
         let mut sim_debt = 0.0_f64;
         let mut total_steps = 0u64;

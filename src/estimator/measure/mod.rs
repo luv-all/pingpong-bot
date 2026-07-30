@@ -1,12 +1,15 @@
 //! 궤적 측정·물리 계수 식별 (e, μ, drag).
 
+mod bounce_event;
 mod identify;
+mod physics_identify;
+mod roll_event;
+mod traj_analysis;
 mod traj_measure;
+mod traj_point;
 
-pub use identify::{
-    drag_from_trajectory, format_physics_for_defaults, friction_from_tangential_speeds,
-    restitution_from_bounce_heights, restitution_from_normal_speeds,
-};
-pub use traj_measure::{
-    BounceEvent, RollEvent, TrajPoint, detect_bounces, detect_rolls, mean_bounce_e, mean_roll_mu,
-};
+pub use bounce_event::BounceEvent;
+pub use physics_identify::PhysicsIdentify;
+pub use roll_event::RollEvent;
+pub use traj_analysis::TrajAnalysis;
+pub use traj_point::TrajPoint;

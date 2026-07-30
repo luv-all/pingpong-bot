@@ -1,21 +1,20 @@
 //! egui 패널 — Shooter / Eval / Status / View 역할별 창.
 
+pub use super::panel_ui_state::PanelUiState;
+pub use super::status_snapshot::StatusSnapshot;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use kiss3d::egui;
 
 use super::super::debug::overlays::DebugOverlays;
-use super::super::debug::snap::CommitPhase;
-use crate::Prediction;
-use crate::constants::viewer::{CAMERA_DIST_DEFAULT, CAMERA_DIST_MAX, CAMERA_DIST_MIN};
+use super::eval_live_run::EvalLiveRun;
+use crate::constants::viewer::{CAMERA_DIST_MAX, CAMERA_DIST_MIN};
 use crate::defaults;
 use crate::robot::Robot;
-use crate::sim::eval_protocol::{
-    self, EvalLaunchParams, EvalMode, EvalProgress, EvalZone, LiveShotObserver, MAX_SCORE,
-    PASS_SCORE_EXCLUSIVE, TOTAL_SHOTS,
-};
-use crate::sim::physics::shooter::{BallShooterSettings, BallState};
+use crate::sim::eval;
+use crate::sim::physics;
 use crate::sim::physics::world::SimWorld;
 use crate::sim::session::controls::SimRuntimeControls;
 
@@ -49,151 +48,6 @@ pub fn ensure_korean_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// 패널 슬라이더 상태 — 매 프레임 `controls` 락 없이 UI를 그린다.
-#[derive(Clone, Debug)]
-pub struct PanelUiState {
-    pub shooter: BallShooterSettings,
-    pub time_scale: f64,
-    /// OrbitCamera3d 거리 [m]
-    pub camera_dist: f32,
-    /// commit 시 quintic 대신 순수 토크 bang-bang을 쓸지 - 디버그 토글.
-    pub use_bang_bang_swing: bool,
-    pub debug: DebugOverlays,
-    /// 평가 프로토콜 백그라운드 진행.
-    pub eval: Arc<Mutex<EvalProgress>>,
-    /// 평가 스레드가 돌아가는 중이면 true.
-    pub eval_running: Arc<AtomicBool>,
-    /// Block vs Alternating.
-    pub eval_mode: EvalMode,
-    /// Eval 전용 발사 속도·좌우 각도 (Shooter 패널과 분리).
-    pub eval_launch: EvalLaunchParams,
-    /// Run 30 이후 선택한 시나리오를 시뮬에서 다시 실행 중일 때.
-    pub eval_live: Option<EvalLiveRun>,
-}
-
-/// 합산 Run으로 저장된 시나리오를 라이브 월드에서 다시 실행·채점.
-#[derive(Debug, Clone)]
-pub struct EvalLiveRun {
-    /// 1..=30 표시용.
-    pub shot_number: usize,
-    pub zone: EvalZone,
-    pub observer: LiveShotObserver,
-    /// 종료 시 이 실행에서 받은 점수.
-    pub live_points: Option<u8>,
-    /// 네트 CCD 투과로 채점 무효.
-    pub net_passthrough: bool,
-}
-
-impl PanelUiState {
-    pub fn from_controls(controls: &SimRuntimeControls) -> Self {
-        return Self {
-            shooter: controls.shooter.clone(),
-            time_scale: controls.time_scale,
-            camera_dist: CAMERA_DIST_DEFAULT,
-            use_bang_bang_swing: controls.use_bang_bang_swing,
-            debug: DebugOverlays::debug_defaults(),
-            eval: Arc::new(Mutex::new(EvalProgress::default())),
-            eval_running: Arc::new(AtomicBool::new(false)),
-            eval_mode: EvalMode::Block,
-            eval_launch: EvalLaunchParams::default(),
-            eval_live: None,
-        };
-    }
-}
-
-/// 상태 표시용 스냅샷 — world 락을 메인 스레드에서 잡지 않기 위함.
-#[derive(Clone, Debug)]
-pub struct StatusSnapshot {
-    pub ball_state: BallState,
-    pub sim_time: f64,
-    pub ball_pos: (f32, f32, f32),
-    pub ball_vel: (f32, f32, f32),
-    pub joints: Vec<String>,
-    /// hit plane 예측 (디버그)
-    pub debug_prediction: Option<Prediction>,
-    pub swing_committed: bool,
-    pub swing_abandoned: bool,
-    pub last_fail_text: Option<String>,
-    pub unreachable_xyz: Option<[f64; 3]>,
-    pub commit_phase: CommitPhase,
-    pub table_pen_depth: f64,
-    pub torque_over: Vec<bool>,
-    pub torque_peak_nm: Vec<f64>,
-    pub torque_now_nm: Vec<f64>,
-    pub accel_over: bool,
-    pub joint_at_limit: Vec<bool>,
-    pub omega: [f64; 3],
-    pub net_gate_ok: Option<bool>,
-    /// 관절 월드 원점 [m] (앵커 HUD)
-    pub joint_world: Vec<[f32; 3]>,
-    pub joint_q: Vec<f64>,
-    pub joint_q_min: Vec<Option<f64>>,
-    pub joint_q_max: Vec<Option<f64>>,
-    pub torque_limit_nm: Vec<f64>,
-}
-
-impl StatusSnapshot {
-    /// 월드에서 한 프레임 분량의 상태를 읽는다.
-    pub fn from_world(world: &SimWorld) -> Self {
-        let bp = world.ball_position();
-        let bv = world.ball_velocity();
-        let snap = world.debug_snap();
-        let arm = world.arm();
-        let joints = world.robot().joints();
-        let rail_x = world.robot().rail_x();
-        let joint_world = arm
-            .joint_origins_world(rail_x, joints)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|p| [p.x as f32, p.y as f32, p.z as f32])
-            .collect();
-        let control = defaults::ControlParams::default();
-        let joint_q = joints.values.clone();
-        let joint_q_min: Vec<Option<f64>> = (0..arm.joint_count())
-            .map(|i| arm.joint_limit(i).map(|l| l.min))
-            .collect();
-        let joint_q_max: Vec<Option<f64>> = (0..arm.joint_count())
-            .map(|i| arm.joint_limit(i).map(|l| l.max))
-            .collect();
-        let torque_limit_nm: Vec<f64> = (0..arm.joint_count())
-            .map(|i| control.max_joint_torques.get(i).copied().unwrap_or(6.0))
-            .collect();
-        return Self {
-            ball_state: world.ball_state,
-            sim_time: world.sim_time,
-            ball_pos: (bp.x, bp.y, bp.z),
-            ball_vel: (bv.x, bv.y, bv.z),
-            joints: world
-                .robot()
-                .joints()
-                .values
-                .iter()
-                .map(|v| format!("{v:.2}"))
-                .collect(),
-            debug_prediction: world.debug_prediction().cloned(),
-            swing_committed: world.swing_committed(),
-            swing_abandoned: world.swing_abandoned(),
-            last_fail_text: snap.last_fail_text.clone(),
-            unreachable_xyz: snap.unreachable_xyz,
-            commit_phase: snap.commit_phase,
-            table_pen_depth: snap.table_pen_depth,
-            torque_over: snap.torque_over.clone(),
-            torque_peak_nm: snap.torque_peak_nm.clone(),
-            torque_now_nm: snap.torque_now_nm.clone(),
-            accel_over: snap.accel_over,
-            joint_at_limit: snap.joint_at_limit.clone(),
-            omega: snap.omega,
-            net_gate_ok: snap.net_gate_ok,
-            joint_world,
-            joint_q,
-            joint_q_min,
-            joint_q_max,
-            torque_limit_nm,
-        };
-    }
-}
-
-/// 슈터 설정·상태 패널 (역할별 창).
 pub fn draw(
     ctx: &egui::Context,
     ui_state: &mut PanelUiState,
@@ -215,7 +69,7 @@ pub fn draw(
     let mut random_shoot = false;
     let mut park = false;
     let mut start_eval = false;
-    let mut start_eval_mode = EvalMode::Block;
+    let mut start_eval_mode = eval::Mode::Block;
     let mut start_live_shot: Option<usize> = None;
 
     // 레이아웃: 좌측 Shooter→Eval, 우측 Status→View.
@@ -313,16 +167,16 @@ pub fn draw(
             ui.add_enabled_ui(!running, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Mode");
-                    ui.selectable_value(&mut ui_state.eval_mode, EvalMode::Block, "Block");
+                    ui.selectable_value(&mut ui_state.eval_mode, eval::Mode::Block, "Block");
                     ui.selectable_value(
                         &mut ui_state.eval_mode,
-                        EvalMode::Alternating,
+                        eval::Mode::Alternating,
                         "Alternating",
                     );
                 });
                 ui.weak(match ui_state.eval_mode {
-                    EvalMode::Block => "Left → Center → Right · 10 each",
-                    EvalMode::Alternating => "L → C → R → C · … · 10 each",
+                    eval::Mode::Block => "Left → Center → Right · 10 each",
+                    eval::Mode::Alternating => "L → C → R → C · … · 10 each",
                 });
                 ui.add_space(4.0);
                 ui.add(
@@ -423,7 +277,7 @@ fn begin_eval_live_shot(
     controls: &Arc<Mutex<SimRuntimeControls>>,
     shot_number: usize,
 ) {
-    if !(1..=TOTAL_SHOTS).contains(&shot_number) {
+    if !(1..=eval::TOTAL_SHOTS).contains(&shot_number) {
         return;
     }
     let settings = {
@@ -440,7 +294,7 @@ fn begin_eval_live_shot(
     let Ok(world_guard) = world.lock() else {
         return;
     };
-    let observer = LiveShotObserver::new(&world_guard);
+    let observer = eval::LiveObserver::new(&world_guard);
     drop(world_guard);
 
     ui_state.shooter = settings.0.clone();
@@ -608,8 +462,8 @@ fn draw_eval_status(
     };
     ui.horizontal(|ui| {
         ui.colored_label(color, egui::RichText::new(verdict).strong());
-        ui.monospace(format!("{}/{}", report.total, MAX_SCORE));
-        ui.weak(format!("need >{PASS_SCORE_EXCLUSIVE}"));
+        ui.monospace(format!("{}/{}", report.total, eval::MAX_SCORE));
+        ui.weak(format!("need >{}", eval::PASS_SCORE_EXCLUSIVE));
     });
 
     ui.add_space(2.0);
@@ -630,7 +484,7 @@ fn draw_eval_status(
             }
             ui.end_row();
 
-            for zone in EvalZone::ALL {
+            for zone in eval::Zone::ALL {
                 let z = report.zone_score(zone);
                 ui.label(zone.label());
                 for c in z.counts {
@@ -643,9 +497,9 @@ fn draw_eval_status(
     ui.add_space(2.0);
     ui.weak(format!(
         "zone totals  R {} · C {} · L {}",
-        report.zone_score(EvalZone::Right).total,
-        report.zone_score(EvalZone::Center).total,
-        report.zone_score(EvalZone::Left).total,
+        report.zone_score(eval::Zone::Right).total,
+        report.zone_score(eval::Zone::Center).total,
+        report.zone_score(eval::Zone::Left).total,
     ));
 
     ui.add_space(6.0);
@@ -656,7 +510,7 @@ fn draw_eval_status(
         .num_columns(10)
         .spacing([2.0, 2.0])
         .show(ui, |ui| {
-            for n in 1..=TOTAL_SHOTS {
+            for n in 1..=eval::TOTAL_SHOTS {
                 let shot = &report.shots[n - 1];
                 let fill = points_color(shot.points);
                 let mut button = egui::Button::new(format!("{n}")).fill(fill);
@@ -721,7 +575,7 @@ fn points_color(points: u8) -> egui::Color32 {
     };
 }
 
-fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mode: EvalMode) {
+fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mode: eval::Mode) {
     if ui_state
         .eval_running
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
@@ -742,7 +596,7 @@ fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mo
 
     {
         let mut p = ui_state.eval.lock().expect("eval progress");
-        *p = EvalProgress::default();
+        *p = eval::Progress::default();
     }
 
     let progress = Arc::clone(&ui_state.eval);
@@ -750,7 +604,7 @@ fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mo
     let launch = ui_state.eval_launch;
     std::thread::spawn(move || {
         let _report =
-            eval_protocol::run_eval_protocol(&robot, physics, &launch, mode, Some(progress));
+            crate::sim::eval::Protocol::run(&robot, physics, &launch, mode, Some(progress));
         running.store(false, Ordering::Relaxed);
     });
 }
@@ -766,8 +620,8 @@ fn debug_checkbox(
 
 fn draw_status_panel(ui: &mut egui::Ui, status: &StatusSnapshot, debug: &DebugOverlays) {
     let ball_ko = match status.ball_state {
-        BallState::Parked => "주차 (슈터에 대기)",
-        BallState::InFlight => "비행 중",
+        physics::BallState::Parked => "주차 (슈터에 대기)",
+        physics::BallState::InFlight => "비행 중",
     };
     let swing_ko = if status.swing_committed {
         "확정 — 치는 중"

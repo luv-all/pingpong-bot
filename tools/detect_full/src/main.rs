@@ -12,10 +12,11 @@ use opencv::core::{Rect, Scalar, Vector};
 use opencv::imgcodecs;
 use opencv::imgproc;
 use opencv::prelude::*;
-use pingpong_bot::{
-    AppearanceChain, ColormaskDetector, ContourDetector, Frame, FrameSource, ImageDirSource,
-    PixelPoint, PreviewAction, RoiTrack, Scorer, destroy_window, draw_cam_label, draw_circle_px,
-    draw_debug_lines, draw_help_lines, hstack_bgr, show_bgr,
+use pingpong_bot::camera;
+use pingpong_bot::camera::{Frame, FrameSource, ImageDirSource, Preview, PreviewAction};
+use pingpong_bot::defaults::{colormask_for, detector_for};
+use pingpong_bot::detector::{
+    AppearanceChain, ColormaskDetector, ContourDetector, RoiTrack, Scorer,
 };
 
 use cli::Args;
@@ -76,7 +77,7 @@ fn appearance_steps(
     scorer: &Scorer,
     frame: &Frame,
     roi: Option<Rect>,
-) -> Result<(Option<PixelPoint>, Mat, Mat)> {
+) -> Result<(Option<camera::Pixel>, Mat, Mat)> {
     let Some(r) = roi else {
         let (px, cm, cas) = appearance.detect_debug(frame, scorer);
         return Ok((px, cm, cas));
@@ -98,7 +99,7 @@ fn appearance_steps(
     paste_at(&mut cm_full, &cm_local, r)?;
     paste_at(&mut cas_full, &cas_local, r)?;
 
-    let px = local_px.map(|p| PixelPoint::new(p.x + f64::from(r.x), p.y + f64::from(r.y)));
+    let px = local_px.map(|p| camera::Pixel::new(p.x + f64::from(r.x), p.y + f64::from(r.y)));
     return Ok((px, cm_full, cas_full));
 }
 
@@ -119,10 +120,10 @@ fn nonzero_bgr(bgr: &Mat) -> i32 {
 }
 
 fn draw_panel_hud(img: &mut Mat, lines: &[impl AsRef<str>], color: Scalar) -> Result<()> {
-    draw_debug_lines(img, lines, color).map_err(Into::into)
+    Preview::draw_debug_lines(img, lines, color).map_err(Into::into)
 }
 
-fn pixel_hud_line(label: &str, pixel: Option<PixelPoint>, equivalent_radius: f64) -> String {
+fn pixel_hud_line(label: &str, pixel: Option<camera::Pixel>, equivalent_radius: f64) -> String {
     return match pixel {
         Some(p) => format!(
             "{label}  pixel=({:.1},{:.1})  radius~{:.0}",
@@ -183,7 +184,7 @@ fn main() -> Result<()> {
 
     let mut source = open_source(&args)?;
     let cam_id = source.camera_id();
-    let mut detector = pingpong_bot::detector_for(cam_id)?;
+    let mut detector = detector_for(cam_id)?;
     if args.no_roi {
         detector.set_roi_enabled(false);
     }
@@ -191,7 +192,7 @@ fn main() -> Result<()> {
     let scorer_params = detector.scorer.clone();
     let scorer = Scorer::from(&scorer_params);
     let mut appearance = AppearanceChain::new()
-        .then(ColormaskDetector::new(pingpong_bot::colormask_for(cam_id)?))
+        .then(ColormaskDetector::new(colormask_for(cam_id)?))
         .then(ContourDetector::from(&scorer_params));
 
     println!(
@@ -212,8 +213,8 @@ fn main() -> Result<()> {
 
     let mut n = 0usize;
     let mut hits = 0usize;
-    let mut last_pixel: Option<PixelPoint> = None;
-    let mut prev_pixel: Option<PixelPoint> = None;
+    let mut last_pixel: Option<camera::Pixel> = None;
+    let mut prev_pixel: Option<camera::Pixel> = None;
 
     while let Some(frame) = source.next_frame() {
         let pixel = detector.detect(&frame);
@@ -263,11 +264,11 @@ fn main() -> Result<()> {
                 "frame={n} {mode} half={} pixel=({:.1}, {:.1})",
                 detector.roi.half_px, p.x, p.y
             );
-            draw_circle_px(&mut raw, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
-            draw_circle_px(&mut mask_panel, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
+            Preview::draw_circle_px(&mut raw, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
+            Preview::draw_circle_px(&mut mask_panel, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
             if let Some(prev) = prev_pixel {
-                draw_circle_px(&mut raw, prev, 6, Scalar::new(0.0, 200.0, 255.0, 0.0), 1)?;
-                draw_circle_px(
+                Preview::draw_circle_px(&mut raw, prev, 6, Scalar::new(0.0, 200.0, 255.0, 0.0), 1)?;
+                Preview::draw_circle_px(
                     &mut mask_panel,
                     prev,
                     6,
@@ -282,8 +283,8 @@ fn main() -> Result<()> {
         }
 
         if let Some(p) = step_px.or(pixel) {
-            draw_circle_px(&mut cm_panel, p, 8, Scalar::new(0.0, 255.0, 0.0, 0.0), 1)?;
-            draw_circle_px(&mut ct_panel, p, 8, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
+            Preview::draw_circle_px(&mut cm_panel, p, 8, Scalar::new(0.0, 255.0, 0.0, 0.0), 1)?;
+            Preview::draw_circle_px(&mut ct_panel, p, 8, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
         }
 
         let mut roi_panel = empty_like(&masked_frame)?;
@@ -302,11 +303,17 @@ fn main() -> Result<()> {
                 0,
             )?;
             if let Some(p) = pixel {
-                draw_circle_px(&mut roi_panel, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
+                Preview::draw_circle_px(
+                    &mut roi_panel,
+                    p,
+                    10,
+                    Scalar::new(0.0, 255.0, 0.0, 0.0),
+                    2,
+                )?;
             }
         } else if let Some(p) = pixel {
             mask_panel.copy_to(&mut roi_panel)?;
-            draw_circle_px(&mut roi_panel, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
+            Preview::draw_circle_px(&mut roi_panel, p, 10, Scalar::new(0.0, 255.0, 0.0, 0.0), 2)?;
         }
 
         let roi_label = if detector.roi.used_roi {
@@ -361,7 +368,7 @@ fn main() -> Result<()> {
             ],
             white,
         )?;
-        draw_help_lines(
+        Preview::draw_help_lines(
             &mut raw,
             &["r ROI | [/] radius_scale | ,/. motion_scale | -/= padding | p paste | q quit"],
             Scalar::new(0.0, 255.0, 80.0, 0.0),
@@ -428,15 +435,15 @@ fn main() -> Result<()> {
             yellow,
         )?;
 
-        draw_cam_label(&mut raw, "0 raw", white)?;
-        draw_cam_label(&mut mask_panel, "1 floor-mask", cyan)?;
-        draw_cam_label(&mut cm_panel, "2 colormask", green)?;
-        draw_cam_label(&mut ct_panel, "3 +contour", orange)?;
-        draw_cam_label(&mut roi_panel, roi_label, yellow)?;
+        Preview::draw_cam_label(&mut raw, "0 raw", white)?;
+        Preview::draw_cam_label(&mut mask_panel, "1 floor-mask", cyan)?;
+        Preview::draw_cam_label(&mut cm_panel, "2 colormask", green)?;
+        Preview::draw_cam_label(&mut ct_panel, "3 +contour", orange)?;
+        Preview::draw_cam_label(&mut roi_panel, roi_label, yellow)?;
 
         // 읽는 순서 = 파이프라인: 0→1→2 / 3→4
-        let top = hstack_bgr(&[raw, mask_panel, cm_panel])?;
-        let bottom = hstack_bgr(&[ct_panel, roi_panel])?;
+        let top = Preview::hstack_bgr(&[raw, mask_panel, cm_panel])?;
+        let bottom = Preview::hstack_bgr(&[ct_panel, roi_panel])?;
         let mosaic = vstack_bgr(&top, &bottom)?;
 
         if let Some(dir) = &args.output {
@@ -449,7 +456,7 @@ fn main() -> Result<()> {
         }
 
         if preview {
-            match show_bgr(window, &mosaic, wait_ms)?.action {
+            match Preview::show_bgr(window, &mosaic, wait_ms)?.action {
                 PreviewAction::Quit => break,
                 PreviewAction::Key(key) if key == i32::from(b'r') || key == i32::from(b'R') => {
                     detector.set_roi_enabled(!detector.roi.roi_enabled);
@@ -476,7 +483,7 @@ fn main() -> Result<()> {
     }
 
     if preview {
-        destroy_window(window);
+        Preview::destroy_window(window);
     }
     println!("done frames={n} hits={hits} {detector}");
     println!(

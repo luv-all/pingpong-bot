@@ -1,4 +1,4 @@
-//! 본선 검출 번들 + SimScene형 빌더.
+//! [`Detector`] 조립. mask는 전처리 고정, `.then` 순서만 appearance 게이트 순서.
 //!
 //! ```ignore
 //! let color = ColormaskDetector::new(params);
@@ -14,54 +14,11 @@
 
 use anyhow::{Result, bail};
 
-use crate::PixelPoint;
-use crate::camera::Frame;
 use crate::detector::spatial::FloorEdgeMask;
-use crate::detector::{
-    AppearanceChain, AppearanceLayer, RoiParams, RoiTrack, Scorer, ScorerParams, track,
-};
+use crate::detector::{AppearanceChain, AppearanceLayer, RoiParams, Scorer, ScorerParams, track};
 
-/// 조립된 본선 검출기 — mask / roi / scorer 스냅샷.
-pub struct Detector {
-    pub mask: FloorEdgeMask,
-    pub roi: RoiTrack,
-    /// 면적 밴드 HUD용 스냅샷.
-    pub scorer: ScorerParams,
-}
+use super::detector::Detector;
 
-impl Detector {
-    pub fn builder() -> DetectorBuilder {
-        return DetectorBuilder::default();
-    }
-
-    pub fn set_roi_enabled(&mut self, enabled: bool) {
-        self.roi.set_roi_enabled(enabled);
-    }
-
-    pub fn detect(&mut self, frame: &Frame) -> Option<PixelPoint> {
-        let Ok(masked) = self.mask.apply_bgr(&frame.image) else {
-            return None;
-        };
-        let gated = Frame {
-            camera_id: frame.camera_id,
-            image: masked,
-            timestamp: frame.timestamp,
-        };
-        return self.roi.detect(&gated);
-    }
-
-    pub fn last_area(&self) -> Option<f64> {
-        return self.roi.last_area();
-    }
-}
-
-impl std::fmt::Display for Detector {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return write!(f, "detector({})", self.roi);
-    }
-}
-
-/// [`Detector`] 조립. mask는 전처리 고정, `.then` 순서만 appearance 게이트 순서.
 #[derive(Default)]
 pub struct DetectorBuilder {
     mask: Option<FloorEdgeMask>,

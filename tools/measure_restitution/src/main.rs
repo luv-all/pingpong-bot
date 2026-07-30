@@ -2,7 +2,9 @@
 //!
 //! 산출물: stdout에 `PhysicsParams::default()` 붙여넣기 스니펫.
 
+mod args;
 mod capture_loop;
+mod patch;
 
 use std::fs;
 use std::path::PathBuf;
@@ -10,58 +12,14 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use nalgebra::Vector3;
-use pingpong_bot::SimWorld;
-use pingpong_bot::constants::{ball, table};
-use pingpong_bot::{
-    PhysicsParams, StereoOfflineArgs, StereoPairCliArgs, calibration_path, drag_from_trajectory,
-    format_physics_for_defaults, restitution_from_bounce_heights, restitution_from_normal_speeds,
-};
+use pingpong_bot::constants::{self, table};
+use pingpong_bot::defaults::PhysicsParams;
+use pingpong_bot::defaults::{calibration_path, primitive_4dof};
+use pingpong_bot::estimator;
+use pingpong_bot::sim::physics::SimWorld;
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "measure_restitution",
-    about = "반발계수 e 측정 → PhysicsParams::default() 스니펫. 영상 멀티캠 또는 수동 숫자"
-)]
-struct Args {
-    #[command(flatten)]
-    offline: StereoOfflineArgs,
-    #[command(flatten)]
-    cam: StereoPairCliArgs,
-    #[arg(long)]
-    no_preview: bool,
-    #[arg(long, default_value_t = 33)]
-    wait_ms: i32,
-    #[arg(long, default_value_t = 10_000)]
-    max_frames: usize,
-    /// 파일 재생 타임라인 FPS (미지정 시 clip meta / 파일 메타)
-    #[arg(long)]
-    timeline_fps: Option<f64>,
-    #[arg(long, value_name = "H0,H1,...")]
-    heights: Option<String>,
-    #[arg(long, value_name = "VIN:VOUT,...")]
-    vz_pairs: Option<String>,
-    #[arg(long)]
-    sim: bool,
-    #[arg(long)]
-    sim_ballistics: bool,
-    #[arg(long, value_name = "PATH")]
-    drag_csv: Option<PathBuf>,
-    #[arg(long, default_value_t = 0.40)]
-    drop_height: f64,
-}
-
-#[derive(Default)]
-struct Patch {
-    restitution: Option<f64>,
-    friction: Option<f64>,
-    drag: Option<f64>,
-}
-
-impl Patch {
-    fn is_empty(&self) -> bool {
-        return self.restitution.is_none() && self.friction.is_none() && self.drag.is_none();
-    }
-}
+use args::Args;
+use patch::Patch;
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -69,7 +27,7 @@ fn main() -> Result<()> {
 
     if let Some(ref csv) = args.drag_csv {
         let samples = load_traj_csv(csv)?;
-        let k = drag_from_trajectory(&samples)
+        let k = estimator::PhysicsIdentify::drag_from_trajectory(&samples)
             .context("항력 적합 실패 — 샘플≥3, 비행 구간 속도≥0.3 m/s")?;
         println!("drag k = {k:.8}  (from {})", csv.display());
         patch.drag = Some(k);
@@ -111,7 +69,7 @@ fn main() -> Result<()> {
 
     if let Some(ref raw) = args.heights {
         let hs = parse_f64_list(raw)?;
-        let e = restitution_from_bounce_heights(&hs)
+        let e = estimator::PhysicsIdentify::restitution_from_bounce_heights(&hs)
             .context("높이로부터 e 추정 실패 — 높이 ≥2개, 양수")?;
         println!("restitution e = {e:.6}  (from {} heights)", hs.len());
         patch.restitution = Some(e);
@@ -119,7 +77,8 @@ fn main() -> Result<()> {
 
     if let Some(ref raw) = args.vz_pairs {
         let pairs = parse_pairs(raw)?;
-        let e = restitution_from_normal_speeds(&pairs).context("속도 쌍으로부터 e 추정 실패")?;
+        let e = estimator::PhysicsIdentify::restitution_from_normal_speeds(&pairs)
+            .context("속도 쌍으로부터 e 추정 실패")?;
         println!("restitution e = {e:.6}  (from {} vz pairs)", pairs.len());
         patch.restitution = Some(e);
     }
@@ -153,16 +112,18 @@ fn main() -> Result<()> {
 
     print!(
         "{}",
-        format_physics_for_defaults(patch.restitution, patch.friction, patch.drag)
+        estimator::PhysicsIdentify::format_physics_for_defaults(
+            patch.restitution,
+            patch.friction,
+            patch.drag
+        )
     );
     return Ok(());
 }
 
 fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
-    use pingpong_bot::estimator::ballistics::semi_implicit_euler;
-
     let physics = PhysicsParams::default();
-    let floor = table::SURFACE_Z + ball::RADIUS;
+    let floor = table::SURFACE_Z + constants::ball::RADIUS;
     let mut pos = Vector3::new(
         table::WIDTH_X * 0.5,
         table::LENGTH_Y * 0.5,
@@ -175,7 +136,7 @@ fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
     let mut prev_vz: f64 = 0.0;
 
     for _ in 0..10_000 {
-        let (np, nv, _) = semi_implicit_euler(pos, vel, Vector3::zeros(), dt, &physics);
+        let (np, nv, _) = estimator::Kinematics::step(pos, vel, Vector3::zeros(), dt, &physics);
         if vin.is_none() && prev_vz < -0.5 && nv.z >= 0.0 {
             vin = Some((-prev_vz).max(1e-6_f64));
             vout = Some(nv.z.max(0.0_f64));
@@ -189,17 +150,18 @@ fn measure_e_ballistics(drop_height: f64) -> Result<f64> {
         (Some(a), Some(b)) => (a, b),
         _ => bail!("ballistics 바운스를 잡지 못함"),
     };
-    return restitution_from_normal_speeds(&[(vin, vout)]).context("ballistics e");
+    return estimator::PhysicsIdentify::restitution_from_normal_speeds(&[(vin, vout)])
+        .context("ballistics e");
 }
 
 fn measure_e_in_sim(drop_height: f64) -> Result<f64> {
-    let robot = pingpong_bot::primitive_4dof().context("competition arm")?;
+    let robot = primitive_4dof().context("competition arm")?;
     let mut world = SimWorld::new(robot);
     world.set_use_ground_truth(false);
 
     let x = table::WIDTH_X * 0.5;
     let y = table::LENGTH_Y * 0.35;
-    let z0 = table::SURFACE_Z + ball::RADIUS + drop_height;
+    let z0 = table::SURFACE_Z + constants::ball::RADIUS + drop_height;
     world.launch_ball_at(
         [x as f32, y as f32, z0 as f32],
         [0.0, 0.0, -0.01],
@@ -211,7 +173,7 @@ fn measure_e_in_sim(drop_height: f64) -> Result<f64> {
     let mut max_vz_after = 0.0_f64;
     let mut saw_descent = false;
     let mut bounced = false;
-    let floor = table::SURFACE_Z + ball::RADIUS;
+    let floor = table::SURFACE_Z + constants::ball::RADIUS;
 
     for _ in 0..8000 {
         world.step(dt, None);
@@ -238,7 +200,8 @@ fn measure_e_in_sim(drop_height: f64) -> Result<f64> {
     let vin = (-min_vz).abs();
     let vout = max_vz_after;
     println!("sim vz_in={vin:.4} vz_out={vout:.4}");
-    return restitution_from_normal_speeds(&[(vin, vout)]).context("sim e 계산 실패");
+    return estimator::PhysicsIdentify::restitution_from_normal_speeds(&[(vin, vout)])
+        .context("sim e 계산 실패");
 }
 
 fn parse_f64_list(raw: &str) -> Result<Vec<f64>> {

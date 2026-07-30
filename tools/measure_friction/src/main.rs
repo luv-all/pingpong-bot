@@ -2,60 +2,20 @@
 //!
 //! 산출물: stdout에 `PhysicsParams::default()` 붙여넣기 스니펫.
 
+mod args;
 mod capture_loop;
-
-use std::path::PathBuf;
+mod patch;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use pingpong_bot::SimWorld;
-use pingpong_bot::constants::{ball, table};
-use pingpong_bot::{
-    PhysicsParams, StereoOfflineArgs, StereoPairCliArgs, calibration_path,
-    format_physics_for_defaults, friction_from_tangential_speeds,
-};
+use pingpong_bot::constants::{self, table};
+use pingpong_bot::defaults::PhysicsParams;
+use pingpong_bot::defaults::{calibration_path, primitive_4dof};
+use pingpong_bot::estimator;
+use pingpong_bot::sim::physics::SimWorld;
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "measure_friction",
-    about = "테이블 마찰 μ 측정 → PhysicsParams::default() 스니펫. 영상 멀티캠 또는 수동 숫자"
-)]
-struct Args {
-    #[command(flatten)]
-    offline: StereoOfflineArgs,
-    #[command(flatten)]
-    cam: StereoPairCliArgs,
-    #[arg(long)]
-    no_preview: bool,
-    #[arg(long, default_value_t = 33)]
-    wait_ms: i32,
-    #[arg(long, default_value_t = 10_000)]
-    max_frames: usize,
-    /// 파일 재생 타임라인 FPS
-    #[arg(long)]
-    timeline_fps: Option<f64>,
-    #[arg(long, value_name = "VIN:VOUT,...")]
-    vt_pairs: Option<String>,
-    #[arg(long)]
-    sim: bool,
-    #[arg(long, default_value_t = 2.0)]
-    horiz_speed: f64,
-    #[arg(long, default_value_t = 0.25)]
-    drop_height: f64,
-}
-
-#[derive(Default)]
-struct Patch {
-    restitution: Option<f64>,
-    friction: Option<f64>,
-    drag: Option<f64>,
-}
-
-impl Patch {
-    fn is_empty(&self) -> bool {
-        return self.restitution.is_none() && self.friction.is_none() && self.drag.is_none();
-    }
-}
+use args::Args;
+use patch::Patch;
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -93,7 +53,8 @@ fn main() -> Result<()> {
 
     if let Some(ref raw) = args.vt_pairs {
         let pairs = parse_pairs(raw)?;
-        let mu = friction_from_tangential_speeds(&pairs).context("접선 쌍으로부터 μ 추정 실패")?;
+        let mu = estimator::PhysicsIdentify::friction_from_tangential_speeds(&pairs)
+            .context("접선 쌍으로부터 μ 추정 실패")?;
         println!("friction μ = {mu:.6}  (from {} vt pairs)", pairs.len());
         patch.friction = Some(mu);
     }
@@ -118,19 +79,23 @@ fn main() -> Result<()> {
 
     print!(
         "{}",
-        format_physics_for_defaults(patch.restitution, patch.friction, patch.drag)
+        estimator::PhysicsIdentify::format_physics_for_defaults(
+            patch.restitution,
+            patch.friction,
+            patch.drag
+        )
     );
     return Ok(());
 }
 
 fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
-    let robot = pingpong_bot::primitive_4dof().context("competition arm")?;
+    let robot = primitive_4dof().context("competition arm")?;
     let mut world = SimWorld::new(robot);
     world.set_use_ground_truth(false);
 
     let x = table::WIDTH_X * 0.5;
     let y = table::LENGTH_Y * 0.35;
-    let z0 = table::SURFACE_Z + ball::RADIUS + drop_height;
+    let z0 = table::SURFACE_Z + constants::ball::RADIUS + drop_height;
     world.launch_ball_at(
         [x as f32, y as f32, z0 as f32],
         [horiz_speed as f32, 0.0, -0.01],
@@ -143,7 +108,7 @@ fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
     let mut vout_t = 0.0_f64;
     let mut saw_descent = false;
     let mut bounced = false;
-    let floor = table::SURFACE_Z + ball::RADIUS;
+    let floor = table::SURFACE_Z + constants::ball::RADIUS;
 
     for _ in 0..8000 {
         world.step(dt, None);
@@ -173,7 +138,8 @@ fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
         bail!("sim 바운스 접선 속도 미검출 — --vt-pairs 로 수동 입력");
     }
     println!("sim vt_in={vin_t:.4} vt_out={vout_t:.4}");
-    return friction_from_tangential_speeds(&[(vin_t, vout_t)]).context("sim μ 계산 실패");
+    return estimator::PhysicsIdentify::friction_from_tangential_speeds(&[(vin_t, vout_t)])
+        .context("sim μ 계산 실패");
 }
 
 fn parse_pairs(raw: &str) -> Result<Vec<(f64, f64)>> {

@@ -1,6 +1,6 @@
 //! `RacketPose`(domain) → Rapier `Pose` 변환.
 
-use crate::RacketPose;
+use crate::robot::RacketPose;
 use rapier3d::prelude::{Rotation, Vector};
 
 /// domain `RacketPose` → Rapier (위치, 회전).

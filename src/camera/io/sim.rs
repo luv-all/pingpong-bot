@@ -4,20 +4,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::{CameraId, PixelPoint};
 use rapier3d::prelude::Vector;
 
-use super::projection::CameraView;
+use crate::camera;
 use crate::camera::HintSource;
+use crate::sim::physics::world::SimWorld;
 use crate::sim::session::SimClockHandle;
-use crate::sim::world::SimWorld;
 
 /// Rapier 월드 공을 픽셀로 투영하는 가상 카메라.
 pub struct SimCamera {
     /// 이 카메라 ID
-    camera_id: CameraId,
+    camera_id: camera::Id,
     /// 핀홀 투영 설정
-    view: CameraView,
+    view: camera::View,
     /// 공유 sim 월드
     world: Arc<Mutex<SimWorld>>,
     /// sim 시계
@@ -35,7 +34,7 @@ pub struct SimCamera {
 impl SimCamera {
     /// `frames == 0` 이면 shutdown까지 무한 프레임.
     pub fn new(
-        camera_id: CameraId,
+        camera_id: camera::Id,
         camera_count: u8,
         frames: u64,
         frame_hz: f64,
@@ -46,7 +45,7 @@ impl SimCamera {
         let remaining = if frames == 0 { None } else { Some(frames) };
         return Self {
             camera_id,
-            view: CameraView::for_camera_index(camera_id.0, camera_count),
+            view: camera::View::for_camera_index(camera_id.0, camera_count),
             world,
             clock,
             remaining,
@@ -58,7 +57,7 @@ impl SimCamera {
 }
 
 impl HintSource for SimCamera {
-    fn next_hint(&mut self) -> Option<(CameraId, Option<PixelPoint>, Instant)> {
+    fn next_hint(&mut self) -> Option<(camera::Id, Option<camera::Pixel>, Instant)> {
         if self.shutdown.load(Ordering::Acquire) {
             return None;
         }
@@ -88,7 +87,7 @@ impl HintSource for SimCamera {
 }
 
 /// Rapier 공 위치 -> 픽셀. 시야 밖이면 None.
-fn pixel_for_ball(ball: Vector, view: &CameraView) -> Option<PixelPoint> {
+fn pixel_for_ball(ball: Vector, view: &camera::View) -> Option<camera::Pixel> {
     return view.project(ball);
 }
 
@@ -98,9 +97,9 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
 
-    use crate::sim::SimRuntimeControls;
-    use crate::sim::SimSession;
-    use crate::sim::SimSessionConfig;
+    use crate::sim::session::SimRuntimeControls;
+    use crate::sim::session::SimSession;
+    use crate::sim::session::SimSessionConfig;
 
     fn test_robot() -> crate::robot::Robot {
         return crate::defaults::primitive_4dof().expect("테스트용 4DOF robot");
@@ -122,7 +121,7 @@ mod tests {
             controls,
             shutdown,
         );
-        let mut camera = session.camera(CameraId::new(0), 3);
+        let mut camera = session.camera(camera::Id::new(0), 3);
         assert!(camera.next_hint().is_some());
         session.shutdown();
     }

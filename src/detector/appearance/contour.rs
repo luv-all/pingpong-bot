@@ -8,7 +8,7 @@ use super::super::motion::draw_candidate_contour;
 use super::super::scoring::candidate::{Candidate, candidates_from_contours};
 use super::super::scoring::params::ScorerParams;
 use super::super::scoring::scorer::Scorer;
-use crate::PixelPoint;
+use crate::camera;
 use crate::camera::Frame;
 
 pub struct ContourDetector {
@@ -99,7 +99,7 @@ impl ContourDetector {
     }
 
     /// 검출 + Canny 엣지(BGR). 선택 컨투어는 초록.
-    pub fn detect_debug(&mut self, frame: &Frame) -> (Option<PixelPoint>, Mat) {
+    pub fn detect_debug(&mut self, frame: &Frame) -> (Option<camera::Pixel>, Mat) {
         self.last_area = None;
         let empty = || {
             Mat::zeros(frame.image.rows(), frame.image.cols(), frame.image.typ())

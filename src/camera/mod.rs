@@ -1,85 +1,35 @@
-//! 카메라 입력·캘리브레이션·삼각측량.
+//! 카메라 입력·캘리브레이션·프레임 IO.
 //!
 //! - [`calib`] — `Calibration` / ChArUco / 탁구대 PnP
-//! - [`tri`] — DLT · OpenCV `triangulatePoints`
-//! - [`io`] — 캡처 · 프리뷰 · 투영 · 시뮬 카메라
+//! - [`io`] — 캡처 · 프리뷰 · 시뮬 카메라
+//! - [`facade`] — Charuco / TablePnp / Preview
 //! - [`arducam_b0332`] — B0332 datasheet (`constants::camera` re-export)
-
-use std::fmt;
-use std::time::Instant;
+//!
+//! 삼각측량 계산은 [`crate::estimator::Triangulate`].
 
 pub mod arducam_b0332;
 pub mod calib;
+pub mod facade;
 pub mod io;
-pub mod tri;
 
-pub use calib::{
-    Calibration, CameraParams, CharucoBoardSpec, CharucoCalibReport, CharucoFrameDetect,
-    MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, TABLE_LANDMARK_COUNT, TableLandmark, TablePnpResult,
-    calibrate_charuco, calibrate_table_pnp, detect_and_draw_charuco, ensure_reproj_below,
-    ensure_reproj_ok, table_landmark_mesh_edges, table_landmarks, upsert_camera,
-};
+mod id;
+mod params;
+mod pixel;
+mod role;
+mod view;
+
+pub use id::Id;
+pub use params::Params;
+pub use pixel::Pixel;
+pub use role::Role;
+pub use view::View;
+
+pub use calib::{BoardSpec, Calibration, FrameDetect, Landmark, Pnp, PnpResult, Report};
+pub use facade::{Charuco, Preview, TablePnp};
 pub use io::{
-    CamCliArgs, CamRigConfig, CamStreamArgs, CameraRole, CaptureBackend, DEFAULT_CLIPS_DIR,
-    DEFAULT_FOV_Y_DEG, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT,
-    DEFAULT_STREAM_WIDTH, ExposureReadout, FittedBgr, Frame, FrameSource, HintSource,
-    ImageDirSource, MonoOfflineArgs, OpenCvCapture, PixelPickMouse, PreviewAction, ResolvedCam,
-    ResolvedStereoOffline, ShowBgrResult, SimCamera, StereoCamCliArgs, StereoClip, StereoOfflineArgs,
-    StereoPairCliArgs, StreamPreset, ThreadedCapture, WorldGridParams, apply_grid_key, arrow_delta,
-    destroy_window, display_fit_bounds, draw_cam_label, draw_circle_px, draw_debug_lines,
-    draw_help_lines, draw_pixel_loupe, draw_world_grid, draw_world_velocity, fit_bgr_downscale,
-    hstack_bgr, parse_fourcc, resolve_cams, resolve_clip_dir, resolve_clip_side,
-    resolve_mono_offline, resolve_stereo_clip, resolve_stereo_offline, show_bgr, unscale_xy,
+    CamCliArgs, CamRigConfig, CamStreamArgs, CaptureBackend, ExposureReadout, FittedBgr, Frame,
+    FrameSource, HintSource, ImageDirSource, MonoOfflineArgs, OpenCvCapture, PixelPickMouse,
+    PreviewAction, ResolvedCam, ResolvedStereoOffline, ShowBgrResult, SimCamera, StereoCamCliArgs,
+    StereoClip, StereoOfflineArgs, StereoPairCliArgs, StreamPreset, ThreadedCapture,
+    WorldGridParams,
 };
-pub use tri::{
-    dlt_triangulate, sample_at, triangulate_projections, triangulate_synced, triangulate_views,
-};
-
-/// 하위 호환: `camera::preview`
-pub use io::preview;
-
-/// 이미지 픽셀 좌표.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PixelPoint {
-    pub x: f64,
-    pub y: f64,
-}
-
-impl PixelPoint {
-    pub fn new(x: f64, y: f64) -> Self {
-        return Self { x, y };
-    }
-
-    pub fn lerp(self, other: Self, w: f64) -> Self {
-        return Self {
-            x: self.x + (other.x - self.x) * w,
-            y: self.y + (other.y - self.y) * w,
-        };
-    }
-}
-
-/// 카메라 식별자.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
-)]
-pub struct CameraId(pub u8);
-
-impl CameraId {
-    pub const fn new(index: u8) -> Self {
-        return Self(index);
-    }
-}
-
-impl fmt::Display for CameraId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        return write!(f, "카메라 {}번", self.0);
-    }
-}
-
-/// 한 프레임에서 검출한 공.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct BallObservation {
-    pub pixel: PixelPoint,
-    pub camera_id: CameraId,
-    pub timestamp: Instant,
-}

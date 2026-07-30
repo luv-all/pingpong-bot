@@ -48,7 +48,7 @@ pub const RAIL_MAX_SPEED: f64 = 5.0;
 ///
 /// 효과(실측): 최악 Δq 2.00 rad → **1.183 rad**, 필요시간 1.30s → **0.770s**.
 /// 이것만으로는 commit 창(0.125~0.175s)에 못 들어와, rough 단계 관절
-/// 선추종(`plan_coarse_track` + `RobotState::set_targets`)과 **함께** 쓴다.
+/// 선추종(`plan_coarse_track` + `robot::State::set_targets`)과 **함께** 쓴다.
 pub const READY_JOINTS_4DOF: [f64; 4] = [0.1207, 0.0, 0.1719, -0.6756];
 
 /// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·윗면 기준).

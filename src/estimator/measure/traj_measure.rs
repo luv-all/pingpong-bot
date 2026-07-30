@@ -3,42 +3,8 @@
 use nalgebra::Vector3;
 
 use crate::constants::{ball, table};
-use crate::{CameraId, PixelPoint, Point3};
 
-/// 삼각측량된 한 샘플.
-#[derive(Debug, Clone)]
-pub struct TrajPoint {
-    pub t: f64,
-    pub pos: Point3,
-    pub pixels: Vec<(CameraId, PixelPoint)>,
-}
-
-/// 바운스 한 번 (반발계수 디버그용).
-#[derive(Debug, Clone)]
-pub struct BounceEvent {
-    /// 접촉에 가까운 샘플 인덱스
-    pub index: usize,
-    pub contact: Point3,
-    pub prev: Point3,
-    pub next: Point3,
-    pub v_in: Vector3<f64>,
-    pub v_out: Vector3<f64>,
-    /// e = |vz_out| / |vz_in|
-    pub e: f64,
-}
-
-/// 테이블 위 롤 구간 (마찰 디버그용).
-#[derive(Debug, Clone)]
-pub struct RollEvent {
-    pub i0: usize,
-    pub i1: usize,
-    pub p0: Point3,
-    pub p1: Point3,
-    pub vt_in: f64,
-    pub vt_out: f64,
-    /// μ = 1 - vt_out / vt_in
-    pub mu: f64,
-}
+use super::{BounceEvent, RollEvent, TrajPoint};
 
 fn floor_z() -> f64 {
     return table::SURFACE_Z + ball::RADIUS;
@@ -186,6 +152,7 @@ pub fn mean_roll_mu(events: &[RollEvent]) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Point3;
 
     fn pt(t: f64, x: f64, y: f64, z: f64) -> TrajPoint {
         TrajPoint {

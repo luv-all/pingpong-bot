@@ -9,9 +9,9 @@
 use anyhow::{Result, bail};
 use clap::Parser;
 use opencv::prelude::*;
-use pingpong_bot::{
-    CamRigConfig, CameraId, CaptureBackend, FrameSource, OpenCvCapture, PreviewAction,
-    destroy_window, show_bgr,
+use pingpong_bot::camera;
+use pingpong_bot::camera::{
+    CamRigConfig, CaptureBackend, FrameSource, OpenCvCapture, Preview, PreviewAction,
 };
 
 #[derive(Parser, Debug)]
@@ -94,8 +94,8 @@ fn probe_backend(backend: CaptureBackend, max_index: i32, preview: bool) -> Resu
     let mut found = 0usize;
 
     for index in 0..max_index {
-        // CameraId는 논리 id — 프로브에선 인덱스와 같게 둠 (0..255)
-        let id = CameraId(index.clamp(0, 255) as u8);
+        // Id는 논리 id — 프로브에선 인덱스와 같게 둠 (0..255)
+        let id = camera::Id(index.clamp(0, 255) as u8);
         match OpenCvCapture::from_device_with_backend(id, index, backend) {
             Ok(mut cap) => {
                 let summary = cap.stream_summary();
@@ -116,12 +116,12 @@ fn probe_backend(backend: CaptureBackend, max_index: i32, preview: bool) -> Resu
                         let window = format!("cam_list device {index} ({})", backend.as_str());
                         println!("    preview: q/ESC → next device");
                         loop {
-                            match show_bgr(&window, &f.image, 30)?.action {
+                            match Preview::show_bgr(&window, &f.image, 30)?.action {
                                 PreviewAction::Quit => break,
                                 PreviewAction::Continue | PreviewAction::Key(_) => {}
                             }
                         }
-                        destroy_window(&window);
+                        Preview::destroy_window(&window);
                     } else {
                         println!("    preview skipped (no frame)");
                     }

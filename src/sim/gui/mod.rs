@@ -4,7 +4,7 @@
 //! gui/
 //!   host/     SimScene builder + run
 //!   layers/   Ball / Robot / Shooter R/W
-//!   scene/    table + BallVisual
+//!   scene/    table + sim::gui::ball::Visual
 //!   viewer/   full sim egui (panel, mesh)
 //!   debug/    overlays + snap
 //! ```
@@ -15,36 +15,39 @@
 //! scene.run(shutdown)?;
 //! ```
 
+pub mod ball;
 #[cfg(feature = "gui")]
 pub mod host;
 #[cfg(feature = "gui")]
 pub mod layers;
-#[cfg(feature = "gui")]
-pub mod robot_visual;
+pub mod robot;
 #[cfg(feature = "gui")]
 pub mod scene;
+pub mod shooter;
 #[cfg(feature = "gui")]
 pub mod viewer;
 
 pub mod debug;
-
-/// 하위 호환 경로 (`sim::gui::debug_overlays`).
-pub use debug::overlays as debug_overlays;
-/// 하위 호환 경로 (`sim::gui::debug_snap`).
-pub use debug::snap as debug_snap;
 
 pub use debug::{CommitPhase, DebugOverlays, SimDebugSnapshot};
 
 #[cfg(feature = "gui")]
 pub use host::{
     BallOnlyViewerOptions, SceneHostOptions, SceneUiDraw, SceneUiHook, SimScene, SimSceneBuilder,
-    run_ball_only_viewer, run_scene_host, run_sim_viewer,
 };
 #[cfg(feature = "gui")]
-pub use robot_visual::{PrimitiveRobotNodes, RobotVisual, UrdfRobotNodes};
+pub use layers::{SceneLayers, SceneLayersBuilder};
 #[cfg(feature = "gui")]
-pub use layers::{BallHandle, RobotHandle, SceneLayers, SceneLayersBuilder, ShooterHandle};
+pub use scene::TableSceneOptions;
 #[cfg(feature = "gui")]
-pub use scene::{BallVisual, TableSceneOptions, build_table_scene};
+pub use viewer::{SimViewerOptions, WORLD_LOCK_WAIT};
+
 #[cfg(feature = "gui")]
-pub use viewer::{SimViewerOptions, WORLD_LOCK_WAIT, lock_world_for_frame};
+mod scene_host;
+#[cfg(feature = "gui")]
+mod sim_viewer;
+
+#[cfg(feature = "gui")]
+pub use scene_host::SceneHost;
+#[cfg(feature = "gui")]
+pub use sim_viewer::SimViewer;

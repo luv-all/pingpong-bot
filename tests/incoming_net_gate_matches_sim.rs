@@ -7,9 +7,10 @@
 
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
-use pingpong_bot::sim::eval_protocol::{EvalMode, settings_for_zone_shot, shot_schedule};
-use pingpong_bot::sim::physics::BallShooterSettings;
-use pingpong_bot::sim::{BallState, SimWorld};
+use pingpong_bot::sim::eval;
+use pingpong_bot::sim::launch;
+use pingpong_bot::sim::physics;
+use pingpong_bot::sim::physics::SimWorld;
 
 /// 공이 라켓에 닿아 있는가.
 fn ball_touches_racket(world: &SimWorld) -> bool {
@@ -37,7 +38,7 @@ fn ball_touches_racket(world: &SimWorld) -> bool {
 ///
 /// 라켓이 한 번 닿은 뒤는 모두 "리턴"이라 관심 밖이다. 약한 리턴이 자기
 /// 코트에 튀어 네트를 맞는 경우가 있어, 속도 부호만으로는 갈라지지 않는다.
-fn incoming_touches_net_in_sim(settings: &BallShooterSettings) -> bool {
+fn incoming_touches_net_in_sim(settings: &launch::Settings) -> bool {
     const DT: f64 = 1.0 / 1000.0;
     let mut world = SimWorld::with_physics(
         defaults::robot().expect("robot"),
@@ -61,7 +62,7 @@ fn incoming_touches_net_in_sim(settings: &BallShooterSettings) -> bool {
             return false;
         }
         previous_y = y;
-        if world.ball_state == BallState::Parked {
+        if world.ball_state == physics::BallState::Parked {
             return false;
         }
     }
@@ -69,7 +70,7 @@ fn incoming_touches_net_in_sim(settings: &BallShooterSettings) -> bool {
 }
 
 /// 본 시뮬에서 수신 공이 네트 평면을 지날 때의 상단 여유고(m).
-fn incoming_net_clearance_in_sim(settings: &BallShooterSettings) -> Option<f64> {
+fn incoming_net_clearance_in_sim(settings: &launch::Settings) -> Option<f64> {
     const DT: f64 = 1.0 / 1000.0;
     let net_y = table::LENGTH_Y * 0.5;
     let net_top = table::SURFACE_Z + table::NET_HEIGHT;
@@ -101,9 +102,9 @@ fn incoming_net_clearance_in_sim(settings: &BallShooterSettings) -> Option<f64> 
 #[test]
 #[ignore = "진단 전용"]
 fn diag_default_shot() {
-    let mut shot = BallShooterSettings::default();
+    let mut shot = launch::Settings::default();
     for lift in [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0] {
-        shot.pitch_deg = BallShooterSettings::default().pitch_deg + lift;
+        shot.pitch_deg = launch::Settings::default().pitch_deg + lift;
         println!(
             "pitch={:+.2} gate_clear={:<5} sim_touch={:<5} clearance={}",
             shot.pitch_deg,
@@ -119,9 +120,12 @@ fn diag_default_shot() {
 #[test]
 #[ignore = "진단 전용"]
 fn diag_net_clearance() {
-    let launch = pingpong_bot::sim::EvalLaunchParams::default();
-    for (i, (zone, index_in_zone)) in shot_schedule(EvalMode::Block).into_iter().enumerate() {
-        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+    let launch = pingpong_bot::sim::eval::LaunchParams::default();
+    for (i, (zone, index_in_zone)) in eval::Protocol::shot_schedule(eval::Mode::Block)
+        .into_iter()
+        .enumerate()
+    {
+        let settings = eval::Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         println!(
             "#{:<3} {:<6} pitch={:+.2} gate_clear={:<5} sim_touch={:<5} clearance={}",
             i + 1,
@@ -139,11 +143,14 @@ fn diag_net_clearance() {
 /// 게이트가 통과시킨 샷은 본 시뮬에서도 네트에 닿지 않아야 한다.
 #[test]
 fn incoming_net_gate_agrees_with_sim() {
-    let launch = pingpong_bot::sim::EvalLaunchParams::default();
+    let launch = pingpong_bot::sim::eval::LaunchParams::default();
     let mut disagreements = Vec::new();
 
-    for (i, (zone, index_in_zone)) in shot_schedule(EvalMode::Block).into_iter().enumerate() {
-        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+    for (i, (zone, index_in_zone)) in eval::Protocol::shot_schedule(eval::Mode::Block)
+        .into_iter()
+        .enumerate()
+    {
+        let settings = eval::Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let gate_says_clear = settings.clears_incoming_rapier_net();
         let sim_touches_net = incoming_touches_net_in_sim(&settings);
         if gate_says_clear && sim_touches_net {

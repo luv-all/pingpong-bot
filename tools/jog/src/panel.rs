@@ -1,10 +1,10 @@
 //! jog egui 패널.
 
 use kiss3d::egui::{self, Color32, RichText};
-use pingpong_bot::InterceptWindow;
 use pingpong_bot::constants::table;
+use pingpong_bot::robot::motion::InterceptWindow;
 
-use crate::motion::{MotionKind, REACH_DELTA_M, joint_label, reach_ok};
+use crate::plan::{Kind, REACH_DELTA_M, joint_label, reach_ok};
 use crate::state::{Action, JogApp, try_action};
 
 pub fn draw(ctx: &egui::Context, app: &mut JogApp) {
@@ -66,7 +66,14 @@ fn draw_status(ui: &mut egui::Ui, app: &JogApp) {
 
 fn draw_params(ui: &mut egui::Ui, app: &mut JogApp) {
     ui.label(RichText::new("이동 설정").strong());
-    ranged(ui, "이동 시간 [초]", &mut app.duration_secs, 0.05, 10.0, 0.05);
+    ranged(
+        ui,
+        "이동 시간 [초]",
+        &mut app.duration_secs,
+        0.05,
+        10.0,
+        0.05,
+    );
     ranged(
         ui,
         "한 번에 최대 각도 [°]",
@@ -84,14 +91,14 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
         .width(ui.available_width().min(320.0))
         .show_ui(ui, |ui| {
             for kind in [
-                MotionKind::Joint,
-                MotionKind::Angles,
-                MotionKind::RailAbs,
-                MotionKind::Ik,
-                MotionKind::Pose,
-                MotionKind::Swing,
-                MotionKind::AimBall,
-                MotionKind::SwingBall,
+                Kind::Joint,
+                Kind::Angles,
+                Kind::RailAbs,
+                Kind::Ik,
+                Kind::Pose,
+                Kind::Swing,
+                Kind::AimBall,
+                Kind::SwingBall,
             ] {
                 ui.selectable_value(&mut app.draft.kind, kind, kind.label());
             }
@@ -100,7 +107,7 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
     let (rail_min, rail_max) = rail_range(&app.arm);
 
     match app.draft.kind {
-        MotionKind::Joint => {
+        Kind::Joint => {
             ui.horizontal(|ui| {
                 ui.label("관절");
                 egui::ComboBox::from_id_salt("joint_pick")
@@ -126,7 +133,7 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
                 0.5,
             );
         }
-        MotionKind::Angles => {
+        Kind::Angles => {
             for i in 0..app.draft.angles_deg.len() {
                 let (min, max) =
                     joint_jog_deg_range(&app.arm, i, app.synced_pose.as_ref(), app.max_delta_deg);
@@ -140,16 +147,23 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
                 );
             }
         }
-        MotionKind::RailAbs => {
-            ranged(ui, "레일 위치 [m]", &mut app.draft.rail_x, rail_min, rail_max, 0.005);
+        Kind::RailAbs => {
+            ranged(
+                ui,
+                "레일 위치 [m]",
+                &mut app.draft.rail_x,
+                rail_min,
+                rail_max,
+                0.005,
+            );
         }
-        MotionKind::Ik => {
+        Kind::Ik => {
             draw_reach(ui, app, false);
         }
-        MotionKind::Pose => {
+        Kind::Pose => {
             draw_reach(ui, app, true);
         }
-        MotionKind::Swing => {
+        Kind::Swing => {
             draw_reach(ui, app, true);
             ranged(
                 ui,
@@ -160,10 +174,10 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
                 0.05,
             );
         }
-        MotionKind::AimBall => {
+        Kind::AimBall => {
             draw_arrival(ui, app, false);
         }
-        MotionKind::SwingBall => {
+        Kind::SwingBall => {
             draw_arrival(ui, app, true);
         }
     }
@@ -310,7 +324,7 @@ fn ranged(ui: &mut egui::Ui, label: &str, value: &mut f64, min: f64, max: f64, s
     );
 }
 
-fn joint_hw_deg_range(arm: &pingpong_bot::Arm, index: usize) -> (f64, f64) {
+fn joint_hw_deg_range(arm: &pingpong_bot::robot::Arm, index: usize) -> (f64, f64) {
     if let Some(limit) = arm.joint_limit(index) {
         return (limit.min.to_degrees(), limit.max.to_degrees());
     }
@@ -319,9 +333,9 @@ fn joint_hw_deg_range(arm: &pingpong_bot::Arm, index: usize) -> (f64, f64) {
 
 /// 관절 한계 ∩ (현재각 ± maxdelta). 슬라이더가 maxdelta 위반을 미리 막는다.
 fn joint_jog_deg_range(
-    arm: &pingpong_bot::Arm,
+    arm: &pingpong_bot::robot::Arm,
     index: usize,
-    synced: Option<&pingpong_bot::RobotPose>,
+    synced: Option<&pingpong_bot::robot::Pose>,
     max_delta_deg: f64,
 ) -> (f64, f64) {
     let (hw_lo, hw_hi) = joint_hw_deg_range(arm, index);
@@ -341,7 +355,7 @@ fn joint_jog_deg_range(
     return (cur_deg, cur_deg);
 }
 
-fn rail_range(arm: &pingpong_bot::Arm) -> (f64, f64) {
+fn rail_range(arm: &pingpong_bot::robot::Arm) -> (f64, f64) {
     if let Some(rail) = arm.rail {
         return (rail.x_min, rail.x_max);
     }

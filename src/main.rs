@@ -9,42 +9,33 @@
 //! cargo run -p pingpong-bot -- --debug
 //! ```
 
+mod cli;
+
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 #[cfg(feature = "real")]
-use pingpong_bot::{CameraId, DynamixelConfig, Hardware, RailConfig, RealHardware, detector_for};
-use pingpong_bot::{
-    InterceptWindow, PhysicsParams, SimRuntimeControls, SimSession, SimSessionConfig, init_tracing,
-    new_shutdown_flag, robot,
-};
+use pingpong_bot::camera;
+#[cfg(feature = "real")]
+use pingpong_bot::defaults::detector_for;
+use pingpong_bot::defaults::{PhysicsParams, robot};
+#[cfg(feature = "real")]
+use pingpong_bot::hardware::dynamixel::DynamixelConfig;
+#[cfg(feature = "real")]
+use pingpong_bot::hardware::rail::RailConfig;
+#[cfg(feature = "real")]
+use pingpong_bot::hardware::{Hardware, RealHardware};
+use pingpong_bot::robot::motion::InterceptWindow;
 #[cfg(feature = "gui")]
-use pingpong_bot::{SimViewerOptions, run_sim_viewer};
+use pingpong_bot::sim::gui::{SimViewer, SimViewerOptions};
+use pingpong_bot::sim::session::{SimRuntimeControls, SimSession, SimSessionConfig};
+use pingpong_bot::telemetry::init_tracing;
 use tracing::info;
 #[cfg(not(feature = "gui"))]
 use tracing::warn;
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum ModeArg {
-    Sim,
-    Real,
-}
-
-/// CLI 인자.
-#[derive(Parser)]
-#[command(name = "pingpong-bot", about = "협력 랠리 핑퐁 로봇 런타임")]
-struct Args {
-    /// sim | real
-    #[arg(long, value_enum, default_value = "sim")]
-    mode: ModeArg,
-    /// Dynamixel 포트 오버라이드 (`DynamixelConfig::default().port`보다 우선).
-    #[arg(long)]
-    dxl_port: Option<String>,
-    /// debug 로그 (샷별 계획·하드웨어 상세).
-    #[arg(long)]
-    debug: bool,
-}
+use cli::{Args, ModeArg};
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -69,7 +60,7 @@ fn run_sim_entry() -> Result<()> {
         "defaults SSOT"
     );
     let controls = Arc::new(Mutex::new(SimRuntimeControls::default()));
-    let shutdown = new_shutdown_flag();
+    let shutdown = SimRuntimeControls::new_shutdown();
     let session = SimSession::with_physics(
         SimSessionConfig {
             physics_hz: 1000.0,
@@ -91,7 +82,7 @@ fn run_sim_entry() -> Result<()> {
     info!("sim kiss3d");
     #[cfg(feature = "gui")]
     {
-        run_sim_viewer(SimViewerOptions {
+        SimViewer::run(SimViewerOptions {
             world: session.world(),
             controls,
             shutdown,
@@ -119,7 +110,7 @@ fn run_real_entry(args: &Args) -> Result<()> {
         RealHardware::new(dxl, Some(RailConfig::default()), arm).context("RealHardware")?;
     let pose = hardware.read_pose().context("read pose")?;
     info!(joints = ?pose.joints.values, "pose");
-    let _ = detector_for(CameraId(0)).context("detector_for cam0")?;
+    let _ = detector_for(camera::Id(0)).context("detector_for cam0")?;
     return Ok(());
 }
 

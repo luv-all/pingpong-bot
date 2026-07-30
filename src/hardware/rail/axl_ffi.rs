@@ -7,7 +7,7 @@ use std::mem::ManuallyDrop;
 
 use libloading::Library;
 
-use crate::HwError;
+use crate::error::HwError;
 
 pub const AXT_RT_SUCCESS: u32 = 0;
 pub const STATUS_EXIST: u32 = 1;

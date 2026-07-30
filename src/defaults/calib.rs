@@ -3,12 +3,10 @@
 //! datasheet(B0332)는 [`crate::constants::camera`]. USB device·보드 치수는 여기.
 //! 비전 산출물 JSON은 [`DEFAULT_DATA_DIR`] 아래 — calib·colormask 툴 전부 여기만.
 
+use crate::camera;
 use std::path::{Path, PathBuf};
 
-use crate::camera::{
-    CamCliArgs, CamRigConfig, CamStreamArgs, CameraId, CameraRole, CharucoBoardSpec,
-    StereoCamCliArgs, StereoPairCliArgs,
-};
+use crate::camera::{CamCliArgs, CamRigConfig, CamStreamArgs, StereoCamCliArgs, StereoPairCliArgs};
 use crate::constants::camera::arducam_b0332;
 
 /// OpenCV 백엔드 CLI 기본 (`recommended` → OS별 CaptureBackend::recommended).
@@ -73,7 +71,7 @@ pub const RIGHT_CAMERA_ID: u8 = 1;
 pub const MAX_REPROJ_RMSE_PX: f64 = 7.0;
 pub const MIN_CHARUCO_CORNERS: usize = 4;
 
-pub const DEFAULT_STEREO_CAM_ROLES: [CameraRole; 2] = [CameraRole::Left, CameraRole::Right];
+pub const DEFAULT_STEREO_CAM_ROLES: [camera::Role; 2] = [camera::Role::Left, camera::Role::Right];
 
 pub const CHARUCO_SQUARES_X: i32 = 5;
 pub const CHARUCO_SQUARES_Y: i32 = 7;
@@ -99,8 +97,8 @@ impl Default for CamRigConfig {
         return Self {
             left_device: LEFT_DEVICE,
             right_device: RIGHT_DEVICE,
-            left_id: CameraId(LEFT_CAMERA_ID),
-            right_id: CameraId(RIGHT_CAMERA_ID),
+            left_id: camera::Id(LEFT_CAMERA_ID),
+            right_id: camera::Id(RIGHT_CAMERA_ID),
         };
     }
 }
@@ -131,7 +129,7 @@ impl Default for StereoPairCliArgs {
     }
 }
 
-impl Default for CharucoBoardSpec {
+impl Default for camera::BoardSpec {
     fn default() -> Self {
         return Self {
             squares_x: CHARUCO_SQUARES_X,

@@ -5,11 +5,12 @@
 
 use nalgebra::Vector3;
 
-use crate::constants::{ball, table};
+use crate::Point3;
+use crate::constants::{G, ball, table};
 use crate::defaults;
+use crate::defaults::MAGNUS_OMEGA_MAX;
 use crate::defaults::PhysicsParams;
-use crate::planner::physics::accel;
-use crate::{HitPlane, Point3, Prediction};
+use crate::estimator::{HitPlane, Prediction};
 
 /// 현재 탄도가 네트 클리어 높이를 통과하는지 (슬랙 포함).
 ///
@@ -157,6 +158,31 @@ fn is_table_rolling(position: Vector3<f64>, velocity: Vector3<f64>) -> bool {
 
 /// 반암시적 오일러: `v += a dt`, 그다음 `p += v_new dt` (+ 테이블 바운스 SSOT).
 ///
+/// 비행 중 공기력만 (중력 제외) [m/s^2].
+///
+/// `-k|v|v + k_m(ω × v)`. Rapier는 중력을 따로 쓰므로 외력에는 이것만 넣는다.
+///
+/// 테이블 바운스 마찰이 Rapier에서 비현실적으로 큰 ω를 만들 수 있어
+/// Magnus에 쓰는 |ω|는 [`MAGNUS_OMEGA_MAX`]로 클립한다.
+pub fn aero_accel(
+    velocity: Vector3<f64>,
+    omega: Vector3<f64>,
+    drag_coefficient: f64,
+    magnus_coefficient: f64,
+) -> Vector3<f64> {
+    let drag = -drag_coefficient * velocity.norm() * velocity;
+    let omega_eff = {
+        let w = omega.norm();
+        if w > MAGNUS_OMEGA_MAX {
+            omega * (MAGNUS_OMEGA_MAX / w)
+        } else {
+            omega
+        }
+    };
+    let magnus = magnus_coefficient * omega_eff.cross(&velocity);
+    return drag + magnus;
+}
+
 /// 바운스 시 \(v\)는 커널 SSOT; \(\omega\)는 유지(스핀 확장 후속).
 pub fn semi_implicit_euler(
     pos: Vector3<f64>,
@@ -165,12 +191,13 @@ pub fn semi_implicit_euler(
     dt: f64,
     physics: &PhysicsParams,
 ) -> (Vector3<f64>, Vector3<f64>, Vector3<f64>) {
-    let a = accel(vel, omega, physics.drag, physics.magnus);
+    let a = G + aero_accel(vel, omega, physics.drag, physics.magnus);
     let next_vel = vel + a * dt;
     let next_pos = pos + next_vel * dt;
     let floor_z = table::SURFACE_Z + ball::RADIUS;
     if next_pos.z <= floor_z && next_vel.z < 0.0 {
-        let (bounced_v, bounced_w) = super::bounce::table_bounce(next_vel, omega, physics);
+        let (bounced_v, bounced_w) =
+            crate::estimator::bounce::table_bounce(next_vel, omega, physics);
         return (
             Vector3::new(next_pos.x, next_pos.y, floor_z),
             bounced_v,

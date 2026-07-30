@@ -3,5 +3,5 @@
 mod ball_area;
 mod floor_edge;
 
-pub use ball_area::scorer_params_from_calib;
+pub(crate) use ball_area::scorer_params_from_calib;
 pub use floor_edge::FloorEdgeMask;

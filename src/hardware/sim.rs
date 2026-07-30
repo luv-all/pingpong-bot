@@ -1,14 +1,17 @@
 //! Rapier sim `Hardware` 어댑터.
 //!
-//! `Hardware` 포트 구현 — 명령·관절 읽기는 domain `RobotState`에 위임하고,
+//! `Hardware` 포트 구현 — 명령·관절 읽기는 domain `robot::State`에 위임하고,
 //! Rapier collider 동기화는 물리 스레드(`SimWorld::step`)가 FK로 처리한다.
 
+use crate::robot;
 use std::sync::{Arc, Mutex};
 
-use crate::{Hardware, HwError, RobotPose, SwingTrajectory, ball_past_midcourt_for_commit};
+use crate::error::HwError;
+use crate::hardware::Hardware;
+use crate::robot::motion;
 use tracing::debug;
 
-use crate::sim::world::SimWorld;
+use crate::sim::physics::world::SimWorld;
 
 /// Rapier sim용 `Hardware` 어댑터.
 pub struct SimHardware {
@@ -34,7 +37,7 @@ impl SimHardware {
 }
 
 impl Hardware for SimHardware {
-    fn command(&mut self, trajectory: &SwingTrajectory) -> Result<(), HwError> {
+    fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
         {
             let mut world = self.world.lock().expect("sim 월드");
             // ground truth 모드에서는 물리 스레드만 타격
@@ -52,7 +55,7 @@ impl Hardware for SimHardware {
             }
             // decisions C4: 네트 통과 전 commit 금지 (ground truth 경로와 동일)
             let ball_y = f64::from(world.ball_position().y);
-            if !ball_past_midcourt_for_commit(ball_y) {
+            if !motion::Planner::past_midcourt(ball_y) {
                 debug!(ball_y, "상대 코트 — EKF control commit 대기");
                 return Ok(());
             }
@@ -77,10 +80,10 @@ impl Hardware for SimHardware {
         return Ok(());
     }
 
-    fn read_pose(&mut self) -> Result<RobotPose, HwError> {
+    fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
         let world = self.world.lock().expect("sim 월드");
         let robot = world.robot();
-        return Ok(RobotPose::new(robot.rail_x(), robot.joints().clone()));
+        return Ok(robot::Pose::new(robot.rail_x(), robot.joints().clone()));
     }
 
     fn is_busy(&mut self) -> bool {

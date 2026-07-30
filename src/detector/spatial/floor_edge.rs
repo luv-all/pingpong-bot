@@ -4,14 +4,15 @@
 //! [`MAX_REPROJ_RMSE_PX`]만큼 **바깥으로** 민 변(`x=-δ` / `x=W+δ`)을 쓴다.
 //! `δ = RMSE · Z_cam / fx` [m] — keep가 가장자리·옆면·재투영 오차만큼 넓어진다.
 
+use crate::camera;
 use anyhow::{Result, bail, ensure};
 use opencv::core::{Point, Scalar, Vector};
 use opencv::imgproc;
 use opencv::prelude::*;
 
-use crate::camera::{CameraParams, MAX_REPROJ_RMSE_PX};
+use crate::Point3;
 use crate::constants::table;
-use crate::{CameraId, Point3};
+use crate::defaults::MAX_REPROJ_RMSE_PX;
 
 /// 테이블 옆변 투영으로 만든 keep 마스크 (255=검출 허용, 0=바닥 제거).
 #[derive(Clone)]
@@ -30,7 +31,7 @@ pub struct FloorEdgeMask {
 
 impl FloorEdgeMask {
     /// `cam_id` 0 → 월드 `x=-δ` 변, 그 외 → `x=W+δ` 변.
-    pub fn from_params(cam_id: CameraId, params: &CameraParams) -> Result<Self> {
+    pub fn from_params(cam_id: camera::Id, params: &camera::Params) -> Result<Self> {
         let w = params.width as i32;
         let h = params.height as i32;
         ensure!(w > 1 && h > 1, "bad image size {}x{}", w, h);
@@ -43,7 +44,10 @@ impl FloorEdgeMask {
         };
         ensure!(params.fx > 0.0, "floor-edge: fx must be > 0");
         let margin_m = MAX_REPROJ_RMSE_PX * z_cam / params.fx;
-        ensure!(margin_m.is_finite() && margin_m >= 0.0, "floor-edge: bad margin");
+        ensure!(
+            margin_m.is_finite() && margin_m >= 0.0,
+            "floor-edge: bad margin"
+        );
 
         // keep 여유: 컷을 바닥 쪽으로 민다 (left: x=-δ, right: x=W+δ).
         let cut_x = if cam_id.0 == 0 {
@@ -145,7 +149,7 @@ impl FloorEdgeMask {
 }
 
 /// 이미지 경계 무시 핀홀 투영. 카메라 뒤면 None. `(u, v, Z_cam)`.
-pub(crate) fn project_unbounded(params: &CameraParams, point: Point3) -> Option<(f64, f64, f64)> {
+pub(crate) fn project_unbounded(params: &camera::Params, point: Point3) -> Option<(f64, f64, f64)> {
     let x_cam = params.rotation * point.coords + params.translation;
     if x_cam.z <= 0.05 {
         return None;
@@ -174,7 +178,7 @@ mod tests {
     use super::*;
     use nalgebra::Vector3;
 
-    fn overhead_looking_down() -> CameraParams {
+    fn overhead_looking_down() -> camera::Params {
         // 테이블 중앙 위쪽 — x=0 변이 이미지에 기울어져 보임
         let eye = Vector3::new(-0.4, table::LENGTH_Y * 0.5, table::SURFACE_Z + 1.6);
         let target = Vector3::new(
@@ -182,8 +186,8 @@ mod tests {
             table::LENGTH_Y * 0.5,
             table::SURFACE_Z,
         );
-        return CameraParams::look_at(
-            CameraId(0),
+        return camera::Params::look_at(
+            camera::Id(0),
             None,
             eye,
             target,
@@ -197,7 +201,7 @@ mod tests {
     #[test]
     fn floor_mask_zeros_exterior_keeps_table_center() {
         let params = overhead_looking_down();
-        let mask = FloorEdgeMask::from_params(CameraId(0), &params).expect("mask");
+        let mask = FloorEdgeMask::from_params(camera::Id(0), &params).expect("mask");
         assert_eq!(mask.keep.cols(), 640);
         assert_eq!(mask.keep.rows(), 480);
         assert!(mask.margin_m > 0.0, "rmse margin should be positive");
@@ -234,7 +238,7 @@ mod tests {
     #[test]
     fn apply_bgr_blacks_masked_pixels() {
         let params = overhead_looking_down();
-        let mask = FloorEdgeMask::from_params(CameraId(0), &params).unwrap();
+        let mask = FloorEdgeMask::from_params(camera::Id(0), &params).unwrap();
         let mut bgr = Mat::new_size_with_default(
             opencv::core::Size::new(640, 480),
             opencv::core::CV_8UC3,

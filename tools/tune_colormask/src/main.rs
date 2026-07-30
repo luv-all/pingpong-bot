@@ -2,7 +2,9 @@
 //!
 //! 레이아웃: (original | mask) / swatch / scatter+iso. `p`·종료 시 `data/colormask.json` upsert.
 
+mod channel_range;
 mod cli;
+mod sample;
 
 use std::sync::{Arc, Mutex};
 
@@ -12,96 +14,20 @@ use opencv::core::{Rect, Scalar, Vec3b, Vector};
 use opencv::highgui;
 use opencv::imgproc;
 use opencv::prelude::*;
-use pingpong_bot::{
-    CameraId, ColorSpace, ColormaskParams, FrameSource, ImageDirSource, PixelPickMouse, PixelPoint,
-    PreviewAction, arrow_delta, colormask_path, destroy_window, draw_cam_label, draw_circle_px,
-    draw_debug_lines, draw_help_lines, draw_pixel_loupe, hstack_bgr, load_colormask_set_or_empty,
-    save_colormask_set, show_bgr,
+use pingpong_bot::camera::{
+    self, FrameSource, ImageDirSource, PixelPickMouse, Preview, PreviewAction,
 };
+use pingpong_bot::defaults::colormask_path;
+use pingpong_bot::detector::{ColorSpace, load_colormask_set_or_empty, save_colormask_set};
 
+use channel_range::ChannelRange;
 use cli::Args;
+use sample::Sample;
 
 const SWATCH_H: i32 = 36;
 const VIZ_H: i32 = 200;
 const SAMPLE_RADIUS: i32 = 2;
 const PLOT_PAD: i32 = 18;
-
-#[derive(Clone, Copy, Debug)]
-struct Sample {
-    x: i32,
-    y: i32,
-    bgr: [u8; 3],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ChannelRange {
-    c0_min: u8,
-    c0_max: u8,
-    c1_min: u8,
-    c1_max: u8,
-    c2_min: u8,
-    c2_max: u8,
-}
-
-/// 정렬된 채널 값에서 선형 보간 퍼센타일 (p ∈ [0, 100]).
-fn channel_percentile(sorted: &[u8], p: f64) -> u8 {
-    debug_assert!(!sorted.is_empty());
-    if sorted.len() == 1 {
-        return sorted[0];
-    }
-    let p = p.clamp(0.0, 100.0);
-    let rank = p / 100.0 * (sorted.len() - 1) as f64;
-    let lo = rank.floor() as usize;
-    let hi = rank.ceil() as usize;
-    if lo == hi {
-        return sorted[lo];
-    }
-    let t = rank - lo as f64;
-    return (f64::from(sorted[lo]) * (1.0 - t) + f64::from(sorted[hi]) * t).round() as u8;
-}
-
-impl ChannelRange {
-    /// `trim_pct`: 양꼬리 절단 % (0 → min/max, 10 → p10..p90). 0..=49로 clamp.
-    fn from_channels(chs: &[[u8; 3]], margin: u8, trim_pct: f64) -> Option<Self> {
-        if chs.is_empty() {
-            return None;
-        }
-        let trim = trim_pct.clamp(0.0, 49.0);
-        let p_lo = trim;
-        let p_hi = 100.0 - trim;
-        let mut lo = [0u8; 3];
-        let mut hi = [0u8; 3];
-        for i in 0..3 {
-            let mut vals: Vec<u8> = chs.iter().map(|c| c[i]).collect();
-            vals.sort_unstable();
-            lo[i] = channel_percentile(&vals, p_lo);
-            hi[i] = channel_percentile(&vals, p_hi);
-            if lo[i] > hi[i] {
-                std::mem::swap(&mut lo[i], &mut hi[i]);
-            }
-        }
-        return Some(Self {
-            c0_min: lo[0].saturating_sub(margin),
-            c0_max: hi[0].saturating_add(margin),
-            c1_min: lo[1].saturating_sub(margin),
-            c1_max: hi[1].saturating_add(margin),
-            c2_min: lo[2].saturating_sub(margin),
-            c2_max: hi[2].saturating_add(margin),
-        });
-    }
-
-    fn to_params(self, space: ColorSpace) -> ColormaskParams {
-        return ColormaskParams {
-            space,
-            c0_min: self.c0_min,
-            c0_max: self.c0_max,
-            c1_min: self.c1_min,
-            c1_max: self.c1_max,
-            c2_min: self.c2_min,
-            c2_max: self.c2_max,
-        };
-    }
-}
 
 fn open_source(args: &Args) -> Result<Box<dyn FrameSource>> {
     let cam_id = args.cam.camera_id().map_err(anyhow::Error::msg)?;
@@ -200,7 +126,7 @@ fn space_label(space: ColorSpace) -> &'static str {
 }
 
 fn upsert_colormask(
-    cam_id: CameraId,
+    cam_id: camera::Id,
     space: ColorSpace,
     range: ChannelRange,
     samples: &[Sample],
@@ -223,7 +149,7 @@ fn upsert_colormask(
     return Ok(());
 }
 
-fn load_samples_for_cam(cam_id: CameraId) -> Vec<Sample> {
+fn load_samples_for_cam(cam_id: camera::Id) -> Vec<Sample> {
     let path = colormask_path();
     let Ok(set) = load_colormask_set_or_empty(&path) else {
         return Vec::new();
@@ -238,7 +164,7 @@ fn load_samples_for_cam(cam_id: CameraId) -> Vec<Sample> {
         .collect();
 }
 
-fn hint_existing(cam_id: CameraId, n_samples: usize) {
+fn hint_existing(cam_id: camera::Id, n_samples: usize) {
     let path = colormask_path();
     let Ok(set) = load_colormask_set_or_empty(&path) else {
         return;
@@ -464,7 +390,7 @@ fn build_scatter(
         )?;
     }
 
-    draw_cam_label(&mut panel, label, Scalar::new(200.0, 200.0, 200.0, 0.0))?;
+    Preview::draw_cam_label(&mut panel, label, Scalar::new(200.0, 200.0, 200.0, 0.0))?;
     return Ok(panel);
 }
 
@@ -514,7 +440,7 @@ fn build_iso_cube(
         max_y = max_y.max(y);
     }
     if !min_x.is_finite() {
-        draw_cam_label(&mut panel, "iso", Scalar::new(200.0, 200.0, 200.0, 0.0))?;
+        Preview::draw_cam_label(&mut panel, "iso", Scalar::new(200.0, 200.0, 200.0, 0.0))?;
         return Ok(panel);
     }
     let dx = (max_x - min_x).max(1e-6);
@@ -566,7 +492,7 @@ fn build_iso_cube(
         )?;
     }
 
-    draw_cam_label(
+    Preview::draw_cam_label(
         &mut panel,
         "iso AABB",
         Scalar::new(200.0, 200.0, 200.0, 0.0),
@@ -624,7 +550,7 @@ fn build_range_viz(
         range,
     )?;
     let iso = build_iso_cube(w - cell * 3, h, &chs, &bgrs, range)?;
-    let row = hstack_bgr(&[p01, p02, p12, iso])?;
+    let row = Preview::hstack_bgr(&[p01, p02, p12, iso])?;
     return vstack_bgr(&swatch, &row);
 }
 
@@ -778,18 +704,18 @@ fn main() -> Result<()> {
             } else {
                 Scalar::new(0.0, 200.0, 255.0, 0.0)
             };
-            draw_circle_px(
+            Preview::draw_circle_px(
                 &mut original,
-                PixelPoint::new(f64::from(s.x), f64::from(s.y)),
+                camera::Pixel::new(f64::from(s.x), f64::from(s.y)),
                 6,
                 color,
                 2,
             )?;
         }
         if frozen {
-            draw_cam_label(&mut original, "FROZEN", Scalar::new(0.0, 0.0, 255.0, 0.0))?;
+            Preview::draw_cam_label(&mut original, "FROZEN", Scalar::new(0.0, 0.0, 255.0, 0.0))?;
         }
-        draw_cam_label(
+        Preview::draw_cam_label(
             &mut original,
             "original",
             Scalar::new(255.0, 255.0, 255.0, 0.0),
@@ -799,9 +725,9 @@ fn main() -> Result<()> {
             Some(r) => make_mask_bgr(&frame_img, space, r)?,
             None => empty_bgr_like(&frame_img)?,
         };
-        draw_cam_label(&mut mask, "mask", Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        Preview::draw_cam_label(&mut mask, "mask", Scalar::new(0.0, 255.0, 255.0, 0.0))?;
 
-        let top = hstack_bgr(&[original, mask])?;
+        let top = Preview::hstack_bgr(&[original, mask])?;
         let strip = build_range_viz(top.cols(), &samples, space, active_range)?;
         let mut mosaic = vstack_bgr(&top, &strip)?;
 
@@ -817,8 +743,8 @@ fn main() -> Result<()> {
             format!("{}  margin={margin}  trim={trim_pct}%", range_txt),
             space_label(space).to_string(),
         ];
-        draw_debug_lines(&mut mosaic, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
-        draw_help_lines(
+        Preview::draw_debug_lines(&mut mosaic, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
+        Preview::draw_help_lines(
             &mut mosaic,
             &[
                 "LMB/Enter pick",
@@ -833,17 +759,17 @@ fn main() -> Result<()> {
         )?;
         if let Some((hx, hy)) = hover {
             if hx >= 0 && hy >= 0 && hx < panel_w && hy < panel_h {
-                let _ = draw_pixel_loupe(&mut mosaic, &frame_img, hx, hy);
+                let _ = Preview::draw_pixel_loupe(&mut mosaic, &frame_img, hx, hy);
             }
         }
 
-        let shown = show_bgr(window, &mosaic, wait_ms)?;
+        let shown = Preview::show_bgr(window, &mosaic, wait_ms)?;
         display_scale = shown.scale;
         match shown.action {
             PreviewAction::Quit => break,
             PreviewAction::Continue => {}
             PreviewAction::Key(k) => {
-                if let Some((dx, dy)) = arrow_delta(k) {
+                if let Some((dx, dy)) = Preview::arrow_delta(k) {
                     let mut m = mouse.lock().expect("mouse lock");
                     m.sync(display_scale, panel_w, panel_h);
                     m.nudge(dx, dy, panel_w, panel_h);
@@ -903,7 +829,7 @@ fn main() -> Result<()> {
         }
     }
 
-    destroy_window(window);
+    Preview::destroy_window(window);
     return Ok(());
 }
 
