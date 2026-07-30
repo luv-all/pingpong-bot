@@ -17,7 +17,7 @@
 //!
 //! ```bash
 //! cargo test --release --test diag_clip_prediction -- --ignored --nocapture
-//! CLIP=fly_04 cargo test --release --test diag_clip_prediction -- --ignored --nocapture
+//! CLIP=fly_02 cargo test --release --test diag_clip_prediction -- --ignored --nocapture
 //! ```
 
 use std::path::Path;
@@ -187,7 +187,7 @@ fn actual_crossing(track: &[Sample], plane_y: f64) -> Option<(f64, Point3)> {
 #[test]
 #[ignore = "순수 진단(클립 필요). 실행: cargo test --release --test diag_clip_prediction -- --ignored --nocapture"]
 fn diag_clip_prediction_error() {
-    let name = std::env::var("CLIP").unwrap_or_else(|_| "fly_02".to_owned());
+    let name = std::env::var("CLIP").unwrap_or_else(|_| "fly_01".to_owned());
     let dir = Path::new(defaults::DEFAULT_CLIPS_DIR).join(&name);
     assert!(dir.is_dir(), "클립 없음: {}", dir.display());
     let fps = clip_fps(&dir);

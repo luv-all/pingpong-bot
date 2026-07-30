@@ -22,7 +22,10 @@ pub struct Args {
     pub out: PathBuf,
 
     /// Space 기준 과거 보관 초
-    #[arg(long, default_value_t = 10.0)]
+    ///
+    /// 공 비행은 1초 안쪽이라 대부분이 빈 프레임이 된다 — 파일 크기와 진단 실행 시간만
+    /// 늘어난다. 던지고 돌아와 누를 여유는 6초면 충분하다.
+    #[arg(long, default_value_t = 6.0)]
     pub preroll: f64,
 
     /// Space 이후 추가 녹화 초

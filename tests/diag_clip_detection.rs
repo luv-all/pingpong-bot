@@ -10,7 +10,7 @@
 //!
 //! ```bash
 //! cargo test --release --test diag_clip_detection -- --ignored --nocapture
-//! CLIP=fly_01 cargo test --release --test diag_clip_detection -- --ignored --nocapture
+//! CLIP=fly_02 cargo test --release --test diag_clip_detection -- --ignored --nocapture
 //! ```
 
 use std::path::PathBuf;
@@ -115,7 +115,7 @@ fn detect_side(path: &PathBuf, camera_id: camera::Id) -> Detected {
 #[test]
 #[ignore = "순수 진단(클립 필요). 실행: cargo test --release --test diag_clip_detection -- --ignored --nocapture"]
 fn diag_clip_detection_per_camera() {
-    let name = std::env::var("CLIP").unwrap_or_else(|_| "fly_02".to_owned());
+    let name = std::env::var("CLIP").unwrap_or_else(|_| "fly_01".to_owned());
     let dir = PathBuf::from(defaults::DEFAULT_CLIPS_DIR).join(&name);
     assert!(dir.is_dir(), "클립 없음: {}", dir.display());
 
@@ -281,7 +281,7 @@ fn flight_window(dir: &std::path::Path) -> Option<(usize, usize)> {
 #[test]
 #[ignore = "순수 진단(클립 필요). 실행: cargo test --release --test diag_clip_detection -- --ignored --nocapture"]
 fn diag_clip_detection_sweep() {
-    let name = std::env::var("CLIP").unwrap_or_else(|_| "fly_02".to_owned());
+    let name = std::env::var("CLIP").unwrap_or_else(|_| "fly_01".to_owned());
     let dir = PathBuf::from(defaults::DEFAULT_CLIPS_DIR).join(&name);
     assert!(dir.is_dir(), "클립 없음: {}", dir.display());
 

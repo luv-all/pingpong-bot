@@ -2,7 +2,7 @@
 
 연구실 스테레오 리그 **프리롤 녹화**. Git LFS로 `data/clips/`에 올려 집에서 재생한다.
 
-프리뷰만 켜 두고 공을 던진 뒤, 데탑에서 `Space` → 최근 `--preroll`(기본 10초) + `--postroll`(기본 2초) 저장.  
+프리뷰만 켜 두고 공을 던진 뒤, 데탑에서 `Space` → 최근 `--preroll`(기본 6초) + `--postroll`(기본 2초) 저장.  
 장면은 CLI `--scene`만 (실행 중 변경 없음). 항상 left+right.
 
 ## 사용
@@ -16,7 +16,7 @@ cargo run -p record-stereo -- --scene drop
 cargo run -p record-stereo -- --scene fly --preset mid
 ```
 
-워크플로: 연출 → 돌아와 **10초 안에** `Space` → 다음 테이크 반복 → `q`.
+워크플로: 연출 → 돌아와 **6초 안에** `Space` → 다음 테이크 반복 → `q`.
 한 번 켜서 원하는 만큼 찍는다 — 클립마다 껐다 켤 필요 없다.
 
 인코딩은 캡처와 **다른 스레드**에서 돈다. 그래서 저장 중에도 캡처가 멈추지 않아 다음
@@ -29,7 +29,7 @@ cargo run -p record-stereo -- --scene fly --preset mid
 |------|------|------|
 | `--scene fly\|roll\|drop` | `fly` | 클립 디렉터리 prefix (`fly_01` …) |
 | `--out DIR` | `data/clips` | 출력 루트 |
-| `--preroll SECS` | 10 | Space 기준 과거 보관 |
+| `--preroll SECS` | 6 | Space 기준 과거 보관 |
 | `--postroll SECS` | 2 | Space 이후 추가 녹화 |
 | `--backend` | `recommended` | OpenCV 백엔드 (Windows→MSMF) |
 | `--width` / `--height` | 1280 / 800 | 스트림 해상도 |
