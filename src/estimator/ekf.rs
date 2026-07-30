@@ -92,11 +92,6 @@ impl Ekf {
         };
     }
 
-    /// 임베드 `[physics]` 기본값으로 생성.
-    pub fn with_defaults() -> Self {
-        return Self::with_physics(crate::defaults::PhysicsParams::default());
-    }
-
     /// 필터를 비운다 (다음 관측에서 재시드).
     pub fn reset(&mut self) {
         self.initialized = false;

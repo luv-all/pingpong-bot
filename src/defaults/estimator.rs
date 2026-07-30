@@ -2,6 +2,16 @@
 
 use anyhow::{Result, ensure};
 
+use crate::defaults::PhysicsParams;
+use crate::estimator::Ekf;
+
+/// 임베드 `[physics]` 기본값으로 빈 필터.
+impl Default for Ekf {
+    fn default() -> Self {
+        return Self::with_physics(PhysicsParams::default());
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EstimatorParams {
     pub min_lead: f64,

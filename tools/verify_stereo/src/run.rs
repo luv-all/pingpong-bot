@@ -142,7 +142,7 @@ pub fn run_opencv(args: &Args) -> Result<()> {
 
     // 검출이 튀어도 궤적이 끊기지 않게 하는 게이팅 필터. `e`로 끄면 생값만 본다.
     let gate = EstimatorParams::default();
-    let mut ekf = estimator::Ekf::with_defaults();
+    let mut ekf = estimator::Ekf::default();
     let mut ekf_enabled = true;
     let mut rejected_total: u64 = 0;
     let mut resets_total: u64 = 0;
