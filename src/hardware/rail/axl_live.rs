@@ -110,6 +110,21 @@ impl AxlLive {
         commanded_m: f64,
         vel: f64,
     ) -> Result<(), HwError> {
+        // InMotion이면 AxmMoveStartPos 불가 — 스윙용 레일 명령만 무시하고 Dynamixel은 계속.
+        let mut in_motion = 0;
+        check_axl("AxmStatusReadInMotion", unsafe {
+            (self.ffi.axm_status_read_in_motion)(config.axis, &mut in_motion)
+        })?;
+        if in_motion != 0 {
+            tracing::warn!(
+                axis = config.axis,
+                commanded_m,
+                vel,
+                "AXL 레일 InMotion — AxmMoveStartPos 무시"
+            );
+            return Ok(());
+        }
+
         check_axl("AxmMotSetAbsRelMode", unsafe {
             (self.ffi.axm_mot_set_abs_rel_mode)(config.axis, 0)
         })?;
