@@ -34,6 +34,16 @@ const MAX_SYNC_LAG: Duration = Duration::from_millis(35);
 /// 오해하지 않게 한다.
 const RAW_MARKER_TTL: Duration = Duration::from_millis(150);
 
+/// 재투영 오차가 이보다 크면 그 삼각측량은 버린다 [px].
+///
+/// 두 캠이 **서로 다른 것**을 잡으면(한쪽은 공, 한쪽은 배경 blob) 3D 점이 완전히 엉뚱한
+/// 곳에 서고, 그 한 점이 EKF 상태를 통째로 끌고 간다. 그런 쌍은 재투영 오차가 즉시 폭발하므로
+/// 여기서 거른다 — 색·원형도 게이트를 통과해도 **기하가 안 맞으면** 공이 아니다.
+///
+/// fly_02 실측(원형도 0.35): p50 1.84 px인데 p95가 168 px였다. 캘리브 rmse가 3.7/3.3 px이고
+/// 캘리브 채택 상한이 `MAX_REPROJ_RMSE_PX = 7.0`이므로 그 두 배를 상한으로 둔다.
+const MAX_REPROJECTION_PX: f64 = 14.0;
+
 /// 시계열에서 이보다 오래된 관측은 버린다 (보간 구간이 공백을 건너뛰지 않게).
 const MAX_OBSERVATION_AGE: Duration = Duration::from_millis(250);
 
@@ -50,6 +60,10 @@ pub struct EstimatorStats {
     pub skew_samples: Vec<f64>,
     /// 삼각측량 재투영 오차 [px] — 3D 복원 품질.
     pub reprojection_samples: Vec<f64>,
+    /// 재투영 오차가 커서 버린 삼각측량 수 (`MAX_REPROJECTION_PX` 초과).
+    ///
+    /// 두 캠이 서로 다른 것을 잡은 쌍이다. 크면 한쪽 검출에 오검출이 섞이고 있다.
+    pub reprojection_rejected: u64,
     /// 두 캠 다 관측이 있는데도 삼각측량을 건너뛴 프레임 수.
     ///
     /// 대부분 `MAX_SYNC_LAG` 초과(한 캠이 검출을 놓쳐 뒤처짐)다. 이 값이 크면 한쪽 캠의
@@ -169,10 +183,15 @@ pub fn spawn(
             }
 
             let fused = fuse(&series, required, &calibration)
+                .ok()
                 // 새 시각이 아니면 버린다 — 같은 측정을 두 번 세지 않는다.
                 .filter(|fused| last_sync.is_none_or(|last| fused.sync_time > last));
-            if fused.is_none() && series.iter().all(|(_, o)| !o.is_empty()) {
-                stats.stale_skipped += 1;
+            if fused.is_none() {
+                match fuse(&series, required, &calibration) {
+                    Err(FuseSkip::Stale) => stats.stale_skipped += 1,
+                    Err(FuseSkip::Reprojection) => stats.reprojection_rejected += 1,
+                    _ => {}
+                }
             }
             if let Some(fused) = fused {
                 let (point, sync_time) = (fused.point, fused.sync_time);
@@ -381,14 +400,14 @@ fn fuse(
     series: &[(camera::Id, Vec<detector::Observation>)],
     required: usize,
     calibration: &Calibration,
-) -> Option<Fused> {
+) -> Result<Fused, FuseSkip> {
     let ready: Vec<(camera::Id, &[detector::Observation])> = series
         .iter()
         .filter(|(_, observations)| !observations.is_empty())
         .map(|(id, observations)| (*id, observations.as_slice()))
         .collect();
     if ready.len() < required {
-        return None;
+        return Err(FuseSkip::NotReady);
     }
 
     let latest: Vec<Instant> = ready
@@ -397,27 +416,39 @@ fn fuse(
         .collect();
     // 한 캠이라도 뒤처져 있으면 이번 프레임은 버린다 — 낡은 시선으로 만든 3D 점이
     // EKF를 통째로 흔든다.
-    let newest = latest.iter().copied().max()?;
-    let oldest = latest.iter().copied().min()?;
+    let (Some(newest), Some(oldest)) = (latest.iter().copied().max(), latest.iter().copied().min())
+    else {
+        return Err(FuseSkip::NotReady);
+    };
     if newest.saturating_duration_since(oldest) > MAX_SYNC_LAG {
-        return None;
+        return Err(FuseSkip::Stale);
     }
-    let sync_time = latest.iter().copied().min()?;
-    let skew = latest
-        .iter()
-        .copied()
-        .max()?
-        .duration_since(sync_time)
-        .as_secs_f64();
+    // 모든 캠이 감싸는 시각으로 보간한다 (외삽 금지).
+    let sync_time = oldest;
+    let skew = newest.saturating_duration_since(sync_time).as_secs_f64();
 
-    let point = Triangulate::synced(&ready, sync_time, calibration).ok()?;
+    let point =
+        Triangulate::synced(&ready, sync_time, calibration).map_err(|_| FuseSkip::NotReady)?;
     let reprojection_px = reprojection_error_px(&ready, sync_time, calibration, point);
-    return Some(Fused {
+    if reprojection_px > MAX_REPROJECTION_PX {
+        return Err(FuseSkip::Reprojection);
+    }
+    return Ok(Fused {
         point,
         sync_time,
         skew,
         reprojection_px,
     });
+}
+
+/// 삼각측량을 건너뛴 이유 — 계측을 나눠 세려고 구분한다.
+enum FuseSkip {
+    /// 관측이 모자라거나 보간에 실패.
+    NotReady,
+    /// 한 캠이 뒤처짐 (`MAX_SYNC_LAG` 초과).
+    Stale,
+    /// 두 캠이 서로 다른 것을 잡음 (`MAX_REPROJECTION_PX` 초과).
+    Reprojection,
 }
 
 /// 복원한 점을 각 카메라로 되쏘아 보간 픽셀과의 최대 거리 [px].

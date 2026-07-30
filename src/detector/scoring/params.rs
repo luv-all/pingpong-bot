@@ -33,10 +33,13 @@ impl ScorerParams {
 mod tests {
     use super::*;
 
+    /// 날아가는 공은 모션 블러로 타원이 된다 — 원형도 하한이 0.55면 비행 프레임의
+    /// 절반 이상을 놓친다 (fly_02 실측: cam0 39%, cam1 70%만 검출). 근거·스윕 표는
+    /// `defaults::vision`의 `ScorerParams::default()` 주석.
     #[test]
     fn default_scorer_params() {
         let p = ScorerParams::default();
-        assert_eq!(p.min_circularity, 0.55);
+        assert_eq!(p.min_circularity, 0.35);
         assert!(p.validate().is_ok());
     }
 }

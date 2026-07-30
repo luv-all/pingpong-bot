@@ -17,7 +17,10 @@ use std::path::PathBuf;
 
 use pingpong_bot::camera::{self, FrameSource, OpenCvCapture};
 use pingpong_bot::defaults;
-use pingpong_bot::detector::Detector;
+use pingpong_bot::detector::{
+    ColormaskDetector, ColormaskParams, ContourDetector, Detector, FloorEdgeMask, RoiParams,
+    Scorer, ScorerParams,
+};
 
 /// 카메라 한 대의 프레임별 검출 결과.
 struct Detected {
@@ -141,6 +144,141 @@ fn diag_clip_detection_per_camera() {
                 c0 as f64 / window as f64 * 100.0,
                 c1 as f64 / window as f64 * 100.0,
                 both_in as f64 / window as f64 * 100.0,
+            );
+        }
+    }
+}
+
+/// `defaults::detector_for`와 같은 조립이되 colormask·ROI를 바꿔 끼울 수 있게 한 것.
+///
+/// `defaults`의 조립 함수는 비공개라 여기서 같은 순서로 다시 쌓는다 —
+/// mask → colormask → contour → scorer + ROI.
+fn detector_with(camera_id: camera::Id, color: &ColormaskParams, roi: bool) -> Detector {
+    return detector_tuned(
+        camera_id,
+        color,
+        roi,
+        ScorerParams::default().min_circularity,
+    );
+}
+
+/// [`detector_with`] + 원형도 하한도 바꾼다.
+///
+/// 모션 블러가 걸린 공은 길게 번져 원형도가 떨어진다 — colormask와 **별개 게이트**라
+/// 따로 재야 어느 쪽이 막고 있는지 안다.
+fn detector_tuned(
+    camera_id: camera::Id,
+    color: &ColormaskParams,
+    roi: bool,
+    min_circularity: f64,
+) -> Detector {
+    let cam = defaults::camera_params_for(camera_id).expect("camera_params_for");
+    let scorer = ScorerParams::from_calib(&cam, min_circularity).expect("scorer from calib");
+    let mut detector = Detector::builder()
+        .mask(FloorEdgeMask::from_params(&cam).expect("floor mask"))
+        .then(ColormaskDetector::new(color.clone()))
+        .then(ContourDetector::from(&scorer))
+        .scorer(Scorer::from(&scorer).with_motion_weight(defaults::MOTION_WEIGHT))
+        .roi(RoiParams::default())
+        .build()
+        .expect("detector");
+    detector.set_roi_enabled(roi);
+    return detector;
+}
+
+/// `(구간 안 검출 수, 구간 **밖** 검출 수)`.
+///
+/// 구간 밖은 공이 아직 없거나(preroll) 이미 착지한 뒤라, 거기서 잡히는 건 대부분
+/// 오검출이다 — 임계를 풀 때 같이 봐야 할 대가.
+fn count_in_window(
+    path: &PathBuf,
+    camera_id: camera::Id,
+    mut detector: Detector,
+    window: (usize, usize),
+) -> (usize, usize) {
+    let mut source = OpenCvCapture::from_path(camera_id, path).expect("클립 열기");
+    let params = defaults::camera_params_for(camera_id).expect("camera_params_for");
+    let needs_undistort = !params.dist.is_empty();
+    let (mut inside, mut outside) = (0_usize, 0_usize);
+    let mut index = 0_usize;
+    while let Some(frame) = source.next_frame() {
+        let frame = if needs_undistort {
+            Detector::undistort(&frame, &params).expect("undistort")
+        } else {
+            frame
+        };
+        if detector.detect(&frame).is_some() {
+            if (window.0..=window.1).contains(&index) {
+                inside += 1;
+            } else {
+                outside += 1;
+            }
+        }
+        index += 1;
+    }
+    return (inside, outside);
+}
+
+/// cam0이 비행 중 61%를 놓치는 원인을 좁힌다 — ROI 유실인가, colormask 임계인가.
+///
+/// ROI를 끄면 크게 오르면 추적 유실(한 번 놓치면 좁아진 ROI 밖으로 공이 나가 복구가 안 됨),
+/// 임계를 풀 때만 오르면 colormask 문제다.
+#[test]
+#[ignore = "순수 진단(클립 필요). 실행: cargo test --release --test diag_clip_detection -- --ignored --nocapture"]
+fn diag_clip_detection_sweep() {
+    let name = std::env::var("CLIP").unwrap_or_else(|_| "fly_02".to_owned());
+    let dir = PathBuf::from(defaults::DEFAULT_CLIPS_DIR).join(&name);
+    assert!(dir.is_dir(), "클립 없음: {}", dir.display());
+
+    // 앞 테스트가 낸 비행 구간. 클립이 바뀌면 같이 바꿔야 한다.
+    let window: (usize, usize) = (221, 243);
+    let span = window.1 - window.0 + 1;
+
+    for (camera_id, file) in [(camera::Id(0), "left.avi"), (camera::Id(1), "right.avi")] {
+        let path = dir.join(file);
+        let base = defaults::colormask_for(camera_id).expect("colormask");
+        println!(
+            "\ncam{}  기준 colormask c0 {}~{} c1 {}~{} c2 {}~{}",
+            camera_id.0, base.c0_min, base.c0_max, base.c1_min, base.c1_max, base.c2_min, base.c2_max
+        );
+
+        for (label, roi) in [("ROI 켬", true), ("ROI 끔", false)] {
+            let (hits, outside) =
+                count_in_window(&path, camera_id, detector_with(camera_id, &base, roi), window);
+            println!(
+                "  {label:<8} {hits:>3}/{span} ({:>3.0}%)   구간밖 {outside}",
+                hits as f64 / span as f64 * 100.0
+            );
+        }
+
+        // 원형도만 풀어본다 — 색은 그대로. 블러로 늘어난 공이 여기서 막히는지.
+        for circularity in [0.45_f64, 0.35, 0.25] {
+            let (hits, outside) = count_in_window(
+                &path,
+                camera_id,
+                detector_tuned(camera_id, &base, false, circularity),
+                window,
+            );
+            println!(
+                "  원형도 ≥{circularity:.2}          {hits:>3}/{span} ({:>3.0}%)   구간밖 {outside}",
+                hits as f64 / span as f64 * 100.0
+            );
+        }
+
+        // 채도·명도 하한을 풀어본다 (공은 밝고 채도 높은 주황이라 하한이 주 게이트).
+        for relax in [10_u8, 25, 40] {
+            let loosened = ColormaskParams {
+                c1_min: base.c1_min.saturating_sub(relax),
+                c2_min: base.c2_min.saturating_sub(relax),
+                ..base.clone()
+            };
+            let (hits, outside) =
+                count_in_window(&path, camera_id, detector_with(camera_id, &loosened, false), window);
+            println!(
+                "  하한 -{relax:<3} (c1≥{:>3} c2≥{:>3})  {hits:>3}/{span} ({:>3.0}%)   구간밖 {outside}",
+                loosened.c1_min,
+                loosened.c2_min,
+                hits as f64 / span as f64 * 100.0
             );
         }
     }
