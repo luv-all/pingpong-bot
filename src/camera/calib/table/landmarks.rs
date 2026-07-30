@@ -1,12 +1,10 @@
 //! 탁구대 랜드마크 목록·메시.
 
 use crate::Point3;
+use crate::constants::TABLE_LANDMARK_COUNT;
 use crate::constants::table;
 
 use super::Landmark;
-
-pub use crate::constants::camera::TABLE_LANDMARK_COUNT;
-pub use crate::defaults::calib::MAX_REPROJ_RMSE_PX;
 
 /// 팀 규약 8점 (순서 고정 — 클릭도 이 순서).
 ///

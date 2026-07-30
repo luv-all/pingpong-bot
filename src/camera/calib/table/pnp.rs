@@ -6,7 +6,10 @@ use opencv::calib3d::{self, SolvePnPMethod};
 use opencv::core::{CV_64F, Mat, MatTraitConst, Point2d, Point3d, Vector};
 use opencv::prelude::*;
 
-use super::{MAX_REPROJ_RMSE_PX, PnpResult, TABLE_LANDMARK_COUNT, table_landmarks};
+use crate::constants::TABLE_LANDMARK_COUNT;
+use crate::defaults::MAX_REPROJ_RMSE_PX;
+
+use super::{PnpResult, table_landmarks};
 use crate::Point3;
 use crate::camera::calib::Calibration;
 use crate::constants::table;

@@ -10,9 +10,6 @@ pub use stereo_clip::StereoClip;
 #[cfg(test)]
 pub(crate) use stereo_clip::resolve_stereo_clip_under;
 
-/// `record-stereo` 오프라인 클립 루트.
-pub const DEFAULT_CLIPS_DIR: &str = "data/clips";
-
 #[cfg(test)]
 mod tests {
     use super::*;

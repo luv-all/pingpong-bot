@@ -6,9 +6,7 @@ mod pnp;
 mod pnp_result;
 
 pub use landmark::Landmark;
-pub use landmarks::{
-    MAX_REPROJ_RMSE_PX, TABLE_LANDMARK_COUNT, table_landmark_mesh_edges, table_landmarks,
-};
+pub use landmarks::{table_landmark_mesh_edges, table_landmarks};
 pub use pnp::{calibrate_table_pnp, ensure_reproj_below, ensure_reproj_ok, upsert_camera};
 pub use pnp_result::PnpResult;
 

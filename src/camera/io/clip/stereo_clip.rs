@@ -3,7 +3,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::DEFAULT_CLIPS_DIR;
+use crate::defaults::DEFAULT_CLIPS_DIR;
+
 use super::clip_meta_file::ClipMetaFile;
 
 const VIDEO_EXTS: &[&str] = &["avi", "mp4", "mkv", "mov"];

@@ -7,9 +7,8 @@ use anyhow::{Context, Result};
 use opencv::core::{Mat, Scalar};
 use opencv::imgcodecs;
 use opencv::prelude::*;
-use pingpong_bot::camera::{
-    Charuco, FrameSource, MIN_CHARUCO_CORNERS, OpenCvCapture, Preview, PreviewAction,
-};
+use pingpong_bot::camera::{Charuco, FrameSource, OpenCvCapture, Preview, PreviewAction};
+use pingpong_bot::defaults::MIN_CHARUCO_CORNERS;
 
 use crate::args::{Args, board_spec, resolve_output};
 use crate::cli;

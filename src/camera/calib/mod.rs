@@ -6,11 +6,8 @@ pub mod table;
 mod calibration;
 
 pub use calibration::Calibration;
-pub use charuco::{
-    BoardSpec, FrameDetect, MIN_CHARUCO_CORNERS, Report, calibrate_charuco, detect_and_draw_charuco,
-};
+pub use charuco::{BoardSpec, FrameDetect, Report, calibrate_charuco, detect_and_draw_charuco};
 pub use table::{
-    Landmark, MAX_REPROJ_RMSE_PX, Pnp, PnpResult, TABLE_LANDMARK_COUNT, calibrate_table_pnp,
-    ensure_reproj_below, ensure_reproj_ok, table_landmark_mesh_edges, table_landmarks,
-    upsert_camera,
+    Landmark, Pnp, PnpResult, calibrate_table_pnp, ensure_reproj_below, ensure_reproj_ok,
+    table_landmark_mesh_edges, table_landmarks, upsert_camera,
 };

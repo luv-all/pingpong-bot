@@ -24,16 +24,12 @@ pub use pixel::Pixel;
 pub use role::Role;
 pub use view::View;
 
-pub use calib::{
-    BoardSpec, Calibration, FrameDetect, Landmark, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, Pnp,
-    PnpResult, Report, TABLE_LANDMARK_COUNT,
-};
+pub use calib::{BoardSpec, Calibration, FrameDetect, Landmark, Pnp, PnpResult, Report};
 pub use facade::{Charuco, Preview, TablePnp};
 pub use io::{
-    CamCliArgs, CamRigConfig, CamStreamArgs, CaptureBackend, DEFAULT_CLIPS_DIR, DEFAULT_FOV_Y_DEG,
-    DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_WIDTH,
-    ExposureReadout, FittedBgr, Frame, FrameSource, HintSource, ImageDirSource, MonoOfflineArgs,
-    OpenCvCapture, PixelPickMouse, PreviewAction, ResolvedCam, ResolvedStereoOffline,
-    ShowBgrResult, SimCamera, StereoCamCliArgs, StereoClip, StereoOfflineArgs, StereoPairCliArgs,
-    StreamPreset, ThreadedCapture, WorldGridParams,
+    CamCliArgs, CamRigConfig, CamStreamArgs, CaptureBackend, ExposureReadout, FittedBgr, Frame,
+    FrameSource, HintSource, ImageDirSource, MonoOfflineArgs, OpenCvCapture, PixelPickMouse,
+    PreviewAction, ResolvedCam, ResolvedStereoOffline, ShowBgrResult, SimCamera, StereoCamCliArgs,
+    StereoClip, StereoOfflineArgs, StereoPairCliArgs, StreamPreset, ThreadedCapture,
+    WorldGridParams,
 };

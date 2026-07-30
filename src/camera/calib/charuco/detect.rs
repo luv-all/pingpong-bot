@@ -9,7 +9,9 @@ use opencv::objdetect::{
 };
 use opencv::prelude::*;
 
-use super::{BoardSpec, FrameDetect, MIN_CHARUCO_CORNERS};
+use crate::defaults::MIN_CHARUCO_CORNERS;
+
+use super::{BoardSpec, FrameDetect};
 
 fn make_charuco_detector(board_spec: BoardSpec) -> Result<(CharucoBoard, CharucoDetector), String> {
     let dict = get_predefined_dictionary(PredefinedDictionaryType::DICT_4X4_50)

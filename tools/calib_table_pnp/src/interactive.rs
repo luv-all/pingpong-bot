@@ -11,9 +11,9 @@ use pingpong_bot::Point3;
 use pingpong_bot::camera;
 use pingpong_bot::camera::Landmark;
 use pingpong_bot::camera::{
-    FrameSource, OpenCvCapture, PixelPickMouse, Preview, PreviewAction, TABLE_LANDMARK_COUNT,
-    TablePnp, WorldGridParams,
+    FrameSource, OpenCvCapture, PixelPickMouse, Preview, PreviewAction, TablePnp, WorldGridParams,
 };
+use pingpong_bot::constants::TABLE_LANDMARK_COUNT;
 
 use crate::args::{Args, pending_path, resolve_camera_id, resolve_output};
 use crate::cli;

@@ -11,8 +11,8 @@ use opencv::imgproc;
 use opencv::prelude::*;
 
 use crate::Point3;
-use crate::camera::MAX_REPROJ_RMSE_PX;
 use crate::constants::table;
+use crate::defaults::MAX_REPROJ_RMSE_PX;
 
 /// 테이블 옆변 투영으로 만든 keep 마스크 (255=검출 허용, 0=바닥 제거).
 #[derive(Clone)]

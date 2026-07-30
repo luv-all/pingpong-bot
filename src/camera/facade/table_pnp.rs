@@ -2,9 +2,10 @@
 
 use crate::camera;
 use crate::camera::calib::{
-    Calibration, Landmark, PnpResult, TABLE_LANDMARK_COUNT, ensure_reproj_below, ensure_reproj_ok,
+    Calibration, Landmark, PnpResult, ensure_reproj_below, ensure_reproj_ok,
     table_landmark_mesh_edges, table_landmarks, upsert_camera,
 };
+use crate::constants::TABLE_LANDMARK_COUNT;
 
 /// 탁구대 solvePnP 공개 진입점.
 pub struct TablePnp;
