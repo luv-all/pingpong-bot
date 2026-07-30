@@ -132,7 +132,7 @@ pub struct SimUpdate {
     /// EKF가 추정한 공 위치 — 주황 공.
     #[serde(default)]
     pub ball: Option<Point3>,
-    /// 예측 도달 위치 — 반투명 고스트 공.
+    /// 예측 도달 위치 — 하늘색 공 (`spawn_ghost`. 알파는 렌더에 반영되지 않는다).
     #[serde(default)]
     pub impact: Option<Point3>,
     /// 실기에서 읽은 로봇 포즈.
