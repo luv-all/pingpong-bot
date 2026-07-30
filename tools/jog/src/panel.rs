@@ -3,23 +3,26 @@
 use kiss3d::egui::{self, Color32, RichText};
 use pingpong_bot::sim::gui::shooter;
 
-use crate::plan::{Kind, REACH_DELTA_M, SwingPreview, joint_label, reach_ok, swing_preview};
+use crate::plan::{Kind, REACH_DELTA_M, SwingPlan, joint_label, reach_ok};
 use crate::state::{Action, JogApp, try_action};
 
 pub fn draw(ctx: &egui::Context, app: &mut JogApp) {
     ensure_korean_fonts(ctx);
 
-    // 예측은 프레임당 한 번만 — 고스트 공·표시·미리보기 게이트가 같은 값을 쓴다.
-    let preview = if app.draft.kind == Kind::Swing {
-        app.synced_pose
-            .as_ref()
-            .and_then(|pose| swing_preview(&app.arm, pose, &app.draft).ok())
-    } else {
-        None
-    };
-    app.sync_ball_ghost(preview.as_ref());
-
     draw_shooter_window(ctx, app);
+    // planner는 입력이 바뀔 때만 돈다 (경고 로그 폭주 방지).
+    app.refresh_swing_plan();
+    app.advance_segments();
+
+    let plan = match app.swing_plan() {
+        Some(Ok(plan)) => Some(plan.clone()),
+        _ => None,
+    };
+    let plan_error = match app.swing_plan() {
+        Some(Err(err)) => Some(err.clone()),
+        _ => None,
+    };
+    app.sync_ball_ghost(plan.as_ref());
 
     egui::Window::new("Jog")
         .default_pos(egui::pos2(12.0, 12.0))
@@ -32,9 +35,9 @@ pub fn draw(ctx: &egui::Context, app: &mut JogApp) {
             ui.separator();
             draw_params(ui, app);
             ui.separator();
-            draw_motion(ui, app, preview.as_ref());
+            draw_motion(ui, app, plan.as_ref(), plan_error.as_deref());
             ui.separator();
-            draw_actions(ui, app, preview.as_ref());
+            draw_actions(ui, app, plan.is_some());
             if let Some(err) = &app.error {
                 ui.add_space(4.0);
                 ui.colored_label(Color32::from_rgb(220, 90, 80), err);
@@ -49,19 +52,15 @@ fn draw_shooter_window(ctx: &egui::Context, app: &mut JogApp) {
         .default_width(280.0)
         .resizable(true)
         .show(ctx, |ui| {
-            let buttons = shooter::ui::draw(ui, &mut app.draft.shooter);
+            let buttons = shooter::ui::draw(
+                ui,
+                &mut app.draft.shooter,
+                shooter::ui::ButtonSet::RANDOM_ONLY,
+            );
             if buttons.random {
                 app.draft.shooter = app.draft.shooter.randomized(&mut rand::thread_rng());
             }
             app.push_shooter();
-            if let Some(handle) = &app.shooter {
-                if buttons.shoot {
-                    handle.request_shoot();
-                }
-                if buttons.park {
-                    handle.request_park();
-                }
-            }
         });
 }
 
@@ -117,7 +116,12 @@ fn draw_params(ui: &mut egui::Ui, app: &mut JogApp) {
     );
 }
 
-fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp, preview: Option<&SwingPreview>) {
+fn draw_motion(
+    ui: &mut egui::Ui,
+    app: &mut JogApp,
+    plan: Option<&SwingPlan>,
+    plan_error: Option<&str>,
+) {
     ui.label(RichText::new("모션").strong());
     egui::ComboBox::from_id_salt("motion_kind")
         .selected_text(app.draft.kind.label())
@@ -195,12 +199,17 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp, preview: Option<&SwingPrevie
             draw_reach(ui, app, true);
         }
         Kind::Swing => {
-            draw_swing(ui, app, preview);
+            draw_swing(ui, app, plan, plan_error);
         }
     }
 }
 
-fn draw_swing(ui: &mut egui::Ui, app: &JogApp, preview: Option<&SwingPreview>) {
+fn draw_swing(
+    ui: &mut egui::Ui,
+    app: &JogApp,
+    plan: Option<&SwingPlan>,
+    plan_error: Option<&str>,
+) {
     ui.label(
         RichText::new("타점·라켓 각도·임팩트 속도는 시뮬과 같은 planner가 고릅니다")
             .weak()
@@ -212,29 +221,32 @@ fn draw_swing(ui: &mut egui::Ui, app: &JogApp, preview: Option<&SwingPreview>) {
         ui.label("동기화하면 계획 결과가 표시됩니다");
         return;
     }
-    let Some(preview) = preview else {
+    let Some(plan) = plan else {
         ui.colored_label(
             Color32::from_rgb(220, 90, 80),
             "이 슈터 설정으로는 받아칠 수 있는 공이 없습니다",
         );
-        ui.label(
-            RichText::new(
-                "네트 미달 · 커밋 창 밖 · IK 불가 · 레일이 너무 멀어 궤적 불가 — 슈터 조준·속도나 레일 위치를 바꿔보세요",
-            )
-                .weak()
-                .small(),
-        );
+        if let Some(err) = plan_error {
+            ui.label(RichText::new(err).weak().small());
+        }
         return;
     };
 
-    let p = preview.prediction.impact_position.coords;
-    let v = preview.prediction.incoming_velocity;
+    let p = plan.prediction.impact_position.coords;
+    let v = plan.prediction.incoming_velocity;
     ui.label(format!("타점 = ({:.3}, {:.3}, {:.3}) m", p.x, p.y, p.z));
     ui.label(format!("입사 속도 = ({:.2}, {:.2}, {:.2}) m/s", v.x, v.y, v.z));
     ui.label(format!(
         "커밋 후 리드 시간 = {:.3} s",
-        preview.prediction.time_to_impact_secs
+        plan.prediction.time_to_impact_secs
     ));
+    match &plan.track_pose {
+        Some(pose) => ui.label(format!(
+            "① 코스 추종 → 레일 {:.3} m ({:.1} s)  ② 스윙",
+            pose.rail_x, app.duration_secs
+        )),
+        None => ui.label("스윙 1단계 (이미 타점 근처)"),
+    };
     ui.colored_label(Color32::from_rgb(90, 190, 120), "스윙 계획 성공");
 }
 
@@ -275,9 +287,9 @@ fn draw_reach(ui: &mut egui::Ui, app: &mut JogApp, with_tilt: bool) {
     }
 }
 
-fn draw_actions(ui: &mut egui::Ui, app: &mut JogApp, preview: Option<&SwingPreview>) {
+fn draw_actions(ui: &mut egui::Ui, app: &mut JogApp, swing_ok: bool) {
     // 슈터 공이 도달 불가이거나 임팩트 IK가 안 풀리면 미리보기를 막는다.
-    let swing_ready = app.draft.kind != Kind::Swing || preview.is_some();
+    let swing_ready = app.draft.kind != Kind::Swing || swing_ok;
     ui.horizontal(|ui| {
         if ui
             .add_enabled(

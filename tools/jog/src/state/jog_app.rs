@@ -10,7 +10,9 @@ use pingpong_bot::sim::gui;
 use pingpong_bot::sim::gui::ball;
 use pingpong_bot::sim::gui::shooter;
 
-use crate::plan::{self, Draft, Kind, SwingPreview};
+use pingpong_bot::sim::launch;
+
+use crate::plan::{self, Draft, Kind, SwingPlan};
 
 use super::action::Action;
 use super::phase::Phase;
@@ -25,11 +27,24 @@ pub struct JogApp {
     pub phase: Phase,
     /// Sync 시점 포즈 — 미리보기 시작점·Discard 복원.
     pub synced_pose: Option<robot::Pose>,
-    pub staged: Option<motion::Trajectory>,
+    /// 스테이징된 궤적 — 스윙은 [코스 추종 이동, 스윙] 두 개일 수 있다.
+    pub staged: Vec<motion::Trajectory>,
+    /// 아직 재생하지 않은 나머지 세그먼트 (앞 세그먼트가 끝나면 이어 재생).
+    pending: Vec<motion::Trajectory>,
     pub duration_secs: f64,
     pub max_delta_deg: f64,
     pub draft: Draft,
     pub error: Option<String>,
+    /// 스윙 계획 캐시 — planner가 로그를 뱉으므로 입력이 바뀔 때만 다시 푼다.
+    swing_cache: Option<SwingCache>,
+}
+
+struct SwingCache {
+    shooter: launch::Settings,
+    start: robot::Pose,
+    track_secs: f64,
+    max_delta_deg: f64,
+    result: Result<SwingPlan, String>,
 }
 
 impl JogApp {
@@ -43,11 +58,13 @@ impl JogApp {
             dry_run,
             phase: Phase::NeedsSync,
             synced_pose: None,
-            staged: None,
+            staged: Vec::new(),
+            pending: Vec::new(),
             duration_secs: 1.0,
             max_delta_deg: 15.0,
             draft: Draft::default(),
             error: None,
+            swing_cache: None,
         };
     }
 
@@ -71,7 +88,7 @@ impl JogApp {
     }
 
     /// 예측 도달점을 홀로그램 공에 반영. Swing 이외거나 예측 실패면 숨김.
-    pub fn sync_ball_ghost(&self, preview: Option<&SwingPreview>) {
+    pub fn sync_ball_ghost(&self, preview: Option<&SwingPlan>) {
         let Some(ball) = &self.ball else {
             return;
         };
@@ -102,7 +119,9 @@ impl JogApp {
         robot.set_pose(pose.clone());
         self.fill_draft_from_pose(&pose);
         self.synced_pose = Some(pose);
-        self.staged = None;
+        self.staged.clear();
+        self.pending.clear();
+        self.swing_cache = None;
         self.phase = Phase::Ready;
         self.error = None;
         return Ok(());
@@ -123,6 +142,59 @@ impl JogApp {
         self.draft.tilt_yaw_deg = 0.0;
     }
 
+    /// 입력(슈터 설정·동기화 포즈·시간·maxdelta)이 바뀌었을 때만 planner를 돌린다.
+    ///
+    /// 매 프레임 돌리면 `plan_best_swing`이 후보마다 뱉는 경고로 터미널이 잠긴다.
+    pub fn refresh_swing_plan(&mut self) {
+        if self.draft.kind != Kind::Swing {
+            self.swing_cache = None;
+            return;
+        }
+        let Some(start) = self.synced_pose.clone() else {
+            self.swing_cache = None;
+            return;
+        };
+        let fresh = self.swing_cache.as_ref().is_some_and(|c| {
+            c.shooter == self.draft.shooter
+                && c.start == start
+                && c.track_secs == self.duration_secs
+                && c.max_delta_deg == self.max_delta_deg
+        });
+        if fresh {
+            return;
+        }
+        let result = plan::plan_swing(
+            &self.arm,
+            &start,
+            &self.draft,
+            self.duration_secs,
+            self.max_delta_deg,
+        )
+        .map_err(|e| format!("{e:#}"));
+        self.swing_cache = Some(SwingCache {
+            shooter: self.draft.shooter.clone(),
+            start,
+            track_secs: self.duration_secs,
+            max_delta_deg: self.max_delta_deg,
+            result,
+        });
+    }
+
+    pub fn swing_plan(&self) -> Option<&Result<SwingPlan, String>> {
+        return self.swing_cache.as_ref().map(|c| &c.result);
+    }
+
+    /// 앞 세그먼트가 끝났으면 다음 세그먼트를 재생한다 (코스 추종 → 스윙).
+    pub fn advance_segments(&mut self) {
+        if self.pending.is_empty() || self.sim_busy() {
+            return;
+        }
+        let next = self.pending.remove(0);
+        if let Ok(robot) = self.robot() {
+            robot.play(next);
+        }
+    }
+
     pub fn discard(&mut self) -> Result<()> {
         ensure!(self.phase.can_discard(), "미리보기가 없습니다");
         let pose = self
@@ -132,7 +204,8 @@ impl JogApp {
         let robot = self.robot()?;
         robot.cancel();
         robot.set_pose(pose);
-        self.staged = None;
+        self.staged.clear();
+        self.pending.clear();
         self.phase = Phase::Ready;
         self.error = None;
         return Ok(());
@@ -140,15 +213,15 @@ impl JogApp {
 
     pub fn apply(&mut self) -> Result<()> {
         ensure!(self.phase.can_apply(), "미리보기가 없습니다");
-        let traj = self
-            .staged
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("staged trajectory 없음"))?;
+        ensure!(!self.staged.is_empty(), "staged trajectory 없음");
+        let segments = self.staged.clone();
         {
             let mut hw = self.hardware.lock().expect("hardware");
-            hw.command(&traj).context("command")?;
-            while hw.is_busy() {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+            for traj in &segments {
+                hw.command(traj).context("command")?;
+                while hw.is_busy() {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
             }
         }
         self.phase = Phase::AwaitingSync;
@@ -162,16 +235,26 @@ impl JogApp {
             .synced_pose
             .clone()
             .ok_or_else(|| anyhow::anyhow!("synced pose 없음"))?;
-        let traj = plan::compose(
-            &self.arm,
-            &start,
-            &self.draft,
-            self.duration_secs,
-            self.max_delta_deg,
-        )?;
+        let segments = if self.draft.kind == Kind::Swing {
+            self.refresh_swing_plan();
+            match self.swing_plan() {
+                Some(Ok(plan)) => plan.segments.clone(),
+                Some(Err(err)) => anyhow::bail!("{err}"),
+                None => anyhow::bail!("스윙 계획 없음"),
+            }
+        } else {
+            vec![plan::compose(
+                &self.arm,
+                &start,
+                &self.draft,
+                self.duration_secs,
+                self.max_delta_deg,
+            )?]
+        };
         let robot = self.robot()?;
-        robot.play(traj.clone());
-        self.staged = Some(traj);
+        robot.play(segments[0].clone());
+        self.pending = segments[1..].to_vec();
+        self.staged = segments;
         self.phase = Phase::Previewed;
         self.error = None;
         return Ok(());

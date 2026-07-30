@@ -12,10 +12,32 @@ pub struct Buttons {
     pub park: bool,
 }
 
+/// 어떤 버튼을 그릴지 — 공을 실제로 쏘지 않는 툴(jog)은 Random만 쓴다.
+#[derive(Debug, Clone, Copy)]
+pub struct ButtonSet {
+    pub shoot: bool,
+    pub random: bool,
+    pub park: bool,
+}
+
+impl ButtonSet {
+    pub const ALL: Self = Self {
+        shoot: true,
+        random: true,
+        park: true,
+    };
+    /// 발사 없이 파라미터만 굴리는 툴용.
+    pub const RANDOM_ONLY: Self = Self {
+        shoot: false,
+        random: true,
+        park: false,
+    };
+}
+
 /// 슈터 파라미터 전체 + Shoot / Random / Park.
 ///
 /// 슬라이더 범위가 여기 한 곳에만 있다 — 호출부가 늘어도 범위는 갈라지지 않는다.
-pub fn draw(ui: &mut egui::Ui, settings: &mut launch::Settings) -> Buttons {
+pub fn draw(ui: &mut egui::Ui, settings: &mut launch::Settings, show: ButtonSet) -> Buttons {
     let mut buttons = Buttons::default();
 
     ui.collapsing("Position", |ui| {
@@ -41,13 +63,13 @@ pub fn draw(ui: &mut egui::Ui, settings: &mut launch::Settings) -> Buttons {
         ui.add(egui::Slider::new(&mut settings.drill_spin_rad_s, -80.0..=80.0).text("drill"));
     });
     ui.horizontal(|ui| {
-        if ui.button("Shoot").clicked() {
+        if show.shoot && ui.button("Shoot").clicked() {
             buttons.shoot = true;
         }
-        if ui.button("Random").clicked() {
+        if show.random && ui.button("Random").clicked() {
             buttons.random = true;
         }
-        if ui.button("Park").clicked() {
+        if show.park && ui.button("Park").clicked() {
             buttons.park = true;
         }
     });

@@ -86,7 +86,11 @@ pub fn draw(
         .resizable(true)
         .collapsible(true)
         .show(ctx, |ui| {
-            let buttons = crate::sim::gui::shooter::ui::draw(ui, &mut ui_state.shooter);
+            let buttons = crate::sim::gui::shooter::ui::draw(
+                ui,
+                &mut ui_state.shooter,
+                crate::sim::gui::shooter::ui::ButtonSet::ALL,
+            );
             shoot |= buttons.shoot;
             random_shoot |= buttons.random;
             park |= buttons.park;

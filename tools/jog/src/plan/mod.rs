@@ -113,7 +113,7 @@ pub fn compose(
                 max_delta_deg,
             )
         }
-        Kind::Swing => swing_traj(arm, start, draft, max_delta_deg),
+        Kind::Swing => anyhow::bail!("스윙은 plan_swing()으로 계획합니다"),
     };
 }
 
@@ -136,48 +136,69 @@ pub fn reach_ok(arm: &Arm, start: &robot::Pose, draft: &Draft) -> bool {
             };
             arm.inverse_pose_with_rail(target, normal, start).is_ok()
         }
-        Kind::Swing => swing_preview(arm, start, draft).is_ok(),
+        Kind::Swing => true,
         _ => true,
     };
 }
 
-/// 슈터 공 스윙의 미리보기 정보 — 패널 표시와 `reach_ok`가 함께 쓴다.
-pub struct SwingPreview {
-    /// planner가 고른 타점 (접수 창 후보 중 최적).
-    pub prediction: Prediction,
-}
-
-/// 슈터 설정 → 커밋 시점 예측 묶음 → 시뮬과 같은 planner.
+/// 슈터 공 스윙 계획 — 코스 추종 이동(필요하면) + 스윙.
 ///
-/// 접수 평면을 사람이 고르지 않는다 — `plan_best_swing`이 접수 창 후보를 전부
-/// 채점해 최적 타점과 궤적을 고른다. 라켓 법선·임팩트 속도도 planner가 푼다.
-fn plan_shooter_swing(
+/// 시뮬은 공이 날아오는 동안 레일·관절을 예측 쪽으로 미리 옮겨두고
+/// (`plan_coarse_track`) 커밋 창에서 스윙한다. jog는 그 두 단계를 순서대로
+/// 재생할 궤적으로 만든다 — 안 그러면 레일이 먼 대기 위치(예: x=0)에 있을 때
+/// 커밋 시간창 안에 도달할 수 없어 모든 해가 실패한다.
+#[derive(Debug, Clone)]
+pub struct SwingPlan {
+    /// planner가 고른 타점.
+    pub prediction: Prediction,
+    /// 순서대로 재생할 궤적 — `[코스 추종 이동, 스윙]` 또는 `[스윙]`.
+    pub segments: Vec<motion::Trajectory>,
+    /// 코스 추종으로 옮겨갈 대기 포즈 (이미 가까우면 `None`).
+    pub track_pose: Option<robot::Pose>,
+}
+
+/// 슈터 설정 → 커밋 시점 예측 → 코스 추종 + 시뮬과 같은 planner.
+pub fn plan_swing(
     arm: &Arm,
     start: &robot::Pose,
     draft: &Draft,
-) -> Result<motion::PlannedIntercept> {
-    let predictions = shooter::commit_predictions(&draft.shooter)?;
-    return motion::physics::plan_best_swing(arm, &predictions, start)
-        .map_err(|e| anyhow::anyhow!("{e}"))
-        .context("스윙 계획");
-}
-
-pub fn swing_preview(arm: &Arm, start: &robot::Pose, draft: &Draft) -> Result<SwingPreview> {
-    let planned = plan_shooter_swing(arm, start, draft)?;
-    return Ok(SwingPreview {
-        prediction: planned.prediction,
-    });
-}
-
-fn swing_traj(
-    arm: &Arm,
-    start: &robot::Pose,
-    draft: &Draft,
+    track_secs: f64,
     max_delta_deg: f64,
-) -> Result<motion::Trajectory> {
-    let planned = plan_shooter_swing(arm, start, draft)?;
-    ensure_max_delta(&start.joints, &planned.trajectory.end, max_delta_deg)?;
-    return Ok(planned.trajectory);
+) -> Result<SwingPlan> {
+    let predictions = shooter::commit_predictions(&draft.shooter)?;
+
+    // 시뮬의 coarse 추종과 같은 목표. IK가 안 풀리면 현재 포즈에서 바로 스윙.
+    let track_pose = motion::physics::plan_coarse_track(arm, &predictions)
+        .filter(|pose| pose != start)
+        .filter(|pose| ensure_rail_in_range(arm, pose.rail_x).is_ok());
+
+    let swing_start = track_pose.as_ref().unwrap_or(start);
+    let planned = motion::physics::plan_best_swing(arm, &predictions, swing_start)
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("스윙 계획")?;
+
+    let mut segments = Vec::with_capacity(2);
+    if let Some(pose) = &track_pose {
+        ensure_max_delta(&start.joints, &pose.joints, max_delta_deg)
+            .context("코스 추종 이동")?;
+        segments.push(move_traj(
+            arm,
+            start,
+            pose.joints.clone(),
+            pose.rail_x,
+            track_secs,
+            max_delta_deg,
+        )?);
+    }
+    ensure_max_delta(&swing_start.joints, &planned.trajectory.end, max_delta_deg)
+        .context("스윙")?;
+    segments.push(planned.trajectory);
+
+    return Ok(SwingPlan {
+        prediction: planned.prediction,
+        segments,
+        track_pose,
+    });
 }
 
 fn current_racket(arm: &Arm, start: &robot::Pose) -> Result<RacketPose> {
@@ -305,12 +326,30 @@ mod tests {
         let start = robot::Pose::new(rail.default_x(), built.arm.default_joints.clone());
         let mut draft = Draft::default();
         draft.kind = Kind::Swing;
-        let preview = swing_preview(&built.arm, &start, &draft).expect("스윙 계획은 성공해야 한다");
+        let plan = plan_swing(&built.arm, &start, &draft, 1.0, 90.0).expect("스윙 계획");
         assert!(
-            preview.prediction.impact_position.coords.y > 0.0,
+            plan.prediction.impact_position.coords.y > 0.0,
             "타점이 로봇 앞이어야 한다"
         );
-        compose(&built.arm, &start, &draft, 1.0, 90.0).expect("스윙 궤적이 만들어져야 한다");
+        assert!(!plan.segments.is_empty());
+    }
+
+    /// 레일이 대기 끝단(x=0)이어도 코스 추종 세그먼트가 앞에 붙어 계획된다 —
+    /// dry-run boot 포즈에서 모든 해가 실패하던 회귀.
+    #[test]
+    fn swing_from_rail_home_prepends_coarse_track() {
+        let built = defaults::robot().expect("robot");
+        let start = robot::Pose::new(0.0, built.arm.default_joints.clone());
+        let mut draft = Draft::default();
+        draft.kind = Kind::Swing;
+        let plan = plan_swing(&built.arm, &start, &draft, 1.0, 90.0).expect("스윙 계획");
+        assert_eq!(plan.segments.len(), 2, "코스 추종 + 스윙");
+        let track = plan.track_pose.expect("코스 추종 포즈");
+        assert!(
+            (track.rail_x - start.rail_x).abs() > 0.1,
+            "레일이 타점 쪽으로 옮겨져야 한다: {}",
+            track.rail_x
+        );
     }
 
     #[test]
@@ -323,13 +362,12 @@ mod tests {
         draft.shooter.pitch_deg = 0.0;
         draft.shooter.height_offset_m = -0.35;
         draft.shooter.speed_mps = 12.0;
-        let err = compose(&built.arm, &start, &draft, 1.0, 90.0).unwrap_err();
+        let err = plan_swing(&built.arm, &start, &draft, 1.0, 90.0).unwrap_err();
         let text = format!("{err:#}");
         assert!(
             text.contains("도달") || text.contains("넘어오지") || text.contains("스윙 계획"),
             "{text}"
         );
-        assert!(!reach_ok(&built.arm, &start, &draft));
     }
 
     #[test]
