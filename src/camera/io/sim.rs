@@ -8,8 +8,8 @@ use rapier3d::prelude::Vector;
 
 use crate::camera;
 use crate::camera::HintSource;
+use crate::sim::physics::world::SimWorld;
 use crate::sim::session::SimClockHandle;
-use crate::sim::world::SimWorld;
 
 /// Rapier 월드 공을 픽셀로 투영하는 가상 카메라.
 pub struct SimCamera {

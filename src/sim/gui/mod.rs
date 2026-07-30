@@ -28,11 +28,6 @@ pub mod viewer;
 
 pub mod debug;
 
-/// 하위 호환 경로 (`sim::gui::debug_overlays`).
-pub use debug::overlays as debug_overlays;
-/// 하위 호환 경로 (`sim::gui::debug_snap`).
-pub use debug::snap as debug_snap;
-
 pub use debug::{CommitPhase, DebugOverlays, SimDebugSnapshot};
 
 #[cfg(feature = "gui")]

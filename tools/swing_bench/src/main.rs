@@ -26,6 +26,8 @@
 //! 기준이다, `config/*.toml`과 동일한 관례.)
 
 mod args;
+mod contact_verify_joint_row;
+mod contact_verify_report;
 mod report;
 mod scenario;
 mod target;
@@ -41,9 +43,10 @@ use pingpong_bot::robot::{self, Arm, Joints, MountPreset, RobotBuilder};
 use pingpong_bot::sim::SimWorld;
 use pingpong_bot::sim::launch;
 use pingpong_bot::swing;
-use serde::Serialize;
 
 use args::Args;
+use contact_verify_joint_row::ContactVerifyJointRow;
+use contact_verify_report::ContactVerifyReport;
 use report::Report;
 use scenario::Scenario;
 use target::Target;
@@ -67,26 +70,6 @@ const SIM_VERIFY_MAX_WAIT_STEPS: usize = 4_000;
 /// `--sim-verify` 대기 예산 — 커밋 이후 실제 접촉까지. `impact_time_secs`는
 /// 보통 이보다 훨씬 짧지만(수백 ms), PD 지연으로 늦게 맞는 경우까지 커버.
 const SIM_VERIFY_MAX_CONTACT_STEPS: usize = 3_000;
-
-/// `--sim-verify` 관절별 결과 한 줄.
-#[derive(Debug, Serialize)]
-struct ContactVerifyJointRow {
-    joint: usize,
-    tracking_error_at_contact_rad: Option<f64>,
-    tracking_error_at_planned_impact_rad: Option<f64>,
-    peak_commanded_speed_rad_s: f64,
-}
-
-/// `--sim-verify` 결과.
-#[derive(Debug, Serialize)]
-struct ContactVerifyReport {
-    swing_committed: bool,
-    contact_detected: bool,
-    planned_impact_time_secs: f64,
-    contact_elapsed_secs: Option<f64>,
-    contact_vs_planned_delta_secs: Option<f64>,
-    joints: Vec<ContactVerifyJointRow>,
-}
 
 fn main() -> Result<()> {
     let args = Args::parse();

@@ -283,11 +283,8 @@ fn diag_swing_timeseries() {
 fn diag_motor_tracking() {
     const DT: f64 = 1.0 / 1000.0;
     let launch = pingpong_bot::eval::LaunchParams::default();
-    let settings = eval::Protocol::settings_for_zone_shot(
-        &launch,
-        pingpong_bot::sim::eval_protocol::Zone::Left,
-        9,
-    );
+    let settings =
+        eval::Protocol::settings_for_zone_shot(&launch, pingpong_bot::eval::Zone::Left, 9);
     let mut world = SimWorld::with_physics(
         defaults::robot().expect("robot"),
         defaults::PhysicsParams::default(),
@@ -370,16 +367,8 @@ fn diag_incoming_trajectory() {
     let launch = pingpong_bot::eval::LaunchParams::default();
 
     for (label, zone, index_in_zone) in [
-        (
-            "#15 Center",
-            pingpong_bot::sim::eval_protocol::Zone::Center,
-            4,
-        ),
-        (
-            "#13 Center",
-            pingpong_bot::sim::eval_protocol::Zone::Center,
-            2,
-        ),
+        ("#15 Center", pingpong_bot::eval::Zone::Center, 4),
+        ("#13 Center", pingpong_bot::eval::Zone::Center, 2),
     ] {
         let settings = eval::Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let mut world = SimWorld::with_physics(

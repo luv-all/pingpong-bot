@@ -19,15 +19,3 @@ pub use gui::{CommitPhase, DebugOverlays, SimDebugSnapshot};
 pub use launch::{Layout, Settings};
 pub use physics::{ArmMultibody, BallState, SimWorld};
 pub use session::{SimBallEstimator, SimRuntimeControls, SimSession, SimSessionConfig};
-
-pub use gui::debug_overlays;
-pub use gui::debug_snap;
-pub use physics::arm_bodies;
-pub use physics::world;
-pub use session::controls;
-pub use session::estimator;
-
-/// 하위 호환: `sim::eval_protocol`
-pub mod eval_protocol {
-    pub use crate::eval::*;
-}

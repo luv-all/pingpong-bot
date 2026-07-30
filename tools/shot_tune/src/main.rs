@@ -40,7 +40,7 @@ use candidate_result::CandidateResult;
 use shot_outcome::ShotOutcome;
 
 /// 한 샷당 최대 물리 스텝 수 (1kHz 기준 4초).
-/// `sim::world` 랠리 테스트들이 쓰는 4_000과 같은 예산.
+/// `sim::physics::world` 랠리 테스트들이 쓰는 4_000과 같은 예산.
 const MAX_STEPS: usize = 4_000;
 const DT: f64 = 1.0 / 1000.0;
 

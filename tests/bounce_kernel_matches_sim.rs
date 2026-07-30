@@ -9,8 +9,8 @@ use pingpong_bot::constants::{self, table};
 use pingpong_bot::defaults;
 use pingpong_bot::estimator;
 use pingpong_bot::estimator::HitPlane;
+use pingpong_bot::eval::{Mode, Protocol};
 use pingpong_bot::sim::SimWorld;
-use pingpong_bot::sim::eval_protocol::{Mode, Protocol};
 
 fn v3(v: rapier3d::prelude::Vector) -> Vector3<f64> {
     return Vector3::new(f64::from(v.x), f64::from(v.y), f64::from(v.z));

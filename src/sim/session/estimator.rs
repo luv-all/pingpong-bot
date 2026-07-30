@@ -10,7 +10,7 @@ use crate::Point3;
 use crate::estimator;
 use crate::estimator::{Estimator, HitPlane, Prediction};
 use crate::sim::physics;
-use crate::sim::world::SimWorld;
+use crate::sim::physics::world::SimWorld;
 use nalgebra::Vector3;
 
 /// Rapier 월드 스냅샷으로 접수 평면 교차를 예측한다 (물리 스텝·자동 스윙 공용).

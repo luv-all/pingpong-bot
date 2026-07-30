@@ -57,7 +57,3 @@ pub use primitive_nodes::PrimitiveNodes;
 pub use urdf_nodes::UrdfNodes;
 #[cfg(feature = "gui")]
 pub use visual::Visual;
-
-/// 하위 호환: `robot::builder` / `robot::loader`
-pub use build::builder;
-pub use build::loader;

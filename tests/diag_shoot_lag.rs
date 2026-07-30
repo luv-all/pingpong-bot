@@ -18,7 +18,7 @@ use pingpong_bot::sim::SimWorld;
 use pingpong_bot::sim::gui::{SimViewer, WORLD_LOCK_WAIT};
 use pingpong_bot::sim::launch;
 use pingpong_bot::sim::physics;
-use pingpong_bot::sim::world::SimStepInput;
+use pingpong_bot::sim::physics::world::SimStepInput;
 
 const PHYSICS_DT: f64 = 1.0 / 1000.0;
 const TICK_BUDGET_US: f64 = 1000.0;

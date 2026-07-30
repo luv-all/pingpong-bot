@@ -17,7 +17,7 @@ use rapier3d::prelude::*;
 use tracing::{debug, info, warn};
 
 use super::arm_bodies::ArmMultibody;
-use crate::sim::gui::debug_snap::{CommitPhase, SimDebugSnapshot};
+use crate::sim::gui::debug::{CommitPhase, SimDebugSnapshot};
 use crate::sim::launch;
 
 pub use super::step_input::SimStepInput;

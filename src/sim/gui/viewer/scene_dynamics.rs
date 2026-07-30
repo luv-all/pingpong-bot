@@ -7,7 +7,6 @@ use kiss3d::prelude::*;
 use rapier3d::prelude::{Rotation, Vector};
 
 use super::super::debug::overlays::{DebugOverlays, colors};
-use super::super::debug::snap::CommitPhase;
 use super::super::scene::{HIDDEN, TableSceneOptions, build_table_scene};
 use super::dynamic_nodes::DynamicNodes;
 use super::lock_world_for_frame;
@@ -25,6 +24,7 @@ use crate::defaults::sim::RANDOM_SHOT_TARGET_PADDING_M;
 use crate::error::SwingPlanError;
 use crate::robot::urdf::{UrdfLinkVisual, UrdfModel};
 use crate::sim::gui::ball;
+use crate::sim::gui::debug::CommitPhase;
 use crate::sim::launch;
 use crate::sim::physics::world::SimWorld;
 use tracing::info;

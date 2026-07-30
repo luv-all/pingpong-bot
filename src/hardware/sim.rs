@@ -11,7 +11,7 @@ use crate::hardware::Hardware;
 use crate::swing;
 use tracing::debug;
 
-use crate::sim::world::SimWorld;
+use crate::sim::physics::world::SimWorld;
 
 /// Rapier sim용 `Hardware` 어댑터.
 pub struct SimHardware {
