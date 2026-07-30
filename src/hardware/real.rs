@@ -7,6 +7,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use tracing::{debug, error};
+#[cfg(not(all(windows, feature = "real")))]
+use tracing::warn;
 
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::AxlRail;
@@ -98,16 +100,28 @@ impl RealHardware {
                 Some(AxlRail::dry_run(config)?)
             }
             Some(config) => {
-                debug!(
-                    dll = %config.dll_path.display(),
-                    axis = config.axis,
-                    irq_no = config.irq_no,
-                    reverse = config.reverse,
-                    x_min_m = config.x_min_m,
-                    x_max_m = config.x_max_m,
-                    "레일 Live 개방"
-                );
-                Some(AxlRail::open(config)?)
+                #[cfg(all(windows, feature = "real"))]
+                {
+                    debug!(
+                        dll = %config.dll_path.display(),
+                        axis = config.axis,
+                        irq_no = config.irq_no,
+                        reverse = config.reverse,
+                        x_min_m = config.x_min_m,
+                        x_max_m = config.x_max_m,
+                        "레일 Live 개방"
+                    );
+                    Some(AxlRail::open(config)?)
+                }
+                #[cfg(not(all(windows, feature = "real")))]
+                {
+                    warn!(
+                        dll = %config.dll_path.display(),
+                        axis = config.axis,
+                        "AXL 레일은 Windows + feature=real 에서만 지원 — 레일 비활성, Dynamixel만 사용 (rail_x=0)"
+                    );
+                    None
+                }
             }
         };
         return Ok(Self {
@@ -264,6 +278,26 @@ mod tests {
         let mut hardware =
             RealHardware::dry_run(dynamixel, Some(test_rail())).expect("dry-run hardware");
 
+        assert_eq!(hardware.read_pose().expect("pose").rail_x, 0.0);
+    }
+
+    /// non-Windows live 레일은 soft-skip → `rail_x=0` (Dynamixel 버스는 dry로 대체).
+    #[cfg(not(all(windows, feature = "real")))]
+    #[test]
+    fn non_windows_live_rail_soft_skips_to_rail_x_zero() {
+        let config = DynamixelConfig {
+            stream_hz: 500.0,
+            ..DynamixelConfig::default()
+        };
+        let stream_hz = config.stream_hz;
+        let mut bus = DynamixelBus::dry_run(config).expect("dry bus");
+        bus.configure_position_mode_max_effort()
+            .expect("position mode");
+        bus.enable_torque(true).expect("torque");
+        let arm = Arc::new((*crate::defaults::urdf_4dof().expect("urdf").arm).clone());
+        let mut hardware =
+            RealHardware::from_bus(bus, stream_hz, Some(test_rail()), false, arm)
+                .expect("hardware");
         assert_eq!(hardware.read_pose().expect("pose").rail_x, 0.0);
     }
 
