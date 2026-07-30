@@ -118,7 +118,7 @@ CLI 덮어쓰기는 포트 정도만:
 
 ```bash
 cargo run -p pingpong-bot -- --mode sim
-cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
+cargo run -p pingpong-bot -- --mode real --dxl-port COM8
 ```
 
 물리계수 측정 툴은 stdout에 `PhysicsParams::default()` 붙여넣기용 스니펫을 낸다  
@@ -133,10 +133,33 @@ cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
 ```bash
 cargo run -p jog -- --dry-run
 cargo run -p jog -- --port COM8 --debug
-cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8 --debug
+cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 ```
 
-`real` 모드는 현재 Dynamixel·AXL **pose 스모크**까지다. 실캠 풀 파이프라인은 다음 단계.
+### `--mode real` — 단발 타격
+
+공 하나를 받아 **스윙 한 번**을 커밋하고 종료한다 (랠리는 아직).
+이벤트·결정·스레드 상세는 [`src/real/README.md`](src/real/README.md).
+
+```bash
+# 리허설 — 실캠·검출·EKF·플래너까지 다 돌리고 모터·레일만 안 움직인다 (macOS에서도 됨)
+cargo run -p pingpong-bot -- --mode real --dry-run
+
+# 실기
+cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
+```
+
+| 플래그 | 기본 | 뜻 |
+|--------|------|-----|
+| `--dry-run` | off | 모터·레일 정지. 나머지 체인은 그대로 |
+| `--preview` | on | 좌/우 검출 오버레이 창 (ESC·`q` 종료) |
+| `--home` | on | 시작 시 센터(ready) 자세로 이동 |
+| `--timeout-secs` | 60 | 공을 기다리는 최대 시간 |
+
+카메라 2대(`data/calibration.json`)와 `data/colormask.json`이 있어야 한다.
+`Ekf`·`Calibration`·`Hardware`를 스레드별로 단독 소유하고 crossbeam 채널로만 잇는다 —
+`read_pose → plan_best → command`가 한 스레드 안에서만 일어나 계획과 전송 사이에 포즈가
+바뀔 수 없다.
 
 ---
 
@@ -155,7 +178,7 @@ flowchart TB
   subgraph adapters ["① 모드 어댑터"]
     direction LR
     sim["<b>sim</b><br/>Rapier · 가상캠 · 뷰어"]
-    real["<b>real</b><br/>Dynamixel · AXL · 실캠 예정"]
+    real["<b>real</b><br/>Dynamixel · AXL · 실캠 단발"]
   end
 
   subgraph hot ["② 핫패스"]
@@ -191,40 +214,44 @@ flowchart TB
 
 ### 파이프라인 스레드
 
-`pipeline` 공통 워커: 카메라당 1 + 추정 1 + 제어 1.
+워커 구성은 어느 쪽이든 같다: 카메라당 1 + 추정 1 + 제어 1.
 
 ```mermaid
 flowchart LR
   frames["FrameSource × N"]
   camT["Camera worker × N"]
   estT["Estimation × 1"]
-  ctrlT["Control × 1 · 100 Hz"]
+  ctrlT["Control × 1"]
   actuator["Hardware"]
 
-  frames --> camT -->|"BallObservation"| estT -->|"Prediction 슬롯"| ctrlT --> actuator
+  frames --> camT -->|"Observation"| estT -->|"Prediction"| ctrlT --> actuator
 ```
+
+실기(`--mode real`)는 [`src/real/`](src/real/)이 돌린다 — 단발 타격 전용이고,
+상태를 스레드별로 단독 소유하며 crossbeam 채널로만 잇는다
+([`src/real/README.md`](src/real/README.md)).
+[`src/pipeline/`](src/pipeline/)은 랠리를 전제로 먼저 써 둔 골격이라 **아직 호출부가 없다**.
 
 ```mermaid
 flowchart LR
-  subgraph simSide ["sim"]
+  subgraph simSide ["sim — 뷰어 엔트리"]
     viewer["Viewer · 메인"]
-    physics["Physics 스레드"]
-    simCamera["SimCamera"]
+    physics["Physics 스레드 · 1 kHz"]
     simHw["SimHardware"]
     viewer -.-> physics
-    physics --> simCamera
+    physics -->|"ground-truth 스윙"| simHw
     simHw --> physics
   end
 
-  common["pipeline workers"]
-  simCamera --> common --> simHw
-
-  subgraph realSide ["real · 예정"]
-    realCamera["UVC · 멀티캠"]
+  subgraph realSide ["real — 단발 타격"]
+    realCamera["UVC × 2"]
+    realWorkers["src/real 워커<br/>cam × 2 · 추정 · 제어"]
     realHw["RealHardware"]
+    realCamera --> realWorkers --> realHw
   end
 
-  realCamera -.-> common -.-> realHw
+  dead["src/pipeline · 호출부 없음"]
+  style dead stroke-dasharray: 5 5
 ```
 
 ---
@@ -241,8 +268,9 @@ src/
   planner/      swing/ · impact · collision
   robot/        build/ · urdf/ · Arm · state
   sim/          physics/ · session/ · gui/
+  real/         실기 단발 타격 런타임 (bin 전용 · README.md)
   hardware/     rail/ · SimHardware · RealHardware
-  pipeline/     카메라→추정→제어 오케스트레이션
+  pipeline/     카메라→추정→제어 오케스트레이션 (랠리 전제 · 호출부 없음)
   telemetry/
   main.rs       CLI · sim 뷰어 / real 스모크
 

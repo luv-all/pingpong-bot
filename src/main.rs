@@ -4,28 +4,22 @@
 //!
 //! ```bash
 //! cargo run -p pingpong-bot
+//! # 실기 단발 타격 (공 1개 → 스윙 1회 → 종료). 모터를 안 움직이는 리허설은 --dry-run.
 //! cargo run -p pingpong-bot -- --mode real --dxl-port COM8
+//! cargo run -p pingpong-bot -- --mode real --dry-run
 //! # 샷별 launch/commit/포기 로그 (기본 info). 더 자세히:
 //! cargo run -p pingpong-bot -- --debug
 //! ```
 
 mod cli;
+#[cfg(feature = "real")]
+mod real;
 
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-#[cfg(feature = "real")]
-use pingpong_bot::camera;
-#[cfg(feature = "real")]
-use pingpong_bot::defaults::detector_for;
 use pingpong_bot::defaults::{PhysicsParams, robot};
-#[cfg(feature = "real")]
-use pingpong_bot::hardware::dynamixel::DynamixelConfig;
-#[cfg(feature = "real")]
-use pingpong_bot::hardware::rail::RailConfig;
-#[cfg(feature = "real")]
-use pingpong_bot::hardware::{Hardware, RealHardware};
 use pingpong_bot::robot::motion::InterceptWindow;
 #[cfg(feature = "gui")]
 use pingpong_bot::sim::gui::{SimViewer, SimViewerOptions};
@@ -100,21 +94,13 @@ fn run_sim_entry() -> Result<()> {
 
 #[cfg(feature = "real")]
 fn run_real_entry(args: &Args) -> Result<()> {
-    let mut dxl = DynamixelConfig::default();
-    if let Some(port) = &args.dxl_port {
-        dxl.port = port.clone();
-    }
-    info!(port = %dxl.port, "defaults real Dynamixel (mirror ID1↔ID2)");
-    let arm = robot().context("defaults::robot")?.arm;
-    let mut hardware =
-        RealHardware::new(dxl, Some(RailConfig::default()), arm).context("RealHardware")?;
-    let pose = hardware.read_pose().context("read pose")?;
-    info!(joints = ?pose.joints.values, "pose");
-    let _ = detector_for(camera::Id(0)).context("detector_for cam0")?;
-    return Ok(());
+    return real::run(args);
 }
 
 #[cfg(not(feature = "real"))]
 fn run_real_entry(_args: &Args) -> Result<()> {
-    anyhow::bail!("real 모드는 `--features real`로 빌드해야 합니다");
+    anyhow::bail!(
+        "real 모드가 빌드에서 빠졌습니다 — `real` feature 없이 빌드된 바이너리입니다 \
+         (기본 feature에 포함되어 있으니 `--no-default-features`를 쓰지 않았는지 확인하세요)"
+    );
 }
