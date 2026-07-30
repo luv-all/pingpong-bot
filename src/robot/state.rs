@@ -208,7 +208,7 @@ impl State {
     ///
     /// 계획된 궤적을 사후 clamp 없이 그대로 재생한다.
     /// 시뮬 폐루프는 [`Self::step_commands`] + 다물체 측정을 쓴다.
-    /// 토크 포화 추종은 [`Self::advance_swing_torque_limited`] / Rapier [`crate::sim::ArmMultibody`].
+    /// 토크 포화 추종은 [`Self::advance_swing_torque_limited`] / Rapier [`crate::sim::physics::ArmMultibody`].
     pub fn advance_swing(&mut self, _arm: &Arm, dt: f64) -> bool {
         let Some(playback) = &mut self.active_swing else {
             return false;

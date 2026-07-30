@@ -40,8 +40,8 @@ use pingpong_bot::defaults;
 use pingpong_bot::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
 use pingpong_bot::planner::Impact;
 use pingpong_bot::robot::{self, Arm, Joints, MountPreset, RobotBuilder};
-use pingpong_bot::sim::SimWorld;
 use pingpong_bot::sim::launch;
+use pingpong_bot::sim::physics::SimWorld;
 use pingpong_bot::swing;
 
 use args::Args;

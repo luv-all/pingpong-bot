@@ -996,8 +996,8 @@ mod tests {
     /// 네트를 넘겨 로봇 쪽 반코트 안(너무 끝이 아닌 가운데 대역)에 떨어지는지
     /// 직접 확인한다. `None`이면 네트에 걸리거나(못 넘김) 착지 전 상태 종료.
     fn first_bounce_xy(speed: f64, pitch_deg: f64, height_offset_m: f64) -> Option<(f64, f64)> {
-        use crate::sim::SimWorld;
         use crate::sim::launch;
+        use crate::sim::physics::SimWorld;
 
         let robot = crate::defaults::primitive_4dof_with_mount(-0.02, table::SURFACE_Z + 0.05)
             .expect("robot 빌드 성공");
@@ -1076,8 +1076,8 @@ mod tests {
                 실행: cargo test --lib diag_ball_speed_feasibility_sweep \
                 -- --ignored --nocapture"]
     fn diag_ball_speed_feasibility_sweep() {
-        use crate::sim::SimWorld;
         use crate::sim::launch;
+        use crate::sim::physics::SimWorld;
 
         const DT: f64 = 1.0 / 1000.0;
         const MAX_STEPS: usize = 4_000;
@@ -2077,8 +2077,8 @@ mod tests {
         let start = arm.initial_state();
         let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
-        use crate::sim::SimWorld;
         use crate::sim::launch;
+        use crate::sim::physics::SimWorld;
         const DT: f64 = 1.0 / 1000.0;
         const MAX_STEPS: usize = 4_000;
         const HEIGHT_OFFSET_M: f64 = 0.24;
@@ -2197,8 +2197,8 @@ mod tests {
         let start = arm.initial_state();
         let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
-        use crate::sim::SimWorld;
         use crate::sim::launch;
+        use crate::sim::physics::SimWorld;
         const DT: f64 = 1.0 / 1000.0;
         const MAX_STEPS: usize = 4_000;
         const HEIGHT_OFFSET_M: f64 = 0.24;
@@ -2315,8 +2315,8 @@ mod tests {
         let start = arm.initial_state();
         let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
-        use crate::sim::SimWorld;
         use crate::sim::launch;
+        use crate::sim::physics::SimWorld;
         const DT: f64 = 1.0 / 1000.0;
         const MAX_STEPS: usize = 4_000;
         const HEIGHT_OFFSET_M: f64 = 0.24;
@@ -2426,8 +2426,8 @@ mod tests {
 
         use crate::estimator::HitPlane;
 
-        use crate::sim::SimWorld;
         use crate::sim::launch;
+        use crate::sim::physics::SimWorld;
         const DT: f64 = 1.0 / 1000.0;
         const MAX_STEPS: usize = 4_000;
         const HEIGHT_OFFSET_M: f64 = 0.24;

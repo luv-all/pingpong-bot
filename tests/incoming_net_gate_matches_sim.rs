@@ -8,9 +8,9 @@
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
 use pingpong_bot::eval;
-use pingpong_bot::sim::SimWorld;
 use pingpong_bot::sim::launch;
 use pingpong_bot::sim::physics;
+use pingpong_bot::sim::physics::SimWorld;
 
 /// 공이 라켓에 닿아 있는가.
 fn ball_touches_racket(world: &SimWorld) -> bool {

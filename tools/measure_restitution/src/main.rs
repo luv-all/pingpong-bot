@@ -16,7 +16,7 @@ use pingpong_bot::constants::{self, table};
 use pingpong_bot::defaults::PhysicsParams;
 use pingpong_bot::defaults::{calibration_path, primitive_4dof};
 use pingpong_bot::estimator;
-use pingpong_bot::sim::SimWorld;
+use pingpong_bot::sim::physics::SimWorld;
 
 use args::Args;
 use patch::Patch;

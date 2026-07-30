@@ -7,7 +7,8 @@ use std::thread;
 
 use anyhow::Result;
 use pingpong_bot::Point3;
-use pingpong_bot::sim::{SimRuntimeControls, SimScene};
+use pingpong_bot::sim::gui::SimScene;
+use pingpong_bot::sim::session::SimRuntimeControls;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

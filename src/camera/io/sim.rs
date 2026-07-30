@@ -97,9 +97,9 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
 
-    use crate::sim::SimRuntimeControls;
-    use crate::sim::SimSession;
-    use crate::sim::SimSessionConfig;
+    use crate::sim::session::SimRuntimeControls;
+    use crate::sim::session::SimSession;
+    use crate::sim::session::SimSessionConfig;
 
     fn test_robot() -> crate::robot::Robot {
         return crate::defaults::primitive_4dof().expect("테스트용 4DOF robot");

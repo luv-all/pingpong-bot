@@ -14,9 +14,9 @@ use pingpong_bot::constants::{BALL_RADIUS, table};
 use pingpong_bot::defaults;
 use pingpong_bot::eval;
 use pingpong_bot::planner::Impact;
-use pingpong_bot::sim::SimWorld;
 use pingpong_bot::sim::launch;
 use pingpong_bot::sim::physics;
+use pingpong_bot::sim::physics::SimWorld;
 
 fn v3(v: rapier3d::prelude::Vector) -> Vector3<f64> {
     return Vector3::new(f64::from(v.x), f64::from(v.y), f64::from(v.z));

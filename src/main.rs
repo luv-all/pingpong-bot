@@ -31,7 +31,7 @@ use pingpong_bot::logging::init_tracing;
 use pingpong_bot::planner::InterceptWindow;
 #[cfg(feature = "gui")]
 use pingpong_bot::sim::gui::{SimViewer, SimViewerOptions};
-use pingpong_bot::sim::{SimRuntimeControls, SimSession, SimSessionConfig};
+use pingpong_bot::sim::session::{SimRuntimeControls, SimSession, SimSessionConfig};
 use tracing::info;
 #[cfg(not(feature = "gui"))]
 use tracing::warn;

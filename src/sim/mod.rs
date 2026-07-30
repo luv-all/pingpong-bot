@@ -9,13 +9,3 @@ pub mod gui;
 pub mod launch;
 pub mod physics;
 pub mod session;
-
-#[cfg(feature = "gui")]
-pub use gui::{
-    BallOnlyViewerOptions, SceneHost, SceneHostOptions, SceneLayers, SceneUiDraw, SceneUiHook,
-    SimScene, SimSceneBuilder, SimViewer, SimViewerOptions, TableSceneOptions,
-};
-pub use gui::{CommitPhase, DebugOverlays, SimDebugSnapshot};
-pub use launch::{Layout, Settings};
-pub use physics::{ArmMultibody, BallState, SimWorld};
-pub use session::{SimBallEstimator, SimRuntimeControls, SimSession, SimSessionConfig};

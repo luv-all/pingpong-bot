@@ -8,7 +8,7 @@ pub use resolved_stereo_offline::ResolvedStereoOffline;
 pub(crate) use resolved_stereo_offline::{resolve_mono_offline, resolve_stereo_offline};
 pub use stereo_clip::StereoClip;
 #[cfg(test)]
-pub(crate) use stereo_clip::resolve_stereo_clip;
+pub(crate) use stereo_clip::resolve_stereo_clip_under;
 
 /// `record-stereo` 오프라인 클립 루트.
 pub const DEFAULT_CLIPS_DIR: &str = "data/clips";
@@ -19,32 +19,46 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    /// 이름(`fly_01`)이 클립 루트 아래로 해석되는지. 프로세스 CWD를 바꾸면
+    /// 병렬 실행되는 다른 테스트의 상대경로 로드를 깨뜨리므로 루트를 주입한다.
     #[test]
-    fn resolves_name_under_default_clips() {
-        let root = tempfile_dir();
-        let clips = root.join("data").join("clips").join("fly_01");
-        fs::create_dir_all(&clips).unwrap();
-        fs::write(clips.join("left.avi"), b"x").unwrap();
-        fs::write(clips.join("right.avi"), b"y").unwrap();
-        fs::write(clips.join("meta.json"), r#"{"meas_fps":40.5}"#).unwrap();
+    fn resolves_name_under_clips_root() {
+        let clips_root = tempfile_dir().join("data").join("clips");
+        let clip = clips_root.join("fly_01");
+        write_clip(&clip);
 
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&root).unwrap();
-        let got = resolve_stereo_clip(Path::new("fly_01")).unwrap();
-        let offline = resolve_stereo_offline(Some(Path::new("fly_01")))
-            .unwrap()
-            .expect("offline");
-        std::env::set_current_dir(prev).unwrap();
+        let got = resolve_stereo_clip_under(Path::new("fly_01"), &clips_root).unwrap();
 
         assert!(got.left.ends_with("left.avi"));
         assert!(got.right.ends_with("right.avi"));
         assert!((got.meas_fps.unwrap() - 40.5).abs() < 1e-9);
+    }
+
+    /// 이미 디렉터리인 경로는 루트와 무관하게 그대로 쓴다.
+    #[test]
+    fn resolves_explicit_dir_for_offline() {
+        let clip = tempfile_dir().join("fly_01");
+        write_clip(&clip);
+
+        let offline = resolve_stereo_offline(Some(&clip))
+            .unwrap()
+            .expect("offline");
+
+        assert!(offline.left.ends_with("left.avi"));
+        assert!(offline.right.ends_with("right.avi"));
         assert!((offline.meas_fps.unwrap() - 40.5).abs() < 1e-9);
     }
 
     #[test]
     fn live_when_no_clip() {
         assert!(resolve_stereo_offline(None).unwrap().is_none());
+    }
+
+    fn write_clip(dir: &Path) {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("left.avi"), b"x").unwrap();
+        fs::write(dir.join("right.avi"), b"y").unwrap();
+        fs::write(dir.join("meta.json"), r#"{"meas_fps":40.5}"#).unwrap();
     }
 
     fn tempfile_dir() -> PathBuf {

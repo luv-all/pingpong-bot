@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use pingpong_bot::sim::SceneUiDraw;
+use pingpong_bot::sim::gui::SceneUiDraw;
 
 use crate::panel;
 use crate::state::JogApp;
