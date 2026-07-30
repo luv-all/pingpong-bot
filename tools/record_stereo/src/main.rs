@@ -24,7 +24,7 @@ use opencv::core::{Mat, Scalar, Size, Vector};
 use opencv::imgcodecs;
 use opencv::prelude::*;
 use opencv::videoio::{VideoWriter, VideoWriterTrait};
-use pingpong_bot::camera::{FrameSource, OpenCvCapture, Preview, PreviewAction};
+use pingpong_bot::camera::{FrameSource, OpenCvCapture, Preview, PreviewAction, ThreadedCapture};
 
 use args::Args;
 use capture_cmd::CaptureCmd;
@@ -84,8 +84,13 @@ fn main() -> Result<()> {
     let stop_t = Arc::clone(&stop);
     let ring_keep = Duration::from_secs_f64(args.preroll + args.postroll + RING_MARGIN_SECS);
 
+    // 캠당 grab 스레드 — 두 캠을 한 스레드에서 순차로 read하면 서로를 기다려 절반 속도가 된다
+    // (실측: 순차 34~41 fps vs 라이브 파이프라인 76~81 fps). 라이브와 같은 구조로 맞춘다.
+    let left_src = ThreadedCapture::spawn(left_cap);
+    let right_src = ThreadedCapture::spawn(right_cap);
+
     let grab: JoinHandle<()> = thread::spawn(move || {
-        grab_loop(left_cap, right_cap, shared_t, cmd_t, stop_t, ring_keep);
+        grab_loop(left_src, right_src, shared_t, cmd_t, stop_t, ring_keep);
     });
 
     let (sw, sh) = cam.stream.resolved_size();
@@ -228,8 +233,8 @@ fn main() -> Result<()> {
 }
 
 fn grab_loop(
-    mut left: OpenCvCapture,
-    mut right: OpenCvCapture,
+    mut left: ThreadedCapture,
+    mut right: ThreadedCapture,
     shared: Arc<Mutex<CaptureShared>>,
     cmd_slot: Arc<Mutex<Option<CaptureCmd>>>,
     stop: Arc<AtomicBool>,
@@ -237,6 +242,7 @@ fn grab_loop(
 ) {
     let mut ring: VecDeque<PairSample> = VecDeque::new();
     let mut pending: Option<CaptureCmd> = None;
+    let mut last_pair: Option<(Instant, Instant)> = None;
     let mut fps_window_start = Instant::now();
     let mut fps_window_count = 0u64;
     let mut grab_fps = 0.0f64;
@@ -259,6 +265,13 @@ fn grab_loop(
             set_error(&shared, "right: 프레임 없음");
             break;
         };
+        // `ThreadedCapture`는 새 프레임을 기다리지 않고 최신 것을 즉시 준다 — 같은 쌍을
+        // 다시 담지 않도록 타임스탬프로 거른다.
+        if last_pair == Some((lf.timestamp, rf.timestamp)) {
+            thread::sleep(Duration::from_micros(500));
+            continue;
+        }
+        last_pair = Some((lf.timestamp, rf.timestamp));
 
         let t = Instant::now();
         let width = lf.image.cols();
@@ -341,39 +354,47 @@ fn grab_loop(
                 .cloned()
                 .collect();
 
-            let status = match write_clip(
-                &dir,
-                &scene,
-                &clip,
-                request_fps,
-                grab_fps,
-                &backend,
-                &fourcc,
-                preroll.as_secs_f64(),
-                postroll.as_secs_f64(),
-                req_w,
-                req_h,
-            ) {
-                Ok(meta) => {
-                    println!(
-                        "saved {} frames={} meas_fps={:.1}",
-                        dir.display(),
-                        meta.frames,
-                        meta.meas_fps
-                    );
-                    format!(
-                        "saved {}",
-                        dir.file_name().and_then(|s| s.to_str()).unwrap_or("?")
-                    )
+            // **인코딩은 별도 스레드로.** 여기서 바로 쓰면 400프레임 × 2개 AVI를 인코딩하는
+            // 동안 grab이 멈춰 링이 비고, 다음 테이크의 프리롤이 깨진다 — 연속 촬영이
+            // 사실상 불가능했던 이유다. 캡처는 계속 돌게 두고 쓰기만 넘긴다.
+            let writer_shared = Arc::clone(&shared);
+            let preroll_secs = preroll.as_secs_f64();
+            let postroll_secs = postroll.as_secs_f64();
+            thread::spawn(move || {
+                let status = match write_clip(
+                    &dir,
+                    &scene,
+                    &clip,
+                    request_fps,
+                    grab_fps,
+                    &backend,
+                    &fourcc,
+                    preroll_secs,
+                    postroll_secs,
+                    req_w,
+                    req_h,
+                ) {
+                    Ok(meta) => {
+                        println!(
+                            "saved {} frames={} meas_fps={:.1}",
+                            dir.display(),
+                            meta.frames,
+                            meta.meas_fps
+                        );
+                        format!(
+                            "saved {}",
+                            dir.file_name().and_then(|s| s.to_str()).unwrap_or("?")
+                        )
+                    }
+                    Err(e) => {
+                        eprintln!("save failed {}: {e:#}", dir.display());
+                        format!("save failed: {e}")
+                    }
+                };
+                if let Ok(mut g) = writer_shared.lock() {
+                    g.last_status = Some(status);
                 }
-                Err(e) => {
-                    eprintln!("save failed {}: {e:#}", dir.display());
-                    format!("save failed: {e}")
-                }
-            };
-            if let Ok(mut g) = shared.lock() {
-                g.last_status = Some(status);
-            }
+            });
         }
     }
 }

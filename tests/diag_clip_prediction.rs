@@ -246,6 +246,31 @@ fn diag_clip_prediction_error() {
         plane.y, cross_t, cross_point.coords.x, cross_point.coords.z
     );
 
+    // 예측이 아무리 정확해도 팔이 못 닿으면 못 친다 — 실제 도달점이 작업영역 안인지.
+    // 입사 속도는 평면 통과 직전 두 점의 차분.
+    let incoming = track
+        .windows(2)
+        .find(|pair| pair[1].t >= cross_t)
+        .map(|pair| (pair[1].point.coords - pair[0].point.coords) / (pair[1].t - pair[0].t))
+        .unwrap_or_else(Vector3::zeros);
+    let robot = defaults::robot().expect("robot");
+    let start = pingpong_bot::robot::Pose::new(
+        robot.arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+        robot.arm.default_joints.clone(),
+    );
+    let at_impact = pingpong_bot::estimator::Prediction {
+        time_to_impact_secs: 0.30,
+        impact_position: cross_point,
+        incoming_velocity: incoming,
+    };
+    match pingpong_bot::robot::motion::Planner::feasibility(&robot.arm, &at_impact, &start) {
+        Some(feasibility) => println!(
+            "  IK 도달 O — 관절속도 비율 {:.2} · 레일 {:.2} (1.0 초과면 한계 밖)",
+            feasibility.peak_joint_speed_ratio, feasibility.peak_rail_speed_ratio
+        ),
+        None => println!("  **IK 도달 X** — 이 지점은 팔 작업영역 밖이다"),
+    }
+
     // 런타임과 같은 필터에 같은 순서로 먹인다.
     let base = Instant::now();
     let mut ekf = Ekf::default();
@@ -313,7 +338,10 @@ fn diag_clip_prediction_error() {
         }
         let mean = kept.iter().map(|(_, e, _)| e).sum::<f64>() / kept.len() as f64;
         let worst = kept.iter().map(|(_, e, _)| *e).fold(0.0_f64, f64::max);
-        let earliest = kept.iter().map(|(lead, _, _)| *lead).fold(0.0_f64, f64::max);
+        let earliest = kept
+            .iter()
+            .map(|(lead, _, _)| *lead)
+            .fold(0.0_f64, f64::max);
         println!(
             "  σ ≤ {:.2} m → {}회 남음, 평균 {:.1} cm · 최대 {:.1} cm, 가장 이른 리드 {:.3}s",
             threshold,

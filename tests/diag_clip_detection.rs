@@ -47,6 +47,45 @@ impl Detected {
     }
 }
 
+/// 검출 단계별 비용 [ms/frame] — ROI 켬/끔.
+///
+/// 클립 fps(34~41)는 `record_stereo`(검출 없음)의 캡처+인코딩 한계다. 라이브는 인코딩이
+/// 없으니 검출이 얼마나 비싼지가 실제 처리율을 정한다.
+fn time_detection(path: &PathBuf, camera_id: camera::Id) {
+    let params = defaults::camera_params_for(camera_id).expect("camera_params_for");
+    let needs_undistort = !params.dist.is_empty();
+
+    for (label, roi) in [("ROI 켬", true), ("ROI 끔", false)] {
+        let mut source = OpenCvCapture::from_path(camera_id, path).expect("클립 열기");
+        let mut detector = defaults::detector_for(camera_id).expect("detector_for");
+        detector.set_roi_enabled(roi);
+
+        let (mut detect_ns, mut undistort_ns, mut frames) = (0_u128, 0_u128, 0_u32);
+        while let Some(frame) = source.next_frame() {
+            let frame = if needs_undistort {
+                let start = std::time::Instant::now();
+                let out = Detector::undistort(&frame, &params).expect("undistort");
+                undistort_ns += start.elapsed().as_nanos();
+                out
+            } else {
+                frame
+            };
+            let start = std::time::Instant::now();
+            let _ = detector.detect(&frame);
+            detect_ns += start.elapsed().as_nanos();
+            frames += 1;
+        }
+        let per = |ns: u128| ns as f64 / frames as f64 / 1e6;
+        println!(
+            "  cam{} {label}  검출 {:.2} ms/f  (undistort {:.2})  → 캠당 최대 {:.0} fps",
+            camera_id.0,
+            per(detect_ns),
+            per(undistort_ns),
+            1000.0 / per(detect_ns).max(1e-6)
+        );
+    }
+}
+
 fn detect_side(path: &PathBuf, camera_id: camera::Id) -> Detected {
     let mut source = OpenCvCapture::from_path(camera_id, path).expect("클립 열기");
     let params = defaults::camera_params_for(camera_id).expect("camera_params_for");
@@ -96,6 +135,10 @@ fn diag_clip_detection_per_camera() {
             side.rate_within_span() * 100.0
         );
     }
+
+    println!("검출 비용:");
+    time_detection(&dir.join("left.avi"), camera::Id(0));
+    time_detection(&dir.join("right.avi"), camera::Id(1));
 
     // 스테레오가 실제로 성립하는 프레임 — 이게 EKF가 받을 수 있는 측정의 상한이다.
     let both: Vec<usize> = left

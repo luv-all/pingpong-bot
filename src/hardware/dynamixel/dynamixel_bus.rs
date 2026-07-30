@@ -240,6 +240,8 @@ impl DynamixelBus {
     ///
     /// 읽기에 실패하면 `false` — 모르면 쓰는 쪽이 안전하다.
     fn position_mode_already_configured(&mut self) -> Result<bool, HwError> {
+        // `real` 없이 빌드하면 아래 Real 갈래가 통째로 사라져 이 값이 안 쓰인다.
+        #[cfg(feature = "real")]
         let config = self.mapping.config.clone();
         match &mut self.backend {
             // dry-run은 실제 레지스터가 없다 — 항상 쓰기 경로를 타 기존 검증을 유지한다.
