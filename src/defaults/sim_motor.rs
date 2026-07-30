@@ -20,17 +20,23 @@ pub const SIM_MOTOR_JOINTS: usize = 4;
 /// 라켓의 **반사 관성이 이미 들어 있다** — 링크 하나의 국소 질량만 보던 옛
 /// 추정(I≈5e-3~1.5e-2)이 base/shoulder를 크게 과소평가했다.
 ///
-/// | 관절 | 휴지 | 임팩트 | 채택 |
-/// |------|------|--------|------|
-/// | 0 yaw      | 3.373e-2 | 2.337e-2 | 3.373e-2 |
-/// | 1 shoulder | 1.617e-2 | 1.195e-2 | 1.617e-2 |
-/// | 2 elbow    | 1.406e-2 | 1.429e-2 | 1.429e-2 |
-/// | 3 wrist    | 2.196e-3 | 2.196e-3 | 2.196e-3 |
+/// **2026-07-30 재계산** — `READY_JOINTS_4DOF`를 windup 휴지 자세 탐색
+/// (`diag_windup_rest_pose_search`)으로 바꾼 뒤 `diag_print_representative_inertias`로
+/// 다시 쟀다. yaw가 가장 크게 움직였다(새 휴지 자세가 이전보다 팔을 더
+/// 펼친 자세라 반사 관성이 커짐). elbow/wrist는 임팩트 자세 쪽이 계속
+/// 지배해 사실상 불변.
+///
+/// | 관절 | 휴지(신규) | 임팩트 | 채택 | 이전값 |
+/// |------|-----------|--------|------|--------|
+/// | 0 yaw      | 4.465e-2 | 2.337e-2 | 4.465e-2 | 3.373e-2 |
+/// | 1 shoulder | 1.728e-2 | 1.195e-2 | 1.728e-2 | 1.617e-2 |
+/// | 2 elbow    | ~1.406e-2 | 1.429e-2 | 1.429e-2 | 1.429e-2 |
+/// | 3 wrist    | ~2.196e-3 | 2.196e-3 | 2.196e-3 | 2.196e-3 |
 ///
 /// 자세에 따라 변하는 값이라 이 두 자세는 근사다(시뮬 전용 가정). 실제 팔
 /// 모델과 어긋나면 `inertia_matches_mass_matrix_diagonal` 테스트가 잡는다.
 pub const JOINT_EFFECTIVE_INERTIA_4DOF: [f64; SIM_MOTOR_JOINTS] =
-    [3.373e-2, 1.617e-2, 1.429e-2, 2.196e-3];
+    [4.465e-2, 1.728e-2, 1.429e-2, 2.196e-3];
 
 /// 위치 루프 목표 고유진동수 ω_n [rad/s] — 관절 전체 공통.
 ///
@@ -164,6 +170,7 @@ mod tests {
     fn defaults_validate() {
         SimMotorParams::default().validate().expect("sim_motor");
     }
+
 
     /// 하드코딩한 [`JOINT_EFFECTIVE_INERTIA_4DOF`]가 실제 팔의 질량 행렬
     /// 대각과 여전히 맞는지 — 링크 관성/CAD가 바뀌면 게인도 다시 뽑아야 한다.

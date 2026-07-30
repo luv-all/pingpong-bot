@@ -169,6 +169,19 @@ impl Trajectory {
             .max(self.follow_through_rail_segment().max_speed(24));
     }
 
+    /// 궤적 전 구간 최대 레일 가속도 [m/s²].
+    ///
+    /// [`Self::peak_rail_speed`]의 가속도 짝. 실기 AXL 스테이지는
+    /// `RAIL_ACCEL_M_S2`로 제한되는데 `kinematic_limit_violation`은 레일
+    /// **속도**만 검사해서, 플래너가 레일이 실제로 못 내는 궤적을 통과시킨다
+    /// (WP5에서 발견, WP2a에서 계량).
+    pub fn peak_rail_acceleration(&self) -> f64 {
+        return self
+            .pre_impact_rail_segment()
+            .max_acceleration(24)
+            .max(self.follow_through_rail_segment().max_acceleration(24));
+    }
+
     /// `t` [s]에서 관절각을 샘플한다.
     pub fn sample_at(&self, t: f64) -> Joints {
         let values = if t <= self.impact_time_secs || self.duration_secs <= self.impact_time_secs {

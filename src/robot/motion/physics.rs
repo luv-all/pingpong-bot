@@ -71,12 +71,29 @@ pub fn plan_swing(
     .map_err(DomainError::InfeasibleSwing);
 }
 
+/// 계획 접촉점과 예측 임팩트점의 허용 오차 [m] — 넘으면 후보를 통째로 기각.
+///
+/// WP2c(2026-07-29~30) 실측(`docs/wp2c-contact-tolerance.md`): 값을
+/// 5e-5~0.055 m 범위(1100배)로 스윕해도 커밋률·eval 점수·실제 접촉 좌표가
+/// **완전히 동일** — 이 게이트는 현재 커밋률의 병목이 아니다. 이유는
+/// 해석적으로 막혀 있기 때문이다: `solve_impact_target`의 IK 수렴 오차
+/// (위치 2e-4 m + 법선 1e-3 rad × (BALL_RADIUS+RACKET_HALF_Z))가 상한
+/// 2.25e-4 m을 만들고, 실측 최대 채택 오차는 0.00017 m로 그 아래다 — 즉
+/// 5mm는 IK가 실제로 낼 수 있는 오차의 22배 여유를 둔 값이다.
+///
+/// 두 방향 경계: 아래로는 IK 수렴 오차(2.25e-4 m)보다 커야 유효한 해를
+/// 기각하지 않고, 위로는 라켓 면 반너비 − 공 반지름(≈0.055 m)보다 작아야
+/// 접촉이 면 안에 확실히 들어온다. 현재값은 그 244배 폭 구간의 아래쪽
+/// (하한의 22배, 상한의 1/11)에 있다 — 이 상수는 필터가 아니라 계약
+/// 위반 감지용 트립와이어라, 폭이 남아도 좁게 유지하는 쪽이 맞다(IK 품질
+/// 회귀를 조기에 잡음).
+pub const MAX_CONTACT_ERROR: f64 = 0.005;
+
 pub fn plan_best_swing(
     arm: &Arm,
     predictions: &[Prediction],
     start: &robot::Pose,
 ) -> Result<PlannedIntercept, DomainError> {
-    const MAX_CONTACT_ERROR: f64 = 0.005;
     let current_position = if arm.rail.is_some() {
         arm.forward_kinematics_with_rail(start.rail_x, &start.joints)
     } else {
@@ -532,6 +549,31 @@ fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'sta
     {
         return Some("레일 속도");
     }
+    // 레일 가속도 검사 — **2026-07-30 임시 비활성화, 켜지 말 것 (재측정 전까지)**.
+    //
+    // WP5/WP2a: 예전엔 이 항이 없어 레일이 실제로 못 내는 가속을 요구하는
+    // 궤적도 "OK"로 통과시켰다(실측: dx=0.25/0.50m 시나리오 다수 행이 τ
+    // 통과인데도 실기 레일 가속(당시 12 m/s²)을 최대 4.35배 초과). 검사
+    // 로직 자체는 옳다 — 하지만 `RAIL_ACCEL_M_S2 = 12.0`
+    // (`defaults/planner.rs`)이 `docs/superpowers/plans/2026-07-22-axl-rail.md`에
+    // "board units, tune on bench; values above are placeholders"로 명시된
+    // **미검증 placeholder**였다. 이 검사를 켜자 eval+랜덤 67샷 그리드
+    // 커밋률이 76%(52/67, Phase 0 기준)→15%(10/67)로 붕괴했는데, 사용자가
+    // 실기에서 리니어 모터가 "매우 빠르게" 움직이는 걸 직접 관찰했다고
+    // 확인해 줬다 — 즉 12.0 m/s²가 실제보다 훨씬 보수적일 가능성이 높다.
+    // 리포지토리 전체를 검색해도 레일 모터 실측 사양은 어디에도 없다(같은
+    // 문서가 최초부터 placeholder라고 밝힘). **사용자 결정(2026-07-30)**:
+    // 실측 전까지 이 검사는 꺼둔다 — 틀린 값을 강제해 멀쩡한 스윙을
+    // 대량으로 거절하는 것이, 몇몇 실제 레일 가속 초과 궤적을 놓치는 것보다
+    // 지금 당장은 더 나쁘다. 재측정되면(벤치 스텝 응답 등) `RAIL_ACCEL_M_S2`를
+    // 갱신하고 아래 `if false`를 지워 다시 켤 것 — 검사·계측
+    // (`Trajectory::peak_rail_acceleration`)은 그대로 남겨둔다.
+    if false
+        && arm.rail.is_some()
+        && trajectory.peak_rail_acceleration() > crate::defaults::motion::RAIL_ACCEL_M_S2
+    {
+        return Some("레일 가속도");
+    }
     let samples = (trajectory.duration_secs / 0.002).ceil() as usize;
     for index in 0..=samples.max(1) {
         let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
@@ -548,64 +590,104 @@ fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'sta
     return None;
 }
 
-/// quintic이 관절 한계 안에 들어오도록 임팩트 각속도를 점진적으로 줄인다 ( 근사).
+/// 이분탐색 스텝 수. 배율 해상도 `2^-12 ≈ 0.024%` — 관절속도 한계 대비
+/// 무의미할 만큼 촘촘하고, 실현가능 판정 호출 수는 12회로 상한이 고정된다.
+const FIT_BISECTION_STEPS: usize = 12;
+
+/// quintic이 관절 속도/각가속도/토크 한계 안에 들어오는 **가장 큰** 임팩트
+/// 각속도 배율을 이분탐색한다.
+///
+/// 예전 구현은 `min(speed_scale, accel_scale, torque_scale) × 0.95`를 최대
+/// 32회 반복하는 고정점 반복이었다. WP7 감사(eval 30샷 + 랜덤 5×5 격자,
+/// `wp7::diag_downscale_audit_*`)가 측정한 세 가지 문제:
+///
+/// 1. **매 반복의 0.95 마진이 최종 배율에 그대로 남는다.** 커밋된 스윙의
+///    50~67%가 정확히 1회 반복으로 끝나는데, 그 1회가 곱하는 0.95가 곧
+///    최종 손실이었다 — 실측 최적 배율은 ~0.9997이라 5%를 그냥 버렸다.
+///    (외부 관측: WP2a 스윕에서 달성 `v_r·n`이 정확히 95.0%/100.0% 두
+///    값으로만 갈리던 현상이 이것이다.)
+/// 2. **`0.95` 추정은 한 번에 맞을 수 없다.** quintic 첨두 속도는 끝속도에
+///    비례하지 않는다(Δq가 만드는 위치 구동 성분이 배율과 무관하게 남는다).
+///    그래서 `limit/peak`은 필요한 감소량을 항상 과소평가하고 반복이
+///    필수였다. 이분탐색은 `low`가 **항상 검증된 실현가능 배율**이라 추정이
+///    필요 없고, 한계를 넘는 값을 반환하는 일이 원리적으로 없다.
+/// 3. **실현 불가능한 계획에 32회를 전부 쓴다.** 전체 계획 시도의 55~58%가
+///    32회 상한까지 돌며 매 반복 Newton-Euler 토크 샘플링을 했는데, 전부
+///    "끝속도를 0으로 해도 실현 불가"(위치 이동 자체가 한계 초과)여서
+///    단 1회 검사로 판별 가능했다. 이 경로는 최대 1 kHz로 도는 커밋
+///    경로이고 이미 wall-clock 가드 테스트가 있다. `plan_return_to_center`의
+///    기존 주석("끝속도가 항상 0이라 … 무의미한 재시도(각 32회 반복)")이
+///    같은 병리를 반대편에서 이미 기록해 두고 있었다.
+///
+/// 호출 비용: 이미 실현가능하면 1회(예전과 동일), 어떤 배율로도 불가능하면
+/// 2회(예전 32회), 축소가 필요하면 `2 + FIT_BISECTION_STEPS`회.
+///
+/// 실현가능 판정에 테이블 충돌은 넣지 않는다 — 배율에 대해 단조가 아니고,
+/// 최종 검증은 [`build_feasible_trajectory`]가 한다(예전과 동일).
 fn fit_end_velocity(
     arm: &Arm,
     start: &Joints,
     end: &Joints,
     start_velocity: &[f64],
-    mut end_velocity: Vec<f64>,
+    end_velocity: Vec<f64>,
     duration: f64,
-    mut rail: Rail,
+    rail: Rail,
 ) -> (Vec<f64>, Rail) {
-    for _ in 0..32 {
+    let scaled = |scale: f64| -> (Vec<f64>, Rail) {
+        let mut scaled_rail = rail;
+        scaled_rail.end_velocity = rail.end_velocity * scale;
+        return (
+            end_velocity.iter().map(|value| value * scale).collect(),
+            scaled_rail,
+        );
+    };
+    let feasible = |velocities: Vec<f64>, candidate_rail: Rail| -> bool {
         let trajectory = trajectory_with_follow_through(
             arm,
             start,
             end,
             start_velocity.to_vec(),
-            end_velocity.clone(),
+            velocities,
             duration,
-            rail,
+            candidate_rail,
         );
-        // 최악 위반 관절의 `|토크|/한계` 비율. >1 이면 그 역수로 끝속도를 줄여
-        // 토크 한계 안으로 끌어온다 (관절별 한계를 반영한 스케일). 이용률을 한
-        // 번만 계산하고 실현 가능 판정·스케일에 함께 쓴다.
-        let torque_util = peak_torque_utilization(arm, &trajectory);
-        if torque_util <= 1.0 && kinematic_limits_ok(arm, &trajectory) {
-            return (end_velocity, rail);
-        }
+        return peak_torque_utilization(arm, &trajectory) <= 1.0
+            && kinematic_limits_ok(arm, &trajectory);
+    };
 
-        let peak_speed = trajectory.peak_joint_speed();
-        let peak_accel = trajectory.peak_joint_acceleration();
-        let speed_scale = if peak_speed > arm.max_joint_speed {
-            arm.max_joint_speed / peak_speed * 0.95
-        } else {
-            1.0
-        };
-        let accel_scale = if peak_accel > defaults::ControlParams::default().max_joint_accel {
-            defaults::ControlParams::default().max_joint_accel / peak_accel * 0.95
-        } else {
-            1.0
-        };
-        let torque_scale = if torque_util > 1.0 {
-            1.0 / torque_util * 0.95
-        } else {
-            1.0
-        };
-        let scale = speed_scale.min(accel_scale).min(torque_scale);
-        if scale >= 0.99 {
-            break;
-        }
-        for v in &mut end_velocity {
-            *v *= scale;
-        }
-        rail.end_velocity *= scale;
+    if feasible(end_velocity.clone(), rail) {
+        return (end_velocity, rail);
     }
 
-    // 한계를 완전히 못 맞춰도 끝속도를 0으로 버리지 않는다 (타격 의도 유지).
-    // 최종 검증은 build_feasible_trajectory의 trajectory_within_limits가 한다.
-    return (end_velocity, rail);
+    // 끝속도를 0으로 만들어도 실현 불가면 어떤 배율도 통하지 않는다 — 위치
+    // 이동 자체(Δq, 레일 이동거리)가 한계를 넘는 경우다. 특히 레일 첨두
+    // 속도는 **이동거리/소요시간**이 결정하므로 끝속도 축소로는 줄지 않는다
+    // (감사 실측: 레일 속도로 막힌 39~41%는 실현가능 배율이 아예 없었다).
+    // 끝속도는 원본을 유지해 호출부의 한계 위반 진단이 "무엇이 실제로
+    // 과했는지"를 그대로 보고하게 한다 (타격 의도 유지 — 0으로 버리지 않는다).
+    let (zero_velocity, zero_rail) = scaled(0.0);
+    if !feasible(zero_velocity.clone(), zero_rail) {
+        return (end_velocity, rail);
+    }
+
+    // 실현가능 배율이 존재한다 — 가장 큰 것을 이분탐색한다. `low`는 항상
+    // 검증된 실현가능 배율이므로 반환값은 반드시 한계 안이다.
+    let mut low = 0.0_f64;
+    let mut high = 1.0_f64;
+    let mut best = zero_velocity;
+    let mut best_rail = zero_rail;
+    for _ in 0..FIT_BISECTION_STEPS {
+        let mid = (low + high) * 0.5;
+        let (candidate, candidate_rail) = scaled(mid);
+        if feasible(candidate.clone(), candidate_rail) {
+            low = mid;
+            best = candidate;
+            best_rail = candidate_rail;
+        } else {
+            high = mid;
+        }
+    }
+    return (best, best_rail);
 }
 
 #[cfg(test)]
@@ -664,7 +746,9 @@ mod tests {
     #[test]
     fn in_swing_commit_window_bounds() {
         assert!(!in_swing_commit_window(0.05));
-        assert!(in_swing_commit_window(0.12));
+        assert!(in_swing_commit_window(
+            defaults::ControlParams::default().min_swing_secs + 0.05
+        ));
         assert!(in_swing_commit_window(
             defaults::ControlParams::default().swing_commit_max_secs
         ));
@@ -1066,6 +1150,383 @@ mod tests {
             Some("관절 속도"),
             "임팩트 각속도 4.0 rad/s는 한계 {:.2} rad/s를 넘어야 함",
             arm.max_joint_speed
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // WP2a — 커밋 시간창(`min_swing_secs`/`swing_commit_max_secs`) 검증
+    // ---------------------------------------------------------------------
+
+    /// `plan_swing`과 동일하지만 `min_swing_secs` 게이트를 건너뛴다.
+    ///
+    /// WP2a의 질문은 "0.08 s가 **실측** 하한이냐, 옛 추정치냐"다. `plan_swing`은
+    /// 그 값 아래를 궤적 생성 전에 즉시 거절하므로, 게이트를 통과시켰을 때
+    /// 물리(관절속도/가속/토크)가 실제로 무엇을 말하는지 볼 수 없다. 이
+    /// 헬퍼는 게이트만 빼고 나머지는 `plan_swing`과 동일하게 통과시킨다.
+    fn plan_swing_without_time_gate(
+        arm: &Arm,
+        prediction: Prediction,
+        start: &robot::Pose,
+    ) -> Result<Trajectory, DomainError> {
+        let target = solve_impact_target(arm, &prediction, start)?;
+        let start_velocity = vec![0.0; start.joints.values.len()];
+        let rail_motion = Rail {
+            start: start.rail_x,
+            end: target.pose.rail_x,
+            start_velocity: 0.0,
+            end_velocity: target.rail_velocity,
+        };
+        return build_feasible_trajectory(
+            arm,
+            &start.joints,
+            target.pose.joints,
+            start_velocity,
+            target.joint_velocities,
+            prediction.time_to_impact_secs,
+            rail_motion,
+        )
+        .map_err(DomainError::InfeasibleSwing);
+    }
+
+    /// [`sample_prediction`]과 같지만 임팩트 x를 옮긴다 — **레일이 실제로
+    /// 이동해야 하는** 시나리오를 만든다.
+    ///
+    /// 왜 필요한가: `sample_prediction`의 임팩트 x는 `WIDTH_X*0.5`이고 시작
+    /// 레일 x도 `rail.default_x()`(같은 중앙)라 레일 이동량이 **정확히 0**이다.
+    /// 그 fixture로는 레일 속도·가속 컬럼이 항상 0으로 나와 레일 관련 결론을
+    /// 아무것도 못 낸다(WP2a 1차 시도에서 실제로 그렇게 나왔다).
+    fn sample_prediction_at_dx(time_to_impact_secs: f64, dx: f64) -> Prediction {
+        let mut prediction = sample_prediction(time_to_impact_secs);
+        prediction.impact_position = crate::Point3::new(
+            prediction.impact_position.coords.x + dx,
+            prediction.impact_position.coords.y,
+            prediction.impact_position.coords.z,
+        );
+        return prediction;
+    }
+
+    /// 유한차분 순방향 자코비안으로 라켓 속도를 추정한다
+    /// (`tools/swing_bench`의 `racket_velocity_estimate`와 동일한 방식).
+    fn racket_velocity_fd(
+        arm: &Arm,
+        rail_x: f64,
+        rail_velocity: f64,
+        joints: &Joints,
+        joint_velocities: &[f64],
+    ) -> Option<Vector3<f64>> {
+        const STEP: f64 = 1e-6;
+        let base = arm.forward_kinematics_with_rail(rail_x, joints)?;
+        let nudged: Vec<f64> = joints
+            .values
+            .iter()
+            .zip(joint_velocities)
+            .map(|(q, v)| q + v * STEP)
+            .collect();
+        let perturbed = arm.forward_kinematics_with_rail(
+            rail_x + rail_velocity * STEP,
+            &Joints::from_slice(&nudged),
+        )?;
+        return Some((perturbed.position.coords - base.position.coords) / STEP);
+    }
+
+    /// 짧은 실패 사유 라벨 — 표 한 칸에 들어가게 줄인다.
+    fn failure_label(error: &DomainError) -> String {
+        let DomainError::InfeasibleSwing(err) = error else {
+            return "기타".to_string();
+        };
+        return match err {
+            SwingPlanError::InsufficientTime { .. } => "시간부족(게이트)".to_string(),
+            SwingPlanError::InverseKinematicsNoSolution { .. } => "IK 해없음".to_string(),
+            SwingPlanError::ReturnVelocityUnreachable { .. } => "리턴속도불가".to_string(),
+            SwingPlanError::NearSingularity { joint_index, .. } => {
+                format!("특이점근접(q{joint_index})")
+            }
+            SwingPlanError::TrajectoryExceedsLimits { violated, .. } => {
+                format!("한계:{violated}")
+            }
+            SwingPlanError::TrajectoryExceedsTorque { utilization, .. } => {
+                format!("토크 {utilization:.2}x")
+            }
+            _ => "기타".to_string(),
+        };
+    }
+
+    /// [진단] WP2a — time-to-impact 스윕으로 커밋 시간창 경계를 실측 검증한다.
+    ///
+    /// 대표 임팩트 목표를 고정하고 time-to-impact만 0.03~0.60 s로 훑어, 각
+    /// 값에서 quintic 경로가 실제로 실행 가능한지와 스윙 품질(달성 `v_r·n`,
+    /// 토크 여유, 관절/레일 이용률)을 기록한다. `min_swing_secs` 게이트를 **끈
+    /// 상태**로 계획해 "게이트가 막고 있을 뿐 물리적으로는 가능한" 구간이
+    /// 있는지 본다 — 그게 WP2a의 핵심 질문이다.
+    ///
+    /// 레일 이동량이 다른 3개 시나리오(dx = 0 / 0.25 / 0.50 m)를 함께 돈다.
+    /// `rail_a` 컬럼이 1.0을 넘는 행은 "플래너는 통과시키지만 실기 레일은 못
+    /// 내는" 궤적이다 — `kinematic_limit_violation`이 레일 속도만 검사하기
+    /// 때문(WP5 발견, 이번 실험의 범위 추가 항목).
+    #[test]
+    #[ignore = "순수 진단(스윕). 실행: cargo test --lib diag_commit_window_feasibility_sweep \
+                -- --ignored --nocapture"]
+    fn diag_commit_window_feasibility_sweep() {
+        let arm = sample_three_dof_arm();
+        let start = sample_start(&arm);
+        let control = defaults::ControlParams::default();
+        let rail_max_speed = arm.rail.as_ref().map_or(f64::INFINITY, |r| r.max_speed);
+        let rail_accel_limit = crate::defaults::motion::RAIL_ACCEL_M_S2;
+
+        println!(
+            "arm.max_joint_speed={:.3} rad/s, max_joint_accel={:.0} rad/s², \
+             rail.max_speed={:.2} m/s, RAIL_ACCEL_M_S2={:.1} m/s²",
+            arm.max_joint_speed, control.max_joint_accel, rail_max_speed, rail_accel_limit
+        );
+        println!(
+            "게이트: min_swing_secs={:.3}s, swing_commit_max_secs={:.3}s (게이트 안=\"안\")",
+            control.min_swing_secs, control.swing_commit_max_secs
+        );
+
+        for dx in [0.0_f64, 0.25, 0.50] {
+            println!();
+            println!("===== 임팩트 x 오프셋 dx={dx:+.2} m (레일 이동량) =====");
+            println!(
+                "{:>6} {:>5} {:>5} {:>8} {:>8} {:>7} {:>7} {:>7} {:>7} {:>7}  {}",
+                "tti", "게이트", "계획", "req|vr|", "got|vr|", "vr·n%", "q̇/lim", "q̈/lim",
+                "rail_v", "rail_a", "사유",
+            );
+
+            let mut tti_milli = 30_u32;
+            while tti_milli <= 600 {
+                let tti = f64::from(tti_milli) / 1000.0;
+                let prediction = sample_prediction_at_dx(tti, dx);
+                let in_gate = tti >= control.min_swing_secs && in_swing_commit_window(tti);
+                let gate_mark = if in_gate { "안" } else { "밖" };
+                let required = solve_impact_target(&arm, &prediction, &start)
+                    .ok()
+                    .map(|t| t.racket_velocity);
+
+                match plan_swing_without_time_gate(&arm, prediction, &start) {
+                    Ok(trajectory) => {
+                        let impact_joints = trajectory.impact_joints().clone();
+                        let achieved = racket_velocity_fd(
+                            &arm,
+                            trajectory.rail.end,
+                            trajectory.rail.end_velocity,
+                            &impact_joints,
+                            &trajectory.end_velocity,
+                        );
+                        let normal = arm
+                            .forward_kinematics_with_rail(trajectory.rail.end, &impact_joints)
+                            .map(|pose| pose.normal);
+                        let ratio_pct = match (required, achieved, normal) {
+                            (Some(req), Some(got), Some(n)) => {
+                                let req_n = req.dot(&n).abs();
+                                if req_n > 1e-9 {
+                                    got.dot(&n).abs() / req_n * 100.0
+                                } else {
+                                    f64::NAN
+                                }
+                            }
+                            _ => f64::NAN,
+                        };
+                        let rail_a_ratio =
+                            trajectory.peak_rail_acceleration() / rail_accel_limit;
+                        let flag = if rail_a_ratio > 1.0 { " ⚠레일가속초과" } else { "" };
+                        println!(
+                            "{:>6.3} {:>5} {:>5} {:>8.3} {:>8.3} {:>6.1}% {:>7.2} {:>7.2} \
+                             {:>7.2} {:>7.2}  τ={:.2}x{}",
+                            tti,
+                            gate_mark,
+                            "OK",
+                            required.map_or(f64::NAN, |v| v.norm()),
+                            achieved.map_or(f64::NAN, |v| v.norm()),
+                            ratio_pct,
+                            trajectory.peak_joint_speed() / arm.max_joint_speed,
+                            trajectory.peak_joint_acceleration() / control.max_joint_accel,
+                            trajectory.peak_rail_speed() / rail_max_speed,
+                            rail_a_ratio,
+                            peak_torque_utilization(&arm, &trajectory),
+                            flag,
+                        );
+                    }
+                    Err(error) => {
+                        println!(
+                            "{:>6.3} {:>5} {:>5} {:>8.3} {:>8} {:>7} {:>7} {:>7} {:>7} {:>7}  {}",
+                            tti,
+                            gate_mark,
+                            "FAIL",
+                            required.map_or(f64::NAN, |v| v.norm()),
+                            "—",
+                            "—",
+                            "—",
+                            "—",
+                            "—",
+                            "—",
+                            failure_label(&error),
+                        );
+                    }
+                }
+                // 0.03~0.20은 5ms, 그 위는 20ms — 경계 근처를 촘촘히 본다.
+                tti_milli += if tti_milli < 200 { 5 } else { 20 };
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // 백스윙(windup) 휴지 자세 탐색
+    // -----------------------------------------------------------------
+
+    /// [`tools/shot_tune`]의 `rest_pose_scenarios`와 같은 격자 — 팔이 실제
+    /// 마주치는 대표 임팩트 165개. `solve_impact_target`이 crate 내부 전용
+    /// (`pub(crate)`)이라 여기 재구현한다.
+    fn windup_rest_pose_scenarios() -> Vec<Prediction> {
+        let mut out = Vec::new();
+        for &x_frac in &[0.1, 0.3, 0.5, 0.7, 0.9] {
+            for &y in &[0.20, 0.30, 0.40, 0.55] {
+                for &z_off in &[0.10, 0.18, 0.26, 0.30] {
+                    for &(speed, descend) in &[(6.0, -0.15), (7.5, 0.10), (6.5, 0.30)] {
+                        out.push(Prediction {
+                            time_to_impact_secs: 0.15,
+                            impact_position: crate::Point3::new(
+                                table::WIDTH_X * x_frac,
+                                y,
+                                table::SURFACE_Z + z_off,
+                            ),
+                            incoming_velocity: Vector3::new(0.0, -speed, speed * descend),
+                        });
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    /// 관절별 Chebyshev 중심 — `rest_pose_search`와 동일한 최소최대 로직.
+    fn chebyshev_center(lo: &[f64], hi: &[f64], arm: &Arm) -> Vec<f64> {
+        return (0..lo.len())
+            .map(|j| {
+                let mid = (lo[j] + hi[j]) * 0.5;
+                return match arm.joint_limit(j) {
+                    Some(limit) => mid.clamp(limit.min, limit.max),
+                    None => mid,
+                };
+            })
+            .collect();
+    }
+
+    fn worst_dq(candidate: &[f64], samples: &[Vec<f64>]) -> f64 {
+        return samples
+            .iter()
+            .flat_map(|sample| {
+                sample
+                    .iter()
+                    .zip(candidate)
+                    .map(|(s, c)| (s - c).abs())
+            })
+            .fold(0.0_f64, f64::max);
+    }
+
+    /// [진단] 백스윙(windup) 휴지 자세 탐색.
+    ///
+    /// 사용자 관찰: 실제 GUI에서 매 스윙마다 "라켓이 뒤로 당겨지는" 동작이
+    /// 반복된다 — `plan_return_to_center`가 팔로스루 뒤 팔을
+    /// `READY_JOINTS_4DOF`(임팩트 자세들의 Chebyshev 중심, 즉 **중립** 자세)로
+    /// 되돌리는데, 팔로스루는 임팩트 속도 방향으로 더 나아간 상태라
+    /// 되돌아가는 동작 자체가 매번 "당겨치는 것과 반대 방향" 회전으로
+    /// 보인다. 실제 선수는 대기 자세를 중립이 아니라 **이미 당겨진(backswing)**
+    /// 상태로 잡는다 — 그러면 복귀 동작 자체가 다음 스윙의 예비 동작이 된다.
+    ///
+    /// 방법: 각 대표 임팩트에서 `solve_impact_target`이 실제로 내는 임팩트
+    /// 관절각 `q_impact`와 명령 관절속도 `q̇_impact`(NEAR_SINGULARITY 다운스케일
+    /// 이후 값 — 실제 커밋되는 값)를 구해, `q_windup = q_impact − q̇_impact · T_w`
+    /// 로 시간 `T_w`만큼 되감은 "당겨진" 자세를 만든다. 여러 `T_w`에 대해
+    /// 이 windup 자세들의 Chebyshev 중심을 새 휴지 자세 후보로 잡고, 그
+    /// 후보에서 **실제 임팩트 자세까지의** 최악 Δq(커밋 창에서 소화해야
+    /// 하는 진짜 비용)를 비교한다. `T_w=0`은 곧 현재 방식(임팩트 자세
+    /// 자체의 Chebyshev 중심)과 같아 기준선이 된다.
+    ///
+    /// ```text
+    /// cargo test --release --lib diag_windup_rest_pose_search -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "진단 전용 — 수치를 stdout으로 뽑는다"]
+    fn diag_windup_rest_pose_search() {
+        let robot = crate::defaults::robot().expect("robot");
+        let arm = (*robot.arm).clone();
+        let n = arm.default_joints.values.len();
+        let rail_x = arm.rail.as_ref().map(|r| r.default_x()).unwrap_or(0.0);
+        let scenarios = windup_rest_pose_scenarios();
+
+        // 현재 READY_JOINTS_4DOF 기준선.
+        let current_rest = arm.default_joints.values.clone();
+
+        for &windup_secs in &[0.0_f64, 0.06, 0.10, 0.14, 0.18, 0.22, 0.28] {
+            // IK 시드가 휴지 자세에 의존하는 고정점 문제라 몇 번 반복해 수렴시킨다.
+            let mut search_arm = arm.clone();
+            let mut candidate = current_rest.clone();
+            let mut impact_samples: Vec<Vec<f64>> = Vec::new();
+            let mut solved = 0usize;
+            for _iteration in 0..3 {
+                let start = robot::Pose::new(rail_x, Joints::from_slice(&candidate));
+                let mut lo = vec![f64::INFINITY; n];
+                let mut hi = vec![f64::NEG_INFINITY; n];
+                impact_samples.clear();
+                solved = 0;
+                for prediction in &scenarios {
+                    let Ok(target) = solve_impact_target(&search_arm, prediction, &start) else {
+                        continue;
+                    };
+                    solved += 1;
+                    let q_impact = &target.pose.joints.values;
+                    impact_samples.push(q_impact.clone());
+                    for j in 0..n {
+                        let windup = q_impact[j] - target.joint_velocities[j] * windup_secs;
+                        let clamped = match search_arm.joint_limit(j) {
+                            Some(limit) => windup.clamp(limit.min, limit.max),
+                            None => windup,
+                        };
+                        lo[j] = lo[j].min(clamped);
+                        hi[j] = hi[j].max(clamped);
+                    }
+                }
+                if solved == 0 {
+                    break;
+                }
+                candidate = chebyshev_center(&lo, &hi, &search_arm);
+                search_arm.default_joints = Joints::from_slice(&candidate);
+            }
+            if solved == 0 {
+                println!("T_w={windup_secs:.2}s: IK 해가 있는 시나리오 없음 — 탐색 불가");
+                continue;
+            }
+            let worst = worst_dq(&candidate, &impact_samples);
+            let need_secs = 1.875 * worst / arm.max_joint_speed;
+            println!(
+                "T_w={windup_secs:.2}s  해결={solved}/{}  후보=[{}]  \
+                 최악Δq(후보→임팩트)={worst:.3} rad → 필요시간 {need_secs:.3}s",
+                scenarios.len(),
+                candidate
+                    .iter()
+                    .map(|v| format!("{v:.4}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+        }
+
+        // 기준선: 현재 READY_JOINTS_4DOF에서 같은 임팩트 표본까지의 최악 Δq.
+        let start = robot::Pose::new(rail_x, Joints::from_slice(&current_rest));
+        let mut baseline_samples: Vec<Vec<f64>> = Vec::new();
+        for prediction in &scenarios {
+            if let Ok(target) = solve_impact_target(&arm, prediction, &start) {
+                baseline_samples.push(target.pose.joints.values.clone());
+            }
+        }
+        let baseline_worst = worst_dq(&current_rest, &baseline_samples);
+        println!(
+            "\n기준선(현재 READY_JOINTS_4DOF=[{}]): 최악Δq={baseline_worst:.3} rad → 필요시간 {:.3}s",
+            current_rest
+                .iter()
+                .map(|v| format!("{v:.4}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            1.875 * baseline_worst / arm.max_joint_speed,
         );
     }
 }

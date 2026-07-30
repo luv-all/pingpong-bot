@@ -700,12 +700,21 @@ impl SimWorld {
         }
 
         let min_swing = crate::defaults::ControlParams::default().min_swing_secs;
-        let soonest_tti = predictions
+        // WP2a/2026-07-30: 예전엔 `f64::min`(가장 먼저 지나가는 평면, 즉
+        // y_max처럼 로봇에서 가장 먼 평면의 tti)을 봐서, 그 평면 하나가
+        // 촉박하면 다른 평면(예: y_min, 로봇에 가까워 tti가 더 큰 평면)에
+        // 시간이 남아 있어도 공 전체를 포기했다. 아래 주석("**모든** 후보가
+        // 짧음")이 말하는 조건은 사실 `f64::max`(가장 늦게 지나가는 평면조차
+        // 촉박함)다 — 변수명과 로직이 주석과 어긋나 있었다. `min_swing_secs`가
+        // 작을 때(예전 0.08)는 두 값의 차이가 게이트를 거의 안 건드려 드러나지
+        // 않았지만, WP2a 실측 근거로 값을 올리자(0.24) 커밋률이 0%로 붕괴해
+        // 발견했다.
+        let latest_tti = predictions
             .iter()
             .map(|p| p.time_to_impact_secs)
-            .fold(f64::INFINITY, f64::min);
+            .fold(f64::NEG_INFINITY, f64::max);
         // 모든 후보가 최소 스윙 시간보다 짧음 → 물리적으로 안전한 스윙 불가.
-        if soonest_tti < min_swing {
+        if latest_tti < min_swing {
             let reason = if self.hard_fail_streak > 0 {
                 format!(
                     "tti < min_swing (하드 실패 {}회 후 너무 늦음)",
@@ -782,14 +791,14 @@ impl SimWorld {
                         shot = self.shot_seq,
                         %err,
                         streak = self.hard_fail_streak,
-                        soonest_tti,
+                        latest_tti,
                         "shot: 스윙 계획 하드 실패 — 재시도"
                     );
                 } else {
                     debug!(
                         %err,
                         streak = self.hard_fail_streak,
-                        soonest_tti,
+                        latest_tti,
                         "plan_swing 하드 불능 — 재시도"
                     );
                 }
@@ -806,7 +815,7 @@ impl SimWorld {
                     info!(
                         shot = self.shot_seq,
                         %err,
-                        soonest_tti,
+                        latest_tti,
                         "shot: InsufficientTime — 창 재진입 대기"
                     );
                 }
@@ -1871,24 +1880,28 @@ mod tests {
         let arm = test_robot();
         let world = SimWorld::new(arm.clone());
         let rail_x = world.robot().rail_x();
-        // 홈 FK z를 써서 손잡이 반영 EE에서도 도달·속도 한계 안에 들게 한다.
-        let reachable_z = arm
-            .arm
-            .forward_kinematics_with_rail(rail_x, world.robot().joints())
-            .expect("FK")
-            .position
-            .coords
-            .z;
+        // 예전엔 "홈 자세 자신의 FK z"를 썼다 — 홈 자세가 관절 한계 중점일
+        // 때는 자명하게 도달 가능한 점이었지만, 홈 자세를 임팩트 자세들
+        // 쪽으로 옮긴 뒤(`READY_JOINTS_4DOF`, 2026-07-30)로는 "자기 자신의
+        // FK점"이 오히려 특이점 근처가 된다(`planner::swing::physics`의
+        // `sample_prediction`이 2026-07-23에 같은 이유로 이미 겪은 문제).
+        // 대표 임팩트 높이(다른 테스트들과 동일, `SAMPLE_IMPACT_HEIGHT_M`)로
+        // 대체한다.
         let impact = crate::Point3::new(
             table::WIDTH_X * 0.5,
             table::DEFAULT_HIT_PLANE_Y,
-            reachable_z,
+            table::SURFACE_Z + 0.18,
         );
         let start = robot::Pose::new(rail_x, world.robot().joints().clone());
         let traj = motion::Planner::plan(
             &arm.arm,
             crate::estimator::Prediction {
-                time_to_impact_secs: 0.45,
+                // 2026-07-30: 새 `READY_JOINTS_4DOF`(윈드업 재계산, y∈[0.20,0.55]
+                // 시나리오로만 탐색됨)는 이 테스트가 쓰는 `DEFAULT_HIT_PLANE_Y`
+                // (=0.08, 탐색 범위 밖 최근접 평면)까지의 Δq가 예전 값보다
+                // 커져, 0.45s로는 관절속도 한계를 넘었다. 새 `swing_commit_max_secs`
+                // 상한(0.60) 안에서 여유를 준다.
+                time_to_impact_secs: 0.55,
                 impact_position: impact,
                 incoming_velocity: nalgebra::Vector3::new(0.0, -6.01, 1.51),
             },
@@ -1912,19 +1925,22 @@ mod tests {
         let settings = launch::Settings::default();
         world.shoot_ball(&settings);
 
-        let hit_plane = HitPlane {
-            y: table::DEFAULT_HIT_PLANE_Y,
-        };
+        // `DEFAULT_HIT_PLANE_Y`(0.08, 로봇에 가장 가까운 평면)는 새
+        // `READY_JOINTS_4DOF`의 윈드업 탐색 범위(y∈[0.20,0.55]) 밖이라
+        // 특히 불리하다 — 탐색 범위 안의 대표값(0.20)으로 바꾼다. 이
+        // 테스트의 목적은 "quintic이 실제로 관절을 움직이는가"이지 특정
+        // 평면 자체를 검증하는 게 아니다.
+        let hit_plane = HitPlane { y: 0.20 };
         let pos = world.ball_position();
         let vel = world.ball_velocity();
         let vy = f64::from(vel.y);
-        let t = ((hit_plane.y - f64::from(pos.y)) / vy).max(0.15);
+        let t = ((hit_plane.y - f64::from(pos.y)) / vy)
+            .max(crate::defaults::ControlParams::default().min_swing_secs);
         let impact_x = f64::from(pos.x) + f64::from(vel.x) * t;
-        let reachable = arm
-            .arm
-            .forward_kinematics_with_rail(world.robot().rail_x(), world.robot().joints())
-            .expect("FK");
-        let impact = crate::Point3::new(impact_x, hit_plane.y, reachable.position.coords.z);
+        // 예전엔 "홈 자세 자신의 FK z"를 썼다 — `auto_swing_plans_with_strike_velocity`와
+        // 같은 이유(2026-07-30 `READY_JOINTS_4DOF` 재계산 이후 특이점 근접)로
+        // 대표 임팩트 높이로 대체한다.
+        let impact = crate::Point3::new(impact_x, hit_plane.y, table::SURFACE_Z + 0.18);
         let start = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         let trajectory = motion::Planner::plan(
             &arm.arm,
