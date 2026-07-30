@@ -247,7 +247,7 @@ fn main() -> Result<()> {
         let mut mask_panel = masked_img;
         detector
             .mask
-            .draw_edge_line(&mut mask_panel, Scalar::new(255.0, 255.0, 0.0, 0.0), 2)?;
+            .draw_edge_lines(&mut mask_panel, Scalar::new(255.0, 255.0, 0.0, 0.0), 2)?;
 
         if let Some(r) = detector.roi.last_roi {
             let cyan = Scalar::new(255.0, 255.0, 0.0, 0.0);
@@ -374,26 +374,20 @@ fn main() -> Result<()> {
             Scalar::new(0.0, 255.0, 80.0, 0.0),
         )?;
 
-        draw_panel_hud(
-            &mut mask_panel,
-            &[
-                "floor-edge keep".to_string(),
-                format!(
-                    "cut_x={:.3}m  margin={:.3}m",
-                    detector.mask.cut_x, detector.mask.margin_m
-                ),
-                format!(
-                    "edge ({:.0},{:.0})->({:.0},{:.0}) poly={}",
-                    detector.mask.edge_p0.0,
-                    detector.mask.edge_p0.1,
-                    detector.mask.edge_p1.0,
-                    detector.mask.edge_p1.1,
-                    detector.mask.cut_poly_len
-                ),
-                format!("cut={cut_percent:.0}%  keep={keep_nonzero}/{total_pixels}"),
-            ],
-            cyan,
-        )?;
+        let mut mask_hud = vec![format!(
+            "floor-edge keep  poly={}",
+            detector.mask.keep_poly_len
+        )];
+        mask_hud.extend(detector.mask.edges.iter().map(|e| {
+            format!(
+                "{:?} cut={:.3}m δ={:.3}m ({:.0},{:.0})->({:.0},{:.0})",
+                e.axis, e.cut, e.margin_m, e.p0.0, e.p0.1, e.p1.0, e.p1.1
+            )
+        }));
+        mask_hud.push(format!(
+            "cut={cut_percent:.0}%  keep={keep_nonzero}/{total_pixels}"
+        ));
+        draw_panel_hud(&mut mask_panel, &mask_hud, cyan)?;
 
         draw_panel_hud(
             &mut cm_panel,

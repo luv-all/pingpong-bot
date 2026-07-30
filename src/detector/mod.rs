@@ -30,7 +30,7 @@ pub use roi_params::RoiParams;
 pub use scoring::candidate::{self as candidate, Candidate};
 pub use scoring::params::ScorerParams;
 pub use scoring::scorer::{self as scorer, Scorer};
-pub use spatial::FloorEdgeMask;
+pub use spatial::{Axis, CutEdge, FloorEdgeMask};
 pub(crate) use spatial::scorer_params_from_calib;
 pub use track::RoiTrack;
 pub(crate) use undistort::undistort_frame;

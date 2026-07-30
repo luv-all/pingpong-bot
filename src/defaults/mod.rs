@@ -120,4 +120,38 @@ mod tests {
     fn shared_robot_is_4dof() {
         assert_eq!(shared_robot().arm.joint_count(), 4);
     }
+
+    /// 커밋된 캘리브 SSOT로 만든 바닥 마스크가 테이블을 살려두는지 — 리그를
+    /// 다시 캘리브했을 때 마스크가 테이블을 지워버리는 배치를 여기서 잡는다.
+    #[test]
+    fn committed_calibration_keeps_the_whole_table() {
+        use crate::Point3;
+        use crate::constants::table;
+        use crate::detector::FloorEdgeMask;
+        use opencv::prelude::*;
+
+        let z = table::SURFACE_Z;
+        let probes = [
+            ("center", table::WIDTH_X * 0.5, table::LENGTH_Y * 0.5),
+            ("x0 y0", 0.0, 0.0),
+            ("xW y0", table::WIDTH_X, 0.0),
+            ("x0 yL", 0.0, table::LENGTH_Y),
+            ("xW yL", table::WIDTH_X, table::LENGTH_Y),
+        ];
+
+        for id in [camera::Id(0), camera::Id(1)] {
+            let cam = camera_params_for(id).unwrap();
+            let mask = FloorEdgeMask::from_params(&cam).unwrap();
+            for (name, x, y) in probes {
+                let Some(px) = cam.project_world(Point3::new(x, y, z)) else {
+                    panic!("cam{}: table {name} not in frame", id.0);
+                };
+                let keep: u8 = *mask
+                    .keep
+                    .at_2d(px.y.round() as i32, px.x.round() as i32)
+                    .unwrap();
+                assert_eq!(keep, 255, "cam{}: table {name} was masked out", id.0);
+            }
+        }
+    }
 }
