@@ -851,7 +851,6 @@ impl SimWorld {
             return;
         }
 
-        let min_swing = crate::defaults::ControlParams::default().min_swing_secs;
         // WP2a/2026-07-30: 예전엔 `f64::min`(가장 먼저 지나가는 평면, 즉
         // y_max처럼 로봇에서 가장 먼 평면의 tti)을 봐서, 그 평면 하나가
         // 촉박하면 다른 평면(예: y_min, 로봇에 가까워 tti가 더 큰 평면)에
@@ -865,23 +864,12 @@ impl SimWorld {
             .iter()
             .map(|p| p.time_to_impact_secs)
             .fold(f64::NEG_INFINITY, f64::max);
-        // 모든 후보가 최소 스윙 시간보다 짧음 → 물리적으로 안전한 스윙 불가.
-        if latest_tti < min_swing {
-            let reason = if self.hard_fail_streak > 0 {
-                format!(
-                    "tti < min_swing (하드 실패 {}회 후 너무 늦음)",
-                    self.hard_fail_streak
-                )
-            } else {
-                "tti < min_swing — 너무 늦음".to_string()
-            };
-            self.debug_snap.commit_phase = CommitPhase::TooLate;
-            self.abandon_swing(&reason);
-            if let Some(prediction) = predictions.first() {
-                self.set_debug_prediction(Some(prediction.clone()));
-            }
-            return;
-        }
+        // 2026-07-31: "너무 늦어서 포기"를 없앴다. 시간이 촉박하다는 것 자체는 위험하지
+        // 않다 — 위험한 건 그 시간에 맞추려고 요구되는 관절 속도·가속·토크이고, 그건
+        // `build_feasible_trajectory`가 `kinematic_limit_violation`·`peak_torque_utilization`
+        // 으로 이미 각각 거부한다. 시간으로 미리 자르면 한계 안에서 실현 가능한 늦은
+        // 스윙까지 버리게 된다 (실기 벤치에서 다수 관찰 — 사용자 결정).
+        // 포기는 이제 토크·관절 한계(`JointOrTorqueLimit`)와 네트 실격에서만 일어난다.
 
         // commit 창 밖(너무 이름)이면 계획하지 않고 대기.
         let any_in_window = predictions
@@ -3514,8 +3502,10 @@ mod tests {
                 eval::Protocol::settings_for_zone_shot(&launch_params, zone, index_in_zone);
             let robot_build = crate::defaults::robot().expect("robot");
             let arm = robot_build.arm.clone();
-            let mut world =
-                SimWorld::with_physics(robot_build.clone(), crate::defaults::PhysicsParams::default());
+            let mut world = SimWorld::with_physics(
+                robot_build.clone(),
+                crate::defaults::PhysicsParams::default(),
+            );
             world.set_use_ground_truth(true);
             // WP9와 동일하게 매 샷 전 레일을 테이블 중앙으로 리셋한다.
             if let Some(rail) = arm.rail {
@@ -3551,8 +3541,7 @@ mod tests {
                 let start = robot::Pose::new(world.robot.rail_x(), world.robot.joints().clone());
                 shots_captured += 1;
                 for (index, value) in start.joints.values.iter().enumerate().take(dof) {
-                    from_rest_sum[index] +=
-                        (value - arm.default_joints.values[index]).abs();
+                    from_rest_sum[index] += (value - arm.default_joints.values[index]).abs();
                 }
 
                 println!(
@@ -3596,11 +3585,7 @@ mod tests {
                         .peak_joint_speeds();
                     };
                     let travel = peaks(&start.joints, vec![0.0; dof], zero_rail);
-                    let full = peaks(
-                        &start.joints,
-                        target.joint_velocities.clone(),
-                        rail,
-                    );
+                    let full = peaks(&start.joints, target.joint_velocities.clone(), rail);
                     let delta: Vec<f64> = target
                         .pose
                         .joints

@@ -132,7 +132,6 @@ pub fn run(args: &Args) -> Result<()> {
 /// 메인 루프가 끝난 이유.
 enum Outcome {
     Committed,
-    TooLate,
     Infeasible(String),
     Failed(String),
     TimedOut,
@@ -143,7 +142,6 @@ impl Outcome {
     fn label(&self) -> String {
         return match self {
             Self::Committed => "커밋".to_owned(),
-            Self::TooLate => "포기 - 너무 늦음".to_owned(),
             Self::Infeasible(reason) => format!("포기 - {reason}"),
             Self::Failed(reason) => format!("실패 - {reason}"),
             Self::TimedOut => "타임아웃 - 공이 오지 않음".to_owned(),
@@ -240,7 +238,6 @@ impl Outcome {
     fn from_event(event: ShotEvent) -> Self {
         return match event {
             ShotEvent::Committed { .. } => Self::Committed,
-            ShotEvent::TooLate { .. } => Self::TooLate,
             ShotEvent::Infeasible { reason } => Self::Infeasible(reason),
             ShotEvent::Failed { reason } => Self::Failed(reason),
             _ => Self::Quit,
@@ -274,20 +271,6 @@ fn result_lines(event: &ShotEvent) -> Option<Vec<String>> {
                 f2(*rail_end),
                 f2(*peak_joint_speed)
             ),
-        ]),
-        ShotEvent::TooLate {
-            latest_tti_secs,
-            min_swing_secs,
-            candidates,
-            ball_y,
-        } => Some(vec![
-            "ABANDONED - too late".to_owned(),
-            format!(
-                "latest tti {}s < min swing {}s",
-                f2(*latest_tti_secs),
-                f2(*min_swing_secs)
-            ),
-            format!("candidates {candidates}  ball y {}", f2(*ball_y)),
         ]),
         ShotEvent::Infeasible { reason } => {
             Some(vec!["ABANDONED - infeasible".to_owned(), reason.clone()])
@@ -381,20 +364,7 @@ fn log_event(event: &ShotEvent) {
             peak_joint_speed = f2(*peak_joint_speed),
             "real shot: swing commit"
         ),
-        // 포기 근거 수치를 info로 — `--debug` 없이도 왜 못 쳤는지 보여야 한다.
-        ShotEvent::TooLate {
-            latest_tti_secs,
-            min_swing_secs,
-            candidates,
-            ball_y,
-        } => info!(
-            latest_tti = f2(*latest_tti_secs),
-            min_swing_secs = f2(*min_swing_secs),
-            shortfall = f2(min_swing_secs - latest_tti_secs),
-            candidates,
-            ball_y = f2(*ball_y),
-            "real shot: 포기 — 남은 시간이 최소 스윙 시간 미만"
-        ),
+        // 유일한 포기 사유 — info로 찍는다 (`--debug` 없이 보여야 한다).
         ShotEvent::Infeasible { reason } => {
             info!(reason, "real shot: 포기 — 관절·토크 한계 (모터 보호)")
         }

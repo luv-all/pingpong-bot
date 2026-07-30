@@ -51,7 +51,7 @@ mod throttle;
 mod vision_event;
 
 pub use commit_request::CommitRequest;
-pub use decision::{Decision, decide, latest_tti_secs};
+pub use decision::{Decision, decide};
 pub use options::Options;
 pub use preview::PreviewWindow;
 pub use preview_event::PreviewEvent;

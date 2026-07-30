@@ -20,13 +20,19 @@ use super::quintic_segment::QuinticSegment;
 use super::rail::Rail;
 use super::trajectory::Trajectory;
 
-/// 임팩트까지 남은 시간이 스윙 commit 창 `[MIN_SWING, COMMIT_MAX]` 안인지.
+/// 임팩트까지 남은 시간이 스윙 commit 창 `(0, COMMIT_MAX]` 안인지.
 ///
-/// 창보다 이르면 대기(발사 직후 긴 궤적 금지), 짧으면 `InsufficientTime`.
+/// 창보다 이르면 대기한다 (발사 직후 긴 궤적 금지 — 예측이 아직 안 여물었다).
+///
+/// **하한은 없다 (2026-07-31).** 예전에는 `min_swing_secs`(0.20 s)보다 짧으면 시도조차
+/// 안 했지만, 그건 물리 한계가 아니라 그 앞에 따로 서 있던 시간 하한이었다. 짧은 시간에
+/// 큰 Δq를 넣으면 quintic 첨두 속도·가속·토크가 치솟고, 그건 이미
+/// [`kinematic_limit_violation`]·[`peak_torque_utilization`]이 각각 잡는다 — 즉 "늦어서
+/// 못 친다"는 판정을 시간이 아니라 **실제 한계**가 내리게 한다. 늦게라도 한계 안에서
+/// 실현 가능한 스윙은 치는 게 맞다 (사용자 결정, 벤치 실측 중 다수 포기 관찰).
 pub fn in_swing_commit_window(time_to_impact_secs: f64) -> bool {
-    return (defaults::ControlParams::default().min_swing_secs
-        ..=defaults::ControlParams::default().swing_commit_max_secs)
-        .contains(&time_to_impact_secs);
+    return time_to_impact_secs > defaults::MIN_TIME_TO_GO_SECS
+        && time_to_impact_secs <= defaults::ControlParams::default().swing_commit_max_secs;
 }
 
 /// 네트 통과 후인지 - ground truth/EKF control 공통 commit 게이트.
@@ -42,11 +48,13 @@ pub fn plan_swing(
     start: &robot::Pose,
 ) -> Result<Trajectory, DomainError> {
     let time_to_impact = prediction.time_to_impact_secs;
-    if time_to_impact < defaults::ControlParams::default().min_swing_secs {
+    // 수치 하한만 본다 — quintic이 0으로 나누지 않을 만큼. "너무 늦었다"는 판정은
+    // 시간이 아니라 속도·가속·토크 한계가 내린다 ([`in_swing_commit_window`] 참고).
+    if time_to_impact <= defaults::MIN_TIME_TO_GO_SECS {
         return Err(DomainError::InfeasibleSwing(
             SwingPlanError::InsufficientTime {
                 time_to_impact_secs: time_to_impact,
-                min_swing_secs: defaults::ControlParams::default().min_swing_secs,
+                min_swing_secs: defaults::MIN_TIME_TO_GO_SECS,
             },
         ));
     }
@@ -453,7 +461,10 @@ fn best_scored_prediction(
             continue;
         };
         let score = candidate_score(&candidate);
-        if best.as_ref().is_none_or(|(_, best_score)| score > *best_score) {
+        if best
+            .as_ref()
+            .is_none_or(|(_, best_score)| score > *best_score)
+        {
             best = Some((*prediction, score));
         }
     }
@@ -801,6 +812,27 @@ fn kinematic_limits_ok(arm: &Arm, trajectory: &Trajectory) -> bool {
 /// 튜닝으로 고칠 수 있는 문제인지(관절 각도·레일 범위) 아니면 시간
 /// 예산 문제인지(속도·가속) 구분이 안 된다. 실제로 이 구분이 없어서
 /// 2026-07-23 조사가 한동안 엉뚱한 축(리치/관절속도 재보정)을 팠다.
+/// 레일 가속도 한계 검사 스위치.
+///
+/// **2026-07-31 실측 — 켜면 커밋률이 무너진다.** 시간 게이트를 없애면서 같이 켜 봤고,
+/// 67샷 그리드로 세 조합을 비교했다:
+///
+/// | 구성 | 커밋 | 포기 | 무결정 | 접촉 |
+/// |------|------|------|--------|------|
+/// | 시간 게이트 O · 레일가속 X (이전) | 49 (73%) | 18 | 0 | 51 |
+/// | 시간 게이트 X · 레일가속 **O** | 19 (28%) | 4 | 44 | 50 |
+/// | 시간 게이트 X · 레일가속 X (현재) | 49 (73%) | **1** | 17 | 51 |
+///
+/// 즉 커밋률 45%p 손실은 전적으로 이 검사 탓이고, 시간 게이트 제거는 커밋률을 건드리지
+/// 않으면서 포기만 18 → 1로 줄였다. 원인은 검사 로직이 아니라 `RAIL_ACCEL_M_S2 = 12.0`이
+/// 여전히 **미검증 placeholder**라는 것이다 (`docs/superpowers/plans/2026-07-22-axl-rail.md`가
+/// 최초부터 "values above are placeholders"로 명시). 사용자가 실기에서 리니어 모터가 "매우
+/// 빠르게" 움직이는 걸 직접 확인해 줬으므로 12.0은 실제보다 훨씬 보수적일 가능성이 높다.
+///
+/// **벤치 스텝 응답으로 `RAIL_ACCEL_M_S2`를 실측한 뒤** 이 스위치를 `true`로 되돌릴 것.
+/// 검사·계측(`Trajectory::peak_rail_acceleration`)은 그대로 살아 있다.
+const RAIL_ACCEL_CHECK_ENABLED: bool = false;
+
 fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'static str> {
     if trajectory.peak_joint_speed() > arm.max_joint_speed {
         return Some("관절 속도");
@@ -834,7 +866,13 @@ fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'sta
     // 지금 당장은 더 나쁘다. 재측정되면(벤치 스텝 응답 등) `RAIL_ACCEL_M_S2`를
     // 갱신하고 아래 `if false`를 지워 다시 켤 것 — 검사·계측
     // (`Trajectory::peak_rail_acceleration`)은 그대로 남겨둔다.
-    if false
+    // **2026-07-31 재활성화.** 시간 하한(`min_swing_secs`)을 없애 늦은 스윙까지 허용하면서,
+    // 레일을 몰아붙이는 궤적을 막을 게 이 검사밖에 남지 않았다 — 시간 게이트가 하던 암묵적
+    // 보호를 물리 한계로 옮긴 것이다 (사용자 결정). 위 경고는 그대로 유효하다:
+    // `RAIL_ACCEL_M_S2 = 12.0`은 여전히 **미검증 placeholder**이고 실기 레일은 더 빠를
+    // 가능성이 높다. 커밋률이 떨어지면 값이 낮은 것이지 검사가 틀린 게 아니다 —
+    // 벤치 스텝 응답으로 실측해 `RAIL_ACCEL_M_S2`를 갱신할 것.
+    if RAIL_ACCEL_CHECK_ENABLED
         && arm.rail.is_some()
         && trajectory.peak_rail_acceleration() > crate::defaults::motion::RAIL_ACCEL_M_S2
     {
@@ -1130,18 +1168,25 @@ mod tests {
         }
     }
 
+    /// 커밋 창에는 **하한이 없다** (2026-07-31) — 상한과 수치 하한만 있다.
+    ///
+    /// 늦은 예측을 시간으로 미리 자르면 한계 안에서 실현 가능한 스윙까지 버린다. "너무
+    /// 빨라서 못 친다"는 판정은 `kinematic_limit_violation`·`peak_torque_utilization`이
+    /// 내린다. 시간 하한을 되살리면 이 테스트가 깨진다.
     #[test]
-    fn in_swing_commit_window_bounds() {
-        assert!(!in_swing_commit_window(0.05));
-        assert!(in_swing_commit_window(
-            defaults::ControlParams::default().min_swing_secs + 0.05
-        ));
+    fn commit_window_has_no_lower_time_bound() {
+        assert!(in_swing_commit_window(0.05), "늦어도 시도 대상이어야 한다");
+        assert!(in_swing_commit_window(0.01));
         assert!(in_swing_commit_window(
             defaults::ControlParams::default().swing_commit_max_secs
         ));
+        // 상한은 그대로 — 너무 이르면 예측이 여물 때까지 기다린다.
         assert!(!in_swing_commit_window(
             defaults::ControlParams::default().swing_commit_max_secs + 0.01
         ));
+        // 수치 하한(quintic 0-나눗셈 방지)만 막는다.
+        assert!(!in_swing_commit_window(defaults::MIN_TIME_TO_GO_SECS));
+        assert!(!in_swing_commit_window(0.0));
     }
 
     #[test]
@@ -1304,10 +1349,15 @@ mod tests {
         assert_eq!(selected.prediction, reachable);
     }
 
+    /// `InsufficientTime`은 이제 **수치적으로 퇴화한** tti에서만 난다.
+    ///
+    /// 0.05 s처럼 그냥 촉박한 예측은 더 이상 여기서 걸리지 않는다 — 통과시킨 뒤 속도·토크
+    /// 한계가 판정한다.
     #[test]
-    fn plan_swing_fails_when_insufficient_time() {
+    fn plan_swing_fails_only_on_a_degenerate_time_to_go() {
         let arm = sample_three_dof_arm();
-        let err = plan_swing(&arm, sample_prediction(0.05), &sample_start(&arm)).unwrap_err();
+        let degenerate = defaults::MIN_TIME_TO_GO_SECS * 0.5;
+        let err = plan_swing(&arm, sample_prediction(degenerate), &sample_start(&arm)).unwrap_err();
         let DomainError::InfeasibleSwing(SwingPlanError::InsufficientTime {
             time_to_impact_secs,
             min_swing_secs,
@@ -1315,10 +1365,19 @@ mod tests {
         else {
             panic!("InsufficientTime 기대");
         };
-        assert!((time_to_impact_secs - 0.05).abs() < f64::EPSILON);
+        assert!((time_to_impact_secs - degenerate).abs() < f64::EPSILON);
+        assert!((min_swing_secs - defaults::MIN_TIME_TO_GO_SECS).abs() < f64::EPSILON);
+
+        // 촉박하지만 퇴화하지 않은 tti는 시간 때문에 거부되지 않는다.
+        let late = plan_swing(&arm, sample_prediction(0.05), &sample_start(&arm));
         assert!(
-            (min_swing_secs - defaults::ControlParams::default().min_swing_secs).abs()
-                < f64::EPSILON
+            !matches!(
+                late,
+                Err(DomainError::InfeasibleSwing(
+                    SwingPlanError::InsufficientTime { .. }
+                ))
+            ),
+            "0.05s는 시간 게이트로 막히면 안 된다: {late:?}"
         );
     }
 
@@ -1477,7 +1536,10 @@ mod tests {
             let n = arm.joint_count();
             let rigid_only = arm.clone().with_joint_reflected_inertias(vec![0.0; n]);
             eprintln!("\n=== {label} ===");
-            eprintln!("  반사관성 [kg·m²] = {}", fmt(&arm.joint_reflected_inertias));
+            eprintln!(
+                "  반사관성 [kg·m²] = {}",
+                fmt(&arm.joint_reflected_inertias)
+            );
             eprintln!("  토크한계  [N·m]  = {}", fmt(&arm.joint_torque_limits));
 
             for (tti, prediction) in cases {
@@ -1675,8 +1737,17 @@ mod tests {
             println!("===== 임팩트 x 오프셋 dx={dx:+.2} m (레일 이동량) =====");
             println!(
                 "{:>6} {:>5} {:>5} {:>8} {:>8} {:>7} {:>7} {:>7} {:>7} {:>7}  {}",
-                "tti", "게이트", "계획", "req|vr|", "got|vr|", "vr·n%", "q̇/lim", "q̈/lim",
-                "rail_v", "rail_a", "사유",
+                "tti",
+                "게이트",
+                "계획",
+                "req|vr|",
+                "got|vr|",
+                "vr·n%",
+                "q̇/lim",
+                "q̈/lim",
+                "rail_v",
+                "rail_a",
+                "사유",
             );
 
             let mut tti_milli = 30_u32;
@@ -1713,9 +1784,12 @@ mod tests {
                             }
                             _ => f64::NAN,
                         };
-                        let rail_a_ratio =
-                            trajectory.peak_rail_acceleration() / rail_accel_limit;
-                        let flag = if rail_a_ratio > 1.0 { " ⚠레일가속초과" } else { "" };
+                        let rail_a_ratio = trajectory.peak_rail_acceleration() / rail_accel_limit;
+                        let flag = if rail_a_ratio > 1.0 {
+                            " ⚠레일가속초과"
+                        } else {
+                            ""
+                        };
                         println!(
                             "{:>6.3} {:>5} {:>5} {:>8.3} {:>8.3} {:>6.1}% {:>7.2} {:>7.2} \
                              {:>7.2} {:>7.2}  τ={:.2}x{}",
@@ -1801,12 +1875,7 @@ mod tests {
     fn worst_dq(candidate: &[f64], samples: &[Vec<f64>]) -> f64 {
         return samples
             .iter()
-            .flat_map(|sample| {
-                sample
-                    .iter()
-                    .zip(candidate)
-                    .map(|(s, c)| (s - c).abs())
-            })
+            .flat_map(|sample| sample.iter().zip(candidate).map(|(s, c)| (s - c).abs()))
             .fold(0.0_f64, f64::max);
     }
 

@@ -24,16 +24,9 @@ pub enum ShotEvent {
         rail_end: f64,
         peak_joint_speed: f64,
     },
-    /// 후보가 전부 최소 스윙 시간 미만 — 이번 공은 물리적으로 못 친다.
-    TooLate {
-        /// 후보 중 **가장 늦게** 도달하는 tti [s]. 이게 임계 미만이면 전부 늦은 것이다.
-        latest_tti_secs: f64,
-        /// 그때의 임계 (`ControlParams::min_swing_secs`) [s].
-        min_swing_secs: f64,
-        candidates: usize,
-        ball_y: f64,
-    },
     /// 계획이 관절·토크 한계에 걸렸다 — 모터 보호로 포기 (재시도 없음).
+    ///
+    /// **유일한 포기 사유다.** "남은 시간이 짧다"로는 포기하지 않는다 (2026-07-31).
     Infeasible { reason: String },
     /// 계획 실패 (재시도 가능) — 진단용.
     PlanFailed { reason: String },
@@ -48,10 +41,7 @@ impl ShotEvent {
     pub fn ends_shot(&self) -> bool {
         return matches!(
             self,
-            Self::Committed { .. }
-                | Self::TooLate { .. }
-                | Self::Infeasible { .. }
-                | Self::Failed { .. }
+            Self::Committed { .. } | Self::Infeasible { .. } | Self::Failed { .. }
         );
     }
 }

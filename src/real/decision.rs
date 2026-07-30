@@ -4,11 +4,13 @@
 //! `defaults::ControlParams` / `robot::motion::Planner`에서 오고, real 전용 값을 새로 만들지
 //! 않는다 — sim과 real이 갈리면 sim에서 튜닝한 결과가 실기에 안 옮겨진다.
 //!
+//! **여기서 포기는 하지 않는다.** 남은 시간이 짧다는 것만으로 공을 버리지 않고, 실현
+//! 불가능한지는 `Planner::plan_best`의 속도·가속·토크·관절범위 검사가 판정한다.
+//!
 //! 하드웨어에 손대지 않는 순수 함수라 `cargo test --workspace`로 그대로 돈다.
 //!
 //! [`SimWorld::try_auto_swing`]: https://github.com/luv-all/pingpong-bot/blob/main/src/sim/physics/world.rs
 
-use pingpong_bot::defaults::ControlParams;
 use pingpong_bot::estimator::Prediction;
 use pingpong_bot::robot::motion::Planner;
 
@@ -21,7 +23,7 @@ pub enum WaitReason {
     NoPrediction,
     /// 공이 아직 미드코트를 안 넘음.
     BeforeMidcourt,
-    /// 커밋 창(`[min_swing_secs, swing_commit_max_secs]`) 밖.
+    /// 커밋 창(`(0, swing_commit_max_secs]`) 밖 — 아직 너무 이르다.
     OutOfWindow,
 }
 
@@ -43,21 +45,8 @@ impl WaitReason {
 pub enum Decision {
     /// 다음 관측을 기다린다.
     Wait(WaitReason),
-    /// 이 공은 포기한다 (단발이므로 곧 종료).
-    Abandon(&'static str),
     /// 제어 워커에 계획을 요청한다.
     Attempt,
-}
-
-/// 후보 중 **가장 늦게** 도달하는 tti [s]. 후보가 없으면 `None`.
-///
-/// "너무 늦음" 판정의 근거값이다 — `min`이 아니라 `max`인 이유는 [`decide`] 참고.
-/// 로그에 실을 때도 같은 값을 쓰도록 여기서 한 번만 계산한다.
-pub fn latest_tti_secs(predictions: &[Prediction]) -> Option<f64> {
-    return predictions
-        .iter()
-        .map(|prediction| prediction.time_to_impact_secs)
-        .reduce(f64::max);
 }
 
 /// 게이트를 순서대로 통과시킨다.
@@ -77,16 +66,10 @@ pub fn decide(tracking: bool, ball_y: Option<f64>, predictions: &[Prediction]) -
         return Decision::Wait(WaitReason::BeforeMidcourt);
     }
 
-    // `max`다 — `min`으로 쓰면 아직 여유 있는 후보가 하나라도 늦은 후보에 끌려가 통째로
-    // 포기된다. sim에서 이 실수로 커밋률이 0%가 된 이력이 world.rs 주석에 남아 있다.
-    let latest = predictions
-        .iter()
-        .map(|prediction| prediction.time_to_impact_secs)
-        .fold(f64::NEG_INFINITY, f64::max);
-    if latest < ControlParams::default().min_swing_secs {
-        return Decision::Abandon("너무 늦음 — 남은 시간이 최소 스윙 시간 미만");
-    }
-
+    // "너무 늦어서 포기"는 없다 (2026-07-31). 촉박한 것 자체는 위험하지 않고, 위험한 건
+    // 그 시간에 맞추려고 요구되는 관절 속도·가속·토크다 — 그건 `Planner::plan_best`가
+    // `kinematic_limit_violation`·`peak_torque_utilization`으로 각각 거부한다.
+    // 포기는 그 한계에 실제로 걸렸을 때(`JointOrTorqueLimit`)만 제어 워커가 판정한다.
     if !predictions
         .iter()
         .any(|prediction| Planner::in_commit_window(prediction.time_to_impact_secs))
@@ -103,6 +86,7 @@ mod tests {
     use nalgebra::Vector3;
     use pingpong_bot::Point3;
     use pingpong_bot::constants::table;
+    use pingpong_bot::defaults::ControlParams;
 
     /// 미드코트를 넘은 (= 커밋 게이트를 통과하는) 공 y.
     fn past_midcourt_y() -> f64 {
@@ -163,35 +147,39 @@ mod tests {
         assert_eq!(decision, Decision::Wait(WaitReason::BeforeMidcourt));
     }
 
-    /// 너무 늦음 판정은 `max(tti)` 기준이다.
+    /// 시간이 촉박해도 **포기하지 않고 시도한다** (2026-07-31 결정).
     ///
-    /// 늦은 후보 하나가 섞여 있어도, 아직 여유 있는 후보가 남아 있으면 포기하면 안 된다.
-    /// `min`으로 바꾸면 이 테스트가 깨진다 (sim 커밋률 0% 회귀 방지).
+    /// 예전에는 모든 후보의 tti가 `min_swing_secs`(0.20 s) 미만이면 공을 통째로 버렸다.
+    /// 촉박한 것 자체는 위험하지 않다 — 위험한 건 그 시간에 요구되는 속도·토크이고 그건
+    /// 플래너가 따로 거부한다. 시간 하한을 다시 넣으면 이 테스트가 깨진다.
     #[test]
-    fn abandons_only_when_every_candidate_is_too_late() {
-        let control = ControlParams::default();
-        let too_late = control.min_swing_secs * 0.5;
-
-        let all_late = decide(
-            true,
-            Some(past_midcourt_y()),
-            &[prediction(too_late), prediction(too_late * 0.5)],
-        );
+    fn attempts_even_when_every_candidate_is_late() {
+        let very_late = ControlParams::default().min_swing_secs * 0.1;
         assert!(
-            matches!(all_late, Decision::Abandon(_)),
-            "전부 늦으면 포기: {all_late:?}"
+            Planner::in_commit_window(very_late),
+            "커밋 창에 시간 하한이 없어야 한다"
         );
 
-        let mixed = decide(
+        let decision = decide(
             true,
             Some(past_midcourt_y()),
-            &[prediction(too_late), prediction(in_window_secs())],
+            &[prediction(very_late), prediction(very_late * 0.5)],
         );
         assert_eq!(
-            mixed,
+            decision,
             Decision::Attempt,
-            "여유 있는 후보가 남아 있으면 포기하지 않는다 (max이지 min이 아니다)"
+            "늦어도 시도한다 — 실현 가능 여부는 플래너의 물리 한계가 판정한다"
         );
+    }
+
+    /// 수치 하한(0에 수렴하는 tti)만은 여전히 막는다 — quintic이 0으로 나눈다.
+    #[test]
+    fn rejects_only_a_numerically_degenerate_time_to_go() {
+        let degenerate = pingpong_bot::defaults::MIN_TIME_TO_GO_SECS * 0.5;
+        assert!(!Planner::in_commit_window(degenerate));
+
+        let decision = decide(true, Some(past_midcourt_y()), &[prediction(degenerate)]);
+        assert_eq!(decision, Decision::Wait(WaitReason::OutOfWindow));
     }
 
     #[test]

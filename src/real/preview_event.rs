@@ -8,8 +8,13 @@ use pingpong_bot::camera;
 pub struct PreviewEvent {
     pub frame: camera::Frame,
     pub pixel: Option<camera::Pixel>,
-    /// 예측 도달 위치를 **이 카메라로 재투영**한 픽셀. 프레임 밖이면 `None`.
+    /// 예측 도달 위치를 **이 카메라로 재투영**한 픽셀. 카메라 뒤면 `None`.
+    ///
+    /// 프레임 밖 좌표도 그대로 담는다 (`project_world_unclipped`) — 잘라서 `None`으로
+    /// 만들면 "예측이 없는 것"과 "화면 밖인 것"이 구분되지 않는다.
     pub impact_pixel: Option<camera::Pixel>,
+    /// [`Self::impact_pixel`]이 이 프레임 밖인가.
+    pub impact_offscreen: bool,
     /// 화면 좌상단 HUD 줄들 (추정 상태·게이트 단계).
     pub hud: Vec<String>,
 }
