@@ -16,9 +16,12 @@ Dynamixel 관절 + AXL 리니어 레일을 **시뮬에서 미리보기**한 뒤 
 # 통신 없이 IK·궤적·executor + sim 미리보기
 cargo run -p jog -- --dry-run
 
-# 실기 (Windows 벤치)
+# 실기 (Windows 벤치 — Dynamixel + AXL)
 cargo run -p jog -- --port COM8
 cargo run -p jog -- --port COM8 --dll-path "C:/path/to/AXL.dll"
+
+# 실기 (macOS — Dynamixel만; AXL 레일은 자동 스킵, rail_x=0)
+cargo run -p jog -- --port /dev/tty.usbserial-XXXX
 
 # 디버그: Dynamixel 재시도·AXL API code·초기 배선 덤프
 cargo run -p jog -- --port COM8 --debug
