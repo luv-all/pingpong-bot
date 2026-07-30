@@ -71,7 +71,28 @@
 진입: `camera::Preview` / `camera::Charuco` / `camera::TablePnp` / `estimator::Triangulate` / `detector::Detector`.
 
 - [x] 삼각·검출·ROI·colormask·ChArUco·탁구대 PnP·UVC/파일·undistort 파이프
+- [x] floor-edge 공간 마스크 (`detector::FloorEdgeMask`, RMSE 마진 팽창) + 캠별 면적 밴드 (`ScorerParams::from_calib`)
 - [ ] 멀티캠 동기·타임스탬프 — **비범위**
+
+### 3.1 검출 정확도 — 진행 중
+
+> **플랜:** [`docs/superpowers/plans/2026-07-30-spatial-then-color.md`](docs/superpowers/plans/2026-07-30-spatial-then-color.md)  
+> 문제: floor-edge가 하단만 잘라 **윗 배경**이 colormask를 통과 (`nonzero ≈ 23k`).
+> warm 캐스트 + 저화질 공 픽셀 + 축정렬 AABB의 빈 모서리가 겹쳐 오탐이 남는다.
+> 접근: **공간 corridor → 스틸 GT ~10장 → 메소드 그리드 eval → 승자 본선 반영** (순서 고정).
+
+- [x] `TableCorridorMask` (테이블 XY + `FLIGHT_BAND_M` 프리즘 투영) + `SpatialMask` 합성
+- [x] `detect-full` corridor 패널·HUD (`1 spatial-keep`)
+- [x] `label-stills` — 클립 등분 덤프 + 클릭 라벨 → `data/detect_stills/manifest.json` (무공 `null` 포함)
+- [ ] **스틸 GT 수집(사람 작업)** — `label-stills --cam left|right --clip fly_01 --count 10`, 캠당 2~3장은 `n`
+- [x] `Preprocess` (none/gray_world/warm_pushback/clahe_v/bilateral/gauss/cb_sim) — `Detector.pre`
+- [x] `ColorSpace` 확장 (`lab` · `custom_h_ab`) + `tune-colormask` 4공간 순환
+- [ ] `ColorGate{aabb, aabb_pct, ellipsoid, ellipsoid_diag}` + 256³ LUT · `MorphOp`
+- [ ] `eval-colormask` — stills로 hit/miss/FP/TN 랭킹 (메인 48조합 → 상위만 확장 스윕)
+- [ ] 승자 조합 `detector_for` · `tune-colormask` 반영
+
+> corridor 실측: 밴드 1.0 m에서 keep 61%(cam0) — **바닥·측면만 컷**. 시선 원뿔이라 대 너머 배경은
+> 못 자른다 (밴드 상단이 프레임 밖). 윗 배경 오탐은 색 그리드가 담당한다. 상세는 플랜 §Task 1.
 
 ---
 
@@ -113,3 +134,4 @@ cargo run -p pingpong-bot -- --mode sim
 
 갱신: 2026-07-30 — 도메인 재편: ball/shooter/swing/planner/eval 해체, 계획은 `robot::motion`,
 공 반발 역산은 `estimator::Impact`, robot↔hardware 레이어 분리, 호환 alias 제거.
+검출 정확도 트랙(§3.1) 플랜 추가 — spatial corridor → 스틸 GT → 메소드 그리드 eval.
