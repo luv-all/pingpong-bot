@@ -67,7 +67,7 @@ fn non_windows_live_rail_soft_skips_to_rail_x_zero() {
 cargo test -p pingpong-bot --features real non_windows_live_rail_soft_skips --lib
 ```
 
-- [ ] **Step 3: Implement `from_bus` live branch**
+- [x] **Step 3: Implement `from_bus` live branch**
 
 ```rust
 Some(config) => {
@@ -90,15 +90,15 @@ Some(config) => {
 
 Import `warn` alongside `debug`/`error`.
 
-- [ ] **Step 4: Run tests PASS**
+- [x] **Step 4: Run tests PASS**
 
 ```bash
 cargo test -p pingpong-bot --features real real:: --lib
 ```
 
-- [ ] **Step 5: README** — `tools/jog/README.md` 실행 절에 macOS 실기 = Dynamixel only, 레일 자동 스킵 한 줄.
+- [x] **Step 5: README** — `tools/jog/README.md` 실행 절에 macOS 실기 = Dynamixel only, 레일 자동 스킵 한 줄.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/hardware/real.rs tools/jog/README.md
