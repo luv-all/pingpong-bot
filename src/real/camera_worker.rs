@@ -7,6 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Sender, TrySendError};
+use opencv::prelude::MatTraitConst;
 use pingpong_bot::camera;
 use pingpong_bot::camera::FrameSource;
 use pingpong_bot::detector::Detector;
@@ -67,6 +68,7 @@ pub fn spawn(
             ..CameraStats::default()
         };
         let mut last_timestamp: Option<Instant> = None;
+        let mut checked_size = false;
         let mut progress = Throttle::new(PROGRESS_PERIOD);
         let (mut last_frames, mut last_detections) = (0_u64, 0_u64);
 
@@ -98,6 +100,25 @@ pub fn spawn(
             } else {
                 frame
             };
+
+            // 캘리브 해상도와 실제 프레임 크기가 다르면 fx/fy/cx/cy가 이 이미지에 안 맞는다 —
+            // 검출은 멀쩡한데 삼각측량·재투영만 체계적으로 틀어진다. 조용히 넘어가면
+            // 진단이 불가능하므로 첫 프레임에서 한 번 크게 경고한다.
+            if !checked_size {
+                checked_size = true;
+                let (got_w, got_h) = (frame.image.cols(), frame.image.rows());
+                if got_w != params.width as i32 || got_h != params.height as i32 {
+                    warn!(
+                        frame_w = got_w,
+                        frame_h = got_h,
+                        calib_w = params.width,
+                        calib_h = params.height,
+                        "캘리브 해상도 ≠ 실제 프레임 — 내부 파라미터가 이 이미지에 맞지 않는다 \
+                         (재투영·삼각측량이 체계적으로 틀어짐). 같은 해상도로 재캘리브하거나 \
+                         스트림 크기를 맞출 것"
+                    );
+                }
+            }
 
             stats.frames += 1;
             let pixel = detector.detect(&frame);
