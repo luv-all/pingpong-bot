@@ -20,7 +20,9 @@ path = "src/main.rs"
 required-features = ["gui"]
 
 [features]
-default = ["gui"]
+# real이 기본 — `--mode real`만으로 실기가 돌게 한다 (빌드 feature와 런타임 모드를 둘 다
+# 켜야 하는 마찰 제거). 끄려면 `--no-default-features --features gui`.
+default = ["gui", "real"]
 gui = ["dep:kiss3d", "dep:pollster", "dep:stl_io", "dep:winit"]
 real = ["dep:rustypot", "dep:serialport", "dep:libloading"]
 

@@ -16,6 +16,7 @@
         "hardware": "controller",
         "pipeline": "pipe",
         "planner": "strategy",
+        "real": "target",
         "robot": "robot",
         "sim": "simulations",
         "telemetry": "activity"

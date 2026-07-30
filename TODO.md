@@ -12,7 +12,7 @@
 `ball`/`shooter`/`swing`/`planner`/`eval` 도메인은 해체됨 — 공 상태·피더·채점은
 `sim::physics`/`sim::launch`/`sim::eval`, 팔–테이블 관통은 `robot::collision`.
 
-**우선순위:** **리턴 파워(eval)** → 실캠 `run_real` / Windows 벤치 → 시뮬 품질·포기 정책 → ω 추정 → 풀 동역학 후속.
+**우선순위:** **리턴 파워(eval)** → 실기 단발 1발 계측 / Windows 벤치 → 시뮬 품질·포기 정책 → ω 추정 → 풀 동역학 후속.
 
 > **🔴 지금 최우선 — 리턴 파워:** eval 30/90 (통과선 45). 30발 전부 1점.
 > 진단·반증: [`docs/superpowers/plans/2026-07-27-return-power.md`](docs/superpowers/plans/2026-07-27-return-power.md).
@@ -78,8 +78,11 @@
 ## 4. 하드웨어
 
 - [x] `RealHardware` · SwingExecutor · jog · AXL 레일 · URDF↔motor_ids
-- [ ] `run_real` + 카메라·`Pipeline` (하드웨어 검증 후)
-- [ ] Windows 벤치: `jog --dry-run` → 작은 `j`/`rd` → `swing`
+- [x] `run_real` **단발 타격** — `src/real/` (채널 단일소유 파이프라인).
+      설계 [`src/real/README.md`](src/real/README.md) ·
+      계획 [`docs/superpowers/plans/2026-07-31-run-real-single-shot.md`](docs/superpowers/plans/2026-07-31-run-real-single-shot.md)
+- [ ] Windows 벤치: `jog --dry-run` → 작은 `j`/`rd` → `swing` → `--mode real --dry-run` → 실기 1발
+- [ ] 실기 1발 계측 후 랠리 확장 (커밋 래치 해제·샷 간 EKF 리셋·연속 포기 정책)
 - [ ] 실물 E-stop 경로 (tick clamp·profile은 적용됨)
 
 ---
@@ -107,8 +110,10 @@
 ```bash
 cargo test --workspace
 cargo run -p pingpong-bot -- --mode sim
+# 실캠 단발 리허설 (모터 정지, macOS에서도 됨)
+cargo run -p pingpong-bot -- --mode real --dry-run
 # Windows real:
-# cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
+# cargo run -p pingpong-bot -- --mode real --dxl-port COM8
 ```
 
 갱신: 2026-07-30 — 도메인 재편: ball/shooter/swing/planner/eval 해체, 계획은 `robot::motion`,
