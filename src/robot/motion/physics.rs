@@ -933,7 +933,7 @@ mod tests {
     #[ignore = "진단용 계측 — 수치를 stdout으로 뽑는다"]
     fn diag_reflected_inertia_torque_utilization() {
         /// 관절별 `max |τ| / limit` — `peak_torque_utilization`의 per-joint 버전.
-        fn per_joint_utilization(arm: &Arm, trajectory: &SwingTrajectory) -> Vec<f64> {
+        fn per_joint_utilization(arm: &Arm, trajectory: &Trajectory) -> Vec<f64> {
             let n = arm.joint_count();
             let samples = (trajectory.duration_secs / 0.005).ceil().max(1.0) as usize;
             let mut scratch = crate::robot::dynamics::RneaScratch::new();

@@ -10,7 +10,7 @@
 //! 위상 아티팩트인지, (3) Rapier 솔버 노브로 설정값에 맞출 수 있는지를 가른다.
 
 use pingpong_bot::defaults;
-use pingpong_bot::sim::SimWorld;
+use pingpong_bot::sim::physics::SimWorld;
 
 const DT: f64 = 1.0 / 1000.0;
 

@@ -25,10 +25,10 @@ use nalgebra::Vector3;
 use pingpong_bot::constants::geometry::{RACKET_HALF_X, RACKET_HALF_Y, RACKET_HALF_Z};
 use pingpong_bot::constants::{BALL_RADIUS, table};
 use pingpong_bot::defaults;
-use pingpong_bot::sim::eval_protocol::{EvalLaunchParams, EvalMode, EvalZone};
-use pingpong_bot::sim::eval_protocol::{settings_for_zone_shot, shot_schedule};
-use pingpong_bot::sim::physics::BallShooterSettings;
-use pingpong_bot::sim::{BallState, SimWorld};
+use pingpong_bot::estimator::Impact;
+use pingpong_bot::sim::eval::{LaunchParams as EvalLaunchParams, Mode as EvalMode, Protocol, Zone as EvalZone};
+use pingpong_bot::sim::launch::Settings as BallShooterSettings;
+use pingpong_bot::sim::physics::{BallState, SimWorld};
 
 const DT: f64 = 1.0 / 1000.0;
 const MAX_WAIT_STEPS: usize = 4_000;
@@ -368,7 +368,7 @@ fn print_table(rows: &[TimingRow]) {
 fn diag_contact_timing_trace() {
     let launch = EvalLaunchParams::default();
     for (zone, index_in_zone) in [(EvalZone::Center, 0), (EvalZone::Left, 2)] {
-        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+        let settings = Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let mut world = SimWorld::with_physics(
             defaults::robot().expect("robot"),
             defaults::PhysicsParams::default(),
@@ -395,7 +395,7 @@ fn diag_contact_timing_trace() {
         };
         let impact = prediction.impact_position.coords;
         let normal = {
-            let v_out = pingpong_bot::planner::impact::rally_return_velocity(
+            let v_out = Impact::rally_return(
                 prediction.impact_position,
                 prediction.incoming_velocity,
             );
@@ -479,7 +479,7 @@ fn diag_predictor_vs_rapier_divergence() {
     let launch = EvalLaunchParams::default();
     let physics = defaults::PhysicsParams::default();
     for (zone, index_in_zone) in [(EvalZone::Center, 0), (EvalZone::Left, 2)] {
-        let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+        let settings = Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
         let mut world = SimWorld::with_physics(defaults::robot().expect("robot"), physics);
         world.set_use_ground_truth(true);
         world.shoot_ball(&settings);
@@ -590,7 +590,7 @@ fn diag_predictor_vs_rapier_divergence() {
 fn diag_contact_timing_solver_knob_sweep() {
     type Tweak = Box<dyn Fn(&mut SimWorld)>;
     let launch = EvalLaunchParams::default();
-    let shots: Vec<(EvalZone, usize)> = shot_schedule(EvalMode::Block);
+    let shots: Vec<(EvalZone, usize)> = Protocol::shot_schedule(EvalMode::Block);
 
     let variants: Vec<(&str, Tweak)> = vec![
         ("default", Box::new(|_: &mut SimWorld| {})),
@@ -613,7 +613,7 @@ fn diag_contact_timing_solver_knob_sweep() {
             .iter()
             .enumerate()
             .map(|(i, &(zone, index_in_zone))| {
-                let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+                let settings = Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
                 run_shot_tweaked(
                     format!("{}#{}", zone.label(), i + 1),
                     launch.speed_mps,
@@ -654,11 +654,11 @@ fn diag_contact_timing_solver_knob_sweep() {
 #[ignore = "진단 전용"]
 fn diag_contact_timing_eval_grid() {
     let launch = EvalLaunchParams::default();
-    let rows: Vec<TimingRow> = shot_schedule(EvalMode::Block)
+    let rows: Vec<TimingRow> = Protocol::shot_schedule(EvalMode::Block)
         .into_iter()
         .enumerate()
         .map(|(i, (zone, index_in_zone))| {
-            let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+            let settings = Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
             run_shot(
                 format!("{}#{}", zone.label(), i + 1),
                 launch.speed_mps,
@@ -686,7 +686,7 @@ fn diag_contact_timing_speed_sweep() {
             (EvalZone::Left, 2),
             (EvalZone::Right, 2),
         ] {
-            let settings = settings_for_zone_shot(&launch, zone, index_in_zone);
+            let settings = Protocol::settings_for_zone_shot(&launch, zone, index_in_zone);
             rows.push(run_shot(
                 format!("{}/{}", zone.label(), index_in_zone),
                 speed,
