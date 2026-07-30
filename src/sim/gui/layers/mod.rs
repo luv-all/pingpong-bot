@@ -12,6 +12,9 @@ pub use builder::SceneLayersBuilder;
 #[derive(Clone, Default)]
 pub struct SceneLayers {
     pub ball: Option<ball::Handle>,
+    /// 비교용 반투명 공 — 같은 씬에 두 번째 위치를 겹쳐 볼 때 쓴다
+    /// (예: verify-stereo의 생 삼각측량 vs EKF 출력).
+    pub ghost: Option<ball::Handle>,
     pub robot: Option<robot::Handle>,
     pub shooter: Option<shooter::Handle>,
 }

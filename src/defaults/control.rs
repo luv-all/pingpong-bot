@@ -38,7 +38,6 @@ pub struct ControlParams {
     pub swing_commit_max_secs: f64,
     pub swing_follow_through_secs: f64,
     pub swing_commit_max_ball_y_frac: f64,
-    pub ekf_meas_jump_m: f64,
     pub max_joint_accel: f64,
     /// 관절별 토크 상한 [N·m] — [`joint_torque_limits_4dof_array`] SSOT
     /// (stall×derate, yaw 듀얼 포함).
@@ -62,7 +61,6 @@ impl ControlParams {
             (0.0..=1.0).contains(&self.swing_commit_max_ball_y_frac),
             "swing_commit_max_ball_y_frac in 0..=1"
         );
-        ensure!(self.ekf_meas_jump_m > 0.0, "ekf_meas_jump_m > 0");
         ensure!(self.max_joint_accel > 0.0, "max_joint_accel > 0");
         ensure!(
             self.max_joint_torques.iter().all(|&t| t > 0.0),
@@ -80,7 +78,6 @@ impl Default for ControlParams {
             swing_commit_max_secs: 0.60,
             swing_follow_through_secs: 0.06,
             swing_commit_max_ball_y_frac: 0.55,
-            ekf_meas_jump_m: 0.6,
             max_joint_accel: 400.0,
             max_joint_torques: joint_torque_limits_4dof_array(),
             joint_inertia: 0.015,

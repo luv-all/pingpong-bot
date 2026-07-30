@@ -66,6 +66,12 @@ async fn run_lightweight(options: SceneHostOptions) -> Result<(), String> {
         .as_ref()
         .map(|_| ball::VelocityVisual::spawn(&mut scene));
 
+    let mut ghost_visual = options
+        .layers
+        .ghost
+        .as_ref()
+        .map(|_| ball::Visual::spawn_ghost(&mut scene));
+
     let mut robot_visual = options
         .layers
         .robot
@@ -96,6 +102,12 @@ async fn run_lightweight(options: SceneHostOptions) -> Result<(), String> {
                         vector.hide();
                     }
                 }
+            }
+        }
+        if let (Some(handle), Some(visual)) = (&options.layers.ghost, &mut ghost_visual) {
+            match handle.position() {
+                Some(p) => visual.set_world_position(p),
+                None => visual.hide(),
             }
         }
         if let (Some(_), Some(visual), Some(world)) =

@@ -14,7 +14,7 @@ mod tri;
 mod triangulate;
 
 pub use ballistics::semi_implicit_euler;
-pub use ekf::Ekf;
+pub use ekf::{Ekf, GateOutcome};
 pub use estimator::Estimator;
 pub use hit_plane::HitPlane;
 pub use impact::Impact;

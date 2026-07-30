@@ -3,6 +3,10 @@
 //! 상태 x = [p, v], 측정은 삼각측량 3D 위치.
 //! 짧은 전파와 hit-plane 예측은 반암시적 오일러 (`ballistics`).
 //!
+//! 오검출은 마할라노비스 게이트로 걸러 **무시**한다 ([`GateOutcome`]) — 검출기가
+//! 한 프레임 엉뚱한 곳을 잡아도 필터는 예측으로 넘기고 다음 측정에서 이어붙어,
+//! 위치·속도 추정이 끊기지 않는다. 게이트가 연속으로 막으면 그때 리셋한다.
+//!
 //! sim Rapier에는 이차 항력이 없어서(기본 drag=0) 파이프라인은
 //! `estimator::Ekf::new(0.0)` 을 쓴다. Magnus는 ω 상태 확장 전까지 예측에서 0.
 
@@ -16,6 +20,37 @@ use crate::defaults::PhysicsParams;
 use crate::estimator;
 use crate::estimator::{Estimator, HitPlane, Prediction};
 
+/// 시드 직후 공분산 대각 (위치만 알고 속도는 모름).
+const SEED_COV: f64 = 0.1;
+/// 속도 시드 직후 공분산 대각.
+const VELOCITY_SEED_COV: f64 = 0.05;
+
+/// 측정 한 건을 필터가 어떻게 처리했는지.
+///
+/// 툴 HUD·텔레메트리가 "지금 튄 건지"를 프레임 단위로 읽는 용도.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateOutcome {
+    /// 첫 측정 — 위치만 심었다. 속도는 아직 없다.
+    Seeded,
+    /// 두 번째 측정 — 유한차분으로 속도를 심었다.
+    VelocitySeeded,
+    /// 게이트 통과 — 칼만 보정을 적용했다.
+    Accepted,
+    /// 게이트 밖 — **무시**했다. 필터는 예측만으로 그 프레임을 넘긴다.
+    Rejected,
+    /// 연속 거부 한도 초과 또는 긴 공백 — 트랙을 버리고 이 측정으로 재시드.
+    Reset,
+    /// 타임스탬프 역행 등 쓸 수 없는 측정 — 상태를 건드리지 않았다.
+    Ignored,
+}
+
+impl GateOutcome {
+    /// 필터 상태가 이 측정을 반영했는가.
+    pub fn used_measurement(&self) -> bool {
+        return !matches!(self, GateOutcome::Rejected | GateOutcome::Ignored);
+    }
+}
+
 /// EKF 상태: 위치/속도 + 공분산.
 #[derive(Debug, Clone)]
 pub struct Ekf {
@@ -27,6 +62,10 @@ pub struct Ekf {
     initialized: bool,
     /// 두 번째 측정에서 finite-difference로 속도를 심었는지.
     velocity_seeded: bool,
+    /// 연속으로 게이트에 막힌 측정 수 (통과하면 0).
+    reject_streak: u32,
+    /// 직전 측정의 마할라노비스 d² (게이트 판정 전 값).
+    last_gate_d2: Option<f64>,
 }
 
 impl Ekf {
@@ -48,6 +87,8 @@ impl Ekf {
             physics,
             initialized: false,
             velocity_seeded: false,
+            reject_streak: 0,
+            last_gate_d2: None,
         };
     }
 
@@ -64,6 +105,25 @@ impl Ekf {
         self.position = Vector3::zeros();
         self.velocity = Vector3::zeros();
         self.covariance = Matrix6::identity();
+        self.reject_streak = 0;
+        self.last_gate_d2 = None;
+    }
+
+    /// 연속 거부 수 — 0이면 직전 측정을 받아들였다.
+    pub fn reject_streak(&self) -> u32 {
+        return self.reject_streak;
+    }
+
+    /// 직전 측정의 마할라노비스 d². 임계는 [`EstimatorParams::gate_chi2`].
+    ///
+    /// [`EstimatorParams::gate_chi2`]: crate::defaults::EstimatorParams::gate_chi2
+    pub fn last_gate_d2(&self) -> Option<f64> {
+        return self.last_gate_d2;
+    }
+
+    /// 위치·속도가 모두 서 있어 예측을 낼 수 있는 상태인가.
+    pub fn is_tracking(&self) -> bool {
+        return self.initialized && self.velocity_seeded;
     }
 
     /// 현재 위치 추정.
@@ -90,70 +150,102 @@ impl Ekf {
         self.initialized = true;
         self.velocity_seeded = true;
         self.last_time = Some(time);
+        self.reject_streak = 0;
+        self.last_gate_d2 = None;
+    }
+
+    /// 위치만 심는다 (첫 측정 · 리셋 직후).
+    fn seed(&mut self, measured: Point3, timestamp: Instant) {
+        self.position = measured.coords;
+        self.velocity = Vector3::zeros();
+        self.covariance = Matrix6::identity() * SEED_COV;
+        self.initialized = true;
+        self.velocity_seeded = false;
+        self.reject_streak = 0;
+        self.last_gate_d2 = None;
+        self.last_time = Some(timestamp);
     }
 
     /// 3D 관측으로 보정한다.
-    pub fn update_position(&mut self, measured: Point3, timestamp: Instant) {
+    ///
+    /// 예측 대비 잔차가 마할라노비스 게이트 밖이면 그 측정을 **무시**한다 —
+    /// 필터는 자기 예측대로 그 프레임을 넘기고 다음 정상 측정에서 이어붙는다.
+    /// 오검출 하나로 속도 추정이 끊기지 않게 하는 게 목적이다. 거부가
+    /// [`gate_reject_limit`] 회 연속되면 그때는 필터 쪽이 틀린 것으로 보고
+    /// 트랙을 버린 뒤 그 측정으로 재시드한다.
+    ///
+    /// [`gate_reject_limit`]: crate::defaults::EstimatorParams::gate_reject_limit
+    pub fn update_position(&mut self, measured: Point3, timestamp: Instant) -> GateOutcome {
+        let params = defaults::EstimatorParams::default();
+        let mut stale = false;
+
         if let Some(prev) = self.last_time {
             let dt = timestamp.duration_since(prev).as_secs_f64();
             if dt < 0.0 {
-                return;
+                return GateOutcome::Ignored;
             }
             // 긴 공백(세션 공백/프레임 드롭) -> 하드 리셋
-            if dt >= 0.5 {
+            if dt >= params.stale_gap_secs {
                 self.reset();
+                stale = true;
             } else if self.initialized && self.velocity_seeded && dt > 1e-4 {
                 self.predict_step(dt);
-                // 주차<->발사 텔레포트: 예측 후에도 잔차가 크면 리셋
-                if (measured.coords - self.position).norm()
-                    > defaults::ControlParams::default().ekf_meas_jump_m
-                {
-                    self.reset();
-                }
-            } else if self.initialized && !self.velocity_seeded {
-                // 시드 전: 원시 위치 점프만 검사
-                if (measured.coords - self.position).norm()
-                    > defaults::ControlParams::default().ekf_meas_jump_m
-                {
-                    self.reset();
-                }
             }
         }
 
         if !self.initialized {
-            self.position = measured.coords;
-            self.velocity = Vector3::zeros();
-            self.covariance = Matrix6::identity() * 0.1;
-            self.initialized = true;
-            self.velocity_seeded = false;
-            self.last_time = Some(timestamp);
-            return;
+            self.seed(measured, timestamp);
+            return if stale {
+                GateOutcome::Reset
+            } else {
+                GateOutcome::Seeded
+            };
         }
+
+        let r = Matrix3::identity() * params.r_meas;
+        let p_ht = self.covariance.fixed_view::<6, 3>(0, 0).into_owned();
+        let s = self.covariance.fixed_view::<3, 3>(0, 0) + r;
+        let Some(s_inv) = s.try_inverse() else {
+            self.last_time = Some(timestamp);
+            return GateOutcome::Ignored;
+        };
+        let innovation = measured.coords - self.position;
+
+        // 게이트: 잔차를 혁신 공분산으로 정규화 — 필터가 확신할수록 좁아진다.
+        let d2 = (innovation.transpose() * s_inv * innovation)[(0, 0)];
+        self.last_gate_d2 = Some(d2);
+        if d2 > params.gate_chi2 {
+            self.reject_streak += 1;
+            if self.reject_streak >= params.gate_reject_limit {
+                self.reset();
+                self.seed(measured, timestamp);
+                return GateOutcome::Reset;
+            }
+            // 예측으로 이미 timestamp까지 전파했으면 시계를 맞춰둔다. 속도 시드
+            // 전이면 그대로 둬야 다음 정상 측정의 유한차분 Δt가 맞는다.
+            if self.velocity_seeded {
+                self.last_time = Some(timestamp);
+            }
+            return GateOutcome::Rejected;
+        }
+        self.reject_streak = 0;
 
         // 두 번째 측정: Δp/Δt로 속도 시드 (v=0 초기화 잔여 제거)
         if !self.velocity_seeded {
             if let Some(prev) = self.last_time {
                 let dt = timestamp.duration_since(prev).as_secs_f64();
                 if dt > 1e-4 {
-                    self.velocity = (measured.coords - self.position) / dt;
+                    self.velocity = innovation / dt;
                     self.position = measured.coords;
-                    self.covariance = Matrix6::identity() * 0.05;
+                    self.covariance = Matrix6::identity() * VELOCITY_SEED_COV;
                     self.velocity_seeded = true;
                     self.last_time = Some(timestamp);
-                    return;
+                    return GateOutcome::VelocitySeeded;
                 }
             }
         }
 
-        let r = Matrix3::identity() * defaults::EstimatorParams::default().r_meas;
-        let p_ht = self.covariance.fixed_view::<6, 3>(0, 0).into_owned();
-        let s = self.covariance.fixed_view::<3, 3>(0, 0) + r;
-        let Some(s_inv) = s.try_inverse() else {
-            self.last_time = Some(timestamp);
-            return;
-        };
         let gain = p_ht * s_inv;
-        let innovation = measured.coords - self.position;
         let dx: Vector6<f64> = gain * innovation;
         self.position += Vector3::new(dx[0], dx[1], dx[2]);
         self.velocity += Vector3::new(dx[3], dx[4], dx[5]);
@@ -168,6 +260,7 @@ impl Ekf {
         self.covariance = 0.5 * (self.covariance + self.covariance.transpose());
 
         self.last_time = Some(timestamp);
+        return GateOutcome::Accepted;
     }
 
     fn predict_step(&mut self, dt: f64) {
@@ -203,7 +296,7 @@ fn process_noise(dt: f64) -> Matrix6<f64> {
 
 impl Estimator for Ekf {
     fn update(&mut self, position: Point3, timestamp: Instant) {
-        self.update_position(position, timestamp);
+        let _ = self.update_position(position, timestamp);
     }
 
     fn predict_to(&self, plane: HitPlane) -> Option<Prediction> {
@@ -276,18 +369,137 @@ mod tests {
         );
     }
 
-    #[test]
-    fn jump_reinitializes_filter() {
+    /// 실제 탄도를 8 ms 간격으로 먹여 트랙을 세운다. 다음 프레임의 진실
+    /// 상태도 같이 돌려줘 테스트가 궤적을 이어갈 수 있게 한다.
+    fn tracked_ekf(t0: Instant, frames: u32) -> (Ekf, Vector3<f64>, Vector3<f64>) {
+        let physics = crate::defaults::PhysicsParams::default();
         let mut ekf = Ekf::new(0.0);
+        let mut pos = Vector3::new(table::WIDTH_X * 0.5, 2.4, table::SURFACE_Z + 0.25);
+        let mut vel = Vector3::new(0.0, -5.5, 0.8);
+        for i in 0..frames {
+            ekf.update_position(Point3::from(pos), t0 + Duration::from_millis(8) * i);
+            let (np, nv, _) =
+                estimator::Kinematics::step(pos, vel, Vector3::zeros(), 0.008, &physics);
+            pos = np;
+            vel = nv;
+        }
+        return (ekf, pos, vel);
+    }
+
+    #[test]
+    fn outlier_is_rejected_without_losing_track() {
         let t0 = Instant::now();
-        ekf.set_state(
-            Vector3::new(0.2, 0.3, 0.9),
-            Vector3::new(0.0, -1.0, 0.0),
-            t0,
+        let (mut ekf, _, truth_v) = tracked_ekf(t0, 10);
+        let plane = HitPlane {
+            y: table::DEFAULT_HIT_PLANE_Y,
+        };
+        let before = ekf.velocity().expect("tracking");
+        let before_impact = ekf.predict_to(plane).expect("예측 성립").impact_position;
+
+        // 화면 반대편 오검출 한 프레임
+        let outcome =
+            ekf.update_position(Point3::new(-1.5, 0.2, 0.3), t0 + Duration::from_millis(80));
+
+        assert_eq!(outcome, GateOutcome::Rejected);
+        assert_eq!(ekf.reject_streak(), 1);
+        // 속도는 살아 있고 오검출 방향으로 끌려가지 않았다
+        let after = ekf.velocity().expect("속도 유지");
+        assert!(
+            (after - before).norm() < 0.5,
+            "거부된 측정이 속도를 흔들었다: {before:?} -> {after:?}"
         );
-        // 슈터로 텔레포트
-        ekf.update_position(Point3::new(0.7, 2.5, 1.0), t0 + Duration::from_millis(16));
-        // 리셋 후 첫 측정만 - 속도 미시드
+        assert!(
+            (after.y - truth_v.y).abs() < 1.0,
+            "vy≈{:.1} 유지, got {}",
+            truth_v.y,
+            after.y
+        );
+        // 예측도 끊기지 않고, 튄 점 쪽으로 흔들리지 않는다
+        let after_impact = ekf.predict_to(plane).expect("예측 유지").impact_position;
+        assert!(
+            (after_impact.coords - before_impact.coords).norm() < 0.05,
+            "거부 후 임팩트 예측이 흔들렸다: {before_impact:?} -> {after_impact:?}"
+        );
+    }
+
+    #[test]
+    fn track_recovers_on_next_good_measurement() {
+        let t0 = Instant::now();
+        let (mut ekf, pos10, vel10) = tracked_ekf(t0, 10);
+        ekf.update_position(Point3::new(-1.5, 0.2, 0.3), t0 + Duration::from_millis(80));
+
+        // 궤적을 이어가는 정상 측정 — 아무 일 없었다는 듯 받아들인다
+        let physics = crate::defaults::PhysicsParams::default();
+        let (good, _, _) =
+            estimator::Kinematics::step(pos10, vel10, Vector3::zeros(), 0.008, &physics);
+        let outcome = ekf.update_position(Point3::from(good), t0 + Duration::from_millis(88));
+
+        assert_eq!(outcome, GateOutcome::Accepted);
+        assert_eq!(ekf.reject_streak(), 0);
+        assert!(ekf.is_tracking());
+    }
+
+    #[test]
+    fn sustained_jump_resets_track() {
+        let t0 = Instant::now();
+        let (mut ekf, _, _) = tracked_ekf(t0, 10);
+        let limit = defaults::EstimatorParams::default().gate_reject_limit;
+
+        // 슈터로 텔레포트 — 새 위치에 계속 머문다
+        let mut outcome = GateOutcome::Accepted;
+        for i in 0..limit {
+            outcome = ekf.update_position(
+                Point3::new(0.2, 0.3, 0.9),
+                t0 + Duration::from_millis(80) + Duration::from_millis(8) * i,
+            );
+        }
+
+        assert_eq!(outcome, GateOutcome::Reset);
+        // 리셋 후 첫 측정만 — 속도 미시드
+        assert!(ekf.velocity().is_none());
+        assert_eq!(ekf.reject_streak(), 0);
+    }
+
+    #[test]
+    fn bounce_does_not_trip_the_gate() {
+        let t0 = Instant::now();
+        let mut ekf = Ekf::new(0.0);
+        let physics = crate::defaults::PhysicsParams::default();
+        let mut pos = Vector3::new(0.7, 2.4, table::SURFACE_Z + 0.30);
+        let mut vel = Vector3::new(0.0, -5.0, -2.0);
+        let mut resets = 0;
+
+        for i in 0..40_u32 {
+            let outcome = ekf.update_position(Point3::from(pos), t0 + Duration::from_millis(8) * i);
+            if outcome == GateOutcome::Reset {
+                resets += 1;
+            }
+            let (np, nv, _) = estimator::Kinematics::step(pos, vel, Vector3::zeros(), 0.008, &physics);
+            pos = np;
+            vel = nv;
+            // 테이블 반발 — 위치는 이어지고 vz만 뒤집힌다
+            if pos.z <= table::SURFACE_Z && vel.z < 0.0 {
+                let (bv, _) = estimator::Kinematics::bounce_on_table(vel, Vector3::zeros(), &physics);
+                vel = bv;
+            }
+        }
+
+        assert_eq!(resets, 0, "바운스는 위치 연속 — 리셋되면 안 된다");
+        assert!(ekf.is_tracking());
+    }
+
+    #[test]
+    fn stale_gap_resets_track() {
+        let t0 = Instant::now();
+        let (mut ekf, _, _) = tracked_ekf(t0, 10);
+        let gap = defaults::EstimatorParams::default().stale_gap_secs;
+
+        let outcome = ekf.update_position(
+            Point3::new(0.7, 1.9, 0.95),
+            t0 + Duration::from_secs_f64(gap + 0.1),
+        );
+
+        assert_eq!(outcome, GateOutcome::Reset);
         assert!(ekf.velocity().is_none());
     }
 

@@ -40,6 +40,11 @@ impl SimScene {
         return self.layers.ball.as_ref();
     }
 
+    /// 비교용 반투명 공 ([`SimSceneBuilder::with_ghost_ball`]).
+    pub fn ghost_ball_handle(&self) -> Option<&ball::Handle> {
+        return self.layers.ghost.as_ref();
+    }
+
     pub fn robot(&self) -> Option<&robot::Handle> {
         return self.layers.robot.as_ref();
     }

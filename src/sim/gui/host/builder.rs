@@ -17,6 +17,7 @@ use crate::sim::gui::robot;
 pub struct SimSceneBuilder {
     table: TableSceneOptions,
     ball: Option<ball::Handle>,
+    ghost: Option<ball::Handle>,
     robot: Option<robot::Handle>,
     shooter: Option<shooter::Handle>,
     world: Option<Arc<Mutex<SimWorld>>>,
@@ -47,6 +48,12 @@ impl SimSceneBuilder {
 
     pub fn with_ball_handle(mut self, handle: ball::Handle) -> Self {
         self.ball = Some(handle);
+        return self;
+    }
+
+    /// 본 공과 겹쳐 볼 비교용 반투명 공 (`ghost_ball` 플래그와 달리 별도 레이어).
+    pub fn with_ghost_ball(mut self) -> Self {
+        self.ghost = Some(ball::Handle::new());
         return self;
     }
 
@@ -126,6 +133,7 @@ impl SimSceneBuilder {
             table: self.table,
             layers: SceneLayers {
                 ball: self.ball,
+                ghost: self.ghost,
                 robot: self.robot,
                 shooter: self.shooter,
             },
