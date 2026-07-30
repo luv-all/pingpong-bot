@@ -1,4 +1,4 @@
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::error::HwError;
 use crate::robot::Joints;
@@ -51,7 +51,12 @@ pub struct DynamixelBus {
     pub(super) mapping: MotorMapping,
     backend: BusBackend,
     torque_enabled: bool,
+    /// 클램프 경고 스로틀 — 200 Hz 스트리밍이라 매번 찍으면 로그가 잠긴다.
+    last_clamp_warn: Option<std::time::Instant>,
 }
+
+/// 모터 한계 클램프 경고 주기.
+const CLAMP_WARN_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl DynamixelBus {
     pub fn dry_run(config: DynamixelConfig) -> Result<Self, DynamixelConfigError> {
@@ -69,6 +74,7 @@ impl DynamixelBus {
                 last_current_limits: Vec::new(),
             },
             torque_enabled: false,
+            last_clamp_warn: None,
         });
     }
 
@@ -156,6 +162,7 @@ impl DynamixelBus {
                 port,
             )),
             torque_enabled: false,
+            last_clamp_warn: None,
         };
         bus.apply_motion_profile()?;
         return Ok(bus);
@@ -192,7 +199,34 @@ impl DynamixelBus {
     }
 
     /// Python `set_joint_positions`.
+    ///
+    /// 모터 각도 한계에 걸리는 관절이 있으면 경고한다 — 플래너는 URDF 한계만 보므로
+    /// `motor_angle_limits_deg`가 더 좁으면 여기서 조용히 잘려 팔이 명령과 다른 곳에 선다.
+    /// 200 Hz 스트리밍이라 스로틀한다.
     pub fn write_joints(&mut self, joints: &Joints) -> Result<(), HwError> {
+        let clamped: Vec<usize> = joints
+            .values
+            .iter()
+            .enumerate()
+            .filter(|(index, angle)| self.mapping.clamped_by_motor_limit(*index, **angle))
+            .map(|(index, _)| index)
+            .collect();
+        if !clamped.is_empty()
+            && self
+                .last_clamp_warn
+                .is_none_or(|at| at.elapsed() >= CLAMP_WARN_PERIOD)
+        {
+            self.last_clamp_warn = Some(std::time::Instant::now());
+            warn!(
+                joints = ?clamped,
+                commanded = ?joints.values,
+                "모터 각도 한계로 잘림 — 계획한 자세에 못 선다 (플래너는 URDF 한계만 본다)"
+            );
+        }
+        return self.write_joints_inner(joints);
+    }
+
+    fn write_joints_inner(&mut self, joints: &Joints) -> Result<(), HwError> {
         let joint_count = self.mapping.config.motor_ids.len();
         if joints.values.len() != joint_count {
             return Err(command_transport_error(

@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use pingpong_bot::error::{DomainError, HwError, SwingPlanError};
 use pingpong_bot::hardware::Hardware;
-use pingpong_bot::robot::motion::Planner;
+use pingpong_bot::robot::motion::{self, Planner};
 use pingpong_bot::robot::{self, Arm};
 use tracing::{debug, info, info_span, warn};
 
@@ -35,7 +35,8 @@ const BUSY_POLL: Duration = Duration::from_millis(5);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 
 enum CommitOutcome {
-    Committed,
+    /// 커밋한 궤적 — 임팩트 시점 추종 오차를 재는 데 쓴다.
+    Committed(Box<motion::Trajectory>),
     Infeasible,
     Disconnected,
     Failed,
@@ -94,14 +95,15 @@ pub fn spawn(
 
             match outcome {
                 CommitOutcome::Failed | CommitOutcome::Disconnected => break,
-                CommitOutcome::Committed | CommitOutcome::Infeasible => {}
+                CommitOutcome::Committed(_) | CommitOutcome::Infeasible => {}
             }
 
             let _ = status_tx.send(ControlStatus::Recovering { shot_seq });
 
             // NOTE(결선): 진짜 랠리에서는 풀 센터 복귀 전에 다음 스윙을
             // 허용하도록 이 재무장 조건을 바꿀 수 있다. 지금은 연속 급구만.
-            if matches!(outcome, CommitOutcome::Committed) {
+            if let CommitOutcome::Committed(trajectory) = &outcome {
+                measure_impact_tracking(hardware.as_mut(), trajectory);
                 wait_idle(hardware.as_mut());
             }
             if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
@@ -190,7 +192,7 @@ fn wait_for_commit(
                     rail_end: trajectory.rail.end,
                     peak_joint_speed: trajectory.peak_joint_speed(),
                 });
-                return CommitOutcome::Committed;
+                return CommitOutcome::Committed(Box::new(planned.trajectory));
             }
             // 이번 스윙만 포기 — 바깥 루프가 센터 복귀 후 다음 급구를 받는다.
             Err(DomainError::InfeasibleSwing(SwingPlanError::JointOrTorqueLimit {
@@ -256,6 +258,52 @@ fn log_home(start: &robot::Pose, trajectory: &pingpong_bot::robot::motion::Traje
         duration_secs = f2(trajectory.duration_secs),
         target = f2_slice(&trajectory.end_joints().values),
         "real shot: 센터 이동 — 팔이 움직입니다"
+    );
+}
+
+/// 임팩트 순간 **명령각 대비 실제각** 오차를 잰다 [rad].
+///
+/// `JOINT_SPEED_DERATE`를 0.5 → 0.8로 올렸다. 한계를 실제보다 높이면 플래너가 모터가 못
+/// 따라가는 궤적을 통과시키고, 정직한 거부 대신 **조용한 빗나감**이 된다 — 라켓이 늦게
+/// 도착하는데 로그에는 성공으로 찍힌다. 그래서 실제로 따라오는지 여기서 확인한다.
+///
+/// **임팩트 시점에 딱 한 번만** 읽는다. 스윙 내내 폴링하면 `read_pose`(57600 baud sync_read)가
+/// executor의 200 Hz 목표 전송과 버스를 다퉈, 재려던 추종 오차를 스스로 만들어낸다.
+/// 한 번이면 그 간섭이 무시할 만하고, 정작 중요한 시점의 값을 얻는다.
+fn measure_impact_tracking(hardware: &mut dyn Hardware, trajectory: &motion::Trajectory) {
+    let started = Instant::now();
+    let at_impact = Duration::from_secs_f64(trajectory.impact_time_secs);
+    let Some(remaining) = at_impact.checked_sub(started.elapsed()) else {
+        return;
+    };
+    thread::sleep(remaining);
+
+    let elapsed = started.elapsed().as_secs_f64();
+    let commanded = trajectory.sample_at(elapsed);
+    let Ok(actual) = hardware.read_pose() else {
+        return;
+    };
+    let worst = commanded
+        .values
+        .iter()
+        .zip(actual.joints.values.iter())
+        .map(|(c, a)| (c - a).abs())
+        .fold(0.0_f64, f64::max);
+    let per_joint: Vec<f64> = commanded
+        .values
+        .iter()
+        .zip(actual.joints.values.iter())
+        .map(|(c, a)| c - a)
+        .collect();
+
+    // sim 실측 기준은 0.002~0.003 rad (`docs/…/2026-07-27-return-power.md` §3.1).
+    // 그보다 훨씬 크면 모터가 못 따라가는 것이고, 그 지점이 진짜 속도 한계다.
+    info!(
+        worst_rad = f2(worst),
+        worst_deg = f2(worst.to_degrees()),
+        error_rad = f2_slice(&per_joint),
+        at_secs = f2(elapsed),
+        "real shot: 임팩트 추종 오차 (sim 기준 0.002~0.003 rad)"
     );
 }
 
