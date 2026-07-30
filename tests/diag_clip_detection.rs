@@ -223,6 +223,18 @@ fn count_in_window(
 ///
 /// ROI를 끄면 크게 오르면 추적 유실(한 번 놓치면 좁아진 ROI 밖으로 공이 나가 복구가 안 됨),
 /// 임계를 풀 때만 오르면 colormask 문제다.
+/// 두 캠 검출 구간의 교집합 = 공이 실제로 날아간 구간.
+///
+/// 총 검출 수는 착지해 정지한 공이나 오검출까지 세므로 그것만 보면 병목을 잘못 짚는다
+/// (fly_02: cam0 총 49회 중 40회가 착지 후였다).
+fn flight_window(dir: &std::path::Path) -> Option<(usize, usize)> {
+    let left = detect_side(&dir.join("left.avi"), camera::Id(0));
+    let right = detect_side(&dir.join("right.avi"), camera::Id(1));
+    let ((l0, l1), (r0, r1)) = (left.span()?, right.span()?);
+    let (start, end) = (l0.max(r0), l1.min(r1));
+    return (start <= end).then_some((start, end));
+}
+
 #[test]
 #[ignore = "순수 진단(클립 필요). 실행: cargo test --release --test diag_clip_detection -- --ignored --nocapture"]
 fn diag_clip_detection_sweep() {
@@ -230,21 +242,36 @@ fn diag_clip_detection_sweep() {
     let dir = PathBuf::from(defaults::DEFAULT_CLIPS_DIR).join(&name);
     assert!(dir.is_dir(), "클립 없음: {}", dir.display());
 
-    // 앞 테스트가 낸 비행 구간. 클립이 바뀌면 같이 바꿔야 한다.
-    let window: (usize, usize) = (221, 243);
+    // 비행 구간은 두 캠 검출 구간의 교집합으로 **클립마다 자동으로** 잡는다.
+    // 하드코딩하면 클립이 바뀔 때 조용히 엉뚱한 창을 재게 된다.
+    let window = flight_window(&dir).expect("두 캠 모두 검출된 구간이 없다");
     let span = window.1 - window.0 + 1;
+    println!(
+        "클립 {name} — 비행 구간 {}~{} ({span}프레임)",
+        window.0, window.1
+    );
 
     for (camera_id, file) in [(camera::Id(0), "left.avi"), (camera::Id(1), "right.avi")] {
         let path = dir.join(file);
         let base = defaults::colormask_for(camera_id).expect("colormask");
         println!(
             "\ncam{}  기준 colormask c0 {}~{} c1 {}~{} c2 {}~{}",
-            camera_id.0, base.c0_min, base.c0_max, base.c1_min, base.c1_max, base.c2_min, base.c2_max
+            camera_id.0,
+            base.c0_min,
+            base.c0_max,
+            base.c1_min,
+            base.c1_max,
+            base.c2_min,
+            base.c2_max
         );
 
         for (label, roi) in [("ROI 켬", true), ("ROI 끔", false)] {
-            let (hits, outside) =
-                count_in_window(&path, camera_id, detector_with(camera_id, &base, roi), window);
+            let (hits, outside) = count_in_window(
+                &path,
+                camera_id,
+                detector_with(camera_id, &base, roi),
+                window,
+            );
             println!(
                 "  {label:<8} {hits:>3}/{span} ({:>3.0}%)   구간밖 {outside}",
                 hits as f64 / span as f64 * 100.0
@@ -272,8 +299,12 @@ fn diag_clip_detection_sweep() {
                 c2_min: base.c2_min.saturating_sub(relax),
                 ..base.clone()
             };
-            let (hits, outside) =
-                count_in_window(&path, camera_id, detector_with(camera_id, &loosened, false), window);
+            let (hits, outside) = count_in_window(
+                &path,
+                camera_id,
+                detector_with(camera_id, &loosened, false),
+                window,
+            );
             println!(
                 "  하한 -{relax:<3} (c1≥{:>3} c2≥{:>3})  {hits:>3}/{span} ({:>3.0}%)   구간밖 {outside}",
                 loosened.c1_min,

@@ -22,8 +22,31 @@ use crate::estimator::{Estimator, HitPlane, Prediction};
 
 /// 시드 직후 공분산 대각 (위치만 알고 속도는 모름).
 const SEED_COV: f64 = 0.1;
-/// 속도 시드 직후 공분산 대각.
-const VELOCITY_SEED_COV: f64 = 0.05;
+
+/// 속도 시드 직후 공분산 — **상수가 아니라 측정 노이즈와 실제 간격에서 계산한다**.
+///
+/// 속도는 측정되지 않는다. 두 번째 측정에서 `v = Δp/Δt`로 만드는데, 두 위치 모두
+/// 분산 `r_meas`의 노이즈를 가지므로 `Var(v) = 2·r_meas/Δt²`다. 위치는 방금 그 측정으로
+/// 놓았으니 `Var(p) = r_meas`.
+///
+/// 예전에는 6축 전부 상수 0.05였다. 속도 쪽이 σ 0.22 m/s라는 뜻인데, 실측은 전혀 다르다 —
+/// 클립 3개에서 σ_p 2.8~3.8 cm, dt 24~29 ms이므로 σ_v는 **1.4~2.2 m/s**(분산 1.9~4.9)다.
+/// 즉 필터가 자기 속도 시드를 분산 기준 **37~99배 과신**했다. 그러면 그 틀린 속도로 예측한
+/// 위치와 어긋나는 측정이 마할라노비스 게이트에 "튄 값"으로 걸려 거부되고, 필터는 스스로
+/// 고칠 기회를 막은 채 관성 주행한다. fly_04에서 예측 x가 2.568 m에 얼어붙은 채 실제 도달
+/// 0.367 m와 2.2 m 어긋난 게 이 모습이었다 (`diag_clip_prediction`).
+///
+/// 프레임레이트가 바뀌면 σ_v도 같이 바뀌므로 상수로 박으면 안 된다.
+fn velocity_seed_covariance(r_meas: f64, dt: f64) -> Matrix6<f64> {
+    let position_var = r_meas;
+    let velocity_var = 2.0 * r_meas / (dt * dt);
+    let mut covariance = Matrix6::zeros();
+    for axis in 0..3 {
+        covariance[(axis, axis)] = position_var;
+        covariance[(axis + 3, axis + 3)] = velocity_var;
+    }
+    return covariance;
+}
 
 /// 측정 한 건을 필터가 어떻게 처리했는지.
 ///
@@ -232,7 +255,7 @@ impl Ekf {
                 if dt > 1e-4 {
                     self.velocity = innovation / dt;
                     self.position = measured.coords;
-                    self.covariance = Matrix6::identity() * VELOCITY_SEED_COV;
+                    self.covariance = velocity_seed_covariance(params.r_meas, dt);
                     self.velocity_seeded = true;
                     self.last_time = Some(timestamp);
                     return GateOutcome::VelocitySeeded;
