@@ -20,6 +20,8 @@ use crate::robot::motion;
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
     bus: Arc<Mutex<DynamixelBus>>,
+    /// 레일 dry-run·RNEA 디버그용 Arm 핸들 (스윙 실행 자체는 Goal Position만 씀).
+    #[allow(dead_code)]
     arm: Arc<Arm>,
     /// `None`이면 `rail_x = 0` (레일 비활성). executor와 pose 읽기가 공유.
     rail: Arc<Mutex<Option<AxlRail>>>,
@@ -27,7 +29,6 @@ pub struct RealHardware {
     cancel: Arc<AtomicBool>,
     executor: Option<JoinHandle<()>>,
     stream_hz: f64,
-    torque_feedforward: bool,
 }
 
 impl RealHardware {
@@ -39,13 +40,10 @@ impl RealHardware {
     ) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::open(config)?;
-        let ff = defaults::ControlParams::default().torque_feedforward;
-        if ff {
-            bus.set_current_based_position_mode()?;
-        }
+        bus.configure_position_mode_max_effort()?;
         bus.enable_torque(true)?;
         // 실포트: is_dry_run = false → AXL 실개방
-        return Self::from_bus(bus, stream_hz, rail, false, arm, ff);
+        return Self::from_bus(bus, stream_hz, rail, false, arm);
     }
 
     /// 포트를 열지 않지만 실제 좌표 변환·리밋·executor 경로를 그대로 사용한다.
@@ -74,12 +72,9 @@ impl RealHardware {
         let mut bus = DynamixelBus::dry_run(config).map_err(|e| HwError::InvalidConfig {
             reason: e.to_string(),
         })?;
-        let ff = defaults::ControlParams::default().torque_feedforward;
-        if ff {
-            bus.set_current_based_position_mode()?;
-        }
+        bus.configure_position_mode_max_effort()?;
         bus.enable_torque(true)?;
-        return Self::from_bus(bus, stream_hz, rail, true, arm, ff);
+        return Self::from_bus(bus, stream_hz, rail, true, arm);
     }
 
     fn from_bus(
@@ -88,7 +83,6 @@ impl RealHardware {
         rail: Option<RailConfig>,
         is_dry_run: bool,
         arm: Arc<Arm>,
-        torque_feedforward: bool,
     ) -> Result<Self, HwError> {
         let rail = match rail.filter(|config| config.enabled) {
             None => {
@@ -124,7 +118,6 @@ impl RealHardware {
             cancel: Arc::new(AtomicBool::new(false)),
             executor: None,
             stream_hz,
-            torque_feedforward,
         });
     }
 
@@ -160,13 +153,11 @@ impl Hardware for RealHardware {
 
         let trajectory = trajectory.clone();
         let bus = Arc::clone(&self.bus);
-        let arm = Arc::clone(&self.arm);
         let rail = Arc::clone(&self.rail);
         let busy = Arc::clone(&self.busy);
         self.cancel.store(false, Ordering::Release);
         let cancel = Arc::clone(&self.cancel);
         let tick = Duration::from_secs_f64(1.0 / self.stream_hz);
-        let torque_ff = self.torque_feedforward;
         let rail_target = trajectory.follow_through_rail_x;
         let rail_duration = trajectory.duration_secs;
         self.executor = Some(thread::spawn(move || {
@@ -212,19 +203,6 @@ impl Hardware for RealHardware {
                 };
                 if !joints_ok {
                     break;
-                }
-
-                if torque_ff {
-                    let qd = trajectory.sample_velocity_at(sample_time);
-                    let qdd = trajectory.sample_acceleration_at(sample_time);
-                    // 실기 모터는 자기 회전자도 같이 가속시켜야 하므로
-                    // 피드포워드에 반사관성 항을 포함한다(WP8) — 강체 링크만
-                    // 보는 RNEA는 감속비 200:1에서 필요 전류를 크게 과소평가한다.
-                    if let Some(tau) = arm.required_torque_with_rotor(&joints.values, &qd, &qdd) {
-                        let _ = bus.lock().map(|mut bus| {
-                            let _ = bus.write_goal_currents_from_torques(&tau);
-                        });
-                    }
                 }
 
                 if elapsed >= trajectory.duration_secs {

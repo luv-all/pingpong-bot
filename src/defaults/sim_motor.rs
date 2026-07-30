@@ -1,8 +1,9 @@
 //! Rapier 관절 위치 모터 게인 — **시뮬 전용**.
 //!
 //! 실물 경로(`hardware::dynamixel`)는 이 값을 참조하지 않는다. 실물에는 Goal
-//! Position + Goal Current(RNEA τ)만 나가고, 위치 루프는 MX-64 내부 PID가
-//! 돈다. 여기 값은 그 내부 루프를 Rapier 안에서 흉내 내는 모델 파라미터다.
+//! Position만 나가고(Position Control Mode + PWM/Current Limit 최대), 위치
+//! 루프는 MX 내부 PID가 돈다. 여기 값은 그 내부 루프를 Rapier 안에서 흉내
+//! 내는 모델 파라미터다.
 //!
 //! 아직 실측으로 보정되지 않았다 — `docs/measure-physics.md`의 "모터 위치
 //! 루프" 절 참고.

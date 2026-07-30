@@ -232,7 +232,7 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 - 구름 공 / 포기 조건 명문화 (위 I)
 - EKF 타격 스모크 → C2 승격
 - A4 \(e\)·마찰·drag 실측값으로 constants 갱신
-- real `torque_feedforward` Windows 벤치 (Goal Current·kt 튜닝) — 기본 on
+- real 벤치: Position Mode + max PWM/Current Limit (Goal Current FF 제거)
 
 자세한 체크리스트: [`TODO.md`](../TODO.md).
 
@@ -246,8 +246,9 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
    끝속도는 `peak_torque_scale`로 먼저 줄이고, 그래도 초과면 `JointOrTorqueLimit`.  
    sim 자동 스윙은 이 에러 시 **이번 공 즉시 포기** (모터 보호; IK 실패와 달리 재시도하지 않음). Rapier 다물체 mass와 **다른 SSOT**.
 2. **sim HUD**에 peak/now \(\tau\) [N·m] 표시 (초과·포기 사유).
-3. **FF** = Current-based Position + Goal Current (real) / RNEA effort 상한 갱신 (sim).  
-   `ControlParams::default().torque_feedforward` 기본 **true**. 끄려면 `false`.
+3. **FF (sim only)** — RNEA로 다물체 `motor_max_force` 상한 갱신.
+   `ControlParams::default().torque_feedforward` 기본 **true** (시뮬).  
+   **Real**은 Position Control Mode(3) + PWM Limit / Current Limit 최대. Goal Current FF 없음.
 
 스펙: [`superpowers/specs/2026-07-26-manipulator-dynamics-design.md`](superpowers/specs/2026-07-26-manipulator-dynamics-design.md).
 

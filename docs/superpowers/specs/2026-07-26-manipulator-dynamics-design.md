@@ -5,7 +5,7 @@
 ## 목적
 
 스윙 궤적의 \(\ddot q\)가 모터 \(\tau_{\max}\) 안에 있는지 **해석적으로** 검증하고,
-sim HUD·(옵션) Dynamixel Goal Current FF에 같은 \(\tau(t)\)를 쓴다.
+sim HUD에 같은 \(\tau(t)\)를 쓴다. Real 하드웨어는 Position Mode + max effort.
 
 \[
 \boldsymbol\tau = M(\mathbf q)\,\ddot{\mathbf q}
@@ -47,10 +47,11 @@ fn peak_torques_on_trajectory(arm: &Arm, traj: &SwingTrajectory) -> Option<Vec<f
 
 1. **Planner** — 속도·가속·관절/레일 + RNEA peak \(\lvert\tau_i\rvert \le \tau_{\max,i}\) **하드** 게이트. 초과 시 먼저 `peak_torque_scale`, 그래도 안 되면 `JointOrTorqueLimit` → sim은 이번 공 스윙 포기.
 2. **sim HUD** — commit peak + 재생 중 \(\tau(t)\) (초과·포기 표시).
-3. **Hardware FF** — `control().torque_feedforward` (default **true**). on이면 Current-based Position + Goal Current \(\approx \tau / k_t\) (real), sim은 RNEA로 다물체 `motor_max_force`를 맞춤.
+3. **Hardware** — Real: Position Control Mode(3) + PWM/Current Limit 최대 (Goal Current FF 없음).
+   Sim: `control().torque_feedforward` (default **true**)면 RNEA로 다물체 `motor_max_force`를 맞춤.
 
 ## 테스트
 
 - 정지 \(q_d=q_{dd}=0\) → \(\tau \approx g(q)\).
 - FD로 \(M\) 한 열과 RNEA \(\tau(q,0,e_i) - \tau(q,0,0)\) 교차.
-- dry-run Goal Current 페이로드 (FF on).
+- dry-run Position Mode + max PWM/Current Limit 페이로드.

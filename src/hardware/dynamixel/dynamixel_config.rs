@@ -15,14 +15,18 @@ pub struct DynamixelConfig {
     pub addr_present_position: u8,
     pub addr_profile_acceleration: u8,
     pub addr_profile_velocity: u8,
-    /// Protocol 2.0 Goal Current (MX-64 = 102).
-    pub addr_goal_current: u8,
     /// Operating Mode 레지스터 (MX = 11).
     pub addr_operating_mode: u8,
-    /// Current-based Position Control = 5.
-    pub operating_mode_current_position: u8,
-    /// Goal Current 1 unit → N·m (MX-64 ≈ 3.36 mA/unit, kt≈1.46 → ~0.0049).
-    pub nm_per_goal_current_unit: f64,
+    /// Position Control Mode = 3.
+    pub operating_mode: u8,
+    /// PWM Limit 레지스터 (MX = 36). Position 모드에서 실질 출력 상한.
+    pub addr_pwm_limit: u8,
+    /// PWM Limit 최대값 (100% = 885, MX-28/64 공통).
+    pub pwm_limit_max: u16,
+    /// Current Limit 레지스터 (MX-64 = 38). MX-28에는 없음.
+    pub addr_current_limit: u8,
+    /// MX-64 버스 ID별 Current Limit 최대. MX-28 ID는 넣지 않는다.
+    pub current_limit_max_by_id: Vec<(u8, u16)>,
     pub profile_acceleration: u32,
     pub profile_velocity: u32,
     pub comm_retries: u32,
