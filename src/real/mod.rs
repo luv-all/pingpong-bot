@@ -35,6 +35,7 @@ pub mod camera_worker;
 pub mod control_worker;
 pub mod estimator_worker;
 
+mod ball_receding;
 mod commit_request;
 mod decision;
 pub mod fmt;
