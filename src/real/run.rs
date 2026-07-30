@@ -395,6 +395,8 @@ fn log_summary(outcome: &Outcome, cameras: &[CameraStats], estimator: Option<&Es
             reset = stats.reset,
             skew_p50_ms = stats.skew_percentile(0.50).map(|s| f2(s * 1e3)),
             skew_p95_ms = stats.skew_percentile(0.95).map(|s| f2(s * 1e3)),
+            reproj_p50_px = stats.reprojection_percentile(0.50).map(f2),
+            reproj_p95_px = stats.reprojection_percentile(0.95).map(f2),
             commit_dropped = stats.commit_dropped,
             preview_dropped = stats.preview_dropped,
             "real shot: end — 추정"
