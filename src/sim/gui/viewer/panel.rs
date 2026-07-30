@@ -86,75 +86,10 @@ pub fn draw(
         .resizable(true)
         .collapsible(true)
         .show(ctx, |ui| {
-            ui.collapsing("Position", |ui| {
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.pos_offset_x_m, -0.8..=0.8)
-                        .text("x [m]"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.pos_offset_y_m, -0.6..=0.8)
-                        .text("y [m]"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.pos_offset_z_m, -0.3..=0.5)
-                        .text("z [m]"),
-                );
-                let m = ui_state.shooter.mount_position();
-                ui.monospace(format!("mount {:.2} {:.2} {:.2}", m.x, m.y, m.z));
-            });
-            ui.collapsing("Aim", |ui| {
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.yaw_deg, -25.0..=25.0)
-                        .text("yaw [deg]"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.pitch_deg, -25.0..=25.0)
-                        .text("pitch [deg]"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.roll_deg, -45.0..=45.0)
-                        .text("roll [deg]"),
-                );
-            });
-            ui.collapsing("Muzzle", |ui| {
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.lateral_offset_m, -0.5..=0.5)
-                        .text("lateral [m]"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.height_offset_m, -0.2..=0.4)
-                        .text("height [m]"),
-                );
-            });
-            ui.collapsing("Speed / spin", |ui| {
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.speed_mps, 3.0..=15.0)
-                        .text("speed [m/s]"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.topspin_rad_s, -80.0..=80.0)
-                        .text("topspin"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.sidespin_rad_s, -80.0..=80.0)
-                        .text("sidespin"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut ui_state.shooter.drill_spin_rad_s, -80.0..=80.0)
-                        .text("drill"),
-                );
-            });
-            ui.horizontal(|ui| {
-                if ui.button("Shoot").clicked() {
-                    shoot = true;
-                }
-                if ui.button("Random").clicked() {
-                    random_shoot = true;
-                }
-                if ui.button("Park").clicked() {
-                    park = true;
-                }
-            });
+            let buttons = crate::sim::gui::shooter::ui::draw(ui, &mut ui_state.shooter);
+            shoot |= buttons.shoot;
+            random_shoot |= buttons.random;
+            park |= buttons.park;
         });
 
     let rig_y = shooter_win

@@ -11,6 +11,7 @@ path = "src/main.rs"
 anyhow = "1.0.103"
 clap = { version = "4.6.1", features = ["derive"] }
 nalgebra = { version = "0.35.0", features = ["serde-serialize"] }
+rand = "0.8"
 kiss3d = { version = "0.45.0", features = ["egui"] }
 pingpong-bot = { path = "../..", default-features = false, features = ["gui", "real"] }
 tracing = "0.1"

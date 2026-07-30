@@ -13,6 +13,7 @@ use super::host_options::SceneHostOptions;
 use super::scene::SimScene;
 use crate::sim::gui::ball;
 use crate::sim::gui::robot;
+use crate::sim::gui::shooter;
 
 pub(crate) fn run_scene_host(options: SceneHostOptions) -> Result<(), String> {
     if options.enable_panel {
@@ -78,7 +79,11 @@ async fn run_lightweight(options: SceneHostOptions) -> Result<(), String> {
         .as_ref()
         .map(|_| robot::Visual::spawn(&mut scene, options.urdf.as_deref()));
 
-    let _ = &options.layers.shooter;
+    let mut shooter_visual = options
+        .layers
+        .shooter
+        .as_ref()
+        .map(|_| shooter::Visual::spawn(&mut scene));
 
     while window.render_3d(&mut scene, &mut camera).await {
         if options.shutdown.load(Ordering::Acquire) {
@@ -109,6 +114,9 @@ async fn run_lightweight(options: SceneHostOptions) -> Result<(), String> {
                 Some(p) => visual.set_world_position(p),
                 None => visual.hide(),
             }
+        }
+        if let (Some(handle), Some(visual)) = (&options.layers.shooter, &mut shooter_visual) {
+            visual.set_from_settings(&handle.settings());
         }
         if let (Some(_), Some(visual), Some(world)) =
             (&options.layers.robot, &mut robot_visual, &options.world)

@@ -108,6 +108,7 @@ fn run(args: Args) -> Result<()> {
     let scene = SimScene::builder()
         .title(if args.dry_run { "jog (dry-run)" } else { "jog" })
         .with_robot(Arc::clone(&world))
+        .with_shooter(Arc::clone(&controls), Some(Arc::clone(&world)))
         .with_ball()
         .ghost_ball(true)
         .urdf(robot.urdf.clone())
@@ -122,10 +123,16 @@ fn run(args: Args) -> Result<()> {
         .ball()
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("ball layer missing"))?;
+    let shooter_handle = scene
+        .shooter()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("shooter layer missing"))?;
     {
         let mut app = app.lock().expect("jog app");
         app.attach_robot(robot_handle);
         app.attach_ball(ball_handle);
+        app.attach_shooter(shooter_handle);
+        app.push_shooter();
         if let Err(err) = app.sync() {
             anyhow::bail!("boot sync 실패: {err:#}");
         }

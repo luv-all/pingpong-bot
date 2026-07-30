@@ -1,33 +1,67 @@
 //! jog egui 패널.
 
 use kiss3d::egui::{self, Color32, RichText};
-use pingpong_bot::constants::table;
 use pingpong_bot::robot::motion::InterceptWindow;
+use pingpong_bot::sim::gui::shooter;
 
-use crate::plan::{Kind, REACH_DELTA_M, joint_label, reach_ok};
+use crate::plan::{Kind, REACH_DELTA_M, SwingPreview, joint_label, reach_ok, swing_preview};
 use crate::state::{Action, JogApp, try_action};
 
 pub fn draw(ctx: &egui::Context, app: &mut JogApp) {
     ensure_korean_fonts(ctx);
+
+    // 예측은 프레임당 한 번만 — 고스트 공·표시·미리보기 게이트가 같은 값을 쓴다.
+    let preview = if app.draft.kind == Kind::Swing {
+        app.synced_pose
+            .as_ref()
+            .and_then(|pose| swing_preview(&app.arm, pose, &app.draft).ok())
+    } else {
+        None
+    };
+    app.sync_ball_ghost(preview.as_ref());
+
+    draw_shooter_window(ctx, app);
 
     egui::Window::new("Jog")
         .default_pos(egui::pos2(12.0, 12.0))
         .default_width(400.0)
         .resizable(true)
         .show(ctx, |ui| {
-            app.sync_arrival_ghost();
             draw_header(ui, app);
             ui.separator();
             draw_status(ui, app);
             ui.separator();
             draw_params(ui, app);
             ui.separator();
-            draw_motion(ui, app);
+            draw_motion(ui, app, preview.as_ref());
             ui.separator();
-            draw_actions(ui, app);
+            draw_actions(ui, app, preview.as_ref());
             if let Some(err) = &app.error {
                 ui.add_space(4.0);
                 ui.colored_label(Color32::from_rgb(220, 90, 80), err);
+            }
+        });
+}
+
+/// 메인 sim과 같은 슈터 위젯. 값이 바뀌면 곧바로 sim controls로 민다.
+fn draw_shooter_window(ctx: &egui::Context, app: &mut JogApp) {
+    egui::Window::new("슈터")
+        .default_pos(egui::pos2(440.0, 12.0))
+        .default_width(280.0)
+        .resizable(true)
+        .show(ctx, |ui| {
+            let buttons = shooter::ui::draw(ui, &mut app.draft.shooter);
+            if buttons.random {
+                app.draft.shooter = app.draft.shooter.randomized(&mut rand::thread_rng());
+            }
+            app.push_shooter();
+            if let Some(handle) = &app.shooter {
+                if buttons.shoot {
+                    handle.request_shoot();
+                }
+                if buttons.park {
+                    handle.request_park();
+                }
             }
         });
 }
@@ -84,7 +118,7 @@ fn draw_params(ui: &mut egui::Ui, app: &mut JogApp) {
     );
 }
 
-fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
+fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp, preview: Option<&SwingPreview>) {
     ui.label(RichText::new("모션").strong());
     egui::ComboBox::from_id_salt("motion_kind")
         .selected_text(app.draft.kind.label())
@@ -97,8 +131,6 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
                 Kind::Ik,
                 Kind::Pose,
                 Kind::Swing,
-                Kind::AimBall,
-                Kind::SwingBall,
             ] {
                 ui.selectable_value(&mut app.draft.kind, kind, kind.label());
             }
@@ -164,51 +196,20 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp) {
             draw_reach(ui, app, true);
         }
         Kind::Swing => {
-            draw_reach(ui, app, true);
-            ranged(
-                ui,
-                "맞을 때 속도 [m/s]",
-                &mut app.draft.swing_speed,
-                0.1,
-                8.0,
-                0.05,
-            );
-        }
-        Kind::AimBall => {
-            draw_arrival(ui, app, false);
-        }
-        Kind::SwingBall => {
-            draw_arrival(ui, app, true);
+            draw_swing(ui, app, preview);
         }
     }
 }
 
-fn draw_arrival(ui: &mut egui::Ui, app: &mut JogApp, with_ball_vel: bool) {
-    ui.label("공 도달점 [m]");
-    ranged(
-        ui,
-        "x",
-        &mut app.draft.arrival_xyz[0],
-        -0.05,
-        table::WIDTH_X + 0.05,
-        0.005,
-    );
-    // 도달점 = 접수 창(hit plane). InterceptWindow 기본 [0.08, 0.35].
+fn draw_swing(ui: &mut egui::Ui, app: &mut JogApp, preview: Option<&SwingPreview>) {
     let hit = InterceptWindow::default();
+    ui.label("공을 맞을 깊이 (접수 평면 y) [m]");
     ranged(
         ui,
         "y",
-        &mut app.draft.arrival_xyz[1],
+        &mut app.draft.hit_plane_y,
         hit.y_min,
         hit.y_max,
-        0.005,
-    );
-    ranged(
-        ui,
-        "z",
-        &mut app.draft.arrival_xyz[2],
-        table::SURFACE_Z,
-        table::SURFACE_Z + 0.6,
         0.005,
     );
 
@@ -216,20 +217,39 @@ fn draw_arrival(ui: &mut egui::Ui, app: &mut JogApp, with_ball_vel: bool) {
     ranged(ui, "pitch", &mut app.draft.tilt_pitch_deg, -30.0, 30.0, 0.5);
     ranged(ui, "yaw", &mut app.draft.tilt_yaw_deg, -30.0, 30.0, 0.5);
 
-    if with_ball_vel {
-        ui.label("공 입사 속도 [m/s]");
-        ranged(ui, "vx", &mut app.draft.ball_vin[0], -8.0, 8.0, 0.05);
-        ranged(ui, "vy", &mut app.draft.ball_vin[1], -12.0, 2.0, 0.05);
-        ranged(ui, "vz", &mut app.draft.ball_vin[2], -8.0, 4.0, 0.05);
+    ui.separator();
+    if app.synced_pose.is_none() {
+        ui.label("동기화하면 예측 결과가 표시됩니다");
+        return;
     }
+    let Some(preview) = preview else {
+        ui.colored_label(
+            Color32::from_rgb(220, 90, 80),
+            "이 슈터 설정으로는 접수 평면에 도달하는 공이 없습니다",
+        );
+        ui.label(
+            RichText::new("네트 미달 · 너무 낮음 · 리드 시간 밖 — 속도나 pitch를 올려보세요")
+                .weak()
+                .small(),
+        );
+        return;
+    };
 
-    if let Some(pose) = app.synced_pose.as_ref() {
-        let ok = reach_ok(&app.arm, pose, &app.draft);
-        if ok {
-            ui.colored_label(Color32::from_rgb(90, 190, 120), "IK 가능");
-        } else {
-            ui.colored_label(Color32::from_rgb(220, 90, 80), "IK 불가");
-        }
+    let p = preview.prediction.impact_position.coords;
+    let v = preview.prediction.incoming_velocity;
+    ui.label(format!("도달점 = ({:.3}, {:.3}, {:.3}) m", p.x, p.y, p.z));
+    ui.label(format!("입사 속도 = ({:.2}, {:.2}, {:.2}) m/s", v.x, v.y, v.z));
+    ui.label(format!(
+        "리드 시간 = {:.3} s",
+        preview.prediction.time_to_impact_secs
+    ));
+    if preview.ik_ok {
+        ui.colored_label(Color32::from_rgb(90, 190, 120), "IK 가능");
+    } else {
+        ui.colored_label(
+            Color32::from_rgb(220, 90, 80),
+            "IK 불가 — 깊이·기울기나 슈터 조준을 바꿔보세요",
+        );
     }
 }
 
@@ -270,10 +290,15 @@ fn draw_reach(ui: &mut egui::Ui, app: &mut JogApp, with_tilt: bool) {
     }
 }
 
-fn draw_actions(ui: &mut egui::Ui, app: &mut JogApp) {
+fn draw_actions(ui: &mut egui::Ui, app: &mut JogApp, preview: Option<&SwingPreview>) {
+    // 슈터 공이 도달 불가이거나 임팩트 IK가 안 풀리면 미리보기를 막는다.
+    let swing_ready = app.draft.kind != Kind::Swing || preview.is_some_and(|p| p.ik_ok);
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(app.phase.can_preview(), egui::Button::new("미리보기"))
+            .add_enabled(
+                app.phase.can_preview() && swing_ready,
+                egui::Button::new("미리보기"),
+            )
             .clicked()
         {
             try_action(app, Action::Preview);

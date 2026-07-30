@@ -24,8 +24,8 @@ use crate::defaults::sim::RANDOM_SHOT_TARGET_PADDING_M;
 use crate::error::SwingPlanError;
 use crate::robot::urdf::{UrdfLinkVisual, UrdfModel};
 use crate::sim::gui::ball;
+use crate::sim::gui::shooter;
 use crate::sim::gui::debug::CommitPhase;
-use crate::sim::launch;
 use crate::sim::physics::world::SimWorld;
 use tracing::info;
 
@@ -35,7 +35,7 @@ const OBB_NODE_COUNT: usize = 8;
 
 struct SceneDynamics {
     ball: ball::Visual,
-    shooter: SceneNode3d,
+    shooter: shooter::Visual,
     robot: RobotRender,
     /// hit plane 예측 3D 위치 (공 비행 중 디버그)
     impact_marker: SceneNode3d,
@@ -170,13 +170,7 @@ fn build_scene_dynamics(
     rail_profile: Option<SceneNode3d>,
 ) -> SceneDynamics {
     let ball = ball::Visual::spawn(scene);
-    let shooter = scene
-        .add_cube(
-            launch::Layout::VISUAL_SIZE_X as f32,
-            launch::Layout::VISUAL_SIZE_Y as f32,
-            launch::Layout::VISUAL_SIZE_Z as f32,
-        )
-        .set_color(Color::new(0.45, 0.45, 0.5, 1.0));
+    let shooter = shooter::Visual::spawn(scene);
     let impact_marker = scene.add_sphere(0.018).set_color(rgba(colors::IDLE_PRED));
     let impact_ring = scene
         .add_cube(0.05, 0.05, 0.004)
@@ -404,10 +398,7 @@ fn sync_scene_dynamics(
     }
 
     let (sh_pos, sh_rot) = world.shooter_pose();
-    nodes
-        .shooter
-        .set_position(to_vec3(sh_pos))
-        .set_rotation(to_quat(sh_rot));
+    nodes.shooter.set_pose(sh_pos, sh_rot);
 
     sync_impact_debug_markers(nodes, world, debug);
     sync_unreachable_x(nodes, world, debug);

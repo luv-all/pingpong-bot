@@ -3,14 +3,14 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
-use pingpong_bot::Point3;
 use pingpong_bot::hardware::{Hardware, RealHardware};
 use pingpong_bot::robot::motion;
 use pingpong_bot::robot::{self, Arm};
 use pingpong_bot::sim::gui;
 use pingpong_bot::sim::gui::ball;
+use pingpong_bot::sim::gui::shooter;
 
-use crate::plan::{self, Draft, Kind};
+use crate::plan::{self, Draft, Kind, SwingPreview};
 
 use super::action::Action;
 use super::phase::Phase;
@@ -20,6 +20,7 @@ pub struct JogApp {
     pub hardware: Arc<Mutex<RealHardware>>,
     pub robot: Option<gui::robot::Handle>,
     pub ball: Option<ball::Handle>,
+    pub shooter: Option<shooter::Handle>,
     pub dry_run: bool,
     pub phase: Phase,
     /// Sync 시점 포즈 — 미리보기 시작점·Discard 복원.
@@ -38,6 +39,7 @@ impl JogApp {
             hardware,
             robot: None,
             ball: None,
+            shooter: None,
             dry_run,
             phase: Phase::NeedsSync,
             synced_pose: None,
@@ -57,24 +59,30 @@ impl JogApp {
         self.ball = Some(ball);
     }
 
-    /// AimBall / SwingBall 도달점을 홀로그램 공에 반영. 그 외 모션은 숨김.
-    pub fn sync_arrival_ghost(&self) {
+    pub fn attach_shooter(&mut self, shooter: shooter::Handle) {
+        self.shooter = Some(shooter);
+    }
+
+    /// 패널의 슈터 값을 sim controls로 밀어 넣는다 (월드 슈터 자세·비주얼 갱신).
+    pub fn push_shooter(&self) {
+        if let Some(handle) = &self.shooter {
+            handle.set_settings(self.draft.shooter.clone());
+        }
+    }
+
+    /// 예측 도달점을 홀로그램 공에 반영. Swing 이외거나 예측 실패면 숨김.
+    pub fn sync_ball_ghost(&self, preview: Option<&SwingPreview>) {
         let Some(ball) = &self.ball else {
             return;
         };
-        let show = matches!(self.draft.kind, Kind::AimBall | Kind::SwingBall);
-        if show {
-            let [x, y, z] = self.draft.arrival_xyz;
-            ball.set_position(Some(Point3::new(x, y, z)));
-            if self.draft.kind == Kind::SwingBall {
-                ball.set_velocity(Some(self.draft.ball_vin));
-            } else {
-                ball.set_velocity(None);
-            }
-        } else {
+        let Some(preview) = preview.filter(|_| self.draft.kind == Kind::Swing) else {
             ball.set_position(None);
             ball.set_velocity(None);
-        }
+            return;
+        };
+        let v = preview.prediction.incoming_velocity;
+        ball.set_position(Some(preview.prediction.impact_position));
+        ball.set_velocity(Some([v.x, v.y, v.z]));
     }
 
     fn robot(&self) -> Result<&gui::robot::Handle> {
