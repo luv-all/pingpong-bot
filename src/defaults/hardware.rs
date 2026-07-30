@@ -27,8 +27,8 @@ impl Default for DynamixelConfig {
             addr_current_limit: 38,
             // MX-64만 Current Limit 보유(기본·최대 1941). MX-28(ID 4·5)에는 레지스터 없음.
             current_limit_max_by_id: vec![(1, 1941), (2, 1941), (3, 1941)],
-            profile_acceleration: 20,
-            profile_velocity: 80,
+            profile_acceleration: 0,
+            profile_velocity: 0,
             comm_retries: 5,
             comm_retry_delay_ms: 20,
             stream_hz: 200.0,
