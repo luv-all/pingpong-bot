@@ -13,7 +13,8 @@ use crate::estimator::Prediction;
 use crate::robot::Arm;
 use crate::robot::{self, Joints};
 
-use super::impact_target::solve_impact_target;
+use super::impact_candidate::{ImpactCandidate, best_impact_candidate};
+use super::impact_target::{impact_target_from_candidate, solve_impact_target};
 use super::planned_intercept::PlannedIntercept;
 use super::rail::Rail;
 use super::trajectory::Trajectory;
@@ -50,7 +51,19 @@ pub fn plan_swing(
     }
 
     let target = solve_impact_target(arm, &prediction, start)?;
+    return plan_swing_with_target(arm, time_to_impact, start, target);
+}
 
+/// [`plan_swing`]의 후반부 — 임팩트 목표가 이미 풀려 있을 때의 quintic 생성.
+///
+/// `plan_best_swing`이 WP2b 복합 랭킹 채점에서 얻은 IK 결과를 재사용하려고
+/// 갈라냈다(같은 IK를 두 번 풀지 않기 위해).
+fn plan_swing_with_target(
+    arm: &Arm,
+    time_to_impact: f64,
+    start: &robot::Pose,
+    target: super::impact_target::ImpactTarget,
+) -> Result<Trajectory, DomainError> {
     let start_velocity = vec![0.0; start.joints.values.len()];
     let rail_motion = Rail {
         start: start.rail_x,
@@ -89,58 +102,110 @@ pub fn plan_swing(
 /// 회귀를 조기에 잡음).
 pub const MAX_CONTACT_ERROR: f64 = 0.005;
 
+/// 타점 후보의 WP2b 복합 점수 — **예측 달성 라켓 법선속도 [m/s]**, 클수록 좋음.
+///
+/// ```text
+/// score = |v_r · n| × retained(r),   retained(r) = min(1, 1/r)
+/// ```
+///
+/// 두 항이 각각 사용자 요구의 "임팩트 세기"와 "치기 쉬움"이다.
+///
+/// - `|v_r · n|` = 이 타점 기하가 rally 리턴을 내기 위해 요구하는 라켓 법선속도.
+///   임팩트 모델(`required_racket_velocity_parts`)에서 출사 법선속도는
+///   `(1+e)·v_r·n − e·v_in·n`이라 **리턴 세기를 지배하는 건 법선 성분뿐**이다
+///   (접선 lift 성분은 네트 클리어용이라 세기 비교에서 뺀다).
+/// - `retained(r)` = 그 요구 속도 중 실제로 살아남는 비율. 파이프라인이
+///   끝속도를 깎는 곳이 두 군데인데 **둘 다 같은 1/r 꼴**로 수렴한다:
+///   (1) [`solve_impact_target`]의 사전 축소는 `r > NEAR_SINGULARITY_SPEED_RATIO`
+///       일 때 정확히 `1/r`을 곱한다 (`impact_target.rs`).
+///   (2) 그 아래 구간에서도 [`fit_end_velocity`]가 quintic 첨두 관절속도를
+///       `max_joint_speed` 안으로 이분탐색한다 — 끝속도 기여분은 배율에
+///       선형이고 무축소 상태의 비율이 곧 `r`이므로 가능한 최대 배율은
+///       `1/r`이 상한이다.
+///   즉 `min(1, 1/r)`은 임의 가중치가 아니라 **실제 축소 코드에서 유도된**
+///   값이다 — 그래서 이 점수엔 손으로 고른 가중치가 하나도 없다.
+///
+/// 버린 대안: `w_e·ease + w_s·strength` 2항 가중합. WP2b 실측
+/// (`diag_wp2b_ik_seed_spread`)에서 `InterceptWindow` 전 평면의 `|v_r|`이
+/// 1.75~1.84 m/s(산포 5%)로 사실상 상수인 반면 `r`은 1.45~3.56(2.4배)로
+/// 움직인다 — 두 항 모두 `r`에 단조라 가중치가 식별되지 않는다(어떤 값을
+/// 넣어도 같은 순서). 유도된 단일 항이 더 단순하면서 `|v_r|`이 실제로
+/// 갈리는 기하에서도 옳게 동작한다.
+fn candidate_score(candidate: &ImpactCandidate) -> f64 {
+    let retained = 1.0 / candidate.peak_joint_speed_ratio.max(1.0);
+    return candidate
+        .racket_velocity
+        .dot(&candidate.impact_normal)
+        .abs()
+        * retained;
+}
+
 pub fn plan_best_swing(
     arm: &Arm,
     predictions: &[Prediction],
     start: &robot::Pose,
 ) -> Result<PlannedIntercept, DomainError> {
-    let current_position = if arm.rail.is_some() {
-        arm.forward_kinematics_with_rail(start.rail_x, &start.joints)
-    } else {
-        arm.forward_kinematics(&start.joints)
-    }
-    .map(|pose| pose.position.coords)
-    .unwrap_or_default();
-    let mut ranked: Vec<Prediction> = predictions
+    let in_window: Vec<Prediction> = predictions
         .iter()
         .copied()
         .filter(|prediction| in_swing_commit_window(prediction.time_to_impact_secs))
         .collect();
-    ranked.sort_by(|left, right| {
-        let left_cost = (left.impact_position.coords - current_position).norm();
-        let right_cost = (right.impact_position.coords - current_position).norm();
-        left_cost
-            .partial_cmp(&right_cost)
+
+    let mut last_error = None;
+    // 1단계 — 값싼 **IK 전용** 채점 패스. quintic/토크 적합은 여기서 돌리지
+    // 않는다(그건 2단계에서 순서대로, 첫 성공까지만). 이 경로는 매 물리 틱이
+    // 아니라 `SWING_RETRY_THROTTLE_SECS`(20 ms)로 스로틀된 커밋 시도에서만
+    // 도는 자리라 후보당 IK 한 번은 감당 가능하다.
+    let mut scored: Vec<(Prediction, ImpactCandidate, f64)> = Vec::with_capacity(in_window.len());
+    for prediction in &in_window {
+        match best_impact_candidate(arm, prediction, start) {
+            Ok(candidate) => {
+                let score = candidate_score(&candidate);
+                scored.push((*prediction, candidate, score));
+            }
+            // 채점 자체가 실패한 후보는 어차피 `plan_swing`도 같은 IK에서
+            // 떨어진다 — 후보에서 뺀다.
+            Err(error) => last_error = Some(DomainError::InfeasibleSwing(error)),
+        }
+    }
+    scored.sort_by(|left, right| {
+        right
+            .2
+            .partial_cmp(&left.2)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    let mut last_error = None;
-    for prediction in ranked {
-        let trajectory = match plan_swing(arm, prediction, start) {
-            Ok(trajectory) => trajectory,
-            Err(error) => {
-                last_error = Some(error);
-                continue;
-            }
-        };
-        let pose = if arm.rail.is_some() {
-            arm.forward_kinematics_with_rail(trajectory.rail.end, &trajectory.end)
-        } else {
-            arm.forward_kinematics(&trajectory.end)
-        };
-        let Some(pose) = pose else {
-            continue;
-        };
-        let contact = pose.position.coords
-            + pose.normal
-                * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z);
-        if (contact - prediction.impact_position.coords).norm() > MAX_CONTACT_ERROR {
-            continue;
+
+    // 2단계 — 복합 점수 순으로 실제 궤적을 만들어 **첫 성공**을 채택한다.
+    // 실패 시 다음 후보로 넘어가는 폴백 동작은 예전과 같다(바뀐 건 순서뿐).
+    for (prediction, candidate, _) in scored {
+        let target = impact_target_from_candidate(arm, candidate);
+        let trajectory =
+            match plan_swing_with_target(arm, prediction.time_to_impact_secs, start, target) {
+                Ok(trajectory) => trajectory,
+                Err(error) => {
+                    last_error = Some(error);
+                    continue;
+                }
+            };
+        if let Some(planned) = accept_if_contact_within_tolerance(arm, prediction, trajectory) {
+            return Ok(planned);
         }
-        return Ok(PlannedIntercept {
-            prediction,
-            trajectory,
-        });
     }
+
+    // 채점 패스가 **전부** 실패했을 때만: 예전의 거리순 폴백으로 되돌아간다.
+    // 채점이 곧 IK라 정상적으로는 여기 도달하지 않지만, 채점 단계가 고장 나도
+    // 후보가 0개로 줄지 않게 하는 안전망이다.
+    if !in_window.is_empty() && last_error.is_none() {
+        for prediction in distance_ranked(arm, in_window, start) {
+            let Ok(trajectory) = plan_swing(arm, prediction, start) else {
+                continue;
+            };
+            if let Some(planned) = accept_if_contact_within_tolerance(arm, prediction, trajectory) {
+                return Ok(planned);
+            }
+        }
+    }
+
     return Err(last_error.unwrap_or(DomainError::InfeasibleSwing(
         SwingPlanError::InverseKinematicsNoSolution {
             target_x: 0.0,
@@ -148,6 +213,51 @@ pub fn plan_best_swing(
             target_z: 0.0,
         },
     )));
+}
+
+/// 궤적 종단 FK로 접촉점을 재계산해 [`MAX_CONTACT_ERROR`] 안이면 채택한다.
+fn accept_if_contact_within_tolerance(
+    arm: &Arm,
+    prediction: Prediction,
+    trajectory: Trajectory,
+) -> Option<PlannedIntercept> {
+    let pose = if arm.rail.is_some() {
+        arm.forward_kinematics_with_rail(trajectory.rail.end, &trajectory.end)
+    } else {
+        arm.forward_kinematics(&trajectory.end)
+    }?;
+    let contact = pose.position.coords
+        + pose.normal * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z);
+    if (contact - prediction.impact_position.coords).norm() > MAX_CONTACT_ERROR {
+        return None;
+    }
+    return Some(PlannedIntercept {
+        prediction,
+        trajectory,
+    });
+}
+
+/// WP2b 이전의 랭킹 — 현재 라켓 위치에서 가까운 타점 순. 폴백 전용.
+fn distance_ranked(
+    arm: &Arm,
+    mut predictions: Vec<Prediction>,
+    start: &robot::Pose,
+) -> Vec<Prediction> {
+    let current_position = if arm.rail.is_some() {
+        arm.forward_kinematics_with_rail(start.rail_x, &start.joints)
+    } else {
+        arm.forward_kinematics(&start.joints)
+    }
+    .map(|pose| pose.position.coords)
+    .unwrap_or_default();
+    predictions.sort_by(|left, right| {
+        let left_cost = (left.impact_position.coords - current_position).norm();
+        let right_cost = (right.impact_position.coords - current_position).norm();
+        left_cost
+            .partial_cmp(&right_cost)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    return predictions;
 }
 
 /// commit 전 값싼 rough 추종용 목표 포즈를 계산한다 (rough-to-fine의 rough).
@@ -741,6 +851,127 @@ mod tests {
             // 완만한 상승)에 맞춘다.
             incoming_velocity: Vector3::new(0.0, -7.0, 0.7),
         };
+    }
+
+    /// WP2b 계측 — 복합 점수가 **실제 계획 결과**의 세기를 예측하는가.
+    ///
+    /// `candidate_score`는 `|v_r·n| × min(1, 1/r)`로 달성 세기를 추정한다.
+    /// 이 테스트는 후보마다 그 추정치와, `plan_swing`을 실제로 끝까지 돌려
+    /// 얻은 궤적의 **임팩트 시점 실측 라켓 법선속도**(FK 유한차분)를 나란히
+    /// 찍어, 추정이 순서를 맞히는지 본다.
+    ///
+    /// ```text
+    /// cargo test --lib diag_wp2b_score_vs_achieved -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "진단용 계측 — 수치를 stdout으로 뽑는다"]
+    fn diag_wp2b_score_vs_achieved() {
+        use crate::robot::motion::InterceptWindow;
+
+        let robot = crate::defaults::robot().expect("robot");
+        let arm = &*robot.arm;
+        let start = sample_start(arm);
+        let window = InterceptWindow::default();
+
+        /// 궤적의 임팩트 시점 라켓 속도·법선 (FK 유한차분).
+        fn achieved_at_impact(arm: &Arm, trajectory: &Trajectory) -> (f64, f64) {
+            const H: f64 = 1e-5;
+            let t = trajectory.impact_time_secs;
+            let fk = |time: f64| {
+                arm.forward_kinematics_with_rail(
+                    trajectory.sample_rail_at(time),
+                    &trajectory.sample_at(time),
+                )
+            };
+            let (Some(before), Some(at)) = (fk(t - H), fk(t)) else {
+                return (f64::NAN, f64::NAN);
+            };
+            let v = (at.position.coords - before.position.coords) / H;
+            return (v.dot(&at.normal), v.norm());
+        }
+
+        // 로봇 코트로 들어오는 대표 탄도 — 평면마다 tti·높이가 함께 변하도록
+        // 중력 포함 자유낙하로 만든다(평면별 tti를 고정하면 이 실험의 핵심인
+        // "시간 예산" 축이 사라진다).
+        for (label, y0, speed, vz0) in [
+            ("느린 공 (5 m/s)", 2.0_f64, 5.0_f64, 0.7_f64),
+            ("빠른 공 (7 m/s)", 2.6, 7.0, 0.9),
+        ] {
+            println!("\n=== {label} ===");
+            println!(
+                "{:>6} {:>7} {:>7} {:>7} {:>9} {:>10} {:>10} {:>8}",
+                "plane_y", "tti", "r", "|v_r·n|", "score", "achieved", "|v_act|", "결과"
+            );
+            // 창 한가운데 평면의 임팩트가 실현가능 높이 대역(table+0.20)에
+            // 오도록 발사 높이를 역산한다 — 안 그러면 전 후보가 도달권 밖으로
+            // 떨어져(IK 실패) 이 실험이 아무것도 구분하지 못한다.
+            let t_mid = (y0 - (window.y_min + window.y_max) * 0.5) / speed;
+            let z0 = table::SURFACE_Z + 0.20 + 0.5 * 9.81 * t_mid * t_mid - vz0 * t_mid;
+            let mut rows: Vec<(f64, f64, f64)> = Vec::new();
+            for plane in window.hit_planes() {
+                let t = (y0 - plane.y) / speed;
+                let prediction = Prediction {
+                    time_to_impact_secs: t,
+                    impact_position: crate::Point3::new(
+                        table::WIDTH_X * 0.5,
+                        plane.y,
+                        z0 + vz0 * t - 0.5 * 9.81 * t * t,
+                    ),
+                    incoming_velocity: Vector3::new(0.0, -speed, vz0 - 9.81 * t),
+                };
+                if !in_swing_commit_window(t) {
+                    continue;
+                }
+                let Ok(candidate) =
+                    super::super::impact_candidate::best_impact_candidate(arm, &prediction, &start)
+                else {
+                    println!("{:>6.2} {t:>7.3}  IK 실패", plane.y);
+                    continue;
+                };
+                let r = candidate.peak_joint_speed_ratio;
+                let vrn = candidate
+                    .racket_velocity
+                    .dot(&candidate.impact_normal)
+                    .abs();
+                let score = candidate_score(&candidate);
+                match plan_swing(arm, prediction, &start) {
+                    Ok(trajectory) => {
+                        let (achieved, mag) = achieved_at_impact(arm, &trajectory);
+                        println!(
+                            "{:>6.2} {t:>7.3} {r:>7.3} {vrn:>7.3} {score:>9.4} {:>10.4} {mag:>10.4} {:>8}",
+                            plane.y,
+                            achieved.abs(),
+                            "ok"
+                        );
+                        rows.push((score, achieved.abs(), plane.y));
+                    }
+                    Err(error) => println!(
+                        "{:>6.2} {t:>7.3} {r:>7.3} {vrn:>7.3} {score:>9.4} {:>10} {:>10} {error}",
+                        plane.y, "-", "-"
+                    ),
+                }
+            }
+            if rows.len() < 2 {
+                continue;
+            }
+            let by_score = rows
+                .iter()
+                .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
+                .unwrap();
+            let by_actual = rows
+                .iter()
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                .unwrap();
+            println!(
+                "  점수 1위: y={:.2} (achieved={:.4})   실제 1위: y={:.2} (achieved={:.4})   \
+                 점수랭킹이 놓친 배율 = {:.2}×",
+                by_score.2,
+                by_score.1,
+                by_actual.2,
+                by_actual.1,
+                by_actual.1 / by_score.1.max(1e-9)
+            );
+        }
     }
 
     #[test]

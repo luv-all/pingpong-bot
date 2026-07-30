@@ -6,10 +6,10 @@ use crate::error::DomainError;
 use crate::estimator::Prediction;
 use crate::robot::{self, Arm};
 
-use super::impact_candidate::best_impact_candidate;
+use super::impact_candidate::{ImpactCandidate, best_impact_candidate};
 
 /// IK 목표 관절속도가 한계의 이 배수를 넘으면 특이점 근처로 본다.
-const NEAR_SINGULARITY_SPEED_RATIO: f64 = 2.5;
+pub(crate) const NEAR_SINGULARITY_SPEED_RATIO: f64 = 2.5;
 
 /// 임팩트 IK·목표 속도 역산 결과. `plan_swing`(quintic)과 `plan_bang_bang_swing`
 /// (순수 토크 적분, `motion::bang_bang`)이 같은 임팩트 설정을 공유한다 —
@@ -28,7 +28,16 @@ pub(crate) fn solve_impact_target(
 ) -> Result<ImpactTarget, DomainError> {
     let candidate =
         best_impact_candidate(arm, prediction, start).map_err(DomainError::InfeasibleSwing)?;
+    return Ok(impact_target_from_candidate(arm, candidate));
+}
 
+/// 이미 풀어 둔 IK 후보를 임팩트 목표로 바꾼다 — 근특이점 사전 축소만 적용.
+///
+/// [`solve_impact_target`]에서 갈라낸 이유: `plan_best_swing`(WP2b 복합 랭킹)이
+/// 후보를 채점하려고 [`best_impact_candidate`]를 이미 한 번 부르는데, 채택된
+/// 후보에 대해 그걸 또 풀면 IK를 두 번 도는 셈이 된다. 채점 결과를 그대로
+/// 넘겨 재사용한다.
+pub(crate) fn impact_target_from_candidate(arm: &Arm, candidate: ImpactCandidate) -> ImpactTarget {
     if candidate.peak_joint_speed_ratio > NEAR_SINGULARITY_SPEED_RATIO {
         let (joint_index, required_speed) = candidate
             .joint_velocities
@@ -57,18 +66,18 @@ pub(crate) fn solve_impact_target(
             .iter()
             .map(|v| v * scale)
             .collect();
-        return Ok(ImpactTarget {
+        return ImpactTarget {
             pose: candidate.pose,
             joint_velocities,
             rail_velocity: candidate.rail_velocity * scale,
             racket_velocity: candidate.racket_velocity * scale,
-        });
+        };
     }
 
-    return Ok(ImpactTarget {
+    return ImpactTarget {
         pose: candidate.pose,
         joint_velocities: candidate.joint_velocities,
         rail_velocity: candidate.rail_velocity,
         racket_velocity: candidate.racket_velocity,
-    });
+    };
 }
