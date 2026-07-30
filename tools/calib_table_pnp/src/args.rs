@@ -8,6 +8,8 @@ use pingpong_bot::camera::CamCliArgs;
 use pingpong_bot::defaults::calibration_pending_path;
 use pingpong_bot::defaults::{DEFAULT_CALIBRATION_PATH, DEFAULT_FOV_Y_DEG, MAX_REPROJ_RMSE_PX};
 
+use crate::adjust::DEFAULT_REFINE_RADIUS_PX;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "calib_table_pnp",
@@ -40,6 +42,13 @@ pub struct Args {
     /// Review 캔버스 외곽 패딩 [px]. 프레임 밖 랜드마크 클릭용 (0=비활성)
     #[arg(long, default_value_t = 16)]
     pub pad: i32,
+
+    /// `r` 자동 미세탐색이 각 점을 원래 클릭에서 움직일 수 있는 최대 반경 [px].
+    ///
+    /// 이 반경이 유일한 안전장치다 — 크게 주면 클릭이 실제 영상 특징에서 떨어져
+    /// RMSE만 낮은 무의미한 해로 간다. 0이면 `r`은 no-op.
+    #[arg(long, default_value_t = DEFAULT_REFINE_RADIUS_PX)]
+    pub refine_radius: f64,
 
     /// 픽셀 JSON으로 PnP만 (인터랙티브 없음). 예: {"width":640,"height":480,"pixels":[[u,v],...]}
     #[arg(long)]
@@ -78,6 +87,7 @@ mod tests {
             fov_y: DEFAULT_FOV_Y_DEG,
             max_rmse: MAX_REPROJ_RMSE_PX,
             pad: 16,
+            refine_radius: DEFAULT_REFINE_RADIUS_PX,
             from_pixels: None,
             validate: None,
         };

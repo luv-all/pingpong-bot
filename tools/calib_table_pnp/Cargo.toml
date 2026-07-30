@@ -19,3 +19,7 @@ opencv = { version = "0.98.2", default-features = false, features = [
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 pingpong-bot = { path = "../..", default-features = false }
+
+[dev-dependencies]
+# refine_clicks 테스트에서 알려진 카메라(`Params::look_at`)로 기준 픽셀을 만든다.
+nalgebra = "0.35.0"

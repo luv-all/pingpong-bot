@@ -123,15 +123,28 @@ impl Params {
 
     /// 월드 점 -> 픽셀. 카메라 뒤/이미지 밖이면 `None`.
     pub fn project_world(&self, point: Point3) -> Option<camera::Pixel> {
+        let px = self.project_world_unclipped(point)?;
+        if px.x < 0.0
+            || px.y < 0.0
+            || px.x >= f64::from(self.width)
+            || px.y >= f64::from(self.height)
+        {
+            return None;
+        }
+        return Some(px);
+    }
+
+    /// 월드 점 -> 픽셀. 이미지 경계로 자르지 **않는다** (카메라 뒤면 `None`).
+    ///
+    /// 프레임 밖 랜드마크를 패딩 캔버스에 그려야 하는 캘리브 UI용
+    /// (`calib_table_pnp --pad N`). 삼각측량·검출에는 [`Self::project_world`]를 쓴다.
+    pub fn project_world_unclipped(&self, point: Point3) -> Option<camera::Pixel> {
         let x_cam = self.rotation * point.coords + self.translation;
         if x_cam.z <= 0.05 {
             return None;
         }
         let u = self.fx * (x_cam.x / x_cam.z) + self.cx;
         let v = self.fy * (x_cam.y / x_cam.z) + self.cy;
-        if u < 0.0 || v < 0.0 || u >= f64::from(self.width) || v >= f64::from(self.height) {
-            return None;
-        }
         return Some(camera::Pixel::new(u, v));
     }
 }
@@ -168,5 +181,41 @@ mod tests {
             "translation": [0.0, 0.0, 0.0]
         }"#;
         assert!(serde_json::from_str::<Params>(without_dist).is_err());
+    }
+
+    /// `project_world`는 이미지 밖을 계속 `None`으로, unclipped는 같은 좌표를 그대로 준다.
+    #[test]
+    fn unclipped_keeps_out_of_frame_pixels() {
+        let cam = Params {
+            camera_id: camera::Id(0),
+            label: None,
+            width: 640,
+            height: 480,
+            fx: 500.0,
+            fy: 500.0,
+            cx: 320.0,
+            cy: 240.0,
+            dist: Vec::new(),
+            rotation: nalgebra::Matrix3::identity(),
+            translation: Vector3::zeros(),
+        };
+
+        // 광축 앞 중앙 -> 주점. 두 함수 모두 같은 값.
+        let inside = Point3::new(0.0, 0.0, 2.0);
+        let clipped = cam.project_world(inside).expect("in frame");
+        let raw = cam.project_world_unclipped(inside).expect("in frame");
+        assert!((clipped.x - raw.x).abs() < 1e-12 && (clipped.y - raw.y).abs() < 1e-12);
+        assert!((raw.x - 320.0).abs() < 1e-9 && (raw.y - 240.0).abs() < 1e-9);
+
+        // 프레임 오른쪽 밖 -> clip은 None, unclipped는 width 초과 좌표.
+        let outside = Point3::new(4.0, 0.0, 2.0);
+        assert!(cam.project_world(outside).is_none());
+        let raw = cam.project_world_unclipped(outside).expect("still projects");
+        assert!(raw.x >= f64::from(cam.width), "expected u >= width, got {raw:?}");
+
+        // 카메라 뒤 -> 둘 다 None.
+        let behind = Point3::new(0.0, 0.0, -1.0);
+        assert!(cam.project_world(behind).is_none());
+        assert!(cam.project_world_unclipped(behind).is_none());
     }
 }
