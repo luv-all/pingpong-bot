@@ -5,7 +5,7 @@ use nalgebra::Vector3;
 use crate::defaults;
 use crate::error::SwingPlanError;
 use crate::estimator::Prediction;
-use crate::planner::Impact;
+use crate::motion::Impact;
 use crate::robot::{self, Arm, Joints};
 
 /// `hint`를 어깨/팔꿈치 한계 구간 중점 기준으로 반사한 대안 시드들을
@@ -86,7 +86,7 @@ pub(crate) fn best_impact_candidate(
                 continue;
             }
         };
-        if crate::planner::collision::table_penetration(arm, solved.rail_x, &solved.joints) > 1e-3 {
+        if crate::robot::collision::table_penetration(arm, solved.rail_x, &solved.joints) > 1e-3 {
             continue;
         }
         let Some(pose) = arm.forward_kinematics_with_rail(solved.rail_x, &solved.joints) else {

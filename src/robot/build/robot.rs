@@ -34,15 +34,15 @@ impl Robot {
 }
 
 impl Robot {
-    pub fn obbs(&self, rail_x: f64, joints: &Joints) -> Vec<crate::planner::OrientedBox> {
-        return crate::planner::collision::robot_obbs(&self.arm, rail_x, joints);
+    pub fn obbs(&self, rail_x: f64, joints: &Joints) -> Vec<crate::robot::OrientedBox> {
+        return crate::robot::collision::robot_obbs(&self.arm, rail_x, joints);
     }
 
     pub fn table_penetration(&self, rail_x: f64, joints: &Joints) -> f64 {
-        return crate::planner::collision::table_penetration(&self.arm, rail_x, joints);
+        return crate::robot::collision::table_penetration(&self.arm, rail_x, joints);
     }
 
     pub fn clamp_above_table(&self, rail_x: f64, joints: &Joints) -> Joints {
-        return crate::planner::collision::clamp_above_table(&self.arm, rail_x, joints);
+        return crate::robot::collision::clamp_above_table(&self.arm, rail_x, joints);
     }
 }

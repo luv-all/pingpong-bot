@@ -16,15 +16,6 @@ use super::trajectory::Trajectory;
 pub struct Planner;
 
 impl Planner {
-    pub fn aero_accel(
-        velocity: Vector3<f64>,
-        omega: Vector3<f64>,
-        drag_coefficient: f64,
-        magnus_coefficient: f64,
-    ) -> Vector3<f64> {
-        return physics::aero_accel(velocity, omega, drag_coefficient, magnus_coefficient);
-    }
-
     pub fn in_commit_window(time_to_impact_secs: f64) -> bool {
         return physics::in_swing_commit_window(time_to_impact_secs);
     }

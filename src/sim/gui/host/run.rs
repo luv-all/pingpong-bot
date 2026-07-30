@@ -7,12 +7,12 @@ use super::super::scene::build_table_scene;
 use super::super::viewer::{self, SimViewerOptions, lock_world_for_frame};
 use crate::constants::table;
 use crate::constants::viewer::CAMERA_DIST_DEFAULT;
-use crate::robot;
 
 use super::ball_only_options::BallOnlyViewerOptions;
 use super::host_options::SceneHostOptions;
 use super::scene::SimScene;
 use crate::sim::gui::ball;
+use crate::sim::gui::robot;
 
 pub(crate) fn run_scene_host(options: SceneHostOptions) -> Result<(), String> {
     if options.enable_panel {

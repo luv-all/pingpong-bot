@@ -9,7 +9,7 @@ use pingpong_bot::constants::{self, table};
 use pingpong_bot::defaults;
 use pingpong_bot::estimator;
 use pingpong_bot::estimator::HitPlane;
-use pingpong_bot::eval::{Mode, Protocol};
+use pingpong_bot::sim::eval::{Mode, Protocol};
 use pingpong_bot::sim::physics::SimWorld;
 
 fn v3(v: rapier3d::prelude::Vector) -> Vector3<f64> {
@@ -178,7 +178,7 @@ fn hit_plane_prediction_matches_simulated_ball() {
         .filter(|(i, _)| i % 4 == 0)
     {
         let settings = Protocol::settings_for_zone_shot(
-            &pingpong_bot::eval::LaunchParams::default(),
+            &pingpong_bot::sim::eval::LaunchParams::default(),
             zone,
             index_in_zone,
         );

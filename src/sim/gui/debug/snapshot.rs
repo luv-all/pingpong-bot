@@ -2,10 +2,10 @@
 
 use crate::defaults;
 use crate::error::SwingPlanError;
-use crate::planner::collision::{robot_obbs, table_penetration};
+use crate::motion;
 use crate::robot::Arm;
 use crate::robot::Joints;
-use crate::swing;
+use crate::robot::collision::{robot_obbs, table_penetration};
 
 use super::commit_phase::CommitPhase;
 use super::obb::DebugObb;
@@ -80,7 +80,7 @@ impl SimDebugSnapshot {
         self.commit_phase = CommitPhase::Committed;
     }
 
-    pub fn set_committed_path(&mut self, arm: &Arm, trajectory: &swing::Trajectory) {
+    pub fn set_committed_path(&mut self, arm: &Arm, trajectory: &motion::Trajectory) {
         self.committed_racket_path = sample_racket_path(arm, trajectory, GHOST_SAMPLES);
         let control = defaults::ControlParams::default();
         let duration = trajectory.duration_secs.max(f64::EPSILON);
@@ -199,7 +199,7 @@ impl SimDebugSnapshot {
     }
 }
 
-fn sample_racket_path(arm: &Arm, trajectory: &swing::Trajectory, samples: usize) -> Vec<[f64; 3]> {
+fn sample_racket_path(arm: &Arm, trajectory: &motion::Trajectory, samples: usize) -> Vec<[f64; 3]> {
     let n = samples.max(2);
     let mut out = Vec::with_capacity(n + 1);
     for i in 0..=n {

@@ -2,7 +2,7 @@
 
 use clap::Parser;
 
-use crate::mode_arg::ModeArg;
+use super::mode_arg::ModeArg;
 
 #[derive(Parser)]
 #[command(name = "pingpong-bot", about = "협력 랠리 핑퐁 로봇 런타임")]

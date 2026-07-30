@@ -284,7 +284,7 @@ impl Protocol {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eval::live_observer::net_plane_passthrough;
+    use crate::sim::eval::live_observer::net_plane_passthrough;
 
     #[test]
     fn net_plane_passthrough_detects_low_crossing() {
@@ -453,7 +453,7 @@ mod tests {
 mod smoke {
     use super::*;
     use crate::defaults;
-    use crate::eval;
+    use crate::sim::eval;
 
     #[test]
     fn protocol_runs_and_prints_score() {

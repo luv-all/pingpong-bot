@@ -9,8 +9,7 @@
 //! cargo run -p pingpong-bot -- --debug
 //! ```
 
-mod args;
-mod mode_arg;
+mod cli;
 
 use std::sync::{Arc, Mutex};
 
@@ -27,17 +26,16 @@ use pingpong_bot::hardware::dynamixel::DynamixelConfig;
 use pingpong_bot::hardware::rail::RailConfig;
 #[cfg(feature = "real")]
 use pingpong_bot::hardware::{Hardware, RealHardware};
-use pingpong_bot::logging::init_tracing;
-use pingpong_bot::planner::InterceptWindow;
+use pingpong_bot::motion::InterceptWindow;
 #[cfg(feature = "gui")]
 use pingpong_bot::sim::gui::{SimViewer, SimViewerOptions};
 use pingpong_bot::sim::session::{SimRuntimeControls, SimSession, SimSessionConfig};
+use pingpong_bot::telemetry::init_tracing;
 use tracing::info;
 #[cfg(not(feature = "gui"))]
 use tracing::warn;
 
-use args::Args;
-use mode_arg::ModeArg;
+use cli::{Args, ModeArg};
 
 fn main() -> Result<()> {
     let args = Args::parse();

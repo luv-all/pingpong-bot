@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use super::super::debug::overlays::DebugOverlays;
 use super::eval_live_run::EvalLiveRun;
 use crate::constants::viewer::CAMERA_DIST_DEFAULT;
-use crate::eval;
+use crate::sim::eval;
 use crate::sim::launch;
 use crate::sim::session::controls::SimRuntimeControls;
 

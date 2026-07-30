@@ -2,11 +2,11 @@
 
 use kiss3d::prelude::*;
 
+use super::visual_geom::{place_link, racket_disc_world_rotation, to_vec3};
 use crate::constants::geometry::{
     ARM_BASE_HEIGHT, ARM_BASE_RADIUS, JOINT_MARKER_RADIUS, LINK_FOREARM_RADIUS, LINK_UPPER_RADIUS,
     RACKET_BLADE_RADIUS, RACKET_HALF_Z, RACKET_HANDLE_RADIUS,
 };
-use crate::robot::visual_geom::{place_link, racket_disc_world_rotation, to_vec3};
 use crate::sim::gui::scene::HIDDEN;
 use crate::sim::physics::world::SimWorld;
 

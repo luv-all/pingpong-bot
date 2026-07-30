@@ -2,9 +2,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::motion;
 use crate::robot::{self, Joints, RacketPose};
 use crate::sim::physics::world::SimWorld;
-use crate::swing;
 
 /// 로봇 원시 R/W — `SimWorld`의 [`robot::State`]에 위임.
 ///
@@ -50,7 +50,7 @@ impl Handle {
     }
 
     /// 궤적 미리보기 재생. 진행 중이면 교체(`replace_swing`).
-    pub fn play(&self, trajectory: swing::Trajectory) {
+    pub fn play(&self, trajectory: motion::Trajectory) {
         let mut world = self.world.lock().expect("sim 월드");
         world.robot_mut().replace_swing(trajectory);
     }
@@ -95,13 +95,13 @@ mod tests {
         if let Some(v) = end.values.get_mut(0) {
             *v += 0.1;
         }
-        let traj = crate::swing::Trajectory::new(
+        let traj = crate::motion::Trajectory::new(
             pose.joints.clone(),
             end,
             vec![0.0; pose.joints.values.len()],
             vec![0.0; pose.joints.values.len()],
             0.2,
-            crate::swing::RailMotion {
+            crate::motion::Rail {
                 start: pose.rail_x,
                 end: pose.rail_x,
                 start_velocity: 0.0,
@@ -131,13 +131,13 @@ mod tests {
         let start = robot.pose();
         let mut end = start.joints.clone();
         end.values[0] += 15f64.to_radians();
-        let traj = crate::swing::Trajectory::new(
+        let traj = crate::motion::Trajectory::new(
             start.joints.clone(),
             end.clone(),
             vec![0.0; start.joints.values.len()],
             vec![0.0; start.joints.values.len()],
             0.5,
-            crate::swing::RailMotion {
+            crate::motion::Rail {
                 start: start.rail_x,
                 end: start.rail_x,
                 start_velocity: 0.0,

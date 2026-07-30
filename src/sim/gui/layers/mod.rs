@@ -2,8 +2,8 @@
 
 mod builder;
 
-use crate::robot;
 use crate::sim::gui::ball;
+use crate::sim::gui::robot;
 use crate::sim::gui::shooter;
 
 pub use builder::SceneLayersBuilder;

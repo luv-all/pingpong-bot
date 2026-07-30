@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 
 use super::super::layers::SceneLayers;
 use super::super::scene::TableSceneOptions;
-use crate::robot;
 use crate::robot::urdf::UrdfModel;
 use crate::sim::gui::ball;
 use crate::sim::gui::shooter;
@@ -14,6 +13,7 @@ use super::builder::SimSceneBuilder;
 use super::host_options::SceneHostOptions;
 use super::run::run_scene_host;
 use super::ui_draw::SceneUiHook;
+use crate::sim::gui::robot;
 
 /// 조립된 씬 — 레이어 핸들 IO + [`Self::run`].
 ///

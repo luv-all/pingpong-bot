@@ -1,4 +1,4 @@
-//! CLI 바이너리용 tracing 초기화.
+//! CLI 바이너리용 tracing subscriber 초기화.
 //!
 //! Windows PowerShell 등에서 `RUST_LOG=… cargo …` 문법이 깨지므로
 //! `--debug` 플래그만 쓴다.

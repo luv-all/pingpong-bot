@@ -166,7 +166,7 @@ pub fn bias_torques(arm: &Arm, joints: &Joints, joint_velocities: &[f64]) -> Vec
 
 /// [`bias_torques`]의 버퍼 재사용 버전. `scratch`(RNEA)와 `zero_accel`(영가속도
 /// 임시 벡터), `bias_out`을 호출부가 소유해 매 스텝 호출하는 루프(예:
-/// `planner::bang_bang::plan_bang_bang_for`)에서 힙 할당 없이 반복 계산한다.
+/// `motion::bang_bang::plan_bang_bang_for`)에서 힙 할당 없이 반복 계산한다.
 pub fn bias_torques_into(
     arm: &Arm,
     joints: &Joints,

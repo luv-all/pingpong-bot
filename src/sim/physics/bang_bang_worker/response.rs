@@ -1,7 +1,7 @@
 use crate::error::DomainError;
-use crate::swing;
+use crate::motion;
 
 pub(super) struct Response {
     pub(super) id: u64,
-    pub(super) result: Result<swing::bang_bang::PlannedIntercept, DomainError>,
+    pub(super) result: Result<motion::bang_bang::PlannedIntercept, DomainError>,
 }

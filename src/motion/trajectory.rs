@@ -3,7 +3,7 @@
 use crate::robot::Joints;
 
 use super::quintic_segment::QuinticSegment;
-use super::rail_motion::RailMotion;
+use super::rail::Rail;
 
 /// 하드웨어에 넘기는 quintic 스윙 궤적.
 #[derive(Debug, Clone, PartialEq)]
@@ -21,7 +21,7 @@ pub struct Trajectory {
     pub impact_time_secs: f64,
     pub duration_secs: f64,
     /// 시작→임팩트 레일 운동.
-    pub rail: RailMotion,
+    pub rail: Rail,
     pub follow_through_rail_x: f64,
     pub follow_through_rail_velocity: f64,
 }
@@ -34,7 +34,7 @@ impl Trajectory {
         start_velocity: Vec<f64>,
         end_velocity: Vec<f64>,
         duration_secs: f64,
-        rail: RailMotion,
+        rail: Rail,
     ) -> Self {
         return Self {
             start,
@@ -61,7 +61,7 @@ impl Trajectory {
         end_velocity: Vec<f64>,
         impact_time_secs: f64,
         duration_secs: f64,
-        rail: RailMotion,
+        rail: Rail,
         follow_through_rail_x: f64,
         follow_through_rail_velocity: f64,
     ) -> Self {
@@ -302,7 +302,7 @@ mod tests {
             vec![0.0],
             0.40,
             0.50,
-            RailMotion {
+            Rail {
                 start: 0.2,
                 end: 0.5,
                 start_velocity: 0.0,

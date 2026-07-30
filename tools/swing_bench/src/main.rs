@@ -37,12 +37,12 @@ use clap::Parser;
 use nalgebra::Vector3;
 use pingpong_bot::Point3;
 use pingpong_bot::defaults;
-use pingpong_bot::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
-use pingpong_bot::planner::Impact;
+use pingpong_bot::defaults::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
+use pingpong_bot::motion;
+use pingpong_bot::motion::Impact;
 use pingpong_bot::robot::{self, Arm, Joints, MountPreset, RobotBuilder};
 use pingpong_bot::sim::launch;
 use pingpong_bot::sim::physics::SimWorld;
-use pingpong_bot::swing;
 
 use args::Args;
 use contact_verify_joint_row::ContactVerifyJointRow;
@@ -325,7 +325,7 @@ fn simulate(
         .expect("target FK — compute_target이 이미 IK로 검증한 자세")
         .position
         .coords;
-    let mut scratch = swing::RacketGuidanceScratch::new(n);
+    let mut scratch = motion::RacketGuidanceScratch::new(n);
 
     let mut peak_util: Vec<f64> = vec![0.0; n];
     let mut peak_speed: Vec<f64> = vec![0.0; n];
@@ -343,7 +343,7 @@ fn simulate(
         // ZEM/ZEV의 `Tg`(목표 도달까지 남은 시간)로 이 시뮬레이션 자체의
         // 예산(`max_time_secs`)을 쓴다 — 모듈 문서 참고.
         let remaining_secs = max_time_secs - t;
-        let Some(step) = swing::Planner::step_racket_guidance(
+        let Some(step) = motion::Planner::step_racket_guidance(
             arm,
             &mut q,
             &mut qdot,

@@ -3,8 +3,8 @@
 use super::layout;
 use crate::constants::{ball, table};
 use crate::defaults;
+use crate::estimator;
 use crate::estimator::HitPlane;
-use crate::swing;
 use nalgebra::Vector3;
 use rand::Rng;
 use rapier3d::prelude::{
@@ -265,7 +265,8 @@ fn apply_aero_force(
     if mass <= 1e-12 {
         return;
     }
-    let force = swing::Planner::aero_accel(velocity, omega, physics.drag, physics.magnus) * mass;
+    let force =
+        estimator::Kinematics::aero_accel(velocity, omega, physics.drag, physics.magnus) * mass;
     body.add_force(
         Vector::new(force.x as f32, force.y as f32, force.z as f32),
         true,

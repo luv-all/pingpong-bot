@@ -3,11 +3,12 @@
 실행 체크리스트. 상세 스펙은 [`plan.md`](plan.md)·[`docs/phase2.md`](docs/phase2.md)·[`docs/decisions.md`](docs/decisions.md).  
 앱 숫자는 [`src/defaults/`](src/defaults/) SSOT. 로봇 활성 프리셋은 `defaults::robot()` 본문만.
 
-공개 API는 도메인 모듈 경로 (`planner::Impact` / `swing::Planner` / `estimator::Kinematics` /
-`camera::Preview` / `eval::Protocol` …). 자유함수 root dump·호환 alias는 쓰지 않는다.
+공개 API는 도메인 모듈 경로 (`motion::Impact` / `motion::Planner` / `estimator::Kinematics` /
+`camera::Preview` / `sim::eval::Protocol` …). 자유함수 root dump·호환 alias는 쓰지 않는다.
 
-파이프라인은 역할 기준: `detector` (검출) → `estimator` (삼각측량·EKF·예측) → `swing` (계획).
-`ball` / `shooter` 도메인은 해체됨 — 공 상태·피더는 `sim::physics` / `sim::launch`.
+파이프라인은 역할 기준: `detector` (검출) → `estimator` (삼각측량·EKF·예측) → `motion` (계획).
+`ball` / `shooter` / `swing` / `planner` / `eval` 도메인은 해체됨 — 공 상태·피더·채점은
+`sim::physics` / `sim::launch` / `sim::eval`, 팔–테이블 관통은 `robot::collision`.
 
 **우선순위:** **리턴 파워(eval)** → 실캠 `run_real` / Windows 벤치 → 시뮬 품질·포기 정책 → ω 추정 → 풀 동역학 후속.
 
@@ -39,8 +40,8 @@
 
 | 역할 | facade |
 |------|--------|
-| 리턴·라켓 속도 | `planner::Impact::rally_return` / `required_racket_velocity` |
-| 스윙 | `swing::Planner::plan` / `plan_best` / `plan_bang_bang` |
+| 리턴·라켓 속도 | `motion::Impact::rally_return` / `required_racket_velocity` |
+| 스윙 | `motion::Planner::plan` / `plan_best` / `plan_bang_bang` |
 | IK·속도 | `Arm::inverse_pose_with_rail` / `velocities_for_racket_velocity` |
 | 토크 | `Arm::required_torque` / `Arm::torque_feasible` |
 
@@ -108,4 +109,5 @@ cargo run -p pingpong-bot -- --mode sim
 # cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
 ```
 
-갱신: 2026-07-30 — ball/shooter 도메인 해체(detector/estimator/sim), 호환 alias 제거.
+갱신: 2026-07-30 — 도메인 재편: ball/shooter/swing/planner/eval 해체,
+detector → estimator → motion 파이프라인, robot↔hardware 레이어 분리, 호환 alias 제거.

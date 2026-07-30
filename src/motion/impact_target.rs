@@ -12,7 +12,7 @@ use super::impact_candidate::best_impact_candidate;
 const NEAR_SINGULARITY_SPEED_RATIO: f64 = 2.5;
 
 /// 임팩트 IK·목표 속도 역산 결과. `plan_swing`(quintic)과 `plan_bang_bang_swing`
-/// (순수 토크 적분, `planner::bang_bang`)이 같은 임팩트 설정을 공유한다 —
+/// (순수 토크 적분, `motion::bang_bang`)이 같은 임팩트 설정을 공유한다 —
 /// 갈라지는 지점은 이 목표를 어떤 궤적 "모양"에 넣느냐뿐이다.
 pub(crate) struct ImpactTarget {
     pub(crate) pose: robot::Pose,

@@ -22,8 +22,8 @@ use crossbeam_channel::{Receiver, Sender, unbounded};
 
 use crate::error::DomainError;
 use crate::estimator::Prediction;
+use crate::motion;
 use crate::robot::Arm;
-use crate::swing;
 
 mod inflight;
 mod request;
@@ -47,7 +47,7 @@ impl BangBangWorker {
         let (res_tx, res_rx) = unbounded::<Response>();
         thread::spawn(move || {
             for request in req_rx.iter() {
-                let result = swing::Planner::plan_bang_bang(
+                let result = motion::Planner::plan_bang_bang(
                     &request.arm,
                     &request.predictions,
                     &request.start,
@@ -118,7 +118,10 @@ impl BangBangWorker {
     /// 추적 중인 id와 안 맞으므로 조용히 버려진다.
     pub fn poll(
         &mut self,
-    ) -> Option<(f64, Result<swing::bang_bang::PlannedIntercept, DomainError>)> {
+    ) -> Option<(
+        f64,
+        Result<motion::bang_bang::PlannedIntercept, DomainError>,
+    )> {
         let mut latest = None;
         // 이론상 한 번에 응답이 하나만 있어야 하지만, 방어적으로 채널을
         // 전부 드레인하며 지금 추적 중인 id와 일치하는 마지막 것만 취한다.

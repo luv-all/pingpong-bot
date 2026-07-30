@@ -149,7 +149,7 @@ mod tests {
             urdf.mount =
                 SimRobotMount::rep103_z_up_at_table_end_with_mount(base_y, height_offset_m);
             return urdf
-                .to_arm(crate::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S)
+                .to_arm(crate::defaults::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S)
                 .expect("Arm 변환");
         };
 

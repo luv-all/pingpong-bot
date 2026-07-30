@@ -14,7 +14,7 @@ use crate::estimator;
 use crate::estimator::Estimator;
 use crate::estimator::Prediction;
 use crate::hardware::Hardware;
-use crate::swing;
+use crate::motion;
 use crate::telemetry::{Telemetry, TelemetryEvent};
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
@@ -185,7 +185,7 @@ pub fn run(
                             continue;
                         }
                     };
-                    match swing::Planner::plan_best(&arm, &candidates, &start) {
+                    match motion::Planner::plan_best(&arm, &candidates, &start) {
                         Ok(planned) => {
                             let trajectory = planned.trajectory;
                             telemetry_control.log(TelemetryEvent::SwingCommand(trajectory.clone()));

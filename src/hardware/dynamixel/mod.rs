@@ -22,10 +22,6 @@ pub use crate::constants::dynamixel::{
     MX28_NO_LOAD_SPEED_RPM, MX28_STALL_TORQUE_NM, MX64_STALL_TORQUE_NM,
     PROFILE_VELOCITY_REV_MIN_PER_LSB, rev_min_to_rad_s,
 };
-pub use crate::defaults::dxl_limits::{
-    CONTINUOUS_TORQUE_DERATE, DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, JOINT_SPEED_DERATE,
-    joint_torque_limits_4dof, joint_torque_limits_4dof_array,
-};
 
 pub use dynamixel_bus::DynamixelBus;
 pub use dynamixel_config::DynamixelConfig;

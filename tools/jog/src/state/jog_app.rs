@@ -6,8 +6,8 @@ use anyhow::{Context, Result, ensure};
 use pingpong_bot::Point3;
 use pingpong_bot::hardware::{Hardware, RealHardware};
 use pingpong_bot::robot::{self, Arm};
+use pingpong_bot::sim::gui;
 use pingpong_bot::sim::gui::ball;
-use pingpong_bot::swing;
 
 use crate::motion::{self, MotionDraft, MotionKind};
 
@@ -17,13 +17,13 @@ use super::phase::Phase;
 pub struct JogApp {
     pub arm: Arc<Arm>,
     pub hardware: Arc<Mutex<RealHardware>>,
-    pub robot: Option<robot::Handle>,
+    pub robot: Option<gui::robot::Handle>,
     pub ball: Option<ball::Handle>,
     pub dry_run: bool,
     pub phase: Phase,
     /// Sync 시점 포즈 — 미리보기 시작점·Discard 복원.
     pub synced_pose: Option<robot::Pose>,
-    pub staged: Option<swing::Trajectory>,
+    pub staged: Option<pingpong_bot::motion::Trajectory>,
     pub duration_secs: f64,
     pub max_delta_deg: f64,
     pub draft: MotionDraft,
@@ -48,7 +48,7 @@ impl JogApp {
         };
     }
 
-    pub fn attach_robot(&mut self, robot: robot::Handle) {
+    pub fn attach_robot(&mut self, robot: gui::robot::Handle) {
         self.robot = Some(robot);
     }
 
@@ -76,7 +76,7 @@ impl JogApp {
         }
     }
 
-    fn robot(&self) -> Result<&robot::Handle> {
+    fn robot(&self) -> Result<&gui::robot::Handle> {
         return self
             .robot
             .as_ref()

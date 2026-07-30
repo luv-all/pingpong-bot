@@ -3,7 +3,7 @@
 //! 4-DOF 팔이 짧은 링크(≈45cm reach) + 실기 스펙 기반 관절속도 한계
 //! (~2.88 rad/s) 조합에서 일반적인 랠리 리턴 속도(~2 m/s)조차 특정 자세에서
 //! 관절속도 조작성이 나빠 버거워지는 문제가 있었다(2026-07-23 조사).
-//! `planner::swing_feasibility`(다중 IK 시드 중 최선 조작성 선택, quintic
+//! `motion::swing_feasibility`(다중 IK 시드 중 최선 조작성 선택, quintic
 //! 없이 "낼 수 있는가"만 봄)를 여러 마운트 후보(레일 높이·테이블과의 거리)에
 //! 대해 대표 랠리 시나리오 배터리로 채점해, 어떤 마운트 위치가 가장 넓은
 //! 방향/속도 범위를 실기 관절속도 한계 안에서 커버하는지 찾는다.
@@ -24,15 +24,15 @@ use clap::Parser;
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
 use pingpong_bot::estimator::Prediction;
+use pingpong_bot::motion;
 use pingpong_bot::robot;
-use pingpong_bot::swing;
 
 use args::Args;
 use mount_result::MountResult;
 use scenario::{Scenario, build_scenarios};
 
 /// 실현 가능(NearSingularity 임계값과 별개, 실기 관절속도 한계 자체) 판정 기준.
-/// `planner::physics::NEAR_SINGULARITY_SPEED_RATIO`(2.5)와는 다른 목적 —
+/// `motion::physics::NEAR_SINGULARITY_SPEED_RATIO`(2.5)와는 다른 목적 —
 /// 여기서는 "특이점 근접"이 아니라 "실제로 안전하게 실행 가능한가"를 좀 더
 /// 보수적으로 본다(피크가 한계에 딱 걸치면 토크 여유가 없어 불안정할 수
 /// 있음, `plan_swing`의 `fit_end_velocity` 안전계수 0.95와 같은 취지).
@@ -70,7 +70,7 @@ fn evaluate_mount(
                 impact_position: scenario.impact,
                 incoming_velocity: scenario.incoming_velocity,
             };
-            swing::Planner::feasibility(&arm, &prediction, &start_pose)
+            motion::Planner::feasibility(&arm, &prediction, &start_pose)
                 .map(|f| f.peak_joint_speed_ratio)
                 .unwrap_or(f64::INFINITY)
         })

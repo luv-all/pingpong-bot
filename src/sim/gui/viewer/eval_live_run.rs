@@ -1,6 +1,6 @@
 //! 합산 Run 시나리오 라이브 재실행.
 
-use crate::eval;
+use crate::sim::eval;
 
 /// 합산 Run으로 저장된 시나리오를 라이브 월드에서 다시 실행·채점.
 #[derive(Debug, Clone)]

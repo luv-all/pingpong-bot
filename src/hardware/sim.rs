@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::error::HwError;
 use crate::hardware::Hardware;
-use crate::swing;
+use crate::motion;
 use tracing::debug;
 
 use crate::sim::physics::world::SimWorld;
@@ -37,7 +37,7 @@ impl SimHardware {
 }
 
 impl Hardware for SimHardware {
-    fn command(&mut self, trajectory: &swing::Trajectory) -> Result<(), HwError> {
+    fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
         {
             let mut world = self.world.lock().expect("sim 월드");
             // ground truth 모드에서는 물리 스레드만 타격
@@ -55,7 +55,7 @@ impl Hardware for SimHardware {
             }
             // decisions C4: 네트 통과 전 commit 금지 (ground truth 경로와 동일)
             let ball_y = f64::from(world.ball_position().y);
-            if !swing::Planner::past_midcourt(ball_y) {
+            if !motion::Planner::past_midcourt(ball_y) {
                 debug!(ball_y, "상대 코트 — EKF control commit 대기");
                 return Ok(());
             }

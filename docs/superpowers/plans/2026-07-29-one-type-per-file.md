@@ -6,7 +6,7 @@
 
 파일 1타입·짧은 이름·모듈 경로로 도메인 표시라는 **원칙은 유지**되지만, 아래
 rename map의 `ball::*` / `shooter::*` 목적지는 폐기됐다. entity 모듈 대신
-**역할 기준**(detector → estimator → planner)으로 배치한다.
+**역할 기준**(detector → estimator → motion)으로 배치한다.
 
 | 이 플랜의 목적지 | 실제 배치 (2026-07-30) |
 |------------------|------------------------|
@@ -17,9 +17,27 @@ rename map의 `ball::*` / `shooter::*` 목적지는 폐기됐다. entity 모듈 
 | `shooter::{Settings,Layout}` | `sim::launch::*` |
 | `shooter::Handle` | `sim::gui::shooter::Handle` |
 | `camera::Triangulate` · `camera::tri` | `estimator::Triangulate` · `estimator::tri` |
+| `swing::*` + `planner::{Impact,InterceptWindow}` | `motion::*` |
+| `planner::collision` · `OrientedBox` | `robot::collision` · `robot::OrientedBox` |
+| `eval::*` | `sim::eval::*` (sim 전용 채점 모드) |
+| `robot::{Handle,Visual,PrimitiveNodes,UrdfNodes}` | `sim::gui::robot::*` |
+| `logging::init_tracing` | `telemetry::init_tracing` |
+| `args` · `mode_arg` (bin 전용) | `cli::*` |
 
 `constants/ball`은 ITTF 물리 상수라 유지. 임시 별칭·호환 경로는 쓰지 않는다
 (배포 이력 없음 — 사용자 결정). Task 1~10의 rename map은 이 표로 읽을 것.
+
+### 레이어 방향 (2026-07-30 기준, 테스트 제외)
+
+```text
+camera → detector → estimator → motion → robot → hardware
+                                    ↘        ↘       ↙
+                                       sim · pipeline
+```
+
+- 스펙 숫자는 `defaults` / `constants` 단일 소유 — 도메인이 pass-through 재수출하지 않는다
+- 탄도 계산(`aero_accel`)은 `estimator::Kinematics` 소유 (sim·motion 공유 SSOT)
+- 팔–테이블 관통은 `robot::collision` (계획이 조회하는 관계)
 
 ---
 

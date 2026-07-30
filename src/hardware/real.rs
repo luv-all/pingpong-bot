@@ -14,8 +14,8 @@ use super::rail::RailConfig;
 use crate::defaults;
 use crate::error::HwError;
 use crate::hardware::Hardware;
+use crate::motion;
 use crate::robot::Arm;
-use crate::swing;
 
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
@@ -151,7 +151,7 @@ impl RealHardware {
 }
 
 impl Hardware for RealHardware {
-    fn command(&mut self, trajectory: &swing::Trajectory) -> Result<(), HwError> {
+    fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
         self.reap_executor();
         if self.busy.swap(true, Ordering::AcqRel) {
             debug!("Dynamixel 스윙 실행 중 — 중복 명령 무시");
@@ -291,13 +291,13 @@ mod tests {
             ..DynamixelConfig::default()
         };
         let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
-        let trajectory = swing::Trajectory::new(
+        let trajectory = motion::Trajectory::new(
             Joints::from_slice(&[0.0; 4]),
             Joints::from_slice(&[0.1; 4]),
             vec![0.0; 4],
             vec![0.0; 4],
             0.03,
-            swing::RailMotion::fixed(0.0),
+            motion::Rail::fixed(0.0),
         );
 
         hardware.command(&trajectory).expect("command");
@@ -320,13 +320,13 @@ mod tests {
         };
         let mut hardware =
             RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
-        let trajectory = swing::Trajectory::new(
+        let trajectory = motion::Trajectory::new(
             Joints::from_slice(&[0.0; 4]),
             Joints::from_slice(&[0.05; 4]),
             vec![0.0; 4],
             vec![0.0; 4],
             0.04,
-            swing::RailMotion {
+            motion::Rail {
                 start: 0.0,
                 end: 0.25,
                 start_velocity: 0.0,
@@ -352,13 +352,13 @@ mod tests {
             ..DynamixelConfig::default()
         };
         let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
-        let trajectory = swing::Trajectory::new(
+        let trajectory = motion::Trajectory::new(
             Joints::from_slice(&[0.0; 4]),
             Joints::from_slice(&[0.1; 4]),
             vec![0.0; 4],
             vec![0.0; 4],
             2.0,
-            swing::RailMotion::fixed(0.0),
+            motion::Rail::fixed(0.0),
         );
         hardware.command(&trajectory).expect("command");
 

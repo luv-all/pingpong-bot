@@ -12,8 +12,8 @@ use super::super::debug::overlays::DebugOverlays;
 use super::eval_live_run::EvalLiveRun;
 use crate::constants::viewer::{CAMERA_DIST_MAX, CAMERA_DIST_MIN};
 use crate::defaults;
-use crate::eval;
 use crate::robot::Robot;
+use crate::sim::eval;
 use crate::sim::physics;
 use crate::sim::physics::world::SimWorld;
 use crate::sim::session::controls::SimRuntimeControls;
@@ -603,7 +603,8 @@ fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mo
     let running = Arc::clone(&ui_state.eval_running);
     let launch = ui_state.eval_launch;
     std::thread::spawn(move || {
-        let _report = crate::eval::Protocol::run(&robot, physics, &launch, mode, Some(progress));
+        let _report =
+            crate::sim::eval::Protocol::run(&robot, physics, &launch, mode, Some(progress));
         running.store(false, Ordering::Relaxed);
     });
 }

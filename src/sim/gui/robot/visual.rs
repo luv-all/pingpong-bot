@@ -2,8 +2,8 @@
 
 use kiss3d::prelude::*;
 
+use super::{PrimitiveNodes, UrdfNodes};
 use crate::robot::urdf::UrdfModel;
-use crate::robot::{PrimitiveNodes, UrdfNodes};
 use crate::sim::physics::world::SimWorld;
 
 /// 월드에 맞춰 그리는 로봇 비주얼.

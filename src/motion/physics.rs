@@ -2,58 +2,21 @@
 
 use nalgebra::Vector3;
 
-use crate::constants::{G, table};
+use crate::constants::table;
 use crate::defaults;
-use crate::defaults::planner::{
+use crate::defaults::motion::{
     RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
 use crate::estimator::Prediction;
-use crate::planner::Impact;
+use crate::motion::Impact;
 use crate::robot::Arm;
 use crate::robot::{self, Joints};
 
 use super::impact_target::solve_impact_target;
 use super::planned_intercept::PlannedIntercept;
-use super::rail_motion::RailMotion;
+use super::rail::Rail;
 use super::trajectory::Trajectory;
-
-/// 비행 중 공기력만 (중력 제외) [m/s^2].
-///
-/// `-k|v|v + k_m(ω × v)`. Rapier는 중력을 따로 쓰므로 외력에는 이것만 넣는다.
-///
-/// 테이블 바운스 마찰이 Rapier에서 비현실적으로 큰 ω를 만들 수 있어
-/// Magnus에 쓰는 |ω|는 [`MAGNUS_OMEGA_MAX`]로 클립한다.
-pub use crate::defaults::planner::MAGNUS_OMEGA_MAX;
-
-pub fn aero_accel(
-    velocity: Vector3<f64>,
-    omega: Vector3<f64>,
-    drag_coefficient: f64,
-    magnus_coefficient: f64,
-) -> Vector3<f64> {
-    let drag = -drag_coefficient * velocity.norm() * velocity;
-    let omega_eff = {
-        let w = omega.norm();
-        if w > MAGNUS_OMEGA_MAX {
-            omega * (MAGNUS_OMEGA_MAX / w)
-        } else {
-            omega
-        }
-    };
-    let magnus = magnus_coefficient * omega_eff.cross(&velocity);
-    return drag + magnus;
-}
-
-/// 중력 + 항력 + Magnus [m/s^2]. plan Model C: `g - k|v|v + k_m(ω×v)`.
-pub fn accel(
-    velocity: Vector3<f64>,
-    omega: Vector3<f64>,
-    drag_coefficient: f64,
-    magnus_coefficient: f64,
-) -> Vector3<f64> {
-    return G + aero_accel(velocity, omega, drag_coefficient, magnus_coefficient);
-}
 
 /// 임팩트까지 남은 시간이 스윙 commit 창 `[MIN_SWING, COMMIT_MAX]` 안인지.
 ///
@@ -89,7 +52,7 @@ pub fn plan_swing(
     let target = solve_impact_target(arm, &prediction, start)?;
 
     let start_velocity = vec![0.0; start.joints.values.len()];
-    let rail_motion = RailMotion {
+    let rail_motion = Rail {
         start: start.rail_x,
         end: target.pose.rail_x,
         start_velocity: 0.0,
@@ -322,7 +285,7 @@ pub fn plan_return_to_center(arm: &Arm, start: &robot::Pose) -> Result<Trajector
         .max(RETURN_TO_CENTER_MIN_SECS);
     let mut last_error = None;
     while duration <= RETURN_TO_CENTER_MAX_SECS {
-        let rail = RailMotion {
+        let rail = Rail {
             start: start.rail_x,
             end: center_rail_x,
             start_velocity: 0.0,
@@ -364,7 +327,7 @@ fn build_feasible_trajectory(
     start_velocity: Vec<f64>,
     end_velocity: Vec<f64>,
     duration: f64,
-    rail: RailMotion,
+    rail: Rail,
 ) -> Result<Trajectory, SwingPlanError> {
     let (fitted, fitted_rail) = fit_end_velocity(
         arm,
@@ -407,7 +370,7 @@ fn build_feasible_trajectory(
                 let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
                 let joints = trajectory.sample_at(time);
                 let rail_x = trajectory.sample_rail_at(time);
-                worst = worst.max(crate::planner::collision::table_penetration(
+                worst = worst.max(crate::robot::collision::table_penetration(
                     arm, rail_x, &joints,
                 ));
             }
@@ -430,7 +393,7 @@ fn trajectory_with_follow_through(
     start_velocity: Vec<f64>,
     impact_velocity: Vec<f64>,
     impact_time: f64,
-    rail: RailMotion,
+    rail: Rail,
 ) -> Trajectory {
     let follow_time = defaults::ControlParams::default().swing_follow_through_secs;
     let mut end_values = impact.values.clone();
@@ -468,7 +431,7 @@ fn trajectory_collision_free(arm: &Arm, trajectory: &Trajectory) -> bool {
         let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
         let joints = trajectory.sample_at(time);
         let rail_x = trajectory.sample_rail_at(time);
-        if crate::planner::collision::table_penetration(arm, rail_x, &joints) > 1e-3 {
+        if crate::robot::collision::table_penetration(arm, rail_x, &joints) > 1e-3 {
             return false;
         }
     }
@@ -587,8 +550,8 @@ fn fit_end_velocity(
     start_velocity: &[f64],
     mut end_velocity: Vec<f64>,
     duration: f64,
-    mut rail: RailMotion,
-) -> (Vec<f64>, RailMotion) {
+    mut rail: Rail,
+) -> (Vec<f64>, Rail) {
     for _ in 0..32 {
         let trajectory = trajectory_with_follow_through(
             arm,
@@ -798,7 +761,7 @@ mod tests {
             "스윙이 토크로 제한됐어야(한계 근처): util={torque_util}"
         );
         assert!(
-            crate::planner::collision::table_penetration(
+            crate::robot::collision::table_penetration(
                 &arm,
                 trajectory.rail.end,
                 trajectory.goal_joints()
@@ -967,7 +930,7 @@ mod tests {
             vec![0.0; impact.values.len()],
             impact_velocity,
             0.30,
-            RailMotion::fixed(start.rail_x),
+            Rail::fixed(start.rail_x),
         );
         // 한계 위반은 "무엇을" 어겼는지까지 잡힌다 (이전엔 bool 하나였다).
         assert_eq!(

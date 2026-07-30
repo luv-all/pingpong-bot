@@ -31,8 +31,8 @@ pub mod dxl_limits;
 mod estimator;
 mod hardware;
 mod impact;
+pub mod motion;
 mod physics;
-pub mod planner;
 mod robot;
 pub mod sim;
 mod sim_motor;
@@ -54,13 +54,13 @@ pub use dxl_limits::{
 };
 pub use estimator::EstimatorParams;
 pub use impact::ImpactParams;
-pub use physics::PhysicsParams;
-pub use planner::{
+pub use motion::{
     JACOBIAN_DAMPING, JDOT_STEP, MAGNUS_OMEGA_MAX, MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS,
     MIN_TIME_TO_GO_SECS, PLAN_DT_SECS, POSITION_TOLERANCE_RAD_OR_M, RACKET_DIRECTION_TOLERANCE_DEG,
     RACKET_SPEED_RATIO_TOLERANCE, RAIL_ACCEL_M_S2, RETURN_TO_CENTER_GROWTH,
     RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS, TIME_TO_GO_BIAS,
 };
+pub use physics::PhysicsParams;
 pub use robot::{
     RAIL_MAX_SPEED, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount, rail_frame,
     robot, shared_robot, urdf_4dof, urdf_test,
@@ -91,7 +91,7 @@ mod tests {
     use crate::detector::{RoiParams, ScorerParams};
     use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
-    use crate::planner::InterceptWindow;
+    use crate::motion::InterceptWindow;
 
     #[test]
     fn presets_validate() {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::camera::Calibration;
 use crate::defaults::shared_robot;
-use crate::planner::InterceptWindow;
+use crate::motion::InterceptWindow;
 use crate::robot::Robot;
 
 const CONTROL_HZ: f64 = 100.0;

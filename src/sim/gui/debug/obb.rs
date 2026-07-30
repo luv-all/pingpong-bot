@@ -1,6 +1,6 @@
 //! 뷰어용 OBB.
 
-use crate::planner::collision::OrientedBox;
+use crate::robot::collision::OrientedBox;
 
 /// 뷰어용 OBB (중심·half extents·축).
 #[derive(Debug, Clone, Copy)]

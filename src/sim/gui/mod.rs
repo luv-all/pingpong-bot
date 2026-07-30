@@ -20,6 +20,7 @@ pub mod ball;
 pub mod host;
 #[cfg(feature = "gui")]
 pub mod layers;
+pub mod robot;
 #[cfg(feature = "gui")]
 pub mod scene;
 pub mod shooter;

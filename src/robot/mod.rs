@@ -6,6 +6,7 @@
 //! 조립은 [`build`] (`ArmBuilder` / `RobotBuilder`), 런타임 추종은 [`State`].
 
 pub mod build;
+pub mod collision;
 pub mod dynamics;
 pub mod rail;
 pub mod serial;
@@ -21,24 +22,12 @@ mod pose;
 mod racket_pose;
 mod swing_playback;
 
-#[cfg(feature = "gui")]
-pub mod handle;
-#[cfg(feature = "gui")]
-pub mod primitive_nodes;
-#[cfg(feature = "gui")]
-pub mod urdf_nodes;
-#[cfg(feature = "gui")]
-mod urdf_visual_node;
-#[cfg(feature = "gui")]
-pub mod visual;
-#[cfg(feature = "gui")]
-mod visual_geom;
-
 #[cfg(test)]
 mod tests;
 
 pub use arm::Arm;
 pub use build::{ArmBuildError, ArmBuilder, MountPreset, Robot, RobotBuildError, RobotBuilder};
+pub use collision::OrientedBox;
 pub use joint_limit::JointLimit;
 pub use joints::Joints;
 pub use link_inertial::LinkInertial;
@@ -48,12 +37,3 @@ pub use rail::{LinearRail, RailFrame};
 pub use serial::{SerialChain, SerialChainError, SerialJoint};
 pub use state::State;
 pub use urdf::{UrdfGeometry, UrdfLinkVisual, UrdfLoadError, UrdfModel};
-
-#[cfg(feature = "gui")]
-pub use handle::Handle;
-#[cfg(feature = "gui")]
-pub use primitive_nodes::PrimitiveNodes;
-#[cfg(feature = "gui")]
-pub use urdf_nodes::UrdfNodes;
-#[cfg(feature = "gui")]
-pub use visual::Visual;

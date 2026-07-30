@@ -1,6 +1,6 @@
 //! URDF → domain `Arm` 일반 revolute 직렬 체인 변환.
 
-use crate::hardware::dynamixel::joint_torque_limits_4dof;
+use crate::defaults::joint_torque_limits_4dof;
 use crate::robot::Arm;
 use crate::robot::LinkInertial;
 use crate::robot::SerialChain;

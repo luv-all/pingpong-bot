@@ -9,10 +9,11 @@ use std::sync::Arc;
 use crate::constants::{ball, table};
 use crate::defaults::PhysicsParams;
 use crate::error::{DomainError, SwingPlanError};
+use crate::estimator;
 use crate::estimator::Prediction;
-use crate::planner::InterceptWindow;
+use crate::motion;
+use crate::motion::InterceptWindow;
 use crate::robot::Arm;
-use crate::swing;
 use rapier3d::prelude::*;
 use tracing::{debug, info, warn};
 
@@ -511,7 +512,7 @@ impl SimWorld {
 
     /// 비행 중 공에 항력·Magnus 외력을 건다 (중력은 Rapier gravity).
     ///
-    /// ballistics `aero_accel`과 동일 식 — 예측기와 Rapier 궤적을 맞춘다.
+    /// `estimator::Kinematics::aero_accel`과 동일 식 — 예측기와 Rapier 궤적을 맞춘다.
     fn apply_ball_aero_forces(&mut self) {
         if self.ball_state != crate::sim::physics::BallState::InFlight {
             return;
@@ -524,7 +525,12 @@ impl SimWorld {
         let ang = body.angvel();
         let velocity = nalgebra::Vector3::new(f64::from(lin.x), f64::from(lin.y), f64::from(lin.z));
         let omega = nalgebra::Vector3::new(f64::from(ang.x), f64::from(ang.y), f64::from(ang.z));
-        let a = swing::Planner::aero_accel(velocity, omega, self.physics.drag, self.physics.magnus);
+        let a = estimator::Kinematics::aero_accel(
+            velocity,
+            omega,
+            self.physics.drag,
+            self.physics.magnus,
+        );
         let mass = f64::from(body.mass());
         if mass <= 1e-12 {
             return;
@@ -625,7 +631,7 @@ impl SimWorld {
         // 이동은 rate-limited·table-clamped 추종 루프(step_toward_targets)가
         // 처리하므로 max_joint_speed/rail.max_speed·충돌 안전을 자동 상속한다.
         let ball_y = f64::from(self.ball_position().y);
-        if !swing::Planner::past_midcourt(ball_y) {
+        if !motion::Planner::past_midcourt(ball_y) {
             self.debug_snap.commit_phase = CommitPhase::WaitMidcourt;
             if let Some(prediction) = predictions.first() {
                 self.set_debug_prediction(Some(prediction.clone()));
@@ -634,7 +640,7 @@ impl SimWorld {
             // 풀고 `rail.clamp_x` 순수 기하로만 내므로 IK가 수렴 못 해도
             // 레일 추종이 죽지 않는다(전체 포즈 IK에 묶여 있던 예전 동작보다
             // 견고하다).
-            let coarse = swing::Planner::plan_coarse_track_targets(&self.arm, &predictions);
+            let coarse = motion::Planner::plan_coarse_track_targets(&self.arm, &predictions);
             if let Some((rail_x, _)) = coarse.as_ref() {
                 self.robot.set_rail_target(*rail_x);
             }
@@ -682,7 +688,7 @@ impl SimWorld {
         // commit 창 밖(너무 이름)이면 계획하지 않고 대기.
         let any_in_window = predictions
             .iter()
-            .any(|p| swing::Planner::in_commit_window(p.time_to_impact_secs));
+            .any(|p| motion::Planner::in_commit_window(p.time_to_impact_secs));
         if !any_in_window {
             self.debug_snap.commit_phase = CommitPhase::WaitWindow;
             if let Some(prediction) = predictions.first() {
@@ -712,7 +718,7 @@ impl SimWorld {
         }
         self.last_swing_attempt_at = self.sim_time;
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        let planned = match swing::Planner::plan_best(&self.arm, &predictions, &start) {
+        let planned = match motion::Planner::plan_best(&self.arm, &predictions, &start) {
             Ok(planned) => {
                 self.hard_fail_streak = 0;
                 planned
@@ -1419,13 +1425,13 @@ mod tests {
         let mut impact = start.clone();
         impact.values[1] += 0.2;
         impact.values[2] -= 0.3;
-        let traj = crate::swing::Trajectory::new(
+        let traj = crate::motion::Trajectory::new(
             start,
             impact,
             vec![0.0; 4],
             vec![0.0; 4],
             0.25,
-            crate::swing::RailMotion::fixed(world.robot().rail_x()),
+            crate::motion::Rail::fixed(world.robot().rail_x()),
         );
         world.robot_mut().begin_swing(traj);
         let mut max_err = 0.0_f64;
@@ -1823,7 +1829,7 @@ mod tests {
 
     #[test]
     fn auto_swing_plans_with_strike_velocity() {
-        use crate::swing;
+        use crate::motion;
 
         let arm = test_robot();
         let world = SimWorld::new(arm.clone());
@@ -1842,7 +1848,7 @@ mod tests {
             reachable_z,
         );
         let start = robot::Pose::new(rail_x, world.robot().joints().clone());
-        let traj = swing::Planner::plan(
+        let traj = motion::Planner::plan(
             &arm.arm,
             crate::estimator::Prediction {
                 time_to_impact_secs: 0.45,
@@ -1862,7 +1868,7 @@ mod tests {
     #[test]
     fn quintic_swing_moves_robot_joints() {
         use crate::estimator::HitPlane;
-        use crate::swing;
+        use crate::motion;
 
         let arm = test_robot();
         let mut world = SimWorld::new(arm.clone());
@@ -1883,7 +1889,7 @@ mod tests {
             .expect("FK");
         let impact = crate::Point3::new(impact_x, hit_plane.y, reachable.position.coords.z);
         let start = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
-        let trajectory = swing::Planner::plan(
+        let trajectory = motion::Planner::plan(
             &arm.arm,
             crate::estimator::Prediction {
                 time_to_impact_secs: t,
@@ -2161,7 +2167,7 @@ mod tests {
         let mut stepped_precommit = false;
         for _ in 0..5_000 {
             let ball_y = f64::from(world.ball_position().y);
-            if swing::Planner::past_midcourt(ball_y) {
+            if motion::Planner::past_midcourt(ball_y) {
                 break; // commit 단계 진입 — pre-commit 이동만 관찰한다
             }
             // 이 시점의 coarse 목표(있으면)를 기록해 기대 이동 방향으로 삼는다.
@@ -2171,7 +2177,7 @@ mod tests {
                 .into_iter()
                 .filter_map(|plane| world.predict_impact(plane))
                 .collect();
-            if let Some(pose) = swing::Planner::plan_coarse_track(&world.arm, &predictions) {
+            if let Some(pose) = motion::Planner::plan_coarse_track(&world.arm, &predictions) {
                 target_rail_x = Some(pose.rail_x);
             }
             world.step(1.0 / 1000.0, None);

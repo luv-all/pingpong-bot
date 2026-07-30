@@ -4,7 +4,7 @@ use anyhow::{Result, ensure};
 
 use crate::estimator::HitPlane;
 
-pub use crate::defaults::planner::MAX_INTERCEPT_SAMPLES;
+use crate::defaults::MAX_INTERCEPT_SAMPLES;
 
 /// 로봇 앞에서 탐색할 동적 인터셉트 y 구간.
 #[derive(Debug, Clone, Copy, PartialEq)]

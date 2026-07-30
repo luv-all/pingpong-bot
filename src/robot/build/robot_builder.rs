@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
+use crate::defaults::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
 use crate::robot::urdf::{SimRobotMount, UrdfModel};
 
 use super::{MountPreset, Robot, RobotBuildError};

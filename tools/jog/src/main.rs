@@ -17,9 +17,9 @@ use pingpong_bot::defaults::robot;
 use pingpong_bot::hardware::RealHardware;
 use pingpong_bot::hardware::dynamixel::DynamixelConfig;
 use pingpong_bot::hardware::rail::RailConfig;
-use pingpong_bot::logging::init_tracing;
 use pingpong_bot::sim::gui::{SceneUiHook, SimScene};
 use pingpong_bot::sim::session::{SimRuntimeControls, SimSession, SimSessionConfig};
+use pingpong_bot::telemetry::init_tracing;
 use tracing::info;
 
 use args::Args;

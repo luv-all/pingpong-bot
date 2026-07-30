@@ -2,7 +2,7 @@
 
 use kiss3d::egui::{self, Color32, RichText};
 use pingpong_bot::constants::table;
-use pingpong_bot::planner::InterceptWindow;
+use pingpong_bot::motion::InterceptWindow;
 
 use crate::motion::{MotionKind, REACH_DELTA_M, joint_label, reach_ok};
 use crate::state::{Action, JogApp, try_action};

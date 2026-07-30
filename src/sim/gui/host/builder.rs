@@ -2,7 +2,6 @@ use std::sync::{Arc, Mutex};
 
 use super::super::layers::SceneLayers;
 use super::super::scene::TableSceneOptions;
-use crate::robot;
 use crate::robot::urdf::UrdfModel;
 use crate::sim::gui::ball;
 use crate::sim::gui::shooter;
@@ -11,6 +10,7 @@ use crate::sim::session::controls::SimRuntimeControls;
 
 use super::scene::SimScene;
 use super::ui_draw::SceneUiHook;
+use crate::sim::gui::robot;
 
 /// [`SimScene`] 조립.
 #[derive(Default)]

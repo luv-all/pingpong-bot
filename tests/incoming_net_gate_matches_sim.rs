@@ -7,7 +7,7 @@
 
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
-use pingpong_bot::eval;
+use pingpong_bot::sim::eval;
 use pingpong_bot::sim::launch;
 use pingpong_bot::sim::physics;
 use pingpong_bot::sim::physics::SimWorld;
@@ -120,7 +120,7 @@ fn diag_default_shot() {
 #[test]
 #[ignore = "진단 전용"]
 fn diag_net_clearance() {
-    let launch = pingpong_bot::eval::LaunchParams::default();
+    let launch = pingpong_bot::sim::eval::LaunchParams::default();
     for (i, (zone, index_in_zone)) in eval::Protocol::shot_schedule(eval::Mode::Block)
         .into_iter()
         .enumerate()
@@ -143,7 +143,7 @@ fn diag_net_clearance() {
 /// 게이트가 통과시킨 샷은 본 시뮬에서도 네트에 닿지 않아야 한다.
 #[test]
 fn incoming_net_gate_agrees_with_sim() {
-    let launch = pingpong_bot::eval::LaunchParams::default();
+    let launch = pingpong_bot::sim::eval::LaunchParams::default();
     let mut disagreements = Vec::new();
 
     for (i, (zone, index_in_zone)) in eval::Protocol::shot_schedule(eval::Mode::Block)
