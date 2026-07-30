@@ -4,7 +4,7 @@
 //!
 //! ```bash
 //! cargo run -p pingpong-bot
-//! # 실기 단발 타격 (공 1개 → 스윙 1회 → 종료). 모터를 안 움직이는 리허설은 --dry-run.
+//! # 실기 연속 급구 (완주·센터 복귀 후 다음 공). 모터를 안 움직이는 리허설은 --dry-run.
 //! cargo run -p pingpong-bot -- --mode real --dxl-port COM8
 //! cargo run -p pingpong-bot -- --mode real --dry-run
 //! # 샷별 launch/commit/포기 로그 (기본 info). 더 자세히:

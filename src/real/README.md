@@ -1,6 +1,8 @@
-# `src/real` — 실기 단발 타격 (1 hit)
+# `src/real` — 실기 연속 급구 (1·2차)
 
-`--mode real` 런타임. 공 **하나**를 받아 스윙 **한 번**을 커밋하고 종료한다. 랠리는 아직 아니다.
+`--mode real` 런타임. 스윙 완주·센터 복귀 후 **다음 급구**를 반복한다. 결선(진짜 랠리)은
+아직 아니다 — [`specs/2026-07-31-real-continuous-feed-design.md`](../../docs/superpowers/specs/2026-07-31-real-continuous-feed-design.md)
+§Future.
 
 bin 전용 모듈이라 `lib.rs`에 없다 ([`src/cli/`](../cli/)와 같은 방식). 도메인 로직은 전부
 `camera` / `detector` / `estimator` / `robot::motion` / `hardware`에서 가져다 쓰고, 여기는
@@ -21,12 +23,11 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 | `--sim` | on | 관전용 3D 창 (테이블·로봇·예측 도달점·스윙 재생) |
 | `--home` | on | 시작 시 센터(ready) 자세로 이동 |
 | `--release-torque` | off | 종료 시 토크를 뺀다. 기본은 **켠 채로 둔다** (안 그러면 팔이 주저앉는다) |
-| `--timeout-secs` | 60 | 공을 기다리는 최대 시간 |
-| `--dxl-port` | `COM8` | `DynamixelConfig::default().port` 덮어쓰기 |
+| `--timeout-secs` | 60 | Ready(Armed) 이후 다음 공을 기다리는 최대 시간 — 초과해도 **세션은 유지**, Armed마다 재장전 |
 
-**샷이 끝나도 프로그램은 안 꺼진다** (`--preview`가 켜져 있을 때). 커밋했든 포기했든
-동작만 멈추고 결과를 창에 띄운 채 기다린다 — 순식간에 끝나 아무것도 못 보는 걸 막기 위해서다.
-종료는 ESC·`q`. `--preview=false`면 볼 것이 없으니 끝나는 즉시 종료한다.
+**세션은 `Committed`/`Infeasible`로 끝나지 않는다.** 연속 급구가 기본이다. 종료는 ESC·`q`
+(`--preview`) 또는 제어 워커 치명 실패(`Done`). `--preview=false`면 창이 없어 Ctrl+C / `Done`까지
+루프한다.
 
 **종료해도 토크는 유지된다.** `DynamixelBus::drop`이 토크를 끄면 프로그램이 끝나는 순간 팔이
 중력으로 주저앉는다 (AXL 레일도 같은 이유로 서보를 켠 채 닫는다). 손으로 옮기려면
@@ -52,7 +53,7 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 |------|--------------|
 | `FrameSource` + `Detector` | `camera_worker` (캠당 1 스레드) |
 | `Ekf` · `Calibration` · 게이트 | `estimator_worker` |
-| `Hardware` (버스 · 레일 · 커밋 래치) | `control_worker` |
+| `Hardware` (버스 · 레일 · 샷 루프) | `control_worker` |
 | highgui 창 | 메인 스레드 (`PreviewWindow`) |
 | kiss3d 관전 창 | **자식 프로세스** (`--sim-child`) |
 
@@ -118,33 +119,27 @@ stateDiagram-v2
 
     Armed --> Tracking: EKF velocity_seeded
     Tracking --> Tracking: 게이트 Wait — 다음 관측
-
     Tracking --> Committed: plan_best Ok → command
-    Tracking --> TooLate: max(tti) < min_swing_secs
     Tracking --> Infeasible: 관절·토크 한계
-    Armed --> TimedOut: --timeout-secs 초과
+    Armed --> Armed: --timeout-secs warn (세션 유지)
 
-    Committed --> Finishing: 스윙 완주 대기
-    Finishing --> Done: 센터 복귀
-    TooLate --> Done
-    Infeasible --> Done
-    TimedOut --> Done
+    Committed --> Recovering: wait_idle + return_to_center
+    Infeasible --> Recovering: return_to_center
+    Recovering --> Armed: Ready (다음 급구)
+
     Failed --> Done
-    Done --> Frozen: --preview
-    Frozen --> [*]: ESC / q
-    Done --> [*]: --preview=false
+    Done --> [*]: ESC / q 또는 preview 없음
 ```
 
 `ShotEvent`는 전부 메인으로 모여 한 곳에서만 로그된다 (워커가 중복으로 찍지 않는다).
-`Committed`는 sim `"shot: swing commit"`과 **같은 필드**(`duration_secs` · `rail_end` ·
-`impact` · `tti` · `peak_joint_speed`)를 실어서 sim ↔ real 로그를 그대로 비교할 수 있다.
+`shot_seq`로 급구를 구분한다. `Committed`는 sim `"shot: swing commit"`과 **같은 필드**에
+`shot`을 더한다.
 
-포기 이벤트는 **근거 수치를 들고 온다** — `TooLate`는 `latest_tti_secs` · `min_swing_secs` ·
-`candidates` · `ball_y`를, `Infeasible`은 IK 목표 좌표를 싣는다. 문자열 사유만 남기면 벤치에서
-"얼마나 늦었길래 포기했나"를 되짚을 수 없다. 둘 다 **info** 레벨이라 `--debug` 없이 보인다.
+`Infeasible`는 **이번 스윙만** 포기하고 Recovering → Ready로 다음 급구를 받는다.
+`ControlStatus::Recovering` 동안 추정 워커는 `Attempt`를 보내지 않는다.
+공 y가 로봇에서 멀어지면(증가, 히스테리시스) EKF를 리셋해 새 추정을 시작한다.
 
-`Done`은 항상 마지막이고 **제어 워커만** 보낸다. `--preview`면 `Done` 뒤에도 프로그램은 살아
-있고 (Frozen) 화면만 갱신한다 — 제어 워커는 이미 래치돼 아무것도 하지 않는다.
+`Done`은 제어 워커가 루프를 빠져나올 때만 보낸다 (치명 실패·셧다운).
 
 ---
 
@@ -155,7 +150,7 @@ stateDiagram-v2
 - 초록 원 = 검출한 공
 - 빨간 원 = **예측 도달 위치**를 그 카메라로 재투영한 자리 (`camera::Params::project_world`)
 - 좌상단 노란 HUD = 게이트 상태 · 공 위치·속력 · 예측 도달점·tti · EKF 게이트 d²
-- 우하단 = 샷 결과 (커밋 요약 또는 포기 사유). 한 번 뜨면 창을 닫을 때까지 남는다
+- 우하단 = 최신 샷 결과 (커밋 요약 또는 포기 사유). 다음 샷이 오면 덮어쓴다
 
 **sim 창** (`real shot sim`) — 아무것도 조작하지 않는 관전 전용.
 
@@ -235,7 +230,7 @@ real 전용 튜닝 값을 새로 만들지 않는다 — sim과 갈리면 sim에
 | `shutdown.rs` | `Shutdown` / `ShutdownGuard` | 채널 파기 종료 브로드캐스트 |
 | `camera_worker.rs` | `CameraStats` | 캡처 → (왜곡 보정) → 검출 |
 | `estimator_worker.rs` | `EstimatorStats` | 삼각측량 → EKF → 예측 → 게이트 |
-| `control_worker.rs` | — | 하드웨어 단독 소유 · 계획 · 커밋 래치 |
+| `control_worker.rs` | — | 하드웨어 단독 소유 · 계획 · 연속 급구 루프 |
 | `decision.rs` | `Decision` / `WaitReason` | 순수 게이트 + 단위 테스트 |
 | `preview.rs` | `PreviewWindow` | 메인 스레드 highgui |
 | `sim_child.rs` | — | `--sim-child` kiss3d 관전 창 (자식 프로세스) |
@@ -311,15 +306,22 @@ real shot: end           outcome="타임아웃 - 공이 오지 않음"
    위치가 궤적과 어긋날 수 있다.
 5. **macOS는 실기 불가** — `AxlRail::open`이 Windows 전용. `--dry-run`은 `AxlRail::dry_run`을
    타므로 macOS에서도 전 체인 리허설은 된다.
-6. **랠리 미지원** — 커밋 래치가 1회고 샷 간 EKF 리셋·연속 포기 정책이 없다.
+6. **진짜 랠리 미지원** — 연속 급구(완주+센터 복귀 후 재무장)는 지원. 돌아오는 공을 이어서
+   치는 결선 랠리는
+   [spec §Future](../../docs/superpowers/specs/2026-07-31-real-continuous-feed-design.md)만
+   기록. 재무장 조건은 `control_worker`의 NOTE(결선)가 분기점이다.
 7. **죽은 카메라의 종료 지연** — `ThreadedCapture::next_frame`이 첫 프레임을 최대 8초 기다리는
    동안 카메라 워커는 셧다운 플래그를 못 본다. 장치 경합이나 device 인덱스 오류면 요약에
    `frames=0`으로 찍히고 `"프레임 소스 종료"` warn이 함께 나온다 — 그때는
    [`defaults::calib`](../defaults/calib.rs)의 `LEFT_DEVICE` / `RIGHT_DEVICE`를 의심한다
    (`cam-list`로 확인).
 
-## 랠리로 넓힐 때
+## 결선(진짜 랠리)로 넓힐 때
 
-`control_worker`의 커밋 래치를 풀고, `estimator_worker`가 샷 경계에서 EKF를 리셋하면 된다.
-`ShotEvent`에 샷 번호를 붙이고 메인의 종료 조건을 바꾸는 것도 필요하다.
-sim의 `shot_seq` · `park_if_out_of_play` · `hard_fail_streak`가 참고 대상이다.
+구현하지 않는다. 스펙 §Future 요약:
+
+1. 풀 `return_to_center` 전에 다음 스윙 허용 가능 (재무장 조건 변경)
+2. y-증가 외에 네트 통과 후 재접근 등 랠리 경계
+3. out-of-play / lost-track
+4. 스윙 직후 자기 팔·라켓 검출 게이트
+5. sim `shot_seq` · `park_if_out_of_play` 정렬

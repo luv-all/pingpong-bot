@@ -1,4 +1,4 @@
-//! `--mode real` 단발 타격 진입점 — 조립 · 메인 루프 · 요약.
+//! `--mode real` 연속 급구 진입점 — 조립 · 메인 루프 · 요약.
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -22,7 +22,7 @@ use super::camera_worker::{self, CameraStats};
 use super::estimator_worker::{self, EstimatorStats};
 use super::fmt::{f2, f2_slice};
 use super::{
-    Options, PreviewEvent, PreviewWindow, ShotEvent, ShutdownGuard, control_worker,
+    ControlStatus, Options, PreviewEvent, PreviewWindow, ShotEvent, ShutdownGuard, control_worker,
     shutdown_channel, sim_host,
 };
 
@@ -32,13 +32,11 @@ const PREVIEW_CAPACITY: usize = 2;
 const SIM_CAPACITY: usize = 2;
 /// 프리뷰가 없을 때 메인 루프 tick.
 const IDLE_TICK: Duration = Duration::from_millis(5);
-/// 샷이 끝난 뒤 제어 워커가 마무리(스윙 완주 + 센터 복귀)할 여유.
-const FINISH_GRACE: Duration = Duration::from_secs(15);
 
-/// 공 하나를 받아 스윙 한 번을 커밋하고 멈춘다.
+/// 연속 급구: 스윙 완주·센터 복귀 후 다음 공을 다시 친다.
 ///
-/// 창이 있으면(`--preview`) 샷이 끝나도 **프로그램을 끄지 않는다** — 동작만 멈추고
-/// 결과를 띄운 채 기다린다. 종료는 ESC·`q`. 창이 없으면 끝나는 즉시 종료한다.
+/// 종료는 ESC·`q`(preview) 또는 제어 워커 `Done`(치명 실패·셧다운).  
+/// `Committed` / `Infeasible`로 프로세스를 끝내지 않는다.
 pub fn run(args: &Args) -> Result<()> {
     let options = Options::from_args(args);
     let robot = robot().context("defaults::robot")?;
@@ -57,6 +55,7 @@ pub fn run(args: &Args) -> Result<()> {
     let (guard, shutdown) = shutdown_channel();
     let (vision_tx, vision_rx) = bounded(VISION_CAPACITY);
     let (commit_tx, commit_rx) = bounded(1);
+    let (status_tx, status_rx) = unbounded::<ControlStatus>();
     let (event_tx, event_rx) = unbounded();
     let (preview_tx, preview_rx) = if options.preview {
         let (tx, rx) = bounded(PREVIEW_CAPACITY);
@@ -97,6 +96,7 @@ pub fn run(args: &Args) -> Result<()> {
         calibration,
         InterceptWindow::default(),
         commit_tx,
+        status_rx,
         preview_tx,
         sim_tx.clone(),
         event_tx.clone(),
@@ -107,8 +107,10 @@ pub fn run(args: &Args) -> Result<()> {
         Arc::clone(&arm),
         options.home,
         commit_rx,
+        status_tx,
         sim_tx,
         event_tx,
+        shutdown,
     );
 
     let outcome = main_loop(&options, &event_rx, preview_rx, guard);
@@ -129,8 +131,14 @@ pub fn run(args: &Args) -> Result<()> {
     return Ok(());
 }
 
-/// 메인 루프가 끝난 이유.
-enum Outcome {
+/// 세션 요약용 — 마지막 주목 이벤트 + 본 샷 수.
+struct Outcome {
+    shots_seen: u64,
+    last: LastShot,
+}
+
+enum LastShot {
+    None,
     Committed,
     Infeasible(String),
     Failed(String),
@@ -140,20 +148,19 @@ enum Outcome {
 
 impl Outcome {
     fn label(&self) -> String {
-        return match self {
-            Self::Committed => "커밋".to_owned(),
-            Self::Infeasible(reason) => format!("포기 - {reason}"),
-            Self::Failed(reason) => format!("실패 - {reason}"),
-            Self::TimedOut => "타임아웃 - 공이 오지 않음".to_owned(),
-            Self::Quit => "사용자 종료".to_owned(),
+        let last = match &self.last {
+            LastShot::None => "없음".to_owned(),
+            LastShot::Committed => "커밋".to_owned(),
+            LastShot::Infeasible(reason) => format!("포기 - {reason}"),
+            LastShot::Failed(reason) => format!("실패 - {reason}"),
+            LastShot::TimedOut => "타임아웃 - 공이 오지 않음".to_owned(),
+            LastShot::Quit => "사용자 종료".to_owned(),
         };
+        return format!("shots={} last={last}", self.shots_seen);
     }
 }
 
-/// 샷 이벤트를 찍고 프리뷰를 돌린다.
-///
-/// 샷이 끝나면 **셧다운을 걸지 않고** 결과를 화면에 고정한 채 계속 돈다 (창이 있을 때).
-/// 카메라·추정은 계속 돌아 화면이 살아 있고, 제어 워커는 이미 래치돼 아무것도 안 한다.
+/// 샷 이벤트를 찍고 프리뷰를 돌린다. 세션은 ESC/`q` 또는 제어 `Done`까지 유지.
 fn main_loop(
     options: &Options,
     event_rx: &Receiver<ShotEvent>,
@@ -162,11 +169,12 @@ fn main_loop(
 ) -> Outcome {
     let mut preview = options.preview.then(|| PreviewWindow::new("real shot"));
     let mut guard = Some(guard);
-    let wait_deadline = Instant::now() + Duration::from_secs_f64(options.timeout_secs);
-    let mut finish_deadline: Option<Instant> = None;
-    let mut outcome: Option<Outcome> = None;
-    // 창이 없으면 볼 것도 없으니 끝나는 즉시 내려간다.
-    let freeze = options.preview;
+    let mut wait_deadline = Instant::now() + Duration::from_secs_f64(options.timeout_secs);
+    let mut outcome = Outcome {
+        shots_seen: 0,
+        last: LastShot::None,
+    };
+    let mut timed_out_warned = false;
 
     let result = loop {
         let mut control_done = false;
@@ -177,37 +185,38 @@ fn main_loop(
             {
                 preview.set_result(lines);
             }
-            if matches!(event, ShotEvent::Done) {
-                control_done = true;
-                continue;
-            }
-            if outcome.is_none() && event.ends_shot() {
-                outcome = Some(Outcome::from_event(event));
-                finish_deadline = Some(Instant::now() + FINISH_GRACE);
-                if !freeze {
-                    drop(guard.take());
+            match &event {
+                ShotEvent::Armed { shot_seq, .. } => {
+                    outcome.shots_seen = (*shot_seq).max(outcome.shots_seen);
+                    wait_deadline = Instant::now() + Duration::from_secs_f64(options.timeout_secs);
+                    timed_out_warned = false;
                 }
+                ShotEvent::Committed { .. } => outcome.last = LastShot::Committed,
+                ShotEvent::Infeasible { reason, .. } => {
+                    outcome.last = LastShot::Infeasible(reason.clone());
+                }
+                ShotEvent::Failed { reason, .. } => {
+                    outcome.last = LastShot::Failed(reason.clone());
+                }
+                ShotEvent::Done => control_done = true,
+                _ => {}
             }
-        }
-        // 창 없이 돌 때만 제어 워커 종료가 곧 프로그램 종료다.
-        if control_done && !freeze {
-            break outcome.unwrap_or(Outcome::Quit);
         }
 
-        if outcome.is_none() && Instant::now() >= wait_deadline {
+        if control_done {
+            if !options.preview {
+                break outcome;
+            }
+            // preview: Done이어도 창이 있으면 ESC까지 화면 유지. 워커는 이미 끝.
+        }
+
+        if !timed_out_warned && Instant::now() >= wait_deadline {
             warn!(
                 timeout_secs = f2(options.timeout_secs),
-                "공을 기다리다 시간 초과"
+                "공을 기다리다 시간 초과 — 세션은 유지 (다음 Armed에서 재장전)"
             );
-            outcome = Some(Outcome::TimedOut);
-            finish_deadline = Some(Instant::now() + FINISH_GRACE);
-            if !freeze {
-                drop(guard.take());
-            }
-        }
-        if !freeze && finish_deadline.is_some_and(|at| Instant::now() >= at) {
-            warn!("제어 워커 마무리 대기 시간 초과");
-            break outcome.unwrap_or(Outcome::Quit);
+            outcome.last = LastShot::TimedOut;
+            timed_out_warned = true;
         }
 
         match &mut preview {
@@ -217,16 +226,20 @@ fn main_loop(
                         preview.push(event);
                     }
                 }
-                // show가 waitKey(1)로 루프를 페이싱한다. 종료는 여기서만.
                 if preview.show() {
-                    break outcome.unwrap_or(Outcome::Quit);
+                    outcome.last = LastShot::Quit;
+                    break outcome;
                 }
             }
-            None => thread::sleep(IDLE_TICK),
+            None => {
+                if control_done {
+                    break outcome;
+                }
+                thread::sleep(IDLE_TICK);
+            }
         }
     };
 
-    // 여기서 셧다운 — 카메라·추정 워커가 내려간다.
     drop(guard.take());
     if let Some(preview) = &preview {
         preview.close();
@@ -234,21 +247,11 @@ fn main_loop(
     return result;
 }
 
-impl Outcome {
-    fn from_event(event: ShotEvent) -> Self {
-        return match event {
-            ShotEvent::Committed { .. } => Self::Committed,
-            ShotEvent::Infeasible { reason } => Self::Infeasible(reason),
-            ShotEvent::Failed { reason } => Self::Failed(reason),
-            _ => Self::Quit,
-        };
-    }
-}
-
-/// 샷이 끝난 뒤 화면에 고정할 줄 (ASCII — Hershey 폰트 제약).
+/// 샷 결과 HUD (ASCII — Hershey 폰트 제약). 최신 샷으로 덮어쓴다.
 fn result_lines(event: &ShotEvent) -> Option<Vec<String>> {
     return match event {
         ShotEvent::Committed {
+            shot_seq,
             time_to_impact_secs,
             duration_secs,
             impact,
@@ -256,7 +259,7 @@ fn result_lines(event: &ShotEvent) -> Option<Vec<String>> {
             rail_end,
             peak_joint_speed,
         } => Some(vec![
-            "COMMITTED".to_owned(),
+            format!("COMMITTED shot {shot_seq}"),
             format!(
                 "impact x{} y{} z{}  tti {}s",
                 f2(impact.coords.x),
@@ -272,10 +275,13 @@ fn result_lines(event: &ShotEvent) -> Option<Vec<String>> {
                 f2(*peak_joint_speed)
             ),
         ]),
-        ShotEvent::Infeasible { reason } => {
-            Some(vec!["ABANDONED - infeasible".to_owned(), reason.clone()])
+        ShotEvent::Infeasible { shot_seq, reason } => Some(vec![
+            format!("ABANDONED shot {shot_seq} - infeasible"),
+            reason.clone(),
+        ]),
+        ShotEvent::Failed { shot_seq, reason } => {
+            Some(vec![format!("FAILED shot {shot_seq}"), reason.clone()])
         }
-        ShotEvent::Failed { reason } => Some(vec!["FAILED".to_owned(), reason.clone()]),
         _ => None,
     };
 }
@@ -333,20 +339,26 @@ fn open_cameras() -> Result<OpenedCameras> {
 
 fn log_event(event: &ShotEvent) {
     match event {
-        ShotEvent::Armed { pose } => info!(
+        ShotEvent::Armed { shot_seq, pose } => info!(
+            shot = shot_seq,
             rail_x = f2(pose.rail_x),
             joints = f2_slice(&pose.joints.values),
             "real shot: armed"
         ),
-        ShotEvent::Tracking { position, speed } => info!(
+        ShotEvent::Tracking {
+            shot_seq,
+            position,
+            speed,
+        } => info!(
+            shot = shot_seq,
             x = f2(position.coords.x),
             y = f2(position.coords.y),
             z = f2(position.coords.z),
             speed = f2(*speed),
             "real shot: track"
         ),
-        // 필드는 sim `"shot: swing commit"`과 동일 — sim ↔ real 로그를 그대로 비교할 수 있다.
         ShotEvent::Committed {
+            shot_seq,
             time_to_impact_secs,
             duration_secs,
             impact,
@@ -354,6 +366,7 @@ fn log_event(event: &ShotEvent) {
             rail_end,
             peak_joint_speed,
         } => info!(
+            shot = shot_seq,
             duration_secs = f2(*duration_secs),
             rail_start = f2(*rail_start),
             rail_end = f2(*rail_end),
@@ -364,12 +377,19 @@ fn log_event(event: &ShotEvent) {
             peak_joint_speed = f2(*peak_joint_speed),
             "real shot: swing commit"
         ),
-        // 유일한 포기 사유 — info로 찍는다 (`--debug` 없이 보여야 한다).
-        ShotEvent::Infeasible { reason } => {
-            info!(reason, "real shot: 포기 — 관절·토크 한계 (모터 보호)")
+        ShotEvent::Infeasible { shot_seq, reason } => {
+            info!(
+                shot = shot_seq,
+                reason,
+                "real shot: 포기 — 관절·토크 한계 (모터 보호)"
+            )
         }
-        ShotEvent::PlanFailed { reason } => tracing::debug!(reason, "real shot: 계획 실패"),
-        ShotEvent::Failed { reason } => warn!(reason, "real shot: 실패"),
+        ShotEvent::PlanFailed { shot_seq, reason } => {
+            tracing::debug!(shot = shot_seq, reason, "real shot: 계획 실패")
+        }
+        ShotEvent::Failed { shot_seq, reason } => {
+            warn!(shot = shot_seq, reason, "real shot: 실패")
+        }
         ShotEvent::Done => {}
     }
 }
