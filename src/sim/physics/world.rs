@@ -11,9 +11,9 @@ use crate::defaults::PhysicsParams;
 use crate::error::{DomainError, SwingPlanError};
 use crate::estimator;
 use crate::estimator::Prediction;
-use crate::motion;
-use crate::motion::InterceptWindow;
 use crate::robot::Arm;
+use crate::robot::motion;
+use crate::robot::motion::InterceptWindow;
 use rapier3d::prelude::*;
 use tracing::{debug, info, warn};
 
@@ -1425,13 +1425,13 @@ mod tests {
         let mut impact = start.clone();
         impact.values[1] += 0.2;
         impact.values[2] -= 0.3;
-        let traj = crate::motion::Trajectory::new(
+        let traj = crate::robot::motion::Trajectory::new(
             start,
             impact,
             vec![0.0; 4],
             vec![0.0; 4],
             0.25,
-            crate::motion::Rail::fixed(world.robot().rail_x()),
+            crate::robot::motion::Rail::fixed(world.robot().rail_x()),
         );
         world.robot_mut().begin_swing(traj);
         let mut max_err = 0.0_f64;
@@ -1829,7 +1829,7 @@ mod tests {
 
     #[test]
     fn auto_swing_plans_with_strike_velocity() {
-        use crate::motion;
+        use crate::robot::motion;
 
         let arm = test_robot();
         let world = SimWorld::new(arm.clone());
@@ -1868,7 +1868,7 @@ mod tests {
     #[test]
     fn quintic_swing_moves_robot_joints() {
         use crate::estimator::HitPlane;
-        use crate::motion;
+        use crate::robot::motion;
 
         let arm = test_robot();
         let mut world = SimWorld::new(arm.clone());

@@ -14,8 +14,8 @@ use super::rail::RailConfig;
 use crate::defaults;
 use crate::error::HwError;
 use crate::hardware::Hardware;
-use crate::motion;
 use crate::robot::Arm;
+use crate::robot::motion;
 
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {

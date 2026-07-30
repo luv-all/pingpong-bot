@@ -23,7 +23,7 @@ pub struct JogApp {
     pub phase: Phase,
     /// Sync 시점 포즈 — 미리보기 시작점·Discard 복원.
     pub synced_pose: Option<robot::Pose>,
-    pub staged: Option<pingpong_bot::motion::Trajectory>,
+    pub staged: Option<pingpong_bot::robot::motion::Trajectory>,
     pub duration_secs: f64,
     pub max_delta_deg: f64,
     pub draft: MotionDraft,

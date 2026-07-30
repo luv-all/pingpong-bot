@@ -692,7 +692,7 @@ mod tests {
         let mut worst = std::time::Duration::ZERO;
         for _ in 0..RUNS {
             let t0 = std::time::Instant::now();
-            let _ = crate::motion::Planner::plan(&arm, prediction, &start_pose);
+            let _ = crate::robot::motion::Planner::plan(&arm, prediction, &start_pose);
             let elapsed = t0.elapsed();
             total += elapsed;
             worst = worst.max(elapsed);
@@ -1087,7 +1087,7 @@ mod tests {
             .expect("robot 빌드 성공");
         let arm = (*robot.arm).clone();
 
-        let intercept = crate::motion::InterceptWindow {
+        let intercept = crate::robot::motion::InterceptWindow {
             y_min: 0.20,
             y_max: 0.55,
             sample_step: 0.05,
@@ -1119,7 +1119,7 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::motion::Planner::past_midcourt(ball_y) {
+                if !crate::robot::motion::Planner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
@@ -1132,7 +1132,9 @@ mod tests {
                 // 좋은(가장 여유 있는) 후보를 골라 "최선의 경우"로 비교한다.
                 let best_in_window = predictions
                     .iter()
-                    .filter(|p| crate::motion::Planner::in_commit_window(p.time_to_impact_secs))
+                    .filter(|p| {
+                        crate::robot::motion::Planner::in_commit_window(p.time_to_impact_secs)
+                    })
                     .copied()
                     .max_by(|a, b| {
                         let start = robot::Pose::new(
@@ -1962,7 +1964,7 @@ mod tests {
                 impact_position: crate::Point3::new(impact.0, impact.1, impact.2),
                 incoming_velocity: Vector3::new(incoming.0, incoming.1, incoming.2),
             };
-            match crate::motion::Planner::plan(&arm, prediction, &start_pose) {
+            match crate::robot::motion::Planner::plan(&arm, prediction, &start_pose) {
                 Ok(trajectory) => {
                     eprintln!("사용한 시나리오: {label} (quintic 계획 성공)");
                     chosen = Some(trajectory);
@@ -2082,7 +2084,7 @@ mod tests {
 
         let robot = crate::defaults::primitive_4dof_with_mount(-0.02, table::SURFACE_Z + 0.05)
             .expect("robot 빌드 성공");
-        let intercept = crate::motion::InterceptWindow {
+        let intercept = crate::robot::motion::InterceptWindow {
             y_min: 0.20,
             y_max: 0.55,
             sample_step: 0.05,
@@ -2120,7 +2122,7 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::motion::Planner::past_midcourt(ball_y) {
+                if !crate::robot::motion::Planner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
@@ -2130,7 +2132,9 @@ mod tests {
                     .collect();
                 let in_window: Vec<_> = predictions
                     .into_iter()
-                    .filter(|p| crate::motion::Planner::in_commit_window(p.time_to_impact_secs))
+                    .filter(|p| {
+                        crate::robot::motion::Planner::in_commit_window(p.time_to_impact_secs)
+                    })
                     .collect();
                 if !in_window.is_empty() {
                     found = Some(in_window);
@@ -2202,7 +2206,7 @@ mod tests {
 
         let robot = crate::defaults::primitive_4dof_with_mount(-0.02, table::SURFACE_Z + 0.05)
             .expect("robot 빌드 성공");
-        let intercept = crate::motion::InterceptWindow {
+        let intercept = crate::robot::motion::InterceptWindow {
             y_min: 0.20,
             y_max: 0.55,
             sample_step: 0.05,
@@ -2227,7 +2231,7 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::motion::Planner::past_midcourt(ball_y) {
+                if !crate::robot::motion::Planner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
@@ -2237,7 +2241,9 @@ mod tests {
                     .collect();
                 let in_window: Vec<_> = predictions
                     .into_iter()
-                    .filter(|p| crate::motion::Planner::in_commit_window(p.time_to_impact_secs))
+                    .filter(|p| {
+                        crate::robot::motion::Planner::in_commit_window(p.time_to_impact_secs)
+                    })
                     .collect();
                 if !in_window.is_empty() {
                     predictions_at_window = Some(in_window);
@@ -2261,7 +2267,7 @@ mod tests {
                         .position
                         .coords)
                     .norm();
-                match crate::motion::Planner::feasibility(&arm, p, &start_pose) {
+                match crate::robot::motion::Planner::feasibility(&arm, p, &start_pose) {
                     Some(f) => {
                         eprintln!(
                             "  impact=({:.3},{:.3},{:.3}) tti={:.3} dist_from_home={:.3}m -> \
@@ -2320,7 +2326,7 @@ mod tests {
 
         let robot = crate::defaults::primitive_4dof_with_mount(-0.02, table::SURFACE_Z + 0.05)
             .expect("robot 빌드 성공");
-        let intercept = crate::motion::InterceptWindow {
+        let intercept = crate::robot::motion::InterceptWindow {
             y_min: 0.20,
             y_max: 0.55,
             sample_step: 0.05,
@@ -2345,7 +2351,7 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::motion::Planner::past_midcourt(ball_y) {
+                if !crate::robot::motion::Planner::past_midcourt(ball_y) {
                     continue;
                 }
                 let predictions: Vec<_> = intercept
@@ -2355,7 +2361,9 @@ mod tests {
                     .collect();
                 let in_window: Vec<_> = predictions
                     .into_iter()
-                    .filter(|p| crate::motion::Planner::in_commit_window(p.time_to_impact_secs))
+                    .filter(|p| {
+                        crate::robot::motion::Planner::in_commit_window(p.time_to_impact_secs)
+                    })
                     .collect();
                 if !in_window.is_empty() {
                     predictions_at_window = Some(in_window);
@@ -2373,7 +2381,7 @@ mod tests {
             );
             let mut any_succeeded_alone = false;
             for p in &predictions {
-                let feasibility = crate::motion::Planner::feasibility(&arm, p, &start_pose)
+                let feasibility = crate::robot::motion::Planner::feasibility(&arm, p, &start_pose)
                     .map(|f| format!("peak_ratio={:.2}", f.peak_joint_speed_ratio))
                     .unwrap_or_else(|| "IK 실패".to_string());
                 match super::super::planned_intercept::plan_bang_bang_swing(
@@ -2452,7 +2460,7 @@ mod tests {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
-                if !crate::motion::Planner::past_midcourt(ball_y) {
+                if !crate::robot::motion::Planner::past_midcourt(ball_y) {
                     continue;
                 }
 
@@ -2467,7 +2475,9 @@ mod tests {
                     let Some(prediction) = world.predict_impact(HitPlane { y }) else {
                         continue;
                     };
-                    if !crate::motion::Planner::in_commit_window(prediction.time_to_impact_secs) {
+                    if !crate::robot::motion::Planner::in_commit_window(
+                        prediction.time_to_impact_secs,
+                    ) {
                         continue;
                     }
                     if let Some(ceiling) = kinematic_ceiling(&arm, &start_pose, &prediction) {

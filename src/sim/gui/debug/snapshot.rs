@@ -2,10 +2,10 @@
 
 use crate::defaults;
 use crate::error::SwingPlanError;
-use crate::motion;
 use crate::robot::Arm;
 use crate::robot::Joints;
 use crate::robot::collision::{robot_obbs, table_penetration};
+use crate::robot::motion;
 
 use super::commit_phase::CommitPhase;
 use super::obb::DebugObb;

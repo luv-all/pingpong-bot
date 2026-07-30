@@ -91,7 +91,7 @@ mod tests {
     use crate::detector::{RoiParams, ScorerParams};
     use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
-    use crate::motion::InterceptWindow;
+    use crate::robot::motion::InterceptWindow;
 
     #[test]
     fn presets_validate() {

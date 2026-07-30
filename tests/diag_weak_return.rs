@@ -12,7 +12,7 @@ use nalgebra::Vector3;
 
 use pingpong_bot::constants::{BALL_RADIUS, table};
 use pingpong_bot::defaults;
-use pingpong_bot::motion::Impact;
+use pingpong_bot::estimator::Impact;
 use pingpong_bot::sim::eval;
 use pingpong_bot::sim::launch;
 use pingpong_bot::sim::physics;

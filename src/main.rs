@@ -26,7 +26,7 @@ use pingpong_bot::hardware::dynamixel::DynamixelConfig;
 use pingpong_bot::hardware::rail::RailConfig;
 #[cfg(feature = "real")]
 use pingpong_bot::hardware::{Hardware, RealHardware};
-use pingpong_bot::motion::InterceptWindow;
+use pingpong_bot::robot::motion::InterceptWindow;
 #[cfg(feature = "gui")]
 use pingpong_bot::sim::gui::{SimViewer, SimViewerOptions};
 use pingpong_bot::sim::session::{SimRuntimeControls, SimSession, SimSessionConfig};

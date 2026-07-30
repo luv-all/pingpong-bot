@@ -1,5 +1,5 @@
 use crate::error::DomainError;
-use crate::motion;
+use crate::robot::motion;
 
 pub(super) struct Response {
     pub(super) id: u64,

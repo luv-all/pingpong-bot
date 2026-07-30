@@ -24,8 +24,8 @@ use clap::Parser;
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
 use pingpong_bot::estimator::Prediction;
-use pingpong_bot::motion;
 use pingpong_bot::robot;
+use pingpong_bot::robot::motion;
 
 use args::Args;
 use mount_result::MountResult;

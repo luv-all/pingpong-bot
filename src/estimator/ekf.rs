@@ -228,7 +228,7 @@ mod tests {
     use crate::constants::table;
     use crate::estimator;
     use crate::estimator::HitPlane;
-    use crate::motion;
+    use crate::robot::motion;
 
     #[test]
     fn ekf_predicts_hit_plane_from_state() {

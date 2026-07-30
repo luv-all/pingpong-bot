@@ -3,8 +3,8 @@
 use super::playback_trajectory::PlaybackTrajectory;
 use super::swing_playback::SwingPlayback;
 use super::{Arm, RacketPose};
-use crate::motion;
 use crate::robot::Joints;
+use crate::robot::motion;
 
 /// 런타임 관절 상태 - sim/real encoder 읽기가 같은 타입을 채운다.
 #[derive(Debug, Clone, PartialEq)]
@@ -349,7 +349,7 @@ impl State {
 #[cfg(test)]
 mod tests {
     use crate::defaults::ControlParams;
-    use crate::motion;
+    use crate::robot::motion;
 
     #[test]
     fn playback_targets_and_reaches_follow_through_end() {

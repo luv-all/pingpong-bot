@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::error::HwError;
 use crate::hardware::Hardware;
-use crate::motion;
+use crate::robot::motion;
 use tracing::debug;
 
 use crate::sim::physics::world::SimWorld;

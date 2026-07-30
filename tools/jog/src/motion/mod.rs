@@ -7,8 +7,8 @@ use anyhow::{Context, Result, ensure};
 use nalgebra::{Rotation3, Vector3};
 use pingpong_bot::Point3;
 use pingpong_bot::defaults::{ControlParams, ImpactParams};
-use pingpong_bot::motion;
-use pingpong_bot::motion::Impact;
+use pingpong_bot::estimator::Impact;
+use pingpong_bot::robot::motion;
 use pingpong_bot::robot::{self, Arm, Joints, RacketPose};
 
 pub use draft::MotionDraft;

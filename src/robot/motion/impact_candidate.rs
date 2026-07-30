@@ -4,8 +4,8 @@ use nalgebra::Vector3;
 
 use crate::defaults;
 use crate::error::SwingPlanError;
+use crate::estimator::Impact;
 use crate::estimator::Prediction;
-use crate::motion::Impact;
 use crate::robot::{self, Arm, Joints};
 
 /// `hint`를 어깨/팔꿈치 한계 구간 중점 기준으로 반사한 대안 시드들을

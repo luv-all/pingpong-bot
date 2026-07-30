@@ -8,8 +8,8 @@ use crate::defaults::motion::{
     RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
+use crate::estimator::Impact;
 use crate::estimator::Prediction;
-use crate::motion::Impact;
 use crate::robot::Arm;
 use crate::robot::{self, Joints};
 

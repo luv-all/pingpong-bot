@@ -6,7 +6,7 @@
 
 파일 1타입·짧은 이름·모듈 경로로 도메인 표시라는 **원칙은 유지**되지만, 아래
 rename map의 `ball::*` / `shooter::*` 목적지는 폐기됐다. entity 모듈 대신
-**역할 기준**(detector → estimator → motion)으로 배치한다.
+**역할 기준**(detector → estimator → robot::motion)으로 배치한다.
 
 | 이 플랜의 목적지 | 실제 배치 (2026-07-30) |
 |------------------|------------------------|
@@ -17,7 +17,8 @@ rename map의 `ball::*` / `shooter::*` 목적지는 폐기됐다. entity 모듈 
 | `shooter::{Settings,Layout}` | `sim::launch::*` |
 | `shooter::Handle` | `sim::gui::shooter::Handle` |
 | `camera::Triangulate` · `camera::tri` | `estimator::Triangulate` · `estimator::tri` |
-| `swing::*` + `planner::{Impact,InterceptWindow}` | `motion::*` |
+| `swing::*` + `planner::InterceptWindow` | `robot::motion::*` |
+| `planner::Impact` (공–라켓 반발 역산) | `estimator::Impact` |
 | `planner::collision` · `OrientedBox` | `robot::collision` · `robot::OrientedBox` |
 | `eval::*` | `sim::eval::*` (sim 전용 채점 모드) |
 | `robot::{Handle,Visual,PrimitiveNodes,UrdfNodes}` | `sim::gui::robot::*` |
@@ -30,14 +31,20 @@ rename map의 `ball::*` / `shooter::*` 목적지는 폐기됐다. entity 모듈 
 ### 레이어 방향 (2026-07-30 기준, 테스트 제외)
 
 ```text
-camera → detector → estimator → motion → robot → hardware
-                                    ↘        ↘       ↙
-                                       sim · pipeline
+camera → detector → estimator → robot(collision · motion · state) → hardware
+                          ↘                    ↘                      ↙
+                                     sim · pipeline
 ```
 
+루트 도메인: `camera constants defaults detector error estimator hardware pipeline robot sim telemetry`
+
+- **계획은 `robot::motion`** — 궤적·레일 운동·관절 실현가능성이 전부 로봇 어휘(`Joints`·rail x)라,
+  루트 도메인으로 분리하면 `robot → motion` 역방향이 생긴다. 로봇의 하위 모듈이 맞다.
+- **공 물리는 `estimator` 소유** — 탄도(`Kinematics::aero_accel`)·반발 역산(`Impact`) 모두.
+  로봇이 공 물리를 소유하지 않는다.
 - 스펙 숫자는 `defaults` / `constants` 단일 소유 — 도메인이 pass-through 재수출하지 않는다
-- 탄도 계산(`aero_accel`)은 `estimator::Kinematics` 소유 (sim·motion 공유 SSOT)
 - 팔–테이블 관통은 `robot::collision` (계획이 조회하는 관계)
+- `robot → sim` 은 `#[cfg(test)]` 통합 테스트뿐 (실제 빌드에 없음)
 
 ---
 

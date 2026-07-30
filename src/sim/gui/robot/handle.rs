@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::motion;
+use crate::robot::motion;
 use crate::robot::{self, Joints, RacketPose};
 use crate::sim::physics::world::SimWorld;
 
@@ -95,13 +95,13 @@ mod tests {
         if let Some(v) = end.values.get_mut(0) {
             *v += 0.1;
         }
-        let traj = crate::motion::Trajectory::new(
+        let traj = crate::robot::motion::Trajectory::new(
             pose.joints.clone(),
             end,
             vec![0.0; pose.joints.values.len()],
             vec![0.0; pose.joints.values.len()],
             0.2,
-            crate::motion::Rail {
+            crate::robot::motion::Rail {
                 start: pose.rail_x,
                 end: pose.rail_x,
                 start_velocity: 0.0,
@@ -131,13 +131,13 @@ mod tests {
         let start = robot.pose();
         let mut end = start.joints.clone();
         end.values[0] += 15f64.to_radians();
-        let traj = crate::motion::Trajectory::new(
+        let traj = crate::robot::motion::Trajectory::new(
             start.joints.clone(),
             end.clone(),
             vec![0.0; start.joints.values.len()],
             vec![0.0; start.joints.values.len()],
             0.5,
-            crate::motion::Rail {
+            crate::robot::motion::Rail {
                 start: start.rail_x,
                 end: start.rail_x,
                 start_velocity: 0.0,

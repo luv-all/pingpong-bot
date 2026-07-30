@@ -7,7 +7,6 @@
 
 pub mod bang_bang;
 pub mod feasibility;
-pub mod impact;
 pub mod impact_candidate;
 pub mod impact_target;
 pub mod intercept_window;
@@ -20,7 +19,6 @@ pub mod trajectory;
 
 pub use bang_bang::{RacketGuidanceScratch, RacketGuidanceStep};
 pub use feasibility::Feasibility;
-pub use impact::Impact;
 pub use intercept_window::InterceptWindow;
 pub use planned_intercept::PlannedIntercept;
 pub use planner::Planner;

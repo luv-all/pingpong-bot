@@ -14,7 +14,7 @@ use crate::estimator;
 use crate::estimator::Estimator;
 use crate::estimator::Prediction;
 use crate::hardware::Hardware;
-use crate::motion;
+use crate::robot::motion;
 use crate::telemetry::{Telemetry, TelemetryEvent};
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;

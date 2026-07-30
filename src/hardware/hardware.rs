@@ -1,6 +1,6 @@
 use crate::error::HwError;
-use crate::motion;
 use crate::robot;
+use crate::robot::motion;
 
 /// 로봇 팔과 리니어 구동 인터페이스.
 pub trait Hardware: Send {

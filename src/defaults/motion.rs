@@ -1,6 +1,6 @@
 //! 접수 계획 — 인터셉트·bang-bang·Magnus 휴리스틱.
 
-use crate::motion::InterceptWindow;
+use crate::robot::motion::InterceptWindow;
 
 /// 인터셉트 샘플 상한.
 pub const MAX_INTERCEPT_SAMPLES: usize = 1_024;

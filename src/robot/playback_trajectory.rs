@@ -1,7 +1,7 @@
 //! 재생 중인 스윙 궤적 래퍼.
 
-use crate::motion;
 use crate::robot::Joints;
+use crate::robot::motion;
 
 /// 재생 중인 스윙 궤적 - quintic(`plan_swing`)과 순수 토크 bang-bang
 /// (`plan_bang_bang_swing`)을 같은 재생 루프(`advance_swing`)로 다루기 위한
