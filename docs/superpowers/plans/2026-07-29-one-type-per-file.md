@@ -2,6 +2,27 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+## ⚠️ 2026-07-30 — 모듈 배치 부분 폐기
+
+파일 1타입·짧은 이름·모듈 경로로 도메인 표시라는 **원칙은 유지**되지만, 아래
+rename map의 `ball::*` / `shooter::*` 목적지는 폐기됐다. entity 모듈 대신
+**역할 기준**(detector → estimator → planner)으로 배치한다.
+
+| 이 플랜의 목적지 | 실제 배치 (2026-07-30) |
+|------------------|------------------------|
+| `ball::Observation` | `detector::Observation` |
+| `ball::{Ekf,Kinematics,Snapshot}` · ballistics/bounce/measure | `estimator::*` |
+| `ball::State` | `sim::physics::BallState` |
+| `ball::{Handle,Visual,VelocityVisual}` | `sim::gui::ball::*` |
+| `shooter::{Settings,Layout}` | `sim::launch::*` |
+| `shooter::Handle` | `sim::gui::shooter::Handle` |
+| `camera::Triangulate` · `camera::tri` | `estimator::Triangulate` · `estimator::tri` |
+
+`constants/ball`은 ITTF 물리 상수라 유지. 임시 별칭·호환 경로는 쓰지 않는다
+(배포 이력 없음 — 사용자 결정). Task 1~10의 rename map은 이 표로 읽을 것.
+
+---
+
 **Goal:** `src/` + `tools/`에서 파일당 주 타입 1개(+impl)로 쪼개고, 도메인 접두어는 모듈 경로로 올려 `ball::Observation` / `robot::State` / `camera::Id`처럼 대칭적인 공개 API를 만든다.
 
 **Architecture:** 레이어 단위로 (1) 타입을 파일·폴더로 분리 (2) §3 rename·모듈 이동 (3) `lib.rs`/`mod.rs` re-export 정리 (4) `cargo check --workspace --all-targets`로 고정. 移行 중 한 레이어 안에서만 `pub use New as Old` 별칭을 잠깐 쓰고, 그 레이어 호출부 갱신 후 별칭 제거.

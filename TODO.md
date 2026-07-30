@@ -3,8 +3,11 @@
 실행 체크리스트. 상세 스펙은 [`plan.md`](plan.md)·[`docs/phase2.md`](docs/phase2.md)·[`docs/decisions.md`](docs/decisions.md).  
 앱 숫자는 [`src/defaults/`](src/defaults/) SSOT. 로봇 활성 프리셋은 `defaults::robot()` 본문만.
 
-공개 API는 도메인 facade (`Impact` / `SwingPlanner` / `BallKinematics` / `Preview` / `EvalProtocol` …).  
-자유함수 root dump는 쓰지 않는다.
+공개 API는 도메인 모듈 경로 (`planner::Impact` / `swing::Planner` / `estimator::Kinematics` /
+`camera::Preview` / `eval::Protocol` …). 자유함수 root dump·호환 alias는 쓰지 않는다.
+
+파이프라인은 역할 기준: `detector` (검출) → `estimator` (삼각측량·EKF·예측) → `swing` (계획).
+`ball` / `shooter` 도메인은 해체됨 — 공 상태·피더는 `sim::physics` / `sim::launch`.
 
 **우선순위:** **리턴 파워(eval)** → 실캠 `run_real` / Windows 벤치 → 시뮬 품질·포기 정책 → ω 추정 → 풀 동역학 후속.
 
@@ -26,7 +29,7 @@
 ### 0.2 측정으로 잠글 상수
 
 - [x] e / μ / drag 측정 툴 + [`docs/measure-physics.md`](docs/measure-physics.md)
-- [x] 테이블 바운스 커널 `BallKinematics` / `estimator::bounce`
+- [x] 테이블 바운스 커널 `estimator::Kinematics::bounce_on_table`
 - [ ] Rapier 테이블–공 μ ↔ 커널 정렬 (랜덤샷·랠리 재튜닝 동반)
 - [ ] A4 e·마찰·drag **실측값**으로 `PhysicsParams` / `impact()` 갱신 (보드 준비 후)
 
@@ -36,8 +39,8 @@
 
 | 역할 | facade |
 |------|--------|
-| 리턴·라켓 속도 | `Impact::rally_return` / `required_racket_velocity` |
-| 스윙 | `SwingPlanner::plan` / `plan_best` / `plan_bang_bang` |
+| 리턴·라켓 속도 | `planner::Impact::rally_return` / `required_racket_velocity` |
+| 스윙 | `swing::Planner::plan` / `plan_best` / `plan_bang_bang` |
 | IK·속도 | `Arm::inverse_pose_with_rail` / `velocities_for_racket_velocity` |
 | 토크 | `Arm::required_torque` / `Arm::torque_feasible` |
 
@@ -50,7 +53,7 @@
 
 순방향 Model C는 sim·탄도·플래너에 들어감. **역방향 ω 추정**만 남음.
 
-- [x] Model C 순방향 (`BallKinematics` / Rapier 외력 / 슈터 spin)
+- [x] Model C 순방향 (`estimator::Kinematics` / Rapier 외력 / `sim::launch` spin)
 - [ ] 스펙 — `docs/`에 카메라·Model A/B/C·bounce 구간
 - [ ] 궤적 fitting → ω 추정 · EKF 확장 또는 별도 추정기
 - [ ] prediction_error · spin_confidence · A/B fallback · 바운드 전후 분리
@@ -62,7 +65,7 @@
 
 설계: [`docs/superpowers/specs/2026-07-18-vision-pipeline-design.md`](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md)  
 조립 SSOT: `defaults::detector_for` · `data/colormask.json`.  
-진입: `Preview` / `Charuco` / `TablePnp` / `Triangulate` / `Detector`.
+진입: `camera::Preview` / `camera::Charuco` / `camera::TablePnp` / `estimator::Triangulate` / `detector::Detector`.
 
 - [x] 삼각·검출·ROI·colormask·ChArUco·탁구대 PnP·UVC/파일·undistort 파이프
 - [ ] 멀티캠 동기·타임스탬프 — **비범위**
@@ -105,4 +108,4 @@ cargo run -p pingpong-bot -- --mode sim
 # cargo run -p pingpong-bot --features real -- --mode real --dxl-port COM8
 ```
 
-갱신: 2026-07-29 — API facade 정리, Rerun/리플레이 보류, 완료 항목 축약.
+갱신: 2026-07-30 — ball/shooter 도메인 해체(detector/estimator/sim), 호환 alias 제거.
