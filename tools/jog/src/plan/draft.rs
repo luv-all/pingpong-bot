@@ -1,6 +1,5 @@
 //! egui 입력 초안.
 
-use pingpong_bot::constants::table;
 use pingpong_bot::sim::launch;
 
 use super::kind::Kind;
@@ -15,13 +14,11 @@ pub struct Draft {
     pub rail_x: f64,
     /// IK / Pose: 현재 라켓 위치 대비 Δ(좌우, 전후, 높이) [m].
     pub reach_dxyz: [f64; 3],
-    /// Pose: 현재 법선 / Swing: 입사 반대 방향 기준 기울기 [deg].
+    /// Pose: 현재 법선 기준 기울기 [deg].
     pub tilt_pitch_deg: f64,
     pub tilt_yaw_deg: f64,
     /// Swing: 슈터 설정 (sim controls와 동기화된다).
     pub shooter: launch::Settings,
-    /// Swing: 공을 맞을 접수 평면 y [m].
-    pub hit_plane_y: f64,
 }
 
 impl Default for Draft {
@@ -36,7 +33,6 @@ impl Default for Draft {
             tilt_pitch_deg: 0.0,
             tilt_yaw_deg: 0.0,
             shooter: launch::Settings::default(),
-            hit_plane_y: table::DEFAULT_HIT_PLANE_Y,
         };
     }
 }

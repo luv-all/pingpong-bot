@@ -1,7 +1,6 @@
 //! jog egui 패널.
 
 use kiss3d::egui::{self, Color32, RichText};
-use pingpong_bot::robot::motion::InterceptWindow;
 use pingpong_bot::sim::gui::shooter;
 
 use crate::plan::{Kind, REACH_DELTA_M, SwingPreview, joint_label, reach_ok, swing_preview};
@@ -201,34 +200,27 @@ fn draw_motion(ui: &mut egui::Ui, app: &mut JogApp, preview: Option<&SwingPrevie
     }
 }
 
-fn draw_swing(ui: &mut egui::Ui, app: &mut JogApp, preview: Option<&SwingPreview>) {
-    let hit = InterceptWindow::default();
-    ui.label("공을 맞을 깊이 (접수 평면 y) [m]");
-    ranged(
-        ui,
-        "y",
-        &mut app.draft.hit_plane_y,
-        hit.y_min,
-        hit.y_max,
-        0.005,
+fn draw_swing(ui: &mut egui::Ui, app: &JogApp, preview: Option<&SwingPreview>) {
+    ui.label(
+        RichText::new("타점·라켓 각도·임팩트 속도는 시뮬과 같은 planner가 고릅니다")
+            .weak()
+            .small(),
     );
+    ui.add_space(4.0);
 
-    ui.label("면 기울기 [°]");
-    ranged(ui, "pitch", &mut app.draft.tilt_pitch_deg, -30.0, 30.0, 0.5);
-    ranged(ui, "yaw", &mut app.draft.tilt_yaw_deg, -30.0, 30.0, 0.5);
-
-    ui.separator();
     if app.synced_pose.is_none() {
-        ui.label("동기화하면 예측 결과가 표시됩니다");
+        ui.label("동기화하면 계획 결과가 표시됩니다");
         return;
     }
     let Some(preview) = preview else {
         ui.colored_label(
             Color32::from_rgb(220, 90, 80),
-            "이 슈터 설정으로는 접수 평면에 도달하는 공이 없습니다",
+            "이 슈터 설정으로는 받아칠 수 있는 공이 없습니다",
         );
         ui.label(
-            RichText::new("네트 미달 · 너무 낮음 · 리드 시간 밖 — 속도나 pitch를 올려보세요")
+            RichText::new(
+                "네트 미달 · 커밋 창 밖 · IK 불가 · 레일이 너무 멀어 궤적 불가 — 슈터 조준·속도나 레일 위치를 바꿔보세요",
+            )
                 .weak()
                 .small(),
         );
@@ -237,20 +229,13 @@ fn draw_swing(ui: &mut egui::Ui, app: &mut JogApp, preview: Option<&SwingPreview
 
     let p = preview.prediction.impact_position.coords;
     let v = preview.prediction.incoming_velocity;
-    ui.label(format!("도달점 = ({:.3}, {:.3}, {:.3}) m", p.x, p.y, p.z));
+    ui.label(format!("타점 = ({:.3}, {:.3}, {:.3}) m", p.x, p.y, p.z));
     ui.label(format!("입사 속도 = ({:.2}, {:.2}, {:.2}) m/s", v.x, v.y, v.z));
     ui.label(format!(
-        "리드 시간 = {:.3} s",
+        "커밋 후 리드 시간 = {:.3} s",
         preview.prediction.time_to_impact_secs
     ));
-    if preview.ik_ok {
-        ui.colored_label(Color32::from_rgb(90, 190, 120), "IK 가능");
-    } else {
-        ui.colored_label(
-            Color32::from_rgb(220, 90, 80),
-            "IK 불가 — 깊이·기울기나 슈터 조준을 바꿔보세요",
-        );
-    }
+    ui.colored_label(Color32::from_rgb(90, 190, 120), "스윙 계획 성공");
 }
 
 fn draw_reach(ui: &mut egui::Ui, app: &mut JogApp, with_tilt: bool) {
@@ -292,7 +277,7 @@ fn draw_reach(ui: &mut egui::Ui, app: &mut JogApp, with_tilt: bool) {
 
 fn draw_actions(ui: &mut egui::Ui, app: &mut JogApp, preview: Option<&SwingPreview>) {
     // 슈터 공이 도달 불가이거나 임팩트 IK가 안 풀리면 미리보기를 막는다.
-    let swing_ready = app.draft.kind != Kind::Swing || preview.is_some_and(|p| p.ik_ok);
+    let swing_ready = app.draft.kind != Kind::Swing || preview.is_some();
     ui.horizontal(|ui| {
         if ui
             .add_enabled(

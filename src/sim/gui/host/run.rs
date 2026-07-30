@@ -116,7 +116,14 @@ async fn run_lightweight(options: SceneHostOptions) -> Result<(), String> {
             }
         }
         if let (Some(handle), Some(visual)) = (&options.layers.shooter, &mut shooter_visual) {
-            visual.set_from_settings(&handle.settings());
+            // 메인 뷰어와 같은 SSOT — 물리 월드의 본체 자세. 월드가 없으면 설정에서.
+            match options.world.as_ref().and_then(|w| lock_world_for_frame(w)) {
+                Some(guard) => {
+                    let (pos, rot) = guard.shooter_pose();
+                    visual.set_pose(pos, rot);
+                }
+                None => visual.set_from_settings(&handle.settings()),
+            }
         }
         if let (Some(_), Some(visual), Some(world)) =
             (&options.layers.robot, &mut robot_visual, &options.world)

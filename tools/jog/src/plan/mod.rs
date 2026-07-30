@@ -7,8 +7,7 @@ pub mod shooter;
 use anyhow::{Context, Result, ensure};
 use nalgebra::{Rotation3, Vector3};
 use pingpong_bot::Point3;
-use pingpong_bot::defaults::{ControlParams, ImpactParams};
-use pingpong_bot::estimator::{Impact, Prediction};
+use pingpong_bot::estimator::Prediction;
 use pingpong_bot::robot::motion;
 use pingpong_bot::robot::{self, Arm, Joints, RacketPose};
 
@@ -114,7 +113,7 @@ pub fn compose(
                 max_delta_deg,
             )
         }
-        Kind::Swing => swing_traj(arm, start, draft, duration_secs, max_delta_deg),
+        Kind::Swing => swing_traj(arm, start, draft, max_delta_deg),
     };
 }
 
@@ -137,114 +136,48 @@ pub fn reach_ok(arm: &Arm, start: &robot::Pose, draft: &Draft) -> bool {
             };
             arm.inverse_pose_with_rail(target, normal, start).is_ok()
         }
-        Kind::Swing => swing_preview(arm, start, draft).is_ok_and(|p| p.ik_ok),
+        Kind::Swing => swing_preview(arm, start, draft).is_ok(),
         _ => true,
     };
 }
 
 /// 슈터 공 스윙의 미리보기 정보 — 패널 표시와 `reach_ok`가 함께 쓴다.
 pub struct SwingPreview {
+    /// planner가 고른 타점 (접수 창 후보 중 최적).
     pub prediction: Prediction,
-    /// 도달점·법선으로 임팩트 포즈 IK가 풀리는가.
-    pub ik_ok: bool,
 }
 
-/// 슈터 설정 → 도달 예측 → 임팩트 포즈 IK 가능 여부.
+/// 슈터 설정 → 커밋 시점 예측 묶음 → 시뮬과 같은 planner.
 ///
-/// 예측 자체가 실패하면 `Err` — 그 사유를 패널에 그대로 띄운다.
-pub fn swing_preview(arm: &Arm, start: &robot::Pose, draft: &Draft) -> Result<SwingPreview> {
-    let prediction = shooter::predict(&draft.shooter, draft.hit_plane_y)?;
-    let normal = swing_normal(&prediction, draft)?;
-    let ik_ok = arm
-        .inverse_pose_with_rail(prediction.impact_position, normal, start)
-        .is_ok();
-    return Ok(SwingPreview { prediction, ik_ok });
+/// 접수 평면을 사람이 고르지 않는다 — `plan_best_swing`이 접수 창 후보를 전부
+/// 채점해 최적 타점과 궤적을 고른다. 라켓 법선·임팩트 속도도 planner가 푼다.
+fn plan_shooter_swing(
+    arm: &Arm,
+    start: &robot::Pose,
+    draft: &Draft,
+) -> Result<motion::PlannedIntercept> {
+    let predictions = shooter::commit_predictions(&draft.shooter)?;
+    return motion::physics::plan_best_swing(arm, &predictions, start)
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("스윙 계획");
 }
 
-/// 라켓 기준 법선 = 입사 반대 방향 + 사용자 기울기.
-fn swing_normal(prediction: &Prediction, draft: &Draft) -> Result<Vector3<f64>> {
-    let v_in = prediction.incoming_velocity;
-    ensure!(v_in.norm() > 1e-3, "입사 속도가 너무 작습니다");
-    return tilt_normal(-v_in.normalize(), draft.tilt_pitch_deg, draft.tilt_yaw_deg);
+pub fn swing_preview(arm: &Arm, start: &robot::Pose, draft: &Draft) -> Result<SwingPreview> {
+    let planned = plan_shooter_swing(arm, start, draft)?;
+    return Ok(SwingPreview {
+        prediction: planned.prediction,
+    });
 }
 
 fn swing_traj(
     arm: &Arm,
     start: &robot::Pose,
     draft: &Draft,
-    duration_secs: f64,
     max_delta_deg: f64,
 ) -> Result<motion::Trajectory> {
-    let prediction = shooter::predict(&draft.shooter, draft.hit_plane_y)?;
-    let target = prediction.impact_position;
-    let v_in = prediction.incoming_velocity;
-    let aim_normal = swing_normal(&prediction, draft)?;
-
-    let impact = arm
-        .inverse_pose_with_rail(target, aim_normal, start)
-        .context("스윙 임팩트 포즈 IK")?;
-    let racket = arm
-        .forward_kinematics_with_rail(impact.rail_x, &impact.joints)
-        .context("임팩트 FK")?;
-    let normal = racket.normal.normalize();
-
-    let v_out = Impact::rally_return(target, v_in);
-    let e = ImpactParams::default().racket_effective_restitution;
-    let v_r = Impact::required_racket_velocity(v_in, v_out, normal, e).context("라켓 속도 역산")?;
-
-    let (rail_impact_vel, joint_impact_vel) = arm
-        .velocities_for_racket_velocity(&impact, v_r)
-        .context("라켓 속도 → 관절·레일 속도")?;
-
-    ensure_max_delta(&start.joints, &impact.joints, max_delta_deg)?;
-    return build_follow_through_swing(
-        start,
-        &impact,
-        joint_impact_vel,
-        rail_impact_vel,
-        duration_secs,
-    );
-}
-
-fn build_follow_through_swing(
-    start: &robot::Pose,
-    impact: &robot::Pose,
-    joint_impact_vel: Vec<f64>,
-    rail_impact_vel: f64,
-    duration_secs: f64,
-) -> Result<motion::Trajectory> {
-    let follow = ControlParams::default().swing_follow_through_secs.max(0.02);
-    let approach = duration_secs.max(follow + 0.05);
-    let impact_time = (approach - follow).max(0.05);
-    let duration = impact_time + follow;
-
-    let n = impact.joints.values.len();
-    let mut follow_joints = Vec::with_capacity(n);
-    for i in 0..n {
-        follow_joints.push(impact.joints.values[i] + joint_impact_vel[i] * follow);
-    }
-    let follow_rail = impact.rail_x + rail_impact_vel * follow;
-    let start_vel = vec![0.0; n];
-    let follow_vel = vec![0.0; n];
-
-    return Ok(motion::Trajectory::with_follow_through(
-        start.joints.clone(),
-        impact.joints.clone(),
-        Joints::from_slice(&follow_joints),
-        start_vel,
-        joint_impact_vel,
-        follow_vel,
-        impact_time,
-        duration,
-        motion::Rail {
-            start: start.rail_x,
-            end: impact.rail_x,
-            start_velocity: 0.0,
-            end_velocity: rail_impact_vel,
-        },
-        follow_rail,
-        0.0,
-    ));
+    let planned = plan_shooter_swing(arm, start, draft)?;
+    ensure_max_delta(&start.joints, &planned.trajectory.end, max_delta_deg)?;
+    return Ok(planned.trajectory);
 }
 
 fn current_racket(arm: &Arm, start: &robot::Pose) -> Result<RacketPose> {
@@ -366,25 +299,36 @@ mod tests {
     #[test]
     fn default_shooter_swing_has_a_solution() {
         let built = defaults::robot().expect("robot");
-        let start = robot::Pose::new(0.0, built.arm.default_joints.clone());
+        // 시뮬은 랠리 사이 레일 중앙에서 대기한다 — 끝단에서 시작하면 커밋
+        // 시간창 안에 레일이 못 간다.
+        let rail = built.arm.rail.expect("rail");
+        let start = robot::Pose::new(rail.default_x(), built.arm.default_joints.clone());
         let mut draft = Draft::default();
         draft.kind = Kind::Swing;
-        let preview = swing_preview(&built.arm, &start, &draft).expect("예측은 성공해야 한다");
-        assert!(preview.ik_ok, "기본 슈터 공은 IK가 풀려야 한다");
+        let preview = swing_preview(&built.arm, &start, &draft).expect("스윙 계획은 성공해야 한다");
+        assert!(
+            preview.prediction.impact_position.coords.y > 0.0,
+            "타점이 로봇 앞이어야 한다"
+        );
         compose(&built.arm, &start, &draft, 1.0, 90.0).expect("스윙 궤적이 만들어져야 한다");
     }
 
     #[test]
     fn unreachable_shooter_swing_reports_reason() {
         let built = defaults::robot().expect("robot");
-        let start = robot::Pose::new(0.0, built.arm.default_joints.clone());
+        let rail = built.arm.rail.expect("rail");
+        let start = robot::Pose::new(rail.default_x(), built.arm.default_joints.clone());
         let mut draft = Draft::default();
         draft.kind = Kind::Swing;
         draft.shooter.pitch_deg = 0.0;
         draft.shooter.height_offset_m = -0.35;
         draft.shooter.speed_mps = 12.0;
         let err = compose(&built.arm, &start, &draft, 1.0, 90.0).unwrap_err();
-        assert!(format!("{err:#}").contains("도달"), "{err:#}");
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("도달") || text.contains("넘어오지") || text.contains("스윙 계획"),
+            "{text}"
+        );
         assert!(!reach_ok(&built.arm, &start, &draft));
     }
 

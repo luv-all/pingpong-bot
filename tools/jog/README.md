@@ -2,8 +2,9 @@
 
 Dynamixel 관절 + AXL 리니어 레일을 **시뮬에서 미리보기**한 뒤 **Apply**로만 실기에 보내는 GUI.
 
-공 추적·`plan_swing` 같은 planner는 **쓰지 않는다**. 목표만 정하면 FK/IK와 quintic 궤적으로 팔·레일을 같은 시간에 보낸다.
-스윙 입력은 시뮬 슈터 파라미터로 주고, 도달점·입사 속도는 탄도 예측에서 얻는다.
+직접 조그(`j`/`angles`/`r`/`ik`/`pose`)는 planner 없이 FK/IK + quintic으로 보낸다.
+**스윙만은 시뮬과 똑같이 동작한다** — 슈터 파라미터만 주면 타점·라켓 각도·임팩트
+속도는 `plan_best_swing`이 고른다.
 
 설정 SSOT: [`src/defaults/`](../../src/defaults/) — `dynamixel()` · `rail()` · `robot()` · `control()`.
 
@@ -50,26 +51,33 @@ cargo run -p jog -- --port COM8 --debug
 | `r` / `rd` | 레일 절대 / 상대 [m] |
 | `ik` | 위치 IK (레일 x 유지) |
 | `pose` | 위치+법선 IK |
-| `swing` | 슈터가 쏜 공의 예측 도달점으로 임팩트 스윙 |
+| `swing` | 슈터가 쏜 공을 시뮬과 같은 planner로 받아치기 |
 | `duration` / `maxdelta` | 기본 이동 시간 · 관절 최대 Δ |
 
 ### 스윙 (슈터 공)
 
-**슈터** 창에서 위치·조준각·속도·스핀을 정하면 `Kinematics::predict_to`가 접수 평면
-도달점과 입사 속도를 예측한다 — 실제 파이프라인과 같은 예측기다. 도달점·입사속도를
-직접 넣지 않으므로 물리적으로 불가능한 조합이 들어올 수 없다.
+입력은 **슈터 창의 파라미터뿐**이다. 접수 평면도, 라켓 각도도 사람이 고르지 않는다 —
+시뮬과 완전히 같은 경로를 탄다:
 
-Jog 창에서는 **공을 맞을 깊이**(접수 평면 y)와 **면 기울기**만 정한다. 임팩트 라켓
-속도는 `rally_return` → `required_racket_velocity`로 역산되고, `velocities_for_racket_velocity`
-→ 관절·레일 속도 → quintic + 팔로스루로 간다.
+1. 슈터 발사 상태를 `Kinematics::step`으로 **시뮬이 스윙을 커밋하는 시점**
+   (`ball_past_midcourt_for_commit`)까지 굴린다
+2. 그 상태에서 `InterceptWindow`의 **모든** hit plane에 `predict_to`
+3. `plan_best_swing`이 후보를 전부 채점해 최적 타점·라켓 자세·임팩트 속도를 고르고
+   quintic 궤적까지 만든다
 
-도달 불가(네트 미달·너무 낮음·리드 시간 밖)거나 임팩트 IK가 안 풀리면 사유가 표시되고
-미리보기가 잠긴다. **Random**은 네트 통과가 검증된 샷만 뽑는다.
+도달점·입사속도를 직접 넣지 않으므로 물리적으로 불가능한 조합이 들어올 수 없다.
+계획이 실패하면(네트 미달 · 커밋 창 밖 · IK 불가 · 레일이 멀어 궤적 불가) 사유가
+표시되고 미리보기가 잠긴다.
+
+레일이 타점에서 멀면 커밋 시간창 안에 못 간다 — 시뮬이 랠리 사이 레일 중앙에서
+대기하는 것과 같은 이유다. 먼저 `r`로 레일을 중앙 근처로 옮기면 풀린다.
+
+**Random**은 네트 통과가 검증된 샷만 뽑는다.
 
 ## 동작 요약
 
 1. Sync: 실기 `read_pose` → `RobotHandle::set_pose`
-2. Preview: 목표 결정 (직접 / IK / pose / 슈터 예측 swing) → `SwingTrajectory` → sim `play`
+2. Preview: 목표 결정 (직접 / IK / pose) 또는 `plan_best_swing` → `SwingTrajectory` → sim `play`
 3. Apply: 같은 궤적 → `RealHardware::command` → busy 대기 → AwaitingSync
 4. Sync 후 다시 Ready
 
