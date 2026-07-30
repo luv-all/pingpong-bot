@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use pingpong_bot::camera;
 use pingpong_bot::camera::Calibration;
-use pingpong_bot::defaults::ControlParams;
 use pingpong_bot::estimator::{Ekf, Estimator, GateOutcome, Prediction, Triangulate};
 use pingpong_bot::robot::motion::{InterceptWindow, Planner};
 use tracing::{debug, info_span};
@@ -16,7 +15,7 @@ use tracing::{debug, info_span};
 use super::fmt::f2;
 use super::{
     CommitRequest, Decision, PreviewEvent, ShotEvent, Shutdown, SimUpdate, Throttle, VisionEvent,
-    decide, latest_tti_secs,
+    decide,
 };
 
 /// 스테레오 쌍으로 인정할 최대 타임스탬프 차 [s].
@@ -95,7 +94,6 @@ pub fn spawn(
         let required = calibration.min_cameras_for_triangulation();
         let planes = intercept.hit_planes();
         let mut announced_track = false;
-        let mut announced_abandon = false;
         let mut last_decision: Option<Decision> = None;
         let mut progress = Throttle::new(PROGRESS_PERIOD);
 
@@ -190,17 +188,7 @@ pub fn spawn(
                         stats.commit_dropped += 1;
                     }
                 }
-                Decision::Abandon(_) if !announced_abandon => {
-                    announced_abandon = true;
-                    // 판정에 쓴 값을 그대로 실어 보낸다 — 로그만 보고 "얼마나 늦었나"를 안다.
-                    let _ = event_tx.send(ShotEvent::TooLate {
-                        latest_tti_secs: latest_tti_secs(&predictions).unwrap_or(f64::NAN),
-                        min_swing_secs: ControlParams::default().min_swing_secs,
-                        candidates: predictions.len(),
-                        ball_y: ball_y.unwrap_or(f64::NAN),
-                    });
-                }
-                Decision::Abandon(_) | Decision::Wait(_) => {}
+                Decision::Wait(_) => {}
             }
 
             if let Some(sim_tx) = &sim_tx {
@@ -212,17 +200,28 @@ pub fn spawn(
             }
 
             if let Some(preview_tx) = &preview_tx {
-                let hud = hud_lines(&ekf, &decision, shown.as_ref());
-                // 예측 도달점을 **이 카메라로 재투영**해 화면 위에 찍는다.
-                let impact_pixel = shown.and_then(|prediction| {
-                    calibration
-                        .params(event.frame.camera_id)?
-                        .project_world(prediction.impact_position)
+                // 예측 도달점을 **이 카메라로 재투영**한다. 자르지 않고 프레임 밖인지만
+                // 따로 알려 준다 — 안 보이는 이유가 "예측 없음"인지 "화각 밖"인지 구분해야
+                // 벤치에서 진단이 된다 (접수 평면 y 0.08~0.35는 로봇 코앞이라 화각을
+                // 벗어나기 쉽다).
+                let params = calibration.params(event.frame.camera_id);
+                let impact_pixel = shown.zip(params).and_then(|(prediction, params)| {
+                    params.project_world_unclipped(prediction.impact_position)
                 });
+                let impact_offscreen = impact_pixel.is_some_and(|pixel| {
+                    params.is_some_and(|params| {
+                        pixel.x < 0.0
+                            || pixel.y < 0.0
+                            || pixel.x >= f64::from(params.width)
+                            || pixel.y >= f64::from(params.height)
+                    })
+                });
+                let hud = hud_lines(&ekf, &decision, shown.as_ref(), impact_offscreen);
                 let preview = PreviewEvent {
                     frame: event.frame,
                     pixel: event.pixel,
                     impact_pixel,
+                    impact_offscreen,
                     hud,
                 };
                 if let Err(TrySendError::Full(_)) = preview_tx.try_send(preview) {
@@ -312,10 +311,14 @@ fn display_candidate(predictions: &[Prediction]) -> Option<Prediction> {
 
 /// HUD 문자열은 **ASCII만** 쓴다 — Hershey 폰트가 유니코드를 못 그린다 (한글은 `??????`).
 /// 한글 사유는 `ShotEvent` 로그로만 나간다.
-fn hud_lines(ekf: &Ekf, decision: &Decision, shown: Option<&Prediction>) -> Vec<String> {
+fn hud_lines(
+    ekf: &Ekf,
+    decision: &Decision,
+    shown: Option<&Prediction>,
+    impact_offscreen: bool,
+) -> Vec<String> {
     let state = match decision {
         Decision::Attempt => "ATTEMPT plan request".to_owned(),
-        Decision::Abandon(_) => "ABANDON too late".to_owned(),
         Decision::Wait(reason) => reason.label().to_owned(),
     };
     let mut lines = vec![state];
@@ -327,13 +330,20 @@ fn hud_lines(ekf: &Ekf, decision: &Decision, shown: Option<&Prediction>) -> Vec<
         ));
     }
     if let Some(prediction) = shown {
+        let offscreen = if impact_offscreen {
+            "  [OFF-FRAME]"
+        } else {
+            ""
+        };
         lines.push(format!(
-            "impact x{:+.2} y{:+.2} z{:+.2}  tti {:.3}s",
+            "impact x{:+.2} y{:+.2} z{:+.2}  tti {:.2}s{offscreen}",
             prediction.impact_position.coords.x,
             prediction.impact_position.coords.y,
             prediction.impact_position.coords.z,
             prediction.time_to_impact_secs
         ));
+    } else {
+        lines.push("impact none".to_owned());
     }
     if let Some(d2) = ekf.last_gate_d2() {
         lines.push(format!("gate   d2 {d2:.1}  reject {}", ekf.reject_streak()));
