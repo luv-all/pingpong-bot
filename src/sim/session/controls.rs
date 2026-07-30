@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use crate::robot::RailFrame;
 use crate::sim::launch;
 
 /// GUI에서 바꾸고 물리 스레드가 읽는 sim 런타임 상태.
@@ -10,6 +11,14 @@ use crate::sim::launch;
 pub struct SimRuntimeControls {
     /// 발사 파라미터 (GUI 슬라이더)
     pub shooter: launch::Settings,
+    /// 레일 철제 프로파일 설치 위치 (GUI "Rig" 슬라이더).
+    ///
+    /// 실물에서도 조정 가능한 축만 담는다 — 프로파일 두께는
+    /// [`RAIL_THICKNESS`](crate::constants::geometry::RAIL_THICKNESS) 고정.
+    /// 월드는 **공이 주차된 동안만** 이 값을 팔에 반영한다
+    /// (`SimWorld::apply_rail_frame`) — 비행 중 베이스가 움직이면 이미 계획된
+    /// 궤적이 옛 베이스를 기준으로 남는다.
+    pub rail_frame: RailFrame,
     /// sim 시간 배율 (1.0 = 실시간)
     pub time_scale: f64,
     /// true면 commit 시 quintic 대신 순수 토크 bang-bang을 계획한다 - GUI
@@ -25,6 +34,7 @@ impl Default for SimRuntimeControls {
     fn default() -> Self {
         return Self {
             shooter: launch::Settings::default(),
+            rail_frame: crate::defaults::rail_frame(),
             time_scale: 1.0,
             use_bang_bang_swing: false,
             shoot_requested: false,

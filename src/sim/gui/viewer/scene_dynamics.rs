@@ -48,6 +48,9 @@ struct SceneDynamics {
     rail_min: SceneNode3d,
     rail_max: SceneNode3d,
     rail_cur: SceneNode3d,
+    /// 레일 철제 프로파일 큐브. 마운트가 런타임에 움직이므로 정적 씬에 두지 않고
+    /// 매 프레임 `arm.rail` 기준으로 다시 배치한다.
+    rail_profile: Option<SceneNode3d>,
     arc_pred: Vec<SceneNode3d>,
     arc_truth: Vec<SceneNode3d>,
     ghost: Vec<SceneNode3d>,
@@ -78,8 +81,8 @@ pub(crate) async fn viewer_main(options: SimViewerOptions) -> Result<(), String>
         .add_light(Light::directional(Vec3::new(-0.3, -0.4, -1.0)))
         .set_color(WHITE);
 
-    build_table_scene(&mut scene, &TableSceneOptions::default());
-    let mut dynamic = build_scene_dynamics(&mut scene, options.urdf.as_deref());
+    let rail_profile = build_table_scene(&mut scene, &TableSceneOptions::default());
+    let mut dynamic = build_scene_dynamics(&mut scene, options.urdf.as_deref(), rail_profile);
 
     let controls = Arc::clone(&options.controls);
     let mut ui_state =
@@ -161,7 +164,11 @@ fn rgba(c: [f32; 4]) -> Color {
     return Color::new(c[0], c[1], c[2], c[3]);
 }
 
-fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfModel>) -> SceneDynamics {
+fn build_scene_dynamics(
+    scene: &mut SceneNode3d,
+    urdf: Option<&UrdfModel>,
+    rail_profile: Option<SceneNode3d>,
+) -> SceneDynamics {
     let ball = ball::Visual::spawn(scene);
     let shooter = scene
         .add_cube(
@@ -273,6 +280,7 @@ fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfModel>) -> Sc
         rail_min,
         rail_max,
         rail_cur,
+        rail_profile,
         arc_pred,
         arc_truth,
         ghost,
@@ -404,6 +412,7 @@ fn sync_scene_dynamics(
     sync_impact_debug_markers(nodes, world, debug);
     sync_unreachable_x(nodes, world, debug);
     sync_aim_band(nodes, debug);
+    sync_rail_profile(nodes, world);
     sync_rail_stroke(nodes, world, debug);
     sync_arc_nodes(
         &mut nodes.arc_pred,
@@ -547,6 +556,26 @@ fn sync_aim_band(nodes: &mut SceneDynamics, debug: &DebugOverlays) {
     let _ = pad;
 }
 
+/// 레일 철제 프로파일을 라이브 마운트에 맞춘다.
+///
+/// `defaults::rail_frame()`이 아니라 `arm.rail`을 읽는다 — 마운트는 공이 주차된
+/// 동안 GUI "Rig" 패널에서 움직일 수 있어, 기본값을 읽으면 프로파일만 제자리에
+/// 남는다.
+fn sync_rail_profile(nodes: &mut SceneDynamics, world: &SimWorld) {
+    let Some(node) = nodes.rail_profile.as_mut() else {
+        return;
+    };
+    let Some(rail) = world.arm().rail.as_ref() else {
+        return;
+    };
+    let tcx = (table::WIDTH_X * 0.5) as f32;
+    node.set_position(super::super::scene::rail_profile_center(
+        tcx,
+        rail.mount_y,
+        rail.mount_z,
+    ));
+}
+
 fn sync_rail_stroke(nodes: &mut SceneDynamics, world: &SimWorld, debug: &DebugOverlays) {
     if !debug.rail_stroke {
         nodes.rail_min.set_visible(false).set_position(HIDDEN);
@@ -560,9 +589,9 @@ fn sync_rail_stroke(nodes: &mut SceneDynamics, world: &SimWorld, debug: &DebugOv
         nodes.rail_cur.set_visible(false).set_position(HIDDEN);
         return;
     };
-    let frame = crate::defaults::rail_frame();
-    let y = frame.mount_y() as f32;
-    let z = frame.mount_z() as f32;
+    // 마운트는 런타임에 움직인다 — `defaults::rail_frame()`이 아니라 라이브 레일.
+    let y = rail.mount_y as f32;
+    let z = rail.mount_z as f32;
     nodes
         .rail_min
         .set_visible(true)

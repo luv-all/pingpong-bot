@@ -45,9 +45,16 @@ pub const ARM_BASE_RADIUS: f64 = 0.05;
 /// 베이스 실린더 높이 [m].
 pub const ARM_BASE_HEIGHT: f64 = 0.07;
 
-/// 레일 시각화 단면 (너비×높이) [m]. 기구학 레일과 별개 장식.
+/// 레일 프로파일 두께(단면 높이) [m] — **실측(2026-07-30), 고정**.
+///
+/// 프로파일이 이미 제작돼 있어 조정 불가다. 베이스는 이 윗면에 얹히므로
+/// [`crate::robot::RailFrame::mount_z`]가 하단 높이에 이 값을 더한다.
+/// 이전 `RAIL_VISUAL_HEIGHT = 0.04`는 근거 없는 장식값이었다 — 실측이 있으니
+/// 시각화도 이 상수를 쓴다.
+pub const RAIL_THICKNESS: f64 = 0.055;
+
+/// 레일 시각화 단면 너비 [m]. 단면 폭 실측이 없어 장식값으로 남긴다.
 pub const RAIL_VISUAL_WIDTH: f64 = 0.06;
-pub const RAIL_VISUAL_HEIGHT: f64 = 0.04;
 
 /// 테이블 면 위 최소 여유 [m] - OBB 최저점이 이보다 낮으면 관통.
 pub const TABLE_CLEARANCE: f64 = 0.003;

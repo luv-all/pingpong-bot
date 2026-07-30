@@ -107,13 +107,19 @@ impl SimSession {
                     if physics_shutdown.load(Ordering::Acquire) {
                         return;
                     }
-                    let (shoot, park, shooter, use_bang_bang_swing) = {
+                    let (shoot, park, shooter, use_bang_bang_swing, rail_frame) = {
                         let mut ctrl = physics_controls.lock().expect("sim controls");
                         let shoot = ctrl.shoot_requested;
                         let park = ctrl.park_requested;
                         ctrl.shoot_requested = false;
                         ctrl.park_requested = false;
-                        (shoot, park, ctrl.shooter.clone(), ctrl.use_bang_bang_swing)
+                        (
+                            shoot,
+                            park,
+                            ctrl.shooter.clone(),
+                            ctrl.use_bang_bang_swing,
+                            ctrl.rail_frame,
+                        )
                     };
                     let mut w = physics_world.lock().expect("sim 월드");
                     w.set_use_bang_bang_swing(use_bang_bang_swing);
@@ -123,6 +129,7 @@ impl SimSession {
                             shooter: &shooter,
                             shoot,
                             park,
+                            rail_frame,
                         }),
                     );
                     *physics_time.lock().expect("sim 시간") = w.sim_time;

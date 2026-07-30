@@ -32,8 +32,14 @@ impl Default for TableSceneOptions {
 
 /// 탁구대·네트·바닥·(옵션) 레일·축을 씬에 추가한다.
 ///
-/// 치수·레일 위치는 `constants` / `defaults` SSOT만 사용한다.
-pub(crate) fn build_table_scene(scene: &mut SceneNode3d, opts: &TableSceneOptions) {
+/// 치수는 `constants` SSOT만 사용한다. 레일 프로파일 노드는 초기 위치를
+/// `defaults::rail_frame`으로 잡되 **핸들을 돌려준다** — 마운트는 런타임에
+/// 움직일 수 있으므로(`SimRuntimeControls::rail_frame`) 라이브 뷰어가 매 프레임
+/// `arm.rail` 기준으로 다시 배치해야 한다. 정적 씬만 필요한 호출자는 버리면 된다.
+pub(crate) fn build_table_scene(
+    scene: &mut SceneNode3d,
+    opts: &TableSceneOptions,
+) -> Option<SceneNode3d> {
     let tw = table::WIDTH_X as f32;
     let tl = table::LENGTH_Y as f32;
     let tcx = tw * 0.5;
@@ -84,17 +90,14 @@ pub(crate) fn build_table_scene(scene: &mut SceneNode3d, opts: &TableSceneOption
         .set_color(Color::new(0.22, 0.23, 0.25, 1.0))
         .set_position(Vec3::new(tcx, tcy, 0.01));
 
-    if opts.include_rail {
+    let rail = opts.include_rail.then(|| {
         let frame = crate::defaults::rail_frame();
-        let rail_y = frame.mount_y() as f32;
-        let rail_h = crate::constants::geometry::RAIL_VISUAL_HEIGHT as f32;
         let rail_w = crate::constants::geometry::RAIL_VISUAL_WIDTH as f32;
-        let rail_z = frame.mount_z() as f32 - rail_h * 0.5;
-        scene
-            .add_cube(tw, rail_w, rail_h)
-            .set_color(Color::new(0.35, 0.38, 0.42, 1.0))
-            .set_position(Vec3::new(tcx, rail_y, rail_z));
-    }
+        let mut node = scene.add_cube(tw, rail_w, rail_profile_thickness());
+        node.set_color(Color::new(0.35, 0.38, 0.42, 1.0))
+            .set_position(rail_profile_center(tcx, frame.mount_y(), frame.mount_z()));
+        return node;
+    });
 
     if opts.include_axes {
         // 테이블 로봇쪽 코너 윗면 = 월드 (0, 0, SURFACE_Z)
@@ -118,6 +121,25 @@ pub(crate) fn build_table_scene(scene: &mut SceneNode3d, opts: &TableSceneOption
             Color::new(0.25, 0.45, 1.0, 1.0),
         );
     }
+
+    return rail;
+}
+
+/// 레일 프로파일 큐브 높이 [m] — 실측 두께.
+pub(crate) fn rail_profile_thickness() -> f32 {
+    return crate::constants::geometry::RAIL_THICKNESS as f32;
+}
+
+/// 마운트(y, z)에 대한 레일 프로파일 큐브 중심.
+///
+/// 베이스는 프로파일 **윗면**에 얹히므로 `mount_z`가 윗면이고, 큐브 중심은
+/// 두께 절반만큼 아래다.
+pub(crate) fn rail_profile_center(table_center_x: f32, mount_y: f64, mount_z: f64) -> Vec3 {
+    return Vec3::new(
+        table_center_x,
+        mount_y as f32,
+        mount_z as f32 - rail_profile_thickness() * 0.5,
+    );
 }
 
 /// ITTF식 백선: 외곽(~20mm) + 중앙 세로선(~3mm). 살짝 띄워 z-fighting 방지.

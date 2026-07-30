@@ -5,7 +5,7 @@ use serde::Serialize;
 #[derive(Debug, Serialize)]
 pub struct CandidateResult {
     pub base_y: f64,
-    pub mount_height_offset_m: f64,
+    pub mount_base_z_m: f64,
     pub speed_mps: f64,
     pub pitch_deg: f64,
     pub height_offset_m: f64,

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use super::super::debug::overlays::DebugOverlays;
 use super::eval_live_run::EvalLiveRun;
 use crate::constants::viewer::CAMERA_DIST_DEFAULT;
+use crate::robot::RailFrame;
 use crate::sim::eval;
 use crate::sim::launch;
 use crate::sim::session::controls::SimRuntimeControls;
@@ -14,6 +15,8 @@ use crate::sim::session::controls::SimRuntimeControls;
 #[derive(Clone, Debug)]
 pub struct PanelUiState {
     pub shooter: launch::Settings,
+    /// 레일 마운트 설치 위치 ("Rig" 창). 공이 주차된 동안만 월드에 반영된다.
+    pub rail_frame: RailFrame,
     pub time_scale: f64,
     /// OrbitCamera3d 거리 [m]
     pub camera_dist: f32,
@@ -36,6 +39,7 @@ impl PanelUiState {
     pub fn from_controls(controls: &SimRuntimeControls) -> Self {
         return Self {
             shooter: controls.shooter.clone(),
+            rail_frame: controls.rail_frame,
             time_scale: controls.time_scale,
             camera_dist: CAMERA_DIST_DEFAULT,
             use_bang_bang_swing: controls.use_bang_bang_swing,

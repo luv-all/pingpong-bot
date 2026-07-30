@@ -8,9 +8,11 @@
 //! 대해 대표 랠리 시나리오 배터리로 채점해, 어떤 마운트 위치가 가장 넓은
 //! 방향/속도 범위를 실기 관절속도 한계 안에서 커버하는지 찾는다.
 //!
-//! 실기 마운트: 테이블 면보다 약 3cm 위(2026-07-23 실측 보고) — 기본
-//! 스윕 범위는 이 값 근방을 포함한다. `defaults::primitive_4dof_with_mount`만
-//! 파라미터화돼 있어 `--robot` 선택지는 없다(경진용 primitive 전용).
+//! 실기 마운트: 베이스 z = 0.935 m (바닥 기준 절대 좌표 — 프로파일 하단 0.88 +
+//! 두께 0.055, 2026-07-30 실측). 기본 스윕 범위는 이 값 근방을 덮는다.
+//! 높이는 실물에서 조정 가능하고 두께는 고정이라, 스윕 자유변수는 `(base_y,
+//! base_z)` 둘이다. `defaults::primitive_4dof_with_mount`만 파라미터화돼 있어
+//! `--robot` 선택지는 없다(경진용 primitive 전용).
 //!
 //! 사용법: cargo run -p mount-search --release
 //!         cargo run -p mount-search --release -- --json
@@ -21,7 +23,6 @@ mod scenario;
 
 use anyhow::Result;
 use clap::Parser;
-use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
 use pingpong_bot::estimator::Prediction;
 use pingpong_bot::robot;
@@ -47,14 +48,8 @@ fn linspace(min: f64, max: f64, steps: usize) -> Vec<f64> {
         .collect();
 }
 
-fn evaluate_mount(
-    base_y: f64,
-    height_offset_m: f64,
-    scenarios: &[Scenario],
-) -> Option<MountResult> {
-    // `height_offset_m`은 테이블 면 기준 오프셋, 빌더는 월드 z를 받는다.
-    let robot =
-        defaults::primitive_4dof_with_mount(base_y, table::SURFACE_Z + height_offset_m).ok()?;
+fn evaluate_mount(base_y: f64, base_z: f64, scenarios: &[Scenario]) -> Option<MountResult> {
+    let robot = defaults::primitive_4dof_with_mount(base_y, base_z).ok()?;
     let arm = robot.arm;
     let start = arm.initial_state();
     let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
@@ -91,7 +86,7 @@ fn evaluate_mount(
 
     return Some(MountResult {
         base_y,
-        height_offset_m,
+        base_z,
         feasible_count,
         total,
         mean_peak_ratio,
@@ -103,14 +98,12 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let scenarios = build_scenarios();
 
-    let heights = linspace(args.height_min, args.height_max, args.height_steps);
+    let base_zs = linspace(args.base_z_min, args.base_z_max, args.base_z_steps);
     let mut results: Vec<MountResult> =
         linspace(args.base_y_min, args.base_y_max, args.base_y_steps)
             .into_iter()
-            .flat_map(|base_y| heights.iter().copied().map(move |h| (base_y, h)))
-            .filter_map(|(base_y, height_offset_m)| {
-                evaluate_mount(base_y, height_offset_m, &scenarios)
-            })
+            .flat_map(|base_y| base_zs.iter().copied().map(move |z| (base_y, z)))
+            .filter_map(|(base_y, base_z)| evaluate_mount(base_y, base_z, &scenarios))
             .collect();
 
     results.sort_by(|a, b| {
@@ -134,13 +127,13 @@ fn main() -> Result<()> {
         );
         println!(
             "{:>10} {:>14} {:>18} {:>14} {:>14}",
-            "base_y[m]", "height_off[m]", "feasible/total", "mean_ratio", "worst_ratio"
+            "base_y[m]", "base_z[m]", "feasible/total", "mean_ratio", "worst_ratio"
         );
         for result in results.iter().take(args.top_n) {
             println!(
                 "{:>10.4} {:>14.4} {:>10}/{:<7} {:>14.3} {:>14.3}",
                 result.base_y,
-                result.height_offset_m,
+                result.base_z,
                 result.feasible_count,
                 result.total,
                 result.mean_peak_ratio,
@@ -149,8 +142,8 @@ fn main() -> Result<()> {
         }
         if let Some(best) = results.first() {
             println!(
-                "\n최적 후보: base_y={:.4}m, height_offset={:.4}m ({}/{} 시나리오 실기 관절속도 한계 안에서 실행 가능)",
-                best.base_y, best.height_offset_m, best.feasible_count, best.total
+                "\n최적 후보: base_y={:.4}m, base_z={:.4}m ({}/{} 시나리오 실기 관절속도 한계 안에서 실행 가능)",
+                best.base_y, best.base_z, best.feasible_count, best.total
             );
         }
     }

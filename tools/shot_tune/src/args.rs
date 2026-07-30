@@ -39,12 +39,14 @@ pub struct Args {
     #[arg(long, default_value_t = 1)]
     pub base_y_steps: usize,
 
-    #[arg(long, allow_hyphen_values = true, default_value_t = 0.05)]
-    pub mount_height_min: f64,
-    #[arg(long, allow_hyphen_values = true, default_value_t = 0.05)]
-    pub mount_height_max: f64,
+    /// 레일 마운트 베이스 z [m] — **바닥(z=0) 기준 절대 좌표**.
+    /// 기본값은 실측 마운트(`defaults::rail_frame`, 0.88 + 두께 0.055).
+    #[arg(long, allow_hyphen_values = true, default_value_t = 0.935)]
+    pub mount_base_z_min: f64,
+    #[arg(long, allow_hyphen_values = true, default_value_t = 0.935)]
+    pub mount_base_z_max: f64,
     #[arg(long, default_value_t = 1)]
-    pub mount_height_steps: usize,
+    pub mount_base_z_steps: usize,
 
     #[arg(long, default_value_t = 12)]
     pub shots: usize,

@@ -45,17 +45,13 @@ const MAX_STEPS: usize = 4_000;
 const DT: f64 = 1.0 / 1000.0;
 
 /// `defaults` 프리셋 dispatch. `mount`가 `Some`이면 프리셋 기본 마운트 대신
-/// 그 위치(테이블 끝 기준 y, 테이블 면 기준 높이)로 로봇을 올린다(마운트 스윕용).
+/// 그 위치로 로봇을 올린다(마운트 스윕용) — `(테이블 끝 기준 y, 바닥 기준 절대 z)`.
 fn resolve_robot(robot_id: &str, mount: Option<(f64, f64)>) -> Result<Robot> {
-    use pingpong_bot::constants::table;
-
     let urdf_rel: &str = match robot_id {
         // primitive는 URDF 없이 `defaults`가 직접 만든다.
         "4-dof" | "primitive" | "competition" => {
             return match mount {
-                Some((base_y, height_offset_m)) => {
-                    defaults::primitive_4dof_with_mount(base_y, table::SURFACE_Z + height_offset_m)
-                }
+                Some((base_y, base_z)) => defaults::primitive_4dof_with_mount(base_y, base_z),
                 None => defaults::primitive_4dof(),
             }
             .map_err(|e| anyhow!("primitive 4-dof 빌드 실패: {e}"));
@@ -77,10 +73,9 @@ fn resolve_robot(robot_id: &str, mount: Option<(f64, f64)>) -> Result<Robot> {
         .ee_link_opt(Some("pingpong_paddle_v5_1"))
         .max_joint_speed(DYNAMIXEL_MAX_JOINT_SPEED_RAD_S);
     builder = match mount {
-        Some((base_y, height_offset_m)) => builder.mount(
+        Some((base_y, base_z)) => builder.mount(
             pingpong_bot::robot::urdf::SimRobotMount::rep103_z_up_at_table_end_with_mount(
-                base_y,
-                height_offset_m,
+                base_y, base_z,
             ),
         ),
         None => builder.mount_preset(MountPreset::Rep103AtTableEnd),
@@ -467,13 +462,13 @@ fn main() -> Result<()> {
     };
 
     if args.rest_pose_search {
-        let robot = resolve_robot(&args.robot, Some((args.base_y_min, args.mount_height_min)))?;
+        let robot = resolve_robot(&args.robot, Some((args.base_y_min, args.mount_base_z_min)))?;
         rest_pose_search(&robot.arm, 5);
         return Ok(());
     }
 
     if args.explain {
-        let robot = resolve_robot(&args.robot, Some((args.base_y_min, args.mount_height_min)))?;
+        let robot = resolve_robot(&args.robot, Some((args.base_y_min, args.mount_base_z_min)))?;
         explain_one(
             &robot,
             &launch::Settings {
@@ -488,17 +483,17 @@ fn main() -> Result<()> {
 
     let mut grid = Vec::new();
     for base_y in linspace(args.base_y_min, args.base_y_max, args.base_y_steps) {
-        for mount_h in linspace(
-            args.mount_height_min,
-            args.mount_height_max,
-            args.mount_height_steps,
+        for mount_z in linspace(
+            args.mount_base_z_min,
+            args.mount_base_z_max,
+            args.mount_base_z_steps,
         ) {
             for speed_mps in linspace(args.speed_min, args.speed_max, args.speed_steps) {
                 for pitch_deg in linspace(args.pitch_min, args.pitch_max, args.pitch_steps) {
                     for height_offset_m in
                         linspace(args.height_min, args.height_max, args.height_steps)
                     {
-                        grid.push((base_y, mount_h, speed_mps, pitch_deg, height_offset_m));
+                        grid.push((base_y, mount_z, speed_mps, pitch_deg, height_offset_m));
                     }
                 }
             }
@@ -520,21 +515,21 @@ fn main() -> Result<()> {
                 scope.spawn(move || {
                     let mut out = Vec::with_capacity(slice.len());
                     let mut cached: Option<(f64, f64, Robot)> = None;
-                    for &(base_y, mount_h, speed_mps, pitch_deg, height_offset_m) in slice {
+                    for &(base_y, mount_z, speed_mps, pitch_deg, height_offset_m) in slice {
                         // 마운트가 바뀔 때만 URDF를 다시 로드한다(파일 파싱이
                         // 후보당 수천 번 반복되면 스윕 시간을 지배함).
                         if !cached
                             .as_ref()
-                            .is_some_and(|(y, h, _)| *y == base_y && *h == mount_h)
+                            .is_some_and(|(y, h, _)| *y == base_y && *h == mount_z)
                         {
-                            let robot = resolve_robot(robot_id, Some((base_y, mount_h)))
+                            let robot = resolve_robot(robot_id, Some((base_y, mount_z)))
                                 .expect("로봇 빌드");
-                            cached = Some((base_y, mount_h, robot));
+                            cached = Some((base_y, mount_z, robot));
                         }
                         let (_, _, robot) = cached.as_ref().expect("캐시된 로봇");
                         let mut result = CandidateResult {
                             base_y,
-                            mount_height_offset_m: mount_h,
+                            mount_base_z_m: mount_z,
                             speed_mps,
                             pitch_deg,
                             height_offset_m,
@@ -633,7 +628,7 @@ fn main() -> Result<()> {
         println!(
             "{:>7} {:>7} {:>7} {:>7} {:>8} {:>6} {:>7} {:>7} {:>6} {:>7} {:>7}",
             "base_y",
-            "mnt_h",
+            "mnt_z",
             "speed",
             "pitch",
             "height",
@@ -648,7 +643,7 @@ fn main() -> Result<()> {
             println!(
                 "{:>7.3} {:>7.3} {:>7.2} {:>7.2} {:>8.3} {:>6} {:>7} {:>7} {:>6} {:>7} {:>7.2}",
                 r.base_y,
-                r.mount_height_offset_m,
+                r.mount_base_z_m,
                 r.speed_mps,
                 r.pitch_deg,
                 r.height_offset_m,

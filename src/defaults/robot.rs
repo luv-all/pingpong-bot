@@ -69,19 +69,48 @@ pub const RAIL_MAX_SPEED: f64 = 5.0;
 ///
 /// 이것만으로는 commit 창에 다 못 들어와, rough 단계 관절 선추종
 /// (`plan_coarse_track` + `RobotState::slew_targets_toward`)과 **함께** 쓴다.
+///
+/// # 2026-07-30 재산출 필요 — 미착수 (스윙 튜닝 담당 몫)
+///
+/// [`rail_frame`]에 실측을 반영해 베이스 z가 0.81→0.935로 올라갔다. 아래 값은
+/// **낮은 베이스에서 뽑은 것**이라 현재 마운트에서는 최적이 아니다. 새 마운트에서
+/// `diag_windup_rest_pose_search`를 돌려 확인한 수치:
+///
+/// | | 최악 Δq | 필요시간 |
+/// |---|---|---|
+/// | 아래 값(낮은 베이스 산출) | 1.282 rad | 0.835s |
+/// | 같은 방식으로 재산출 `[0.8612, 0.0, 0.1889, -1.2076]` | 0.767 rad | 0.499s |
+///
+/// 도달성 자체도 나빠졌다(IK 해 118/240 → 91/240) — 베이스를 올린 대가다.
+///
+/// 값을 바꾸면 딸려오는 것들: [`JOINT_EFFECTIVE_INERTIA_4DOF`]
+/// (crate::defaults::JOINT_EFFECTIVE_INERTIA_4DOF) 재측정(휴지 자세가 mass matrix
+/// 대각을 바꾼다), `robot::tests::default_arm_produces_racket_pose`(재산출 값에서는
+/// 라켓이 베이스보다 아래로 내려온다 — 임팩트 대역에 가까워지므로 정상이지만
+/// 그 단정문이 실패한다), 그리고 `mount_search`로 `mount_y` 재스윕.
 pub const READY_JOINTS_4DOF: [f64; 4] = [0.5067, 0.0, -0.2054, -0.6925];
 
-/// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·윗면 기준).
+/// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·바닥 기준).
 ///
-/// `mount_search`(2026-07-26): 현 `behind=0.02`는 ratio≤1이 **0/150**, mean≈3.79.
-/// `behind=0.10`(height=0.05)는 **10/150**, mean≈2.48 — 임팩트 끝속도 스케일
-/// (`NEAR_SINGULARITY` 2.5) 직전에 들어와 약한 스윙을 줄인다. 더 뒤(0.12)도
-/// 비슷하나, 예전 고원(`base_y` −0.10..−0.02)의 바깥쪽 끝을 고름.
-/// height 0.05는 실기 브래킷(~면 위 3~5cm)과 맞춤. 슈터는 `shot_tune`으로 재확인.
+/// **높이는 실측(2026-07-30).** 바닥→프로파일 하단 0.88 m,
+/// 두께 [`RAIL_THICKNESS`](crate::constants::geometry::RAIL_THICKNESS) 0.055 m →
+/// 베이스 z = **0.935**. 이전 값은 `SURFACE_Z + 0.05` = 0.81로, "실기 브래킷
+/// (~면 위 3~5cm)과 맞춤"이라는 추정에 기대고 있었는데 실측이 그 가정을
+/// 뒤집었다 — 시뮬 베이스가 실물보다 12.5 cm 낮았다.
+///
+/// `mount_y`는 `mount_search`(2026-07-26) 값을 유지한다: `behind=0.02`(y=−0.02)는
+/// ratio≤1이 **0/150**, mean≈3.79였고 `behind=0.10`(당시 height=0.05)은
+/// **10/150**, mean≈2.48로 임팩트 끝속도 스케일(`NEAR_SINGULARITY` 2.5) 직전에
+/// 들어왔다. 다만 그 스윕은 **낮은 베이스 기준**이라 0.935에서의 최적값은 아니다.
+///
+/// 두 값 모두 sim GUI "Rig" 패널에서 공이 주차된 동안 런타임 조정 가능하다
+/// (`SimRuntimeControls::rail_frame`). 좋은 위치를 눈으로 찾은 뒤
+/// `mount_search`/`--rest-pose-search`를 그 위치에서 다시 돌려 여기와
+/// [`READY_JOINTS_4DOF`]를 확정하는 것이 순서다.
 pub fn rail_frame() -> RailFrame {
     return RailFrame {
-        behind_table_end: 0.10,
-        above_table: 0.05,
+        mount_y: -0.10,
+        rail_bottom_z: 0.88,
     };
 }
 
@@ -453,12 +482,17 @@ mod tests {
     use super::*;
     use crate::constants::table;
 
+    /// 실측 회귀: 베이스는 바닥 기준 0.935 m (= 하단 0.88 + 두께 0.055).
+    ///
+    /// 탁구대 면(0.76)보다 17.5 cm 위다 — 예전 `SURFACE_Z + 0.05` 가정보다
+    /// 12.5 cm 높다. 이 숫자가 실물이므로 값이 흔들리면 회귀다.
     #[test]
-    fn rail_frame_mounts_behind_and_above_table() {
+    fn rail_frame_mounts_behind_table_at_measured_height() {
         let frame = rail_frame();
         assert!((frame.mount_y() - (-0.10)).abs() < 1e-12);
-        assert!((frame.mount_z() - (table::SURFACE_Z + 0.05)).abs() < 1e-12);
-        assert_eq!(frame.mount_xyz0(), [0.0, -0.10, table::SURFACE_Z + 0.05]);
+        assert!((frame.mount_z() - 0.935).abs() < 1e-12);
+        assert_eq!(frame.mount_xyz0(), [0.0, -0.10, frame.mount_z()]);
+        assert!((frame.mount_z() - table::SURFACE_Z - 0.175).abs() < 1e-12);
     }
 
     #[test]

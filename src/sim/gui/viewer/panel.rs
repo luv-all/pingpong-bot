@@ -72,7 +72,11 @@ pub fn draw(
     let mut start_eval_mode = eval::Mode::Block;
     let mut start_live_shot: Option<usize> = None;
 
-    // 레이아웃: 좌측 Shooter→Eval, 우측 Status→View.
+    // 레이아웃: 좌측 Shooter→Rig→Eval, 우측 Status→View.
+    //
+    // Rig가 좌측에 있는 이유: Shooter와 Rig는 둘 다 "리그를 어디에 놓았나"다
+    // (슈터 위치 / 로봇 마운트 위치). 우측은 읽기 전용 상태·보기 설정이라
+    // 조정 손잡이는 좌측에 모은다.
     const GUI_GAP: f32 = 12.0;
     let screen = ctx.content_rect();
 
@@ -153,10 +157,23 @@ pub fn draw(
             });
         });
 
-    let eval_y = shooter_win
+    let rig_y = shooter_win
         .as_ref()
         .map(|r| r.response.rect.bottom() + GUI_GAP)
         .unwrap_or(screen.top() + 320.0);
+    let rig_win = egui::Window::new("Rig")
+        .default_width(260.0)
+        .default_pos(egui::pos2(screen.left() + 12.0, rig_y))
+        .resizable(true)
+        .collapsible(true)
+        .show(ctx, |ui| {
+            draw_rig_panel(ui, ui_state, status.map(|s| s.ball_state));
+        });
+
+    let eval_y = rig_win
+        .as_ref()
+        .map(|r| r.response.rect.bottom() + GUI_GAP)
+        .unwrap_or(rig_y + 160.0);
     egui::Window::new("Eval")
         .default_width(260.0)
         .default_pos(egui::pos2(screen.left() + 12.0, eval_y))
@@ -235,6 +252,7 @@ pub fn draw(
             ctrl.request_shoot();
         }
         ctrl.shooter = ui_state.shooter.clone();
+        ctrl.rail_frame = ui_state.rail_frame;
         ctrl.time_scale = ui_state.time_scale;
         ctrl.use_bang_bang_swing = ui_state.use_bang_bang_swing;
         if shoot {
@@ -252,6 +270,51 @@ pub fn draw(
     if let Some(shot_number) = start_live_shot {
         begin_eval_live_shot(ui_state, world, controls, shot_number);
     }
+}
+
+/// 레일 리그 설치 위치 — 공이 주차된 동안만 조정 가능.
+///
+/// 두께([`RAIL_THICKNESS`](crate::constants::geometry::RAIL_THICKNESS))는 실측
+/// 고정이라 슬라이더로 내놓지 않는다. 실물에서 못 바꾸는 값을 시뮬에서만
+/// 만질 수 있게 하면 시뮬이 도달 못 하는 자세를 낼 수 있다고 착각하게 된다.
+///
+/// 두 슬라이더 모두 월드 좌표(원점 = 탁구대 로봇쪽 꼭짓점 바닥)를 그대로
+/// 보여준다 — 파생 좌표를 따로 표시할 필요가 없다. "면 위"만 예외로 남긴다:
+/// 도달 범위를 감각적으로 판단할 때 쓰는 값은 바닥이 아니라 탁구대 면 대비
+/// 높이다.
+fn draw_rig_panel(
+    ui: &mut egui::Ui,
+    ui_state: &mut PanelUiState,
+    ball_state: Option<physics::BallState>,
+) {
+    let parked = ball_state == Some(physics::BallState::Parked);
+    let frame = &mut ui_state.rail_frame;
+
+    ui.add_enabled_ui(parked, |ui| {
+        ui.add(egui::Slider::new(&mut frame.mount_y, -0.30..=0.05).text("y [m]"));
+        ui.add(egui::Slider::new(&mut frame.rail_bottom_z, 0.70..=1.10).text("레일 하단 z [m]"));
+    });
+
+    ui.add_space(4.0);
+    ui.monospace(format!(
+        "면 위  {:+.3} m",
+        frame.mount_z() - crate::constants::table::SURFACE_Z
+    ));
+
+    if !parked {
+        ui.colored_label(
+            egui::Color32::from_rgb(220, 165, 80),
+            "공 비행 중 — 주차 후 조정 가능",
+        );
+    }
+
+    ui.add_space(4.0);
+    let default_frame = defaults::rail_frame();
+    ui.add_enabled_ui(parked && *frame != default_frame, |ui| {
+        if ui.button("실측 기본값으로").clicked() {
+            *frame = default_frame;
+        }
+    });
 }
 
 /// 라이브 월드에서 시나리오 재실행 채점을 한 프레임 갱신한다.

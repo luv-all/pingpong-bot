@@ -18,7 +18,6 @@
 use nalgebra::Isometry3;
 
 use super::fk;
-use crate::constants::table;
 
 /// sim에서 URDF 루트를 올릴 위치·자세.
 #[derive(Debug, Clone, Copy)]
@@ -48,18 +47,19 @@ impl SimRobotMount {
         return Self::on_rail_frame(crate::defaults::rail_frame());
     }
 
-    /// [`Self::rep103_z_up_at_table_end`]와 같지만 베이스 위치(테이블과의
-    /// 거리·높이)를 직접 지정한다 — `tools/mount_search`류 마운트 스윕 전용.
+    /// [`Self::rep103_z_up_at_table_end`]와 같지만 베이스 위치를 직접 지정한다 —
+    /// `tools/mount_search`류 마운트 스윕 전용.
     ///
     /// `base_y`: 베이스 y [m], 탁구대 로봇쪽 끝(y=0) 기준.
-    /// `height_offset_m`: 탁구대 면(`table::SURFACE_Z`) 대비 높이 오프셋 [m].
+    /// `base_z`: 베이스 z [m], **바닥(z=0) 기준 절대 좌표**.
     ///
     /// primitive 팔의 [`crate::defaults::primitive_4dof_with_mount`]와 같은
-    /// 좌표 관례를 쓴다. 다만 두 모델은 링크 길이가 달라 최적 마운트 위치가
-    /// 그대로 옮겨지지 않으므로, URDF 로봇은 URDF 로봇대로 스윕해야 한다.
-    pub fn rep103_z_up_at_table_end_with_mount(base_y: f64, height_offset_m: f64) -> Self {
+    /// 좌표 관례를 쓴다 (이전에는 이쪽만 `SURFACE_Z` 상대 오프셋을 받아 어긋나
+    /// 있었다). 다만 두 모델은 링크 길이가 달라 최적 마운트 위치가 그대로
+    /// 옮겨지지 않으므로, URDF 로봇은 URDF 로봇대로 스윕해야 한다.
+    pub fn rep103_z_up_at_table_end_with_mount(base_y: f64, base_z: f64) -> Self {
         return Self {
-            position: [0.0, base_y, table::SURFACE_Z + height_offset_m],
+            position: [0.0, base_y, base_z],
             rpy: [0.0, 0.0, 0.0],
         };
     }
@@ -143,18 +143,17 @@ mod tests {
     fn mount_position_reaches_arm_kinematics_not_just_the_viewer() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("assets/robots/4-dof/urdf/all-4-export.urdf");
-        let arm_for = |base_y: f64, height_offset_m: f64| {
+        let arm_for = |base_y: f64, base_z: f64| {
             let mut urdf =
                 UrdfModel::from_file(&path, Some("pingpong_paddle_v5_1")).expect("load 4-dof");
-            urdf.mount =
-                SimRobotMount::rep103_z_up_at_table_end_with_mount(base_y, height_offset_m);
+            urdf.mount = SimRobotMount::rep103_z_up_at_table_end_with_mount(base_y, base_z);
             return urdf
                 .to_arm(crate::defaults::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S)
                 .expect("Arm 변환");
         };
 
-        let baseline = arm_for(0.02, 0.0);
-        let moved = arm_for(0.12, 0.05);
+        let baseline = arm_for(0.02, 0.88);
+        let moved = arm_for(0.12, 0.93);
 
         let rail_x = 0.5;
         let baseline_mount = baseline.mount_at_rail(rail_x);
