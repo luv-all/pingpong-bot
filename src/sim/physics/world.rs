@@ -175,6 +175,76 @@ pub struct SimWorld {
 ///
 /// **이 상수를 만질 때는 추종 오차가 아니라 커밋률을 먼저 본다.** 낮출수록
 /// 증상은 좋아 보이지만 어느 지점에서 로봇이 아예 안 친다.
+///
+/// ---
+///
+/// **WP10(2026-07-30) — 관절별 차등을 실측으로 검토했고, 스칼라를 유지한다.**
+///
+/// WP2b가 특정한 병목("달성 세기가 필요치의 0.67배, 그 직접 원인은 hit
+/// plane의 50~70%가 quintic 단계에서 `[관절 속도]` 하나로 탈락하는 것")의
+/// 후속 레버로 이 상수의 **관절별 차등**이 제안됐다. 실제로 4원소 배열로
+/// 바꿔 스윕한 결과 **세기 개선이 원리적으로 불가능함을 확인**하고 되돌렸다.
+/// 근거는 [`SimWorld::diag_wp10_commit_time_joint_speed_blame`] — eval 30샷의
+/// **실제 커밋 틱**에서 후보 평면 270개를 관절 단위로 분해한 계측이다.
+///
+/// **1. 이동 예산을 먹는 관절은 q2(elbow) > q0(base yaw)뿐이다.**
+/// `travel`은 임팩트 끝속도를 0으로 둔 quintic의 관절별 첨두 |q̇| — 순수하게
+/// 위치 이동 Δq만으로 생기는 속도다(현행 0.80 기준):
+///
+/// | 관절 | 평균 \|Δq\| [rad] | travel/limit | full/limit | 속도탈락 시 travel 최대 |
+/// |---|---|---|---|---|
+/// | q0 (base yaw) | 0.359 | 0.903 | 0.933 | 0 / 90 |
+/// | q1 (shoulder) | 0.049 | 0.124 | 0.670 | 0 / 90 |
+/// | **q2 (elbow)** | **0.469** | **1.206** | **1.364** | **90 / 90** |
+/// | q3 (wrist) | 0.124 | 0.318 | 0.500 | 0 / 90 |
+///
+/// 탈락 90건 **전부**에서 q2가 travel 최댓값이고(1.206 = 이동만으로 이미
+/// 한계 초과), q0가 0.903으로 뒤를 잇는다. q1·q3는 0.124·0.318로 사실상
+/// 예산을 안 쓴다. 단일 관절의 Δq를 0으로 만들어 구제되는 평면은 **0건**,
+/// q0·q2를 **동시에** 0으로 만들면 60/90이 구제된다 — Δq 자체는 분명히
+/// 병목이다.
+///
+/// **2. 그런데 그 병목은 세기가 아니라 후보 생존 수만 정한다.** 같은 계측이
+/// 통과 평면의 `fit_end_velocity` 실제 배율을 잰다: **평균 0.981**(170개 중
+/// 160개가 정확히 1.000 — 아무것도 안 깎는다). 반면 **270/270** 후보가
+/// `NEAR_SINGULARITY_SPEED_RATIO`(2.5)를 넘어 평균 `r = 4.114`,
+/// `impact_target_from_candidate`의 사전축소가 **1/r = 0.275**를 곱한다.
+/// 즉 세기 손실 배분은 `사전축소 0.275 × quintic 0.981`이고, 이 상수가
+/// 건드릴 수 있는 건 뒤쪽 0.981뿐이다 — **완벽한 선추종으로도 상한이
+/// +1.9%**다. 사전축소는 임팩트 자세의 자코비안 조건수만으로 정해져 시작
+/// 자세(Δq)와 무관하다. 실제로 IK 요구속도가 최대인 관절은 q1(180/270)·
+/// q2(90/270)로 **이동 예산을 먹는 관절과 다르다.**
+///
+/// **3. 실측 A/B도 완전히 평평하다.** `tests/diag_wp10_coarse_track_per_joint.rs`
+/// (eval 30 + 랜덤 5×5)로 8개 스킴을 돌린 결과 `|v_out|/desired`가
+/// **0.6681~0.6685**(산포 0.06%), 커밋률·접촉률·네트통과율은 전 존에서
+/// 완전 동일했다. Left·Right 존은 자릿수까지 동일하다.
+///
+/// **4. q0은 애초에 목표가 아니라 슬루율에 막혀 있다.** 커밋 시점 q0의
+/// rest 이탈이 f=0.80과 f=1.00에서 **똑같이 0.601 rad**다 — 목표를 올려도
+/// `slew_targets_toward`의 `max_joint_speed` 제한 때문에 도달을 못 한다.
+/// q0 값을 0.65~1.00으로 바꿔도 통과 평면 수가 **한 건도** 안 변한다.
+///
+/// **5. 후보 생존 수 기준으로도 현행값이 이미 최적이다.** 같은 계측의 통과
+/// 평면 수(270 중):
+///
+/// | 스킴 | 통과 | | 스킴 | 통과 |
+/// |---|---|---|---|---|
+/// | uniform 0.00 | 0 | | `[q0=*, 0.80, 0.50, 0.80]` | 180 |
+/// | uniform 0.50 | 150 | | `[q0=*, 0.80, 0.65, 0.80]` | 180 |
+/// | **uniform 0.65 / 0.80** | **180** | | `[q0=*, 0.80, 0.90, 0.80]` | 150 |
+/// | uniform 0.90 | 150 | | `[0.80, 0.50, 0.80, 0.80]` | 170 |
+/// | uniform 1.00 | 130 | | `[0.80, 1.00, 0.80, 0.80]` | 170 |
+///
+/// 어떤 관절별 조합도 180을 넘지 못했다. q2를 0.90 이상으로 올리면 오히려
+/// 150으로 떨어지는데, coarse 목표는 **가장 가까운 평면 하나**의 자세라
+/// 거기에 과하게 커밋할수록 나머지 후보 평면의 Δq가 커지기 때문이다.
+///
+/// **결론**: 관절별 차등은 세기(+1.9% 상한)에도 후보 생존(180이 천장)에도
+/// 이득이 없다. 값이 전부 같은 4원소 배열은 쓰지 않는 일반화이므로 스칼라를
+/// 유지한다. 세기 1.5배 격차의 실제 레버는 **사전축소 `1/r`**, 즉 임팩트
+/// 자세의 조건수 쪽이다(`min_swing_secs`·랠리 리턴 타겟 거리·`max_joint_speed`
+/// — WP2b §7의 나머지 항목). 상세: `docs/wp10-coarse-track-per-joint.md`.
 const COARSE_TRACK_JOINT_FRACTION: f64 = 0.80;
 
 impl SimWorld {
@@ -3159,6 +3229,324 @@ mod tests {
             "worst={:.3} mrad > {:.1} mrad",
             worst * 1e3,
             TOL_RAD * 1e3
+        );
+    }
+
+    /// WP10 계측 — 커밋 시점 관절속도 예산을 **어느 관절이** 먹는가.
+    ///
+    /// WP2b §4가 특정한 병목("hit plane의 50~70%가 `[관절 속도]` 하나로
+    /// 탈락하고, 위치 이동 Δq 자체가 예산을 다 쓴다")을 **관절 단위로**
+    /// 쪼갠다. 합성 자세가 아니라 **라이브 eval 30샷의 실제 커밋 틱**에서
+    /// 로봇 포즈를 잡는다 — 그래야 `COARSE_TRACK_JOINT_FRACTION`이 실제로
+    /// 만들어 놓은 시작 자세를 재는 것이 된다.
+    ///
+    /// 후보 평면마다 세 가지를 잰다:
+    ///
+    /// 1. **travel**: 임팩트 끝속도를 0으로 둔 quintic의 관절별 첨두 |q̇|.
+    ///    순수하게 Δq(위치 이동)만으로 생기는 속도 = "이동이 먹는 예산".
+    /// 2. **full**: IK가 요구한 끝속도를 그대로 넣은 quintic(축소 전).
+    ///    `full − travel`이 곧 임팩트 속도 자체가 요구하는 몫이다.
+    /// 3. **관절별 ablation**: 관절 i 하나만 Δq_i = 0으로 만들었을 때
+    ///    (= 그 관절이 커밋 시점까지 완전 선추종된 경우) `plan_swing`이
+    ///    통과로 바뀌는가. 이게 "어느 관절의 선추종 비율을 올려야 하는가"에
+    ///    대한 직접적인 답이다.
+    ///
+    /// ```text
+    /// cargo test --release --lib diag_wp10_commit_time_joint_speed_blame -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "진단 전용 — eval 30샷 라이브 계측"]
+    fn diag_wp10_commit_time_joint_speed_blame() {
+        use crate::robot::motion::Rail;
+        use crate::robot::motion::impact_target::solve_impact_target;
+        use crate::robot::motion::physics::trajectory_with_follow_through;
+        use crate::sim::eval;
+
+        const DT: f64 = 1.0 / 1000.0;
+        const MAX_STEPS: usize = 4_000;
+
+        let launch_params = eval::LaunchParams::default();
+        let dof = 4_usize;
+
+        let mut planes_seen = 0_usize;
+        let mut planes_ok = 0_usize;
+        let mut planes_speed_fail = 0_usize;
+        // 통과 평면 중 quintic 이분탐색이 끝속도를 **전혀 안 깎은** 수.
+        let mut planes_ok_no_downscale = 0_usize;
+        let mut fit_scale_sum = 0.0_f64;
+        let mut fit_scale_n = 0_usize;
+        // 관절속도로 탈락한 평면에서, travel/limit 최댓값을 낸 관절.
+        let mut blame_travel = vec![0_usize; dof];
+        // 관절속도로 탈락한 평면에서, full/limit이 1을 넘긴 관절(중복 카운트).
+        let mut over_limit = vec![0_usize; dof];
+        // 관절 i만 Δq=0으로 만들면 통과로 바뀐 평면 수.
+        let mut ablation_fix = vec![0_usize; dof];
+        // q0·q2 동시 / 전 관절 동시 Δq=0으로 구제된 평면 수.
+        let mut ablation_pair_fix = 0_usize;
+        let mut ablation_all_fix = 0_usize;
+        // 근특이점 사전축소 비율 r = peak_joint_speed_ratio 집계.
+        let mut r_sum = 0.0_f64;
+        let mut r_over = 0_usize;
+        let mut inv_r_sum = 0.0_f64;
+        let mut r_blame = vec![0_usize; dof];
+        let mut travel_sum = vec![0.0_f64; dof];
+        let mut full_sum = vec![0.0_f64; dof];
+        let mut dq_sum = vec![0.0_f64; dof];
+        // 커밋 시점 자세가 휴지 자세에서 얼마나 벗어나 있는가(선추종 실적).
+        let mut from_rest_sum = vec![0.0_f64; dof];
+        let mut shots_captured = 0_usize;
+
+        for (zone, index_in_zone) in eval::Protocol::shot_schedule(eval::Mode::Alternating) {
+            let settings =
+                eval::Protocol::settings_for_zone_shot(&launch_params, zone, index_in_zone);
+            let robot_build = crate::defaults::robot().expect("robot");
+            let arm = robot_build.arm.clone();
+            let mut world =
+                SimWorld::with_physics(robot_build.clone(), crate::defaults::PhysicsParams::default());
+            world.set_use_ground_truth(true);
+            // WP9와 동일하게 매 샷 전 레일을 테이블 중앙으로 리셋한다.
+            if let Some(rail) = arm.rail {
+                *world.robot_mut() =
+                    crate::robot::State::new(arm.default_joints.clone(), rail.default_x());
+            }
+            world.shoot_ball(&settings);
+
+            for _ in 0..MAX_STEPS {
+                world.step(DT, None);
+                if world.swing_committed() || world.swing_abandoned() {
+                    break;
+                }
+                if !motion::Planner::past_midcourt(f64::from(world.ball_position().y)) {
+                    continue;
+                }
+                let predictions: Vec<Prediction> = world
+                    .intercept
+                    .hit_planes()
+                    .into_iter()
+                    .filter_map(|plane| world.predict_impact(plane))
+                    .collect();
+                let in_window: Vec<Prediction> = predictions
+                    .iter()
+                    .copied()
+                    .filter(|p| motion::Planner::in_commit_window(p.time_to_impact_secs))
+                    .collect();
+                if in_window.is_empty() {
+                    continue;
+                }
+
+                // `try_auto_swing`이 `plan_best`에 넘기는 것과 같은 시작 포즈.
+                let start = robot::Pose::new(world.robot.rail_x(), world.robot.joints().clone());
+                shots_captured += 1;
+                for (index, value) in start.joints.values.iter().enumerate().take(dof) {
+                    from_rest_sum[index] +=
+                        (value - arm.default_joints.values[index]).abs();
+                }
+
+                println!(
+                    "\n=== {} #{index_in_zone} — 커밋 틱 (rail_x={:.3}) ===",
+                    zone.label(),
+                    start.rail_x
+                );
+                println!(
+                    "{:>7} {:>6} {:>23} {:>23} {:>23}  {}",
+                    "plane_y", "tti", "Δq [rad]", "travel/limit", "full/limit", "결과"
+                );
+                for prediction in &in_window {
+                    let t = prediction.time_to_impact_secs;
+                    let Ok(target) = solve_impact_target(&arm, prediction, &start) else {
+                        println!("{:>7.2} {t:>6.3}  IK 실패", prediction.impact_position.y);
+                        continue;
+                    };
+                    let rail = Rail {
+                        start: start.rail_x,
+                        end: target.pose.rail_x,
+                        start_velocity: 0.0,
+                        end_velocity: target.rail_velocity,
+                    };
+                    let zero_rail = Rail {
+                        end_velocity: 0.0,
+                        ..rail
+                    };
+                    let peaks = |from: &crate::robot::Joints,
+                                 end_velocity: Vec<f64>,
+                                 rail: Rail|
+                     -> Vec<f64> {
+                        return trajectory_with_follow_through(
+                            &arm,
+                            from,
+                            &target.pose.joints,
+                            vec![0.0; dof],
+                            end_velocity,
+                            t,
+                            rail,
+                        )
+                        .peak_joint_speeds();
+                    };
+                    let travel = peaks(&start.joints, vec![0.0; dof], zero_rail);
+                    let full = peaks(
+                        &start.joints,
+                        target.joint_velocities.clone(),
+                        rail,
+                    );
+                    let delta: Vec<f64> = target
+                        .pose
+                        .joints
+                        .values
+                        .iter()
+                        .zip(start.joints.values.iter())
+                        .map(|(end, from)| end - from)
+                        .collect();
+
+                    let outcome = motion::Planner::plan(&arm, *prediction, &start);
+                    let verdict = match &outcome {
+                        Ok(_) => "ok".to_string(),
+                        Err(error) => format!("{error}"),
+                    };
+                    let speed_fail = verdict.contains("관절 속도");
+                    planes_seen += 1;
+                    planes_ok += usize::from(outcome.is_ok());
+                    planes_speed_fail += usize::from(speed_fail);
+                    // **통과한** 평면에서 quintic이 끝속도를 실제로 얼마나
+                    // 깎았는가 — 채택된 궤적의 임팩트 시점 관절속도를 IK가
+                    // 요구한 값(=사전축소까지 끝난 `target.joint_velocities`)과
+                    // 나눈다. 이 배율이 1.0이면 `fit_end_velocity`는 아무것도
+                    // 깎지 않았다는 뜻이고, 그러면 세기 손실은 전부 quintic
+                    // **이전**(근특이점 사전축소 1/r)에서 일어난 것이라
+                    // Δq(=이 상수)로는 줄일 수 없다.
+                    if let Ok(trajectory) = &outcome {
+                        let wanted = target
+                            .joint_velocities
+                            .iter()
+                            .fold(0.0_f64, |acc, v| acc.max(v.abs()));
+                        if wanted > 1e-9 {
+                            let got = trajectory
+                                .sample_velocity_at(trajectory.impact_time_secs)
+                                .iter()
+                                .fold(0.0_f64, |acc, v| acc.max(v.abs()));
+                            fit_scale_sum += got / wanted;
+                            fit_scale_n += 1;
+                            planes_ok_no_downscale += usize::from(got / wanted > 0.999);
+                        }
+                    }
+                    for index in 0..dof {
+                        travel_sum[index] += travel[index] / arm.max_joint_speed;
+                        full_sum[index] += full[index] / arm.max_joint_speed;
+                        dq_sum[index] += delta[index].abs();
+                    }
+                    if speed_fail {
+                        let worst = travel
+                            .iter()
+                            .enumerate()
+                            .fold((0_usize, f64::NEG_INFINITY), |acc, (i, v)| {
+                                if *v > acc.1 { (i, *v) } else { acc }
+                            })
+                            .0;
+                        blame_travel[worst] += 1;
+                        for index in 0..dof {
+                            if full[index] > arm.max_joint_speed {
+                                over_limit[index] += 1;
+                            }
+                        }
+                        // 관절 i만 완전 선추종됐다고 가정 (Δq_i = 0).
+                        for index in 0..dof {
+                            let mut ablated = start.clone();
+                            ablated.joints.values[index] = target.pose.joints.values[index];
+                            if motion::Planner::plan(&arm, *prediction, &ablated).is_ok() {
+                                ablation_fix[index] += 1;
+                            }
+                        }
+                        // 이동 예산을 먹는 두 관절(q0·q2)을 동시에, 그리고 전
+                        // 관절을 동시에 없앤 경우 — 단일 관절로 안 되는 게
+                        // "조합이면 되는가" 아니면 "Δq 문제가 아닌가"를 가른다.
+                        let mut pair = start.clone();
+                        pair.joints.values[0] = target.pose.joints.values[0];
+                        pair.joints.values[2] = target.pose.joints.values[2];
+                        ablation_pair_fix +=
+                            usize::from(motion::Planner::plan(&arm, *prediction, &pair).is_ok());
+                        let all = robot::Pose::new(start.rail_x, target.pose.joints.clone());
+                        ablation_all_fix +=
+                            usize::from(motion::Planner::plan(&arm, *prediction, &all).is_ok());
+                    }
+
+                    // 근특이점 사전축소(`impact_target_from_candidate`)가 얼마나
+                    // 깎는가 — Δq와 무관한 **두 번째** 세기 손실 경로다.
+                    if let Ok(candidate) =
+                        crate::robot::motion::impact_candidate::best_impact_candidate(
+                            &arm, prediction, &start,
+                        )
+                    {
+                        r_sum += candidate.peak_joint_speed_ratio;
+                        inv_r_sum += 1.0 / candidate.peak_joint_speed_ratio.max(1.0);
+                        r_over += usize::from(candidate.peak_joint_speed_ratio > 2.5);
+                        let worst = candidate
+                            .joint_velocities
+                            .iter()
+                            .enumerate()
+                            .fold((0_usize, f64::NEG_INFINITY), |acc, (i, v)| {
+                                if v.abs() > acc.1 { (i, v.abs()) } else { acc }
+                            })
+                            .0;
+                        r_blame[worst] += 1;
+                    }
+
+                    let show = |v: &[f64], scale: f64| {
+                        return v
+                            .iter()
+                            .map(|x| format!("{:.2}", x / scale))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                    };
+                    println!(
+                        "{:>7.2} {t:>6.3} {:>23} {:>23} {:>23}  {verdict}",
+                        prediction.impact_position.y,
+                        show(&delta, 1.0),
+                        show(&travel, arm.max_joint_speed),
+                        show(&full, arm.max_joint_speed),
+                    );
+                }
+                break;
+            }
+        }
+
+        let mean = |sum: f64| sum / planes_seen.max(1) as f64;
+        println!(
+            "\n### WP10 요약 — 커밋 틱 {shots_captured}개 / 후보 평면 {planes_seen}개 \
+             (통과 {planes_ok}, [관절 속도] 탈락 {planes_speed_fail})\n"
+        );
+        println!(
+            "| 관절 | 평균 \\|Δq\\| [rad] | travel/limit 평균 | full/limit 평균 | \
+             속도탈락 시 travel 최대 관절 | 속도탈락 시 full>limit | Δq_i=0으로 구제된 평면 | \
+             커밋시점 rest 이탈 [rad] |"
+        );
+        println!("|---|---|---|---|---|---|---|---|");
+        for index in 0..dof {
+            println!(
+                "| q{index} | {:.3} | {:.3} | {:.3} | {} | {} | {} | {:.3} |",
+                mean(dq_sum[index]),
+                mean(travel_sum[index]),
+                mean(full_sum[index]),
+                blame_travel[index],
+                over_limit[index],
+                ablation_fix[index],
+                from_rest_sum[index] / shots_captured.max(1) as f64,
+            );
+        }
+        println!(
+            "\n조합 ablation: q0+q2 동시 Δq=0 → {ablation_pair_fix}/{planes_speed_fail} 구제, \
+             전 관절 Δq=0 → {ablation_all_fix}/{planes_speed_fail} 구제"
+        );
+        println!(
+            "근특이점 사전축소: 평균 r = {:.3}, r > 2.5 인 후보 {r_over}/{planes_seen}, \
+             IK 요구속도 최대 관절 분포 = {r_blame:?}",
+            r_sum / planes_seen.max(1) as f64
+        );
+        println!(
+            "통과 평면 {planes_ok}개 중 quintic이 끝속도를 **전혀 안 깎은** 평면 \
+             {planes_ok_no_downscale}개, 평균 fit 배율 {:.4} (vs 사전축소 배율 1/r = {:.4}) \
+             — fit 배율이 1에 가까우면 세기 손실은 전부 사전축소 몫이라 Δq(=이 상수)로는 \
+             못 줄인다.",
+            fit_scale_sum / fit_scale_n.max(1) as f64,
+            inv_r_sum / planes_seen.max(1) as f64
         );
     }
 }

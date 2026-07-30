@@ -513,7 +513,12 @@ fn build_feasible_trajectory(
     return Ok(trajectory);
 }
 
-fn trajectory_with_follow_through(
+/// `pub(crate)`인 이유: WP10 진단(`world.rs`의
+/// `diag_wp10_commit_time_joint_speed_blame`)이 같은 후보에 대해 끝속도만
+/// 0으로 바꾼 궤적을 만들어 "이동 Δq가 먹는 예산"과 "임팩트 속도가 먹는
+/// 예산"을 분리한다. 계획 경로가 실제로 쓰는 궤적 생성과 **같은 함수**여야
+/// 계측이 유효하므로 재구현 대신 노출한다.
+pub(crate) fn trajectory_with_follow_through(
     arm: &Arm,
     start: &Joints,
     impact: &Joints,
