@@ -202,3 +202,42 @@ fn clamp_impact_preserves_hit_plane_y_when_possible() {
     let max_reach = arm.arm_length();
     assert!((clamped.coords - mount.coords).norm() <= max_reach + 1e-6);
 }
+
+#[test]
+#[ignore = "WP4a 진단 — elbow-up 부호 규약 확인용, 수치를 stdout으로 뽑는다"]
+fn diag_wp4a_elbow_up_sign_convention() {
+    let robot = crate::defaults::robot().expect("robot");
+    let arm = &*robot.arm;
+    let rail_x = arm.rail.as_ref().map(|r| r.default_x()).unwrap_or(0.0);
+    let base = crate::defaults::READY_JOINTS_4DOF;
+
+    println!("READY_JOINTS_4DOF = {base:?}");
+    let base_joints = Joints { values: base.to_vec() };
+    let base_pose = arm.forward_kinematics_with_rail(rail_x, &base_joints).expect("FK base");
+    let base_chain = arm.chain_points(rail_x, &base_joints).expect("chain base");
+    println!("base racket z = {:.4}", base_pose.position.coords.z);
+    println!("base chain points (mount..ee): {:?}", base_chain.iter().map(|p| p.z).collect::<Vec<_>>());
+
+    for delta in [0.2_f64, -0.2] {
+        let mut perturbed = base;
+        perturbed[2] += delta;
+        let joints = Joints { values: perturbed.to_vec() };
+        let Some(pose) = arm.forward_kinematics_with_rail(rail_x, &joints) else {
+            println!("q2={delta:+.2}: FK 실패");
+            continue;
+        };
+        let chain = arm.chain_points(rail_x, &joints).expect("chain");
+        println!(
+            "q2 delta={delta:+.2}: racket z={:.4} (base 대비 {:+.4})  chain z={:?}",
+            pose.position.coords.z,
+            pose.position.coords.z - base_pose.position.coords.z,
+            chain.iter().map(|p| p.z).collect::<Vec<_>>()
+        );
+    }
+
+    if let Some(limit) = arm.joint_limit(2) {
+        println!("q2(elbow) 관절한계: min={:.4} max={:.4}", limit.min, limit.max);
+    } else {
+        println!("q2(elbow) 관절한계: continuous(무제한)");
+    }
+}

@@ -868,10 +868,163 @@ impl Arm {
         } else {
             (0.0, 0)
         };
-        return Ok((
-            rail_velocity,
-            velocities.iter().skip(offset).copied().collect(),
-        ));
+        let mut joint_velocities: Vec<f64> =
+            velocities.iter().skip(offset).copied().collect();
+
+        // WP11(2026-07-30, 사용자 제안) — 레일은 그대로 두고, 팔 관절
+        // 4개만의 3×4 부분 자코비안 자체운동(self-motion, 널스페이스
+        // 1차원)으로 **같은 요구 라켓속도**를 더 낮은 피크 관절속도로 낼
+        // 수 있는지 찾는다. `peak_joint_speed_ratio`(r)가 이 함수가 돌려주는
+        // `joint_velocities`(레일 제외)만 보므로, 여기서 개선하면 하류의
+        // 근특이점 사전축소(`impact_target_from_candidate`)·quintic 재적합
+        // (`fit_end_velocity`) 로직은 전혀 손대지 않고도 r이 자연히
+        // 낮아진다. 자체운동은 요구 라켓속도(3제약)에 영향을 주지 않는다 —
+        // `J_arm·n̂=0`이라 `s·n̂`을 얼마든지 더해도 `J_arm·q̇_arm`은
+        // 그대로다. 4관절-3제약이라 널스페이스가 항상 1차원(비특이 자세
+        // 기준)이라 레일까지 포함한 전체 LP를 풀 필요 없이 스칼라 `s` 하나만
+        // 최소화하면 된다(1D 삼분탐색 — 목적함수 `max_i|q0_i+s·n_i|`가
+        // 볼록·구간선형이라 전역최적 보장).
+        if let Some(null_vec) = arm_joint_null_vector(&jacobian, rail_offset) {
+            let (_, improved) = minimize_peak_via_self_motion(&joint_velocities, &null_vec);
+            joint_velocities = improved;
+        }
+
+        return Ok((rail_velocity, joint_velocities));
+    }
+}
+
+/// 팔 관절 4개(레일 제외)만의 3×4 부분 자코비안의 널벡터 — 3개 행(제약)의
+/// "4차원 외적" 공식으로 구한다(SVD 없이): 열 `j`를 뺀 3×3 부분행렬의
+/// 행렬식에 교대부호를 붙인다. 특이(행 랭크<3, 즉 널벡터가 정의 안 됨)면
+/// `None` — 이 경우 자체운동으로 개선할 여지 자체가 없다(원래 최소노름
+/// 해를 그대로 씀).
+fn arm_joint_null_vector(jacobian: &DMatrix<f64>, rail_offset: usize) -> Option<Vec<f64>> {
+    let arm_cols = jacobian.ncols() - rail_offset;
+    if arm_cols != 4 {
+        // 이 로봇의 팔은 항상 4관절 — 다른 자유도 수는 지원 범위 밖.
+        return None;
+    }
+    let minor = |skip_col: usize| -> f64 {
+        let mut sub = Matrix3::<f64>::zeros();
+        let mut c = 0;
+        for col in 0..4 {
+            if col == skip_col {
+                continue;
+            }
+            for row in 0..3 {
+                sub[(row, c)] = jacobian[(row, rail_offset + col)];
+            }
+            c += 1;
+        }
+        return sub.determinant();
+    };
+    let n = [minor(0), -minor(1), minor(2), -minor(3)];
+    let norm = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2] + n[3] * n[3]).sqrt();
+    if norm < 1e-9 {
+        return None;
+    }
+    return Some(n.iter().map(|v| v / norm).collect());
+}
+
+/// `q0 + s·null_vec`의 피크 절댓값(`max_i|.|`)을 최소화하는 `s`를 찾는다.
+/// 목적함수가 `s`에 대해 볼록·구간선형이라 삼분탐색으로 전역최적에
+/// 수렴한다(0을 포함하는 충분히 넓은 구간에서 시작 — `s=0`이 항상 후보에
+/// 포함되므로 결과는 원래 `q0`보다 나쁠 수 없다).
+fn minimize_peak_via_self_motion(q0: &[f64], null_vec: &[f64]) -> (f64, Vec<f64>) {
+    let peak = |s: f64| -> f64 {
+        q0.iter()
+            .zip(null_vec.iter())
+            .map(|(&q, &n)| (q + s * n).abs())
+            .fold(0.0_f64, f64::max)
+    };
+    let bound = 10.0 * q0.iter().map(|v| v.abs()).fold(1.0_f64, f64::max);
+    let mut lo = -bound;
+    let mut hi = bound;
+    for _ in 0..100 {
+        let third = (hi - lo) / 3.0;
+        let m1 = lo + third;
+        let m2 = hi - third;
+        if peak(m1) < peak(m2) {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    let s = 0.5 * (lo + hi);
+    let improved: Vec<f64> = q0.iter().zip(null_vec.iter()).map(|(&q, &n)| q + s * n).collect();
+    return (peak(s), improved);
+}
+
+#[cfg(test)]
+mod wp11_self_motion_tests {
+    use super::*;
+
+    /// 손계산 가능한 3×4 자코비안(첫 3열=항등, 4열째=전부 0)의 널벡터는
+    /// `(0,0,0,±1)`이어야 한다 — 4번째 관절만 움직여도 라켓속도(3제약)엔
+    /// 전혀 기여하지 않는다는 뜻과 정확히 대응.
+    fn identity_block_jacobian() -> DMatrix<f64> {
+        let mut j = DMatrix::zeros(3, 4);
+        j[(0, 0)] = 1.0;
+        j[(1, 1)] = 1.0;
+        j[(2, 2)] = 1.0;
+        return j;
+    }
+
+    #[test]
+    fn null_vector_of_identity_block_is_last_axis() {
+        let j = identity_block_jacobian();
+        let n = arm_joint_null_vector(&j, 0).expect("null vector");
+        assert!((n[0].abs()) < 1e-9);
+        assert!((n[1].abs()) < 1e-9);
+        assert!((n[2].abs()) < 1e-9);
+        assert!((n[3].abs() - 1.0).abs() < 1e-9);
+        // J·n = 0 이어야 한다 (일반식으로도 확인).
+        let jn = &j * DVector::from_vec(n);
+        assert!(jn.norm() < 1e-9);
+    }
+
+    #[test]
+    fn null_vector_respects_rail_offset() {
+        // rail_offset=1이면 열0(레일)을 건너뛰고 열1..4만 본다.
+        let mut j = DMatrix::zeros(3, 5);
+        j[(0, 0)] = 7.0; // 레일 열 — 무시돼야 함
+        j[(0, 1)] = 1.0;
+        j[(1, 2)] = 1.0;
+        j[(2, 3)] = 1.0;
+        // 열4(팔 관절 4번째)는 전부 0 — 널방향이어야 함.
+        let n = arm_joint_null_vector(&j, 1).expect("null vector");
+        assert!((n[3].abs() - 1.0).abs() < 1e-9, "n={n:?}");
+    }
+
+    /// 자체운동 최소화는 `s=0`(원래 최소노름 해)보다 절대 나쁠 수 없고,
+    /// 한 관절이 불균형하게 포화된 경우 뚜렷하게 개선해야 한다.
+    #[test]
+    fn self_motion_never_worse_and_improves_imbalanced_case() {
+        let q0: Vec<f64> = vec![3.555, 0.0, 1.091, 0.265]; // WP9/WP10 실측에서 관측된 극단 불균형 패턴
+        let null_vec: Vec<f64> = vec![0.5, 0.5, 0.5, 0.5]; // 등가중 자체운동 방향(테스트용 단순화)
+        let peak_before = q0.iter().copied().map(f64::abs).fold(0.0_f64, f64::max);
+        let (peak_after, improved) = minimize_peak_via_self_motion(&q0, &null_vec);
+        assert!(
+            peak_after <= peak_before + 1e-9,
+            "자체운동 후 피크가 원래보다 나쁘면 안 됨: before={peak_before} after={peak_after}"
+        );
+        assert!(
+            peak_after < peak_before * 0.9,
+            "이 불균형 사례는 뚜렷하게 개선돼야 함: before={peak_before} after={peak_after}"
+        );
+        for (i, v) in improved.iter().enumerate() {
+            assert!(v.is_finite(), "joint {i} not finite");
+        }
+    }
+
+    #[test]
+    fn self_motion_is_noop_when_already_balanced() {
+        // 이미 완벽히 균형 잡힌 경우(모든 관절이 같은 절댓값) 자체운동으로
+        // 더 낮출 수 없다 — s=0 근처에 머물러야 한다.
+        let q0 = vec![1.0, -1.0, 1.0, -1.0];
+        let null_vec = vec![0.5, 0.5, 0.5, 0.5];
+        let (peak_after, _) = minimize_peak_via_self_motion(&q0, &null_vec);
+        assert!((peak_after - 1.0).abs() < 1e-6, "peak_after={peak_after}");
     }
 }
 
