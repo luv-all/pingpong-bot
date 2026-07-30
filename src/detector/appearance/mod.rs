@@ -5,6 +5,7 @@ mod colormask;
 mod contour;
 mod generator;
 mod layer;
+mod preprocess;
 
 pub use chain::AppearanceChain;
 pub use colormask::{
@@ -14,3 +15,4 @@ pub use colormask::{
 pub use contour::ContourDetector;
 pub use generator::CandidateGenerator;
 pub use layer::AppearanceLayer;
+pub use preprocess::Preprocess;

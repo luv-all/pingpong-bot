@@ -17,13 +17,16 @@
 use anyhow::{Result, bail};
 
 use crate::detector::spatial::SpatialMask;
-use crate::detector::{AppearanceChain, AppearanceLayer, RoiParams, Scorer, ScorerParams, track};
+use crate::detector::{
+    AppearanceChain, AppearanceLayer, Preprocess, RoiParams, Scorer, ScorerParams, track,
+};
 
 use super::detector::Detector;
 
 #[derive(Default)]
 pub struct DetectorBuilder {
     mask: Option<SpatialMask>,
+    pre: Option<Preprocess>,
     appearance: AppearanceChain,
     fuse_scorer: Option<Scorer>,
     scorer_params: Option<ScorerParams>,
@@ -34,6 +37,12 @@ impl DetectorBuilder {
     /// 공간 keep. [`FloorEdgeMask`] 하나만 줘도 `From`으로 받는다.
     pub fn mask(mut self, mask: impl Into<SpatialMask>) -> Self {
         self.mask = Some(mask.into());
+        return self;
+    }
+
+    /// 공간 keep 뒤 BGR 보정. 생략하면 [`Preprocess::None`].
+    pub fn pre(mut self, pre: Preprocess) -> Self {
+        self.pre = Some(pre);
         return self;
     }
 
@@ -77,6 +86,7 @@ impl DetectorBuilder {
         let roi = track(self.appearance, fuse_scorer, roi_params);
         return Ok(Detector {
             mask,
+            pre: self.pre.unwrap_or_default(),
             roi,
             scorer: scorer_params,
         });

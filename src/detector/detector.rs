@@ -5,12 +5,14 @@ use anyhow::Result;
 use crate::camera;
 use crate::camera::Frame;
 use crate::detector::spatial::SpatialMask;
-use crate::detector::{RoiTrack, ScorerParams};
+use crate::detector::{Preprocess, RoiTrack, ScorerParams};
 
 use super::builder::DetectorBuilder;
 
 pub struct Detector {
     pub mask: SpatialMask,
+    /// 공간 keep 뒤, 색 게이트 앞에 붙는 BGR 보정.
+    pub pre: Preprocess,
     pub roi: RoiTrack,
     /// 면적 밴드 HUD용 스냅샷.
     pub scorer: ScorerParams,
@@ -39,9 +41,12 @@ impl Detector {
         let Ok(masked) = self.mask.apply_bgr(&frame.image) else {
             return None;
         };
+        let Ok(image) = self.pre.apply(&masked) else {
+            return None;
+        };
         let gated = Frame {
             camera_id: frame.camera_id,
-            image: masked,
+            image,
             timestamp: frame.timestamp,
         };
         return self.roi.detect(&gated);
