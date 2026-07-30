@@ -4,7 +4,8 @@
 //! [`tools/jog`]의 Apply가 "sync한 포즈로 만든 궤적을 그대로 보낸다"로 보장하는 것을, 여기서는
 //! 포즈를 다른 스레드가 아예 볼 수 없다는 사실로 보장한다.
 //!
-//! 커밋은 **1회 래치**다. 단발이므로 성공하든 포기하든 루프를 빠져나온다.
+//! 연속 급구: `wait_for_commit → (idle) → return_to_center`를 바깥 루프로 반복한다.
+//! `Infeasible`는 이번 스윙만 포기하고 루프는 계속한다.
 //!
 //! [`tools/jog`]: https://github.com/luv-all/pingpong-bot/tree/main/tools/jog
 
@@ -20,7 +21,9 @@ use pingpong_bot::robot::{self, Arm};
 use tracing::{debug, info, info_span, warn};
 
 use super::fmt::{f2, f2_slice};
-use super::{CommitRequest, PoseMsg, ShotEvent, SimUpdate, SwingMsg};
+use super::{
+    CommitRequest, ControlStatus, PoseMsg, ShotEvent, Shutdown, SimUpdate, SwingMsg,
+};
 
 /// 예측의 `time_to_impact_secs`는 요청 시각 기준이다. 계획을 시작할 때 이미 이만큼 낡았으면
 /// 그 예측으로 세운 궤적은 임팩트 시점이 어긋난다 — 버리고 다음 요청을 기다린다.
@@ -33,14 +36,23 @@ const PLAN_THROTTLE_SECS: f64 = 0.020;
 const BUSY_POLL: Duration = Duration::from_millis(5);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 
-/// 제어 워커를 띄운다. 항상 마지막에 [`ShotEvent::Done`]을 보낸다.
+enum CommitOutcome {
+    Committed,
+    Infeasible,
+    Disconnected,
+    Failed,
+}
+
+/// 제어 워커를 띄운다. 셧다운·치명 실패 시 [`ShotEvent::Done`]을 보낸다.
 pub fn spawn(
     mut hardware: Box<dyn Hardware>,
     arm: Arc<Arm>,
     home: bool,
     rx: Receiver<CommitRequest>,
+    status_tx: Sender<ControlStatus>,
     sim_tx: Option<Sender<SimUpdate>>,
     event_tx: Sender<ShotEvent>,
+    shutdown: Shutdown,
 ) -> JoinHandle<()> {
     return thread::spawn(move || {
         let _span = info_span!("control").entered();
@@ -49,56 +61,83 @@ pub fn spawn(
             warn!(%error, "홈 이동 실패 — 현재 자세에서 시작한다");
         }
 
-        match hardware.read_pose() {
-            // armed 로그는 메인이 `ShotEvent::Armed`로 한 곳에서만 찍는다.
-            Ok(pose) => {
-                if let Some(sim_tx) = &sim_tx {
-                    let _ = sim_tx.try_send(SimUpdate {
-                        pose: Some(PoseMsg::from(&pose)),
-                        ..SimUpdate::default()
+        let mut shot_seq: u64 = 0;
+        while !shutdown.is_down() {
+            shot_seq = shot_seq.saturating_add(1);
+
+            let pose = match hardware.read_pose() {
+                Ok(pose) => pose,
+                Err(error) => {
+                    let _ = event_tx.send(ShotEvent::Failed {
+                        shot_seq,
+                        reason: format!("시작 포즈 읽기 실패: {error}"),
                     });
+                    break;
                 }
-                let _ = event_tx.send(ShotEvent::Armed { pose });
-            }
-            Err(error) => {
-                let _ = event_tx.send(ShotEvent::Failed {
-                    reason: format!("시작 포즈 읽기 실패: {error}"),
+            };
+            if let Some(sim_tx) = &sim_tx {
+                let _ = sim_tx.try_send(SimUpdate {
+                    pose: Some(PoseMsg::from(&pose)),
+                    ..SimUpdate::default()
                 });
-                let _ = event_tx.send(ShotEvent::Done);
-                return;
             }
-        }
+            let _ = event_tx.send(ShotEvent::Armed { shot_seq, pose });
+            let _ = status_tx.send(ControlStatus::Ready { shot_seq });
 
-        let committed = wait_for_commit(hardware.as_mut(), &arm, &rx, sim_tx.as_ref(), &event_tx);
+            let outcome = wait_for_commit(
+                hardware.as_mut(),
+                &arm,
+                &rx,
+                sim_tx.as_ref(),
+                &event_tx,
+                shot_seq,
+                &shutdown,
+            );
 
-        if committed {
-            wait_idle(hardware.as_mut());
+            match outcome {
+                CommitOutcome::Failed | CommitOutcome::Disconnected => break,
+                CommitOutcome::Committed | CommitOutcome::Infeasible => {}
+            }
+
+            let _ = status_tx.send(ControlStatus::Recovering { shot_seq });
+
+            // NOTE(결선): 진짜 랠리에서는 풀 센터 복귀 전에 다음 스윙을
+            // 허용하도록 이 재무장 조건을 바꿀 수 있다. 지금은 연속 급구만.
+            if matches!(outcome, CommitOutcome::Committed) {
+                wait_idle(hardware.as_mut());
+            }
             if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
-                warn!(%error, "센터 복귀 실패");
+                warn!(%error, "센터 복귀 실패 — 현재 자세에서 Ready");
             }
+            // 샷 N Attempt가 채널에 남아 샷 N+1에 쓰이지 않게 비운다.
+            while rx.try_recv().is_ok() {}
         }
         let _ = event_tx.send(ShotEvent::Done);
     });
 }
 
-/// 커밋할 때까지 요청을 처리한다. 반환 = 실제로 스윙을 보냈는가.
+/// 커밋할 때까지 요청을 처리한다.
 fn wait_for_commit(
     hardware: &mut dyn Hardware,
     arm: &Arm,
     rx: &Receiver<CommitRequest>,
     sim_tx: Option<&Sender<SimUpdate>>,
     event_tx: &Sender<ShotEvent>,
-) -> bool {
+    shot_seq: u64,
+    shutdown: &Shutdown,
+) -> CommitOutcome {
     let mut last_attempt: Option<Instant> = None;
     let mut last_warn = Instant::now() - Duration::from_secs(10);
     let mut stale = 0_u64;
 
     loop {
+        if shutdown.is_down() {
+            return CommitOutcome::Disconnected;
+        }
         let request = match rx.recv_timeout(RECV_TIMEOUT) {
             Ok(request) => request,
             Err(RecvTimeoutError::Timeout) => continue,
-            // 추정·카메라가 먼저 내려갔다 — 커밋 없이 끝.
-            Err(RecvTimeoutError::Disconnected) => return false,
+            Err(RecvTimeoutError::Disconnected) => return CommitOutcome::Disconnected,
         };
 
         let age = request.age_secs();
@@ -124,28 +163,28 @@ fn wait_for_commit(
 
         match Planner::plan_best(arm, &request.predictions, &start) {
             Ok(planned) => {
-                // 계획한 그 궤적을 그대로 보낸다 — 사이에 포즈를 다시 읽지 않는다.
                 if let Err(error) = hardware.command(&planned.trajectory) {
                     let _ = event_tx.send(ShotEvent::Failed {
+                        shot_seq,
                         reason: format!("스윙 명령 실패: {error}"),
                     });
-                    return false;
+                    return CommitOutcome::Failed;
                 }
                 let trajectory = &planned.trajectory;
                 debug!(
+                    shot = shot_seq,
                     ball_y = f2(request.ball_y),
                     request_age_secs = f2(age),
                     "커밋 요청 소비"
                 );
-                // 커밋한 궤적을 sim 창이 그대로 재생하게 보낸다 (관전용).
                 if let Some(sim_tx) = sim_tx {
                     let _ = sim_tx.try_send(SimUpdate {
                         swing: Some(SwingMsg::from_trajectory(trajectory)),
                         ..SimUpdate::default()
                     });
                 }
-                // 커밋 로그는 메인이 `ShotEvent::Committed` 필드로 한 곳에서만 찍는다.
                 let _ = event_tx.send(ShotEvent::Committed {
+                    shot_seq,
                     time_to_impact_secs: planned.prediction.time_to_impact_secs,
                     duration_secs: trajectory.duration_secs,
                     impact: planned.prediction.impact_position,
@@ -153,15 +192,16 @@ fn wait_for_commit(
                     rail_end: trajectory.rail.end,
                     peak_joint_speed: trajectory.peak_joint_speed(),
                 });
-                return true;
+                return CommitOutcome::Committed;
             }
-            // 모터 보호 — sim과 같이 이번 공은 다시 시도하지 않는다.
+            // 이번 스윙만 포기 — 바깥 루프가 센터 복귀 후 다음 급구를 받는다.
             Err(DomainError::InfeasibleSwing(SwingPlanError::JointOrTorqueLimit {
                 target_x,
                 target_y,
                 target_z,
             })) => {
                 let _ = event_tx.send(ShotEvent::Infeasible {
+                    shot_seq,
                     reason: format!(
                         "토크·관절 한계 초과 (목표 x{} y{} z{})",
                         f2(target_x),
@@ -169,9 +209,8 @@ fn wait_for_commit(
                         f2(target_z)
                     ),
                 });
-                return false;
+                return CommitOutcome::Infeasible;
             }
-            // 이미 늦은 예측 — 로그 레벨만 낮춰 버린다.
             Err(DomainError::InfeasibleSwing(SwingPlanError::InsufficientTime {
                 time_to_impact_secs,
                 min_swing_secs,
@@ -181,9 +220,9 @@ fn wait_for_commit(
                 "InsufficientTime — 창 재진입 대기"
             ),
             Err(error) => {
-                // 계획 실패는 매 시도마다 debug로 남긴다 (원인 추적), warn은 1초 스로틀.
                 debug!(
                     %error,
+                    shot = shot_seq,
                     candidates = request.predictions.len(),
                     rail_x = f2(start.rail_x),
                     start_joints = f2_slice(&start.joints.values),
@@ -191,9 +230,10 @@ fn wait_for_commit(
                 );
                 if last_warn.elapsed() >= Duration::from_secs(1) {
                     last_warn = Instant::now();
-                    warn!(%error, "스윙 계획 실패");
+                    warn!(%error, shot = shot_seq, "스윙 계획 실패");
                 }
                 let _ = event_tx.send(ShotEvent::PlanFailed {
+                    shot_seq,
                     reason: error.to_string(),
                 });
             }

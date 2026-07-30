@@ -1,7 +1,8 @@
-//! 실기 단발 타격 (1 hit) 런타임 — `--mode real` 전용 (bin 로컬, 라이브러리 아님).
+//! 실기 연속 급구 런타임 — `--mode real` 전용 (bin 로컬, 라이브러리 아님).
 //!
-//! 랠리가 아니라 **공 하나에 스윙 한 번**을 커밋하고 종료한다.
-//! 설계: `docs/superpowers/plans/2026-07-31-run-real-single-shot.md`.
+//! 1·2차: 스윙 완주·센터 복귀 후 다음 급구를 반복한다. 결선(진짜 랠리)은 아직 아니다.
+//! 설계: `docs/superpowers/specs/2026-07-31-real-continuous-feed-design.md`  
+//! 계획: `docs/superpowers/plans/2026-07-31-real-continuous-feed.md`
 //!
 //! # 동시성
 //!
@@ -13,20 +14,21 @@
 //! |------|--------------|
 //! | `FrameSource` + `Detector` | [`camera_worker`] (캠당 1 스레드) |
 //! | `Ekf` · `Calibration` · 게이트 | [`estimator_worker`] |
-//! | `Hardware` (버스 · 레일 · 커밋 래치) | [`control_worker`] |
+//! | `Hardware` (버스 · 레일 · 샷 루프) | [`control_worker`] |
 //! | highgui 창 | 메인 스레드 ([`PreviewWindow`]) |
 //!
 //! `read_pose → plan_best → command` 세 단계가 전부 [`control_worker`] 안에서만 일어난다.
 //! 추정 스레드는 로봇 포즈를 **볼 수 없어서** 낡은 포즈로 계획하는 일이 애초에 불가능하다.
+//! Recovering 동안 추정은 `Attempt`를 보내지 않는다 (`ControlStatus`).
 //!
 //! ```text
 //!   cam-left  ─┐
 //!              ├─ VisionEvent ──►  estimator ──┬─ CommitRequest ──►  control
 //!   cam-right ─┘   bounded, drop-on-full       │   bounded(1)        (Hardware 단독 소유)
-//!                                              │
-//!                                 PreviewEvent │              ShotEvent
-//!                                 drop-on-full ▼                      ▼
-//!                                           main (highgui + 로그 + 종료)
+//!                                              │◄─ ControlStatus ───┘
+//!                                 PreviewEvent │   Ready / Recovering
+//!                                 drop-on-full ▼
+//!                                           main (highgui + 로그; 세션 유지)
 //! ```
 //!
 //! [`tools/jog`]: https://github.com/luv-all/pingpong-bot/tree/main/tools/jog
@@ -35,7 +37,9 @@ pub mod camera_worker;
 pub mod control_worker;
 pub mod estimator_worker;
 
+mod ball_receding;
 mod commit_request;
+mod control_status;
 mod decision;
 pub mod fmt;
 mod options;
@@ -51,6 +55,7 @@ mod throttle;
 mod vision_event;
 
 pub use commit_request::CommitRequest;
+pub use control_status::ControlStatus;
 pub use decision::{Decision, decide};
 pub use options::Options;
 pub use preview::PreviewWindow;

@@ -46,6 +46,16 @@ pub const RANDOM_SHOT_PITCH_MAX_DEG: f64 = -2.0;
 pub const RANDOM_SHOT_ROLL_MIN_DEG: f64 = -15.0;
 pub const RANDOM_SHOT_ROLL_MAX_DEG: f64 = 15.0;
 
+/// GUI Random이 고정하는 발사구·자세 (실측 슈터).
+///
+/// 발사구 = `(WIDTH_X/2, LENGTH_Y − inset_y, SURFACE_Z + height_z)`.
+/// yaw만 `RANDOM_SHOT_FIXED_YAW_DEGS` 중 하나를 고르고, 속도·스핀만 랜덤.
+pub const RANDOM_SHOT_FIXED_MUZZLE_INSET_Y_M: f64 = 0.275;
+pub const RANDOM_SHOT_FIXED_MUZZLE_HEIGHT_Z_M: f64 = 0.265;
+pub const RANDOM_SHOT_FIXED_PITCH_DEG: f64 = 15.0;
+pub const RANDOM_SHOT_FIXED_ROLL_DEG: f64 = 0.0;
+pub const RANDOM_SHOT_FIXED_YAW_DEGS: [f64; 3] = [-10.0, 0.0, 10.0];
+
 /// eval_protocol 지터·합격선.
 pub const EVAL_SPEED_JITTER_MPS: f64 = 0.15;
 pub const EVAL_YAW_JITTER_DEG: f64 = 0.5;
