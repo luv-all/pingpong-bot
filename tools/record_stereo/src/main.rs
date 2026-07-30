@@ -40,6 +40,19 @@ const RING_MARGIN_SECS: f64 = 1.0;
 /// 프리뷰 갱신 주기 — 캡처 속도와 무관하게 사람이 보기 충분한 정도.
 const PREVIEW_PERIOD: Duration = Duration::from_millis(33);
 
+/// grab 루프 단계별 누적 비용 — 1초마다 찍고 리셋한다.
+#[derive(Default)]
+struct StageCost {
+    next_frame: Duration,
+    encode: Duration,
+    ring: Duration,
+    preview: Duration,
+    /// 새 프레임이 없어 잔 시간. `thread::sleep`은 OS 타이머 해상도(윈도우 ~15 ms)에
+    /// 걸려 요청보다 훨씬 오래 잘 수 있다 — 그게 루프를 깎는지 여기서 확인한다.
+    idle_sleep: Duration,
+    idle_count: u64,
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     if args.preroll <= 0.0 || args.postroll < 0.0 {
@@ -247,6 +260,7 @@ fn grab_loop(
     let mut pending: Option<CaptureCmd> = None;
     let mut last_pair: Option<(Instant, Instant)> = None;
     let mut preview_tick = Instant::now() - PREVIEW_PERIOD;
+    let mut cost = StageCost::default();
     let mut fps_window_start = Instant::now();
     let mut fps_window_count = 0u64;
     let mut grab_fps = 0.0f64;
@@ -261,6 +275,7 @@ fn grab_loop(
             }
         }
 
+        let stage = Instant::now();
         let Some(lf) = left.next_frame() else {
             set_error(&shared, "left: 프레임 없음");
             break;
@@ -269,10 +284,14 @@ fn grab_loop(
             set_error(&shared, "right: 프레임 없음");
             break;
         };
+        cost.next_frame += stage.elapsed();
         // `ThreadedCapture`는 새 프레임을 기다리지 않고 최신 것을 즉시 준다 — 같은 쌍을
         // 다시 담지 않도록 타임스탬프로 거른다.
         if last_pair == Some((lf.timestamp, rf.timestamp)) {
+            let stage = Instant::now();
             thread::sleep(Duration::from_micros(500));
+            cost.idle_sleep += stage.elapsed();
+            cost.idle_count += 1;
             continue;
         }
         last_pair = Some((lf.timestamp, rf.timestamp));
@@ -280,6 +299,7 @@ fn grab_loop(
         let t = Instant::now();
         let width = lf.image.cols();
         let height = lf.image.rows();
+        let stage = Instant::now();
         let Ok(left_jpeg) = encode_jpeg(&lf.image) else {
             set_error(&shared, "left: JPEG encode 실패");
             break;
@@ -289,6 +309,9 @@ fn grab_loop(
             break;
         };
 
+        cost.encode += stage.elapsed();
+
+        let stage = Instant::now();
         ring.push_back(PairSample {
             t,
             left_jpeg,
@@ -297,11 +320,26 @@ fn grab_loop(
             height,
         });
         trim_ring(&mut ring, t, ring_keep);
+        cost.ring += stage.elapsed();
 
         fps_window_count += 1;
         let elapsed = fps_window_start.elapsed().as_secs_f64();
         if elapsed >= 1.0 {
             grab_fps = fps_window_count as f64 / elapsed;
+            // 23 ms가 어디로 가는지 — 추측 대신 단계별로 잰다.
+            let ms = |d: Duration| d.as_secs_f64() * 1e3 / fps_window_count.max(1) as f64;
+            println!(
+                "grab {:.1} fps | 쌍당 ms: next_frame {:.2} · encode {:.2} · ring {:.2}                  · preview {:.2} | idle sleep {:.1} ms×{} (총 {:.0} ms/s)",
+                grab_fps,
+                ms(cost.next_frame),
+                ms(cost.encode),
+                ms(cost.ring),
+                ms(cost.preview),
+                cost.idle_sleep.as_secs_f64() * 1e3 / cost.idle_count.max(1) as f64,
+                cost.idle_count,
+                cost.idle_sleep.as_secs_f64() * 1e3,
+            );
+            cost = StageCost::default();
             fps_window_count = 0;
             fps_window_start = Instant::now();
         }
@@ -312,6 +350,7 @@ fn grab_loop(
             .unwrap_or(0.0);
         // 프리뷰는 사람이 보는 것이라 120 fps가 필요 없다. 매 프레임 락을 잡고 Mat을
         // 넘기면 그 자체가 캡처를 깎는다 — 표시용으로 충분한 주기로만 올린다.
+        let stage = Instant::now();
         if preview_tick.elapsed() >= PREVIEW_PERIOD
             && let Ok(mut g) = shared.lock()
         {
@@ -325,6 +364,8 @@ fn grab_loop(
                 ring_pairs: ring.len(),
             });
         }
+
+        cost.preview += stage.elapsed();
 
         if let Some(CaptureCmd::Save {
             trigger_at,
