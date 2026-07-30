@@ -73,16 +73,12 @@ pub fn camera_params_for(camera_id: camera::Id) -> Result<camera::Params> {
     return Ok(params);
 }
 
-fn assemble(
-    camera_id: camera::Id,
-    color: ColormaskParams,
-    cam: &camera::Params,
-) -> Result<Detector> {
+fn assemble(color: ColormaskParams, cam: &camera::Params) -> Result<Detector> {
     let circ = ScorerParams::default().min_circularity;
     let scorer = ScorerParams::from_calib(cam, circ)?;
 
     return Detector::builder()
-        .mask(FloorEdgeMask::from_params(camera_id, cam)?)
+        .mask(FloorEdgeMask::from_params(cam)?)
         .then(ColormaskDetector::new(color))
         .then(ContourDetector::from(&scorer))
         .scorer(Scorer::from(&scorer).with_motion_weight(MOTION_WEIGHT))
@@ -94,5 +90,5 @@ fn assemble(
 /// 캘리브·colormask SSOT 필수.
 pub fn detector_for(camera_id: camera::Id) -> Result<Detector> {
     let cam = camera_params_for(camera_id)?;
-    return assemble(camera_id, colormask_for(camera_id)?, &cam);
+    return assemble(colormask_for(camera_id)?, &cam);
 }

@@ -4,7 +4,7 @@
 //! let color = ColormaskDetector::new(params);
 //! let edges = ContourDetector::from(&scorer);
 //! Detector::builder()
-//!     .mask(FloorEdgeMask::from_params(cam_id, &cam)?)
+//!     .mask(FloorEdgeMask::from_params(&cam)?)
 //!     .then(color)
 //!     .then(edges)
 //!     .scorer(Scorer::from(&scorer).with_motion_weight(0.5))

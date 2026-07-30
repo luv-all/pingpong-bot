@@ -383,8 +383,12 @@ fn main() -> Result<()> {
                     detector.mask.cut_x, detector.mask.margin_m
                 ),
                 format!(
-                    "edge y=({:.0},{:.0})",
-                    detector.mask.line_y_at_left, detector.mask.line_y_at_right
+                    "edge ({:.0},{:.0})->({:.0},{:.0}) poly={}",
+                    detector.mask.edge_p0.0,
+                    detector.mask.edge_p0.1,
+                    detector.mask.edge_p1.0,
+                    detector.mask.edge_p1.1,
+                    detector.mask.cut_poly_len
                 ),
                 format!("cut={cut_percent:.0}%  keep={keep_nonzero}/{total_pixels}"),
             ],
