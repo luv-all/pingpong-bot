@@ -1,3 +1,5 @@
+use tracing::debug;
+
 use crate::error::HwError;
 use crate::robot::Joints;
 
@@ -209,18 +211,67 @@ impl DynamixelBus {
         self.write_raw_goal_ticks(&ticks, 0.0)
     }
 
-    /// Torque OFF → Position Control + PWM/Current Limit 최대 → (호출측에서 Torque ON).
+    /// Position Control + PWM/Current Limit 최대 → (호출측에서 Torque ON).
     ///
     /// Position 모드(3)에서는 Goal Current가 쓰이지 않고, 출력 상한은 PWM Limit이다.
     /// MX-64 Current Limit도 스펙 최대로 맞춰 둔다(MX-28에는 해당 레지스터 없음).
+    ///
+    /// 세 레지스터(11 · 36 · 38)는 전부 **EEPROM**(addr 0~63)이라 Torque Enable=1이면 쓰기가
+    /// 거부된다. 그래서 먼저 읽어보고 **이미 원하는 값이면 아무것도 쓰지 않는다** — 앞 실행이
+    /// 토크를 켠 채 끝냈어도([`Self::hold_torque_on_close`]) 팔이 잠깐 늘어지는 일이 없다.
+    /// 값이 다를 때만 토크를 내리고 쓴다.
     pub fn configure_position_mode_max_effort(&mut self) -> Result<(), HwError> {
-        if self.torque_enabled {
-            self.enable_torque(false)?;
+        if self.position_mode_already_configured()? {
+            debug!("EEPROM 설정이 이미 목표값 — 토크를 건드리지 않는다");
+            return Ok(());
         }
+        // EEPROM 쓰기 전에는 토크를 반드시 내려야 한다. 프로세스 로컬 `torque_enabled`는 새
+        // 실행에서 항상 false라 물리 상태를 못 믿는다 — 조건 없이 보낸다.
+        self.enable_torque(false)?;
         self.write_operating_mode()?;
         self.write_max_pwm_limits()?;
         self.write_max_current_limits()?;
         return Ok(());
+    }
+
+    /// Operating Mode · PWM Limit · Current Limit이 모두 목표값인가.
+    ///
+    /// 읽기에 실패하면 `false` — 모르면 쓰는 쪽이 안전하다.
+    fn position_mode_already_configured(&mut self) -> Result<bool, HwError> {
+        let config = self.mapping.config.clone();
+        match &mut self.backend {
+            // dry-run은 실제 레지스터가 없다 — 항상 쓰기 경로를 타 기존 검증을 유지한다.
+            BusBackend::DryRun { .. } => return Ok(false),
+            #[cfg(feature = "real")]
+            BusBackend::Real(real) => {
+                let ids = config.bus_ids();
+                let modes = read_u8s(real, &ids, config.addr_operating_mode, &config);
+                if !modes.is_some_and(|v| v.iter().all(|m| *m == config.operating_mode)) {
+                    return Ok(false);
+                }
+                let pwm = read_u16s(real, &ids, config.addr_pwm_limit, &config);
+                if !pwm.is_some_and(|v| v.iter().all(|p| *p == config.pwm_limit_max)) {
+                    return Ok(false);
+                }
+                if !config.current_limit_max_by_id.is_empty() {
+                    let current_ids: Vec<u8> = config
+                        .current_limit_max_by_id
+                        .iter()
+                        .map(|(id, _)| *id)
+                        .collect();
+                    let want: Vec<u16> = config
+                        .current_limit_max_by_id
+                        .iter()
+                        .map(|(_, v)| *v)
+                        .collect();
+                    let got = read_u16s(real, &current_ids, config.addr_current_limit, &config);
+                    if !got.is_some_and(|v| v == want) {
+                        return Ok(false);
+                    }
+                }
+                return Ok(true);
+            }
+        }
     }
 
     fn write_operating_mode(&mut self) -> Result<(), HwError> {
@@ -441,9 +492,60 @@ impl DynamixelBus {
 
 impl Drop for DynamixelBus {
     fn drop(&mut self) {
-        // Python `close`: best-effort torque off (+ port Drop이 시리얼 닫음).
-        if self.torque_enabled {
+        // 기본은 **토크를 켠 채로 둔다** — 끄면 프로그램이 끝나는 순간 팔이 중력으로 주저앉아
+        // 링크·라켓이 상한다. AXL 레일도 같은 이유로 서보를 켠 채 닫는다(`AxlLive::drop`).
+        // 손으로 팔을 움직이려면 `hold_torque_on_close = false`로 열거나 전원을 내린다.
+        if self.torque_enabled && !self.mapping.config.hold_torque_on_close {
             let _ = self.enable_torque(false);
         }
     }
+}
+
+/// EEPROM 1바이트 레지스터를 모든 id에서 읽는다. 실패하면 `None`.
+#[cfg(feature = "real")]
+fn read_u8s(
+    real: &mut RealBackend,
+    ids: &[u8],
+    address: u8,
+    config: &DynamixelConfig,
+) -> Option<Vec<u8>> {
+    let raw = real
+        .sync_read_with_retry(
+            ids,
+            address,
+            1,
+            config.comm_retries,
+            config.comm_retry_delay_ms,
+        )
+        .ok()?;
+    return raw
+        .into_iter()
+        .map(|bytes| bytes.first().copied())
+        .collect();
+}
+
+/// EEPROM 2바이트 레지스터를 모든 id에서 읽는다. 실패하면 `None`.
+#[cfg(feature = "real")]
+fn read_u16s(
+    real: &mut RealBackend,
+    ids: &[u8],
+    address: u8,
+    config: &DynamixelConfig,
+) -> Option<Vec<u16>> {
+    let raw = real
+        .sync_read_with_retry(
+            ids,
+            address,
+            2,
+            config.comm_retries,
+            config.comm_retry_delay_ms,
+        )
+        .ok()?;
+    return raw
+        .into_iter()
+        .map(|bytes| {
+            let pair: [u8; 2] = bytes.as_slice().try_into().ok()?;
+            Some(u16::from_le_bytes(pair))
+        })
+        .collect();
 }

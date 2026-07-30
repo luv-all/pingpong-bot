@@ -36,6 +36,12 @@ pub struct DynamixelConfig {
     pub joint_offsets_rad: Vec<f64>,
     pub motor_angle_limits_deg: Vec<[f64; 2]>,
     pub mirror_slaves: Vec<MirrorSlave>,
+    /// 버스를 닫을 때 토크를 **켠 채로 둘지**.
+    ///
+    /// 기본 `true` — 끄면 프로그램이 끝나는 순간 팔이 중력으로 주저앉는다. AXL 레일도 같은
+    /// 이유로 서보를 켠 채 닫는다(`AxlLive::drop`). `false`면 종료 시 힘을 빼 손으로 옮길 수
+    /// 있지만, 그 전에 팔을 안전한 자세로 내려두어야 한다.
+    pub hold_torque_on_close: bool,
 }
 
 impl DynamixelConfig {

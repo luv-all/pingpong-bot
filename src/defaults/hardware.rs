@@ -44,6 +44,8 @@ impl Default for DynamixelConfig {
                 master_id: 1,
                 slave_id: 2,
             }],
+            // 종료 시 토크를 끄면 팔이 그대로 주저앉는다 — 켠 채로 둔다.
+            hold_torque_on_close: true,
         };
     }
 }
