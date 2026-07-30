@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
 use pingpong_bot::Point3;
-use pingpong_bot::ball;
 use pingpong_bot::hardware::{Hardware, RealHardware};
 use pingpong_bot::robot::{self, Arm};
+use pingpong_bot::sim::gui::ball;
 use pingpong_bot::swing;
 
 use crate::motion::{self, MotionDraft, MotionKind};

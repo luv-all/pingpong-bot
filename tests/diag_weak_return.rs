@@ -10,13 +10,13 @@
 
 use nalgebra::Vector3;
 
-use pingpong_bot::ball;
 use pingpong_bot::constants::{BALL_RADIUS, table};
 use pingpong_bot::defaults;
 use pingpong_bot::eval;
 use pingpong_bot::planner::Impact;
-use pingpong_bot::shooter;
 use pingpong_bot::sim::SimWorld;
+use pingpong_bot::sim::launch;
+use pingpong_bot::sim::physics;
 
 fn v3(v: rapier3d::prelude::Vector) -> Vector3<f64> {
     return Vector3::new(f64::from(v.x), f64::from(v.y), f64::from(v.z));
@@ -101,7 +101,7 @@ struct ShotDiag {
     swung: bool,
 }
 
-fn run_shot(index: usize, settings: &shooter::Settings) -> ShotDiag {
+fn run_shot(index: usize, settings: &launch::Settings) -> ShotDiag {
     const DT: f64 = 1.0 / 1000.0;
     const MAX_STEPS: usize = 4_000;
 
@@ -180,10 +180,10 @@ fn run_shot(index: usize, settings: &shooter::Settings) -> ShotDiag {
         prev_v = v;
         prev_p = p;
 
-        if contact_done && world.ball_state == ball::State::Parked {
+        if contact_done && world.ball_state == physics::BallState::Parked {
             break;
         }
-        if world.ball_state == ball::State::Parked && diag.swung {
+        if world.ball_state == physics::BallState::Parked && diag.swung {
             break;
         }
     }
@@ -348,7 +348,7 @@ fn diag_motor_tracking() {
             }
         }
         prev_measured = Some(measured);
-        if world.ball_state == ball::State::Parked && step > 100 {
+        if world.ball_state == physics::BallState::Parked && step > 100 {
             break;
         }
     }
@@ -421,7 +421,7 @@ fn diag_incoming_trajectory() {
             }
             prev = p;
             prev_vz = vz;
-            if world.ball_state == ball::State::Parked {
+            if world.ball_state == physics::BallState::Parked {
                 println!(
                     "  parked @ step {step} pos=[{:.3} {:.3} {:.3}]",
                     p.x, p.y, p.z
@@ -500,7 +500,7 @@ fn diag_miss_cause() {
                 touched = true;
             }
             prev_y = ball.y;
-            if world.ball_state == ball::State::Parked {
+            if world.ball_state == physics::BallState::Parked {
                 break;
             }
         }

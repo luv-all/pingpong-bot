@@ -215,7 +215,10 @@ mod tests {
             .collect();
         let spread = flat_zeta.iter().copied().fold(f64::MIN, f64::max)
             / flat_zeta.iter().copied().fold(f64::MAX, f64::min);
-        assert!(spread > 3.0, "옛 평평한 게인 ζ 분산 {spread:.1}배: {flat_zeta:?}");
+        assert!(
+            spread > 3.0,
+            "옛 평평한 게인 ζ 분산 {spread:.1}배: {flat_zeta:?}"
+        );
 
         let tuned = SimMotorParams::default();
         let tuned_zeta: Vec<f64> = (0..SIM_MOTOR_JOINTS)

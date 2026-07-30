@@ -1,15 +1,15 @@
 //! 패널 Status 창 스냅샷.
 
-use crate::ball;
 use crate::defaults;
 use crate::estimator::Prediction;
 use crate::sim::gui::debug::CommitPhase;
+use crate::sim::physics;
 use crate::sim::physics::world::SimWorld;
 
 /// 상태 표시용 스냅샷 — world 락을 메인 스레드에서 잡지 않기 위함.
 #[derive(Clone, Debug)]
 pub struct StatusSnapshot {
-    pub ball_state: ball::State,
+    pub ball_state: physics::BallState,
     pub sim_time: f64,
     pub ball_pos: (f32, f32, f32),
     pub ball_vel: (f32, f32, f32),

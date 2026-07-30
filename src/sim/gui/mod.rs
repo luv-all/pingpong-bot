@@ -4,7 +4,7 @@
 //! gui/
 //!   host/     SimScene builder + run
 //!   layers/   Ball / Robot / Shooter R/W
-//!   scene/    table + ball::Visual
+//!   scene/    table + sim::gui::ball::Visual
 //!   viewer/   full sim egui (panel, mesh)
 //!   debug/    overlays + snap
 //! ```
@@ -15,12 +15,14 @@
 //! scene.run(shutdown)?;
 //! ```
 
+pub mod ball;
 #[cfg(feature = "gui")]
 pub mod host;
 #[cfg(feature = "gui")]
 pub mod layers;
 #[cfg(feature = "gui")]
 pub mod scene;
+pub mod shooter;
 #[cfg(feature = "gui")]
 pub mod viewer;
 

@@ -6,7 +6,7 @@ use rand::Rng;
 
 use crate::defaults::PhysicsParams;
 use crate::robot::Robot;
-use crate::shooter;
+use crate::sim::launch;
 use crate::sim::physics::world::SimWorld;
 
 use super::{
@@ -52,7 +52,7 @@ pub(crate) fn shot_schedule(mode: Mode) -> Vec<(Zone, usize)> {
 ///
 /// 스핀/롤=0. 좌·우는 `side_yaw_deg` 대칭, 중앙은 yaw=0.
 /// pitch/height는 슈터 기본값에서 시작해 네트 게이트만 맞춘다.
-pub(crate) fn settings_for_zone(launch: &LaunchParams, zone: Zone) -> shooter::Settings {
+pub(crate) fn settings_for_zone(launch: &LaunchParams, zone: Zone) -> launch::Settings {
     return settings_for_zone_shot(launch, zone, 0);
 }
 
@@ -61,7 +61,7 @@ pub(crate) fn settings_for_zone_shot(
     launch: &LaunchParams,
     zone: Zone,
     index_in_zone: usize,
-) -> shooter::Settings {
+) -> launch::Settings {
     let _ = index_in_zone;
     return build_zone_shot::<rand::rngs::StdRng>(launch, zone, None);
 }
@@ -72,7 +72,7 @@ pub(crate) fn settings_for_zone_shot_jittered<R: Rng + ?Sized>(
     zone: Zone,
     index_in_zone: usize,
     rng: &mut R,
-) -> shooter::Settings {
+) -> launch::Settings {
     let _ = index_in_zone;
     return build_zone_shot(launch, zone, Some(rng));
 }
@@ -81,8 +81,8 @@ fn build_zone_shot<R: Rng + ?Sized>(
     launch: &LaunchParams,
     zone: Zone,
     mut rng: Option<&mut R>,
-) -> shooter::Settings {
-    let mut shot = shooter::Settings::default();
+) -> launch::Settings {
+    let mut shot = launch::Settings::default();
     shot.roll_deg = 0.0;
     shot.topspin_rad_s = 0.0;
     shot.sidespin_rad_s = 0.0;
@@ -116,7 +116,7 @@ fn build_zone_shot<R: Rng + ?Sized>(
     return shot;
 }
 
-fn lift_pitch_for_net_gate(shot: &mut shooter::Settings) {
+fn lift_pitch_for_net_gate(shot: &mut launch::Settings) {
     if shot.clears_incoming_net_gate() && shot.clears_incoming_rapier_net() {
         return;
     }
@@ -136,7 +136,7 @@ fn lift_pitch_for_net_gate(shot: &mut shooter::Settings) {
 pub(crate) fn run_eval_shot(
     robot: &Robot,
     physics: PhysicsParams,
-    settings: &shooter::Settings,
+    settings: &launch::Settings,
 ) -> (Flags, bool) {
     const MAX_STEPS: usize = 4_000;
     const DT: f64 = 1.0 / 1000.0;
@@ -242,7 +242,7 @@ impl Protocol {
         return shot_schedule(mode);
     }
 
-    pub fn settings_for_zone(launch: &LaunchParams, zone: Zone) -> shooter::Settings {
+    pub fn settings_for_zone(launch: &LaunchParams, zone: Zone) -> launch::Settings {
         return settings_for_zone(launch, zone);
     }
 
@@ -250,7 +250,7 @@ impl Protocol {
         launch: &LaunchParams,
         zone: Zone,
         index_in_zone: usize,
-    ) -> shooter::Settings {
+    ) -> launch::Settings {
         return settings_for_zone_shot(launch, zone, index_in_zone);
     }
 
@@ -259,14 +259,14 @@ impl Protocol {
         zone: Zone,
         index_in_zone: usize,
         rng: &mut R,
-    ) -> shooter::Settings {
+    ) -> launch::Settings {
         return settings_for_zone_shot_jittered(launch, zone, index_in_zone, rng);
     }
 
     pub fn run_shot(
         robot: &Robot,
         physics: PhysicsParams,
-        settings: &shooter::Settings,
+        settings: &launch::Settings,
     ) -> (Flags, bool) {
         return run_eval_shot(robot, physics, settings);
     }

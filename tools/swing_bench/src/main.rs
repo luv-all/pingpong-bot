@@ -38,8 +38,8 @@ use pingpong_bot::defaults;
 use pingpong_bot::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
 use pingpong_bot::planner::Impact;
 use pingpong_bot::robot::{self, Arm, Joints, MountPreset, RobotBuilder};
-use pingpong_bot::shooter;
 use pingpong_bot::sim::SimWorld;
+use pingpong_bot::sim::launch;
 use pingpong_bot::swing;
 use serde::Serialize;
 
@@ -60,7 +60,6 @@ const POSITION_TOLERANCE_RAD_OR_M: f64 = 1e-3;
 const RACKET_SPEED_RATIO_TOLERANCE: f64 = 0.15;
 /// 라켓 속도 방향 허용오차 [deg].
 const RACKET_DIRECTION_TOLERANCE_DEG: f64 = 15.0;
-
 
 /// `--sim-verify` 대기 예산 — 스윙 커밋까지. 기본 슈터 설정의 비행시간(<1s)
 /// 보다 넉넉하게 잡아 스윙이 늦게 커밋돼도 놓치지 않는다.
@@ -517,10 +516,11 @@ fn print_human(robot_id: &str, report: &Report) {
 /// 않는다 — 그래서 PD 추종 지연(base/shoulder가 실제 임팩트 순간 명령각에
 /// 못 미치는 문제)을 볼 수 없다. 이 모드가 그 blind spot을 메운다.
 fn run_sim_verify(dt: f64, json: bool) -> Result<()> {
-    let robot = defaults::primitive_4dof().map_err(|e| anyhow!("기본 4-dof 로봇 빌드 실패: {e}"))?;
+    let robot =
+        defaults::primitive_4dof().map_err(|e| anyhow!("기본 4-dof 로봇 빌드 실패: {e}"))?;
     let mut world = SimWorld::new(robot);
     world.set_use_ground_truth(true);
-    world.shoot_ball(&shooter::Settings::default());
+    world.shoot_ball(&launch::Settings::default());
 
     let mut committed_trajectory = None;
     for _ in 0..SIM_VERIFY_MAX_WAIT_STEPS {

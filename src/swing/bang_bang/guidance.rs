@@ -627,6 +627,7 @@ mod tests {
     use crate::estimator::Prediction;
     use crate::robot::Arm;
     use crate::robot::dynamics::{MassMatrixScratch, RneaScratch, mass_matrix_into};
+    use crate::sim::physics;
 
     /// 피처 브랜치가 실기 관절속도(~2.88 rad/s)로 검증한 마운트.
     fn competition_arm() -> Arm {
@@ -995,14 +996,13 @@ mod tests {
     /// 네트를 넘겨 로봇 쪽 반코트 안(너무 끝이 아닌 가운데 대역)에 떨어지는지
     /// 직접 확인한다. `None`이면 네트에 걸리거나(못 넘김) 착지 전 상태 종료.
     fn first_bounce_xy(speed: f64, pitch_deg: f64, height_offset_m: f64) -> Option<(f64, f64)> {
-        use crate::ball;
-        use crate::shooter;
         use crate::sim::SimWorld;
+        use crate::sim::launch;
 
         let robot = crate::defaults::primitive_4dof_with_mount(-0.02, table::SURFACE_Z + 0.05)
             .expect("robot 빌드 성공");
         let mut world = SimWorld::new(robot);
-        let mut settings = shooter::Settings::default();
+        let mut settings = launch::Settings::default();
         settings.speed_mps = speed;
         settings.pitch_deg = pitch_deg;
         settings.height_offset_m = height_offset_m;
@@ -1018,7 +1018,7 @@ mod tests {
         let mut cleared_net = false;
         for _ in 0..4_000 {
             world.step(DT, None);
-            if world.ball_state != ball::State::InFlight {
+            if world.ball_state != physics::BallState::InFlight {
                 return None;
             }
             let pos = world.ball_position();
@@ -1076,9 +1076,8 @@ mod tests {
                 실행: cargo test --lib diag_ball_speed_feasibility_sweep \
                 -- --ignored --nocapture"]
     fn diag_ball_speed_feasibility_sweep() {
-        use crate::ball;
-        use crate::shooter;
         use crate::sim::SimWorld;
+        use crate::sim::launch;
 
         const DT: f64 = 1.0 / 1000.0;
         const MAX_STEPS: usize = 4_000;
@@ -1107,7 +1106,7 @@ mod tests {
 
             let mut world = SimWorld::new(robot.clone());
             world.set_use_ground_truth(true);
-            let mut settings = shooter::Settings::default();
+            let mut settings = launch::Settings::default();
             settings.speed_mps = speed;
             settings.pitch_deg = pitch_deg;
             settings.height_offset_m = HEIGHT_OFFSET_M;
@@ -1116,7 +1115,7 @@ mod tests {
             let mut found = None;
             for _ in 0..MAX_STEPS {
                 world.step(DT, None);
-                if world.ball_state != ball::State::InFlight {
+                if world.ball_state != physics::BallState::InFlight {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
@@ -2078,9 +2077,8 @@ mod tests {
         let start = arm.initial_state();
         let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
-        use crate::ball;
-        use crate::shooter;
         use crate::sim::SimWorld;
+        use crate::sim::launch;
         const DT: f64 = 1.0 / 1000.0;
         const MAX_STEPS: usize = 4_000;
         const HEIGHT_OFFSET_M: f64 = 0.24;
@@ -2112,7 +2110,7 @@ mod tests {
 
             let mut world = SimWorld::new(robot.clone());
             world.set_use_ground_truth(true);
-            let mut settings = shooter::Settings::default();
+            let mut settings = launch::Settings::default();
             settings.speed_mps = speed;
             settings.pitch_deg = pitch_deg;
             settings.height_offset_m = HEIGHT_OFFSET_M;
@@ -2121,7 +2119,7 @@ mod tests {
             let mut found = None;
             for _ in 0..MAX_STEPS {
                 world.step(DT, None);
-                if world.ball_state != ball::State::InFlight {
+                if world.ball_state != physics::BallState::InFlight {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
@@ -2199,9 +2197,8 @@ mod tests {
         let start = arm.initial_state();
         let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
-        use crate::ball;
-        use crate::shooter;
         use crate::sim::SimWorld;
+        use crate::sim::launch;
         const DT: f64 = 1.0 / 1000.0;
         const MAX_STEPS: usize = 4_000;
         const HEIGHT_OFFSET_M: f64 = 0.24;
@@ -2220,7 +2217,7 @@ mod tests {
             };
             let mut world = SimWorld::new(robot.clone());
             world.set_use_ground_truth(true);
-            let mut settings = shooter::Settings::default();
+            let mut settings = launch::Settings::default();
             settings.speed_mps = speed;
             settings.pitch_deg = pitch_deg;
             settings.height_offset_m = HEIGHT_OFFSET_M;
@@ -2229,7 +2226,7 @@ mod tests {
             let mut predictions_at_window = None;
             for _ in 0..MAX_STEPS {
                 world.step(DT, None);
-                if world.ball_state != ball::State::InFlight {
+                if world.ball_state != physics::BallState::InFlight {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
@@ -2318,9 +2315,8 @@ mod tests {
         let start = arm.initial_state();
         let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
-        use crate::ball;
-        use crate::shooter;
         use crate::sim::SimWorld;
+        use crate::sim::launch;
         const DT: f64 = 1.0 / 1000.0;
         const MAX_STEPS: usize = 4_000;
         const HEIGHT_OFFSET_M: f64 = 0.24;
@@ -2339,7 +2335,7 @@ mod tests {
             };
             let mut world = SimWorld::new(robot.clone());
             world.set_use_ground_truth(true);
-            let mut settings = shooter::Settings::default();
+            let mut settings = launch::Settings::default();
             settings.speed_mps = speed;
             settings.pitch_deg = pitch_deg;
             settings.height_offset_m = HEIGHT_OFFSET_M;
@@ -2348,7 +2344,7 @@ mod tests {
             let mut predictions_at_window = None;
             for _ in 0..MAX_STEPS {
                 world.step(DT, None);
-                if world.ball_state != ball::State::InFlight {
+                if world.ball_state != physics::BallState::InFlight {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);
@@ -2428,10 +2424,10 @@ mod tests {
         let start = arm.initial_state();
         let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
-        use crate::ball;
         use crate::estimator::HitPlane;
-        use crate::shooter;
+
         use crate::sim::SimWorld;
+        use crate::sim::launch;
         const DT: f64 = 1.0 / 1000.0;
         const MAX_STEPS: usize = 4_000;
         const HEIGHT_OFFSET_M: f64 = 0.24;
@@ -2446,7 +2442,7 @@ mod tests {
             };
             let mut world = SimWorld::new(robot.clone());
             world.set_use_ground_truth(true);
-            let mut settings = shooter::Settings::default();
+            let mut settings = launch::Settings::default();
             settings.speed_mps = speed;
             settings.pitch_deg = pitch_deg;
             settings.height_offset_m = HEIGHT_OFFSET_M;
@@ -2455,7 +2451,7 @@ mod tests {
             let mut reached = false;
             for _ in 0..MAX_STEPS {
                 world.step(DT, None);
-                if world.ball_state != ball::State::InFlight {
+                if world.ball_state != physics::BallState::InFlight {
                     break;
                 }
                 let ball_y = f64::from(world.ball_position().y);

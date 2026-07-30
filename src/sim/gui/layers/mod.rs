@@ -1,19 +1,10 @@
 //! 씬 레이어 핸들 — 개체별 원시 R/W (jog 커맨드 enum 없음).
-//!
-//! | 레이어 | Read | Write |
-//! |--------|------|-------|
-//! | ball | 표시 위치 | `set_position` / hide |
-//! | robot | pose · FK · busy | `set_pose` · `set_targets` · `play` · `cancel` |
-//! | shooter | settings · position | settings · shoot/park |
-//!
-//! jog의 `ik`/`pose`/`swing` 등은 **툴**이 궤적·포즈로 만든 뒤 [`crate::robot::Handle`]에
-//! write한다.
 
 mod builder;
 
-use crate::ball;
 use crate::robot;
-use crate::shooter;
+use crate::sim::gui::ball;
+use crate::sim::gui::shooter;
 
 pub use builder::SceneLayersBuilder;
 

@@ -29,8 +29,8 @@ use pingpong_bot::estimator::Prediction;
 use pingpong_bot::hardware::dynamixel::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S;
 use pingpong_bot::planner::InterceptWindow;
 use pingpong_bot::robot::{self, Arm, Joints, MountPreset, Robot, RobotBuilder};
-use pingpong_bot::shooter;
 use pingpong_bot::sim::SimWorld;
+use pingpong_bot::sim::launch;
 use pingpong_bot::swing;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -92,7 +92,7 @@ fn resolve_robot(robot_id: &str, mount: Option<(f64, f64)>) -> Result<Robot> {
 
 fn run_shot(
     robot: &Robot,
-    settings: &shooter::Settings,
+    settings: &launch::Settings,
     start_from_table_center: bool,
 ) -> ShotOutcome {
     use ball::RADIUS as BALL_RADIUS;
@@ -179,7 +179,7 @@ fn run_shot(
         // 매 스텝(1kHz) IK를 도는 것보다 20배 빠르다.
         if step % 20 == 0
             && !outcome.contact
-            && world.ball_state == pingpong_bot::ball::State::InFlight
+            && world.ball_state == pingpong_bot::sim::physics::BallState::InFlight
             && swing::Planner::past_midcourt(f64::from(position.y))
         {
             let start = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
@@ -343,7 +343,7 @@ fn rest_pose_search(arm: &Arm, iterations: usize) {
 
 /// 한 발을 돌리며 commit 창에서 `plan_best_swing`이 실제로 어떤 오류로
 /// 실패하는지 그대로 출력한다 — "왜 안 되는가"를 추측 대신 확인하기 위함.
-fn explain_one(robot: &Robot, settings: &shooter::Settings) {
+fn explain_one(robot: &Robot, settings: &launch::Settings) {
     use pingpong_bot::constants::table;
 
     let arm = &robot.arm;
@@ -366,7 +366,7 @@ fn explain_one(robot: &Robot, settings: &shooter::Settings) {
     );
     for step in 0..MAX_STEPS {
         world.step(DT, None);
-        if step % 20 != 0 || world.ball_state != pingpong_bot::ball::State::InFlight {
+        if step % 20 != 0 || world.ball_state != pingpong_bot::sim::physics::BallState::InFlight {
             continue;
         }
         let ball_y = f64::from(world.ball_position().y);
@@ -458,9 +458,9 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // 좌우 위치·yaw 배터리는 후보마다 **같은** 시드로 뽑아 공정 비교한다.
-    let base = shooter::Settings::default();
+    let base = launch::Settings::default();
     let mut rng = StdRng::seed_from_u64(args.seed);
-    let battery: Vec<shooter::Settings> = if args.shots == 0 {
+    let battery: Vec<launch::Settings> = if args.shots == 0 {
         vec![base.clone()]
     } else {
         (0..args.shots).map(|_| base.randomized(&mut rng)).collect()
@@ -476,11 +476,11 @@ fn main() -> Result<()> {
         let robot = resolve_robot(&args.robot, Some((args.base_y_min, args.mount_height_min)))?;
         explain_one(
             &robot,
-            &shooter::Settings {
+            &launch::Settings {
                 speed_mps: args.speed_min,
                 pitch_deg: args.pitch_min,
                 height_offset_m: args.height_min,
-                ..shooter::Settings::default()
+                ..launch::Settings::default()
             },
         );
         return Ok(());
@@ -551,7 +551,7 @@ fn main() -> Result<()> {
                         };
                         let mut ratios = Vec::with_capacity(battery.len());
                         for shot in battery {
-                            let settings = shooter::Settings {
+                            let settings = launch::Settings {
                                 speed_mps: if random_speed {
                                     shot.speed_mps
                                 } else {

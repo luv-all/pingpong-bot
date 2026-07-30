@@ -34,7 +34,7 @@ impl LiveObserver {
             flags: Flags::default(),
             net_passthrough: false,
             previous_y: world.ball_position().y,
-            saw_flight: world.ball_state == crate::ball::State::InFlight,
+            saw_flight: world.ball_state == crate::sim::physics::BallState::InFlight,
             saw_net_contact: false,
             net_contact_after_hit: false,
             racket_contact_active: false,
@@ -56,7 +56,7 @@ impl LiveObserver {
         if self.finished {
             return true;
         }
-        if world.ball_state == crate::ball::State::InFlight {
+        if world.ball_state == crate::sim::physics::BallState::InFlight {
             self.saw_flight = true;
         }
 
@@ -131,7 +131,7 @@ impl LiveObserver {
             self.finished = true;
             return true;
         }
-        if self.saw_flight && world.ball_state == crate::ball::State::Parked {
+        if self.saw_flight && world.ball_state == crate::sim::physics::BallState::Parked {
             self.finished = true;
             return true;
         }

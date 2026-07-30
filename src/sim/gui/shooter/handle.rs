@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::Point3;
-use crate::shooter;
+use crate::sim::launch;
 use crate::sim::physics::world::SimWorld;
 use crate::sim::session::controls::SimRuntimeControls;
 
@@ -22,11 +22,11 @@ impl Handle {
         return Self { controls, world };
     }
 
-    pub fn settings(&self) -> shooter::Settings {
+    pub fn settings(&self) -> launch::Settings {
         return self.controls.lock().expect("controls").shooter.clone();
     }
 
-    pub fn set_settings(&self, settings: shooter::Settings) {
+    pub fn set_settings(&self, settings: launch::Settings) {
         self.controls.lock().expect("controls").shooter = settings;
     }
 

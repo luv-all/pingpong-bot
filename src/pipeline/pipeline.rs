@@ -5,12 +5,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::ball;
 use crate::camera;
-use crate::camera::Triangulate;
+use crate::detector;
 use crate::detector::Detector;
 use crate::error::DomainError;
 use crate::error::SwingPlanError;
+use crate::estimator;
 use crate::estimator::Estimator;
 use crate::estimator::Prediction;
 use crate::hardware::Hardware;
@@ -33,7 +33,7 @@ pub fn run(
     telemetry: Arc<dyn Telemetry>,
 ) -> Result<(), PipelineError> {
     let (observation_tx, observation_rx) =
-        bounded::<ball::Observation>(OBSERVATION_CHANNEL_CAPACITY);
+        bounded::<detector::Observation>(OBSERVATION_CHANNEL_CAPACITY);
     let predictions: Arc<ArrayQueue<Vec<Prediction>>> = Arc::new(ArrayQueue::new(1));
     let shutdown = Arc::new(AtomicBool::new(false));
     let mut handles: Vec<(PipelineThread, JoinHandle<()>)> = Vec::new();
@@ -48,7 +48,7 @@ pub fn run(
                         let _span = info_span!("detect", ?camera_id).entered();
                         if let Some(pixel) = Detector::passthrough(hint) {
                             if sender
-                                .send(ball::Observation {
+                                .send(detector::Observation {
                                     pixel,
                                     camera_id,
                                     timestamp,
@@ -77,7 +77,7 @@ pub fn run(
                         };
                         if let Some(pixel) = detector.detect(&frame) {
                             if sender
-                                .send(ball::Observation {
+                                .send(detector::Observation {
                                     pixel,
                                     camera_id,
                                     timestamp: frame.timestamp,
@@ -102,7 +102,7 @@ pub fn run(
     handles.push((
         PipelineThread::Estimation,
         thread::spawn(move || {
-            let mut series: Vec<(camera::Id, Vec<ball::Observation>)> = calibration
+            let mut series: Vec<(camera::Id, Vec<detector::Observation>)> = calibration
                 .cameras
                 .iter()
                 .map(|c| (c.camera_id, Vec::new()))
@@ -129,7 +129,7 @@ pub fn run(
                     continue;
                 };
 
-                let refs: Vec<(camera::Id, &[ball::Observation])> = series
+                let refs: Vec<(camera::Id, &[detector::Observation])> = series
                     .iter()
                     .filter(|(_, b)| !b.is_empty())
                     .map(|(id, b)| (*id, b.as_slice()))
@@ -138,7 +138,7 @@ pub fn run(
                     continue;
                 }
 
-                match Triangulate::synced(&refs, sync_time, &calibration) {
+                match estimator::Triangulate::synced(&refs, sync_time, &calibration) {
                     Ok(point) => {
                         estimator.update(point, sync_time);
                         let candidates: Vec<Prediction> = intercept

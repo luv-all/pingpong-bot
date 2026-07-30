@@ -1,8 +1,8 @@
 //! [`SceneLayers`] 빌더.
 
-use crate::ball;
 use crate::robot;
-use crate::shooter;
+use crate::sim::gui::ball;
+use crate::sim::gui::shooter;
 
 use super::SceneLayers;
 

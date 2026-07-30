@@ -1,9 +1,9 @@
 //! 발사 파라미터.
 
+use super::layout;
 use crate::constants::{ball, table};
 use crate::defaults;
 use crate::estimator::HitPlane;
-use crate::shooter;
 use crate::swing;
 use nalgebra::Vector3;
 use rand::Rng;
@@ -37,7 +37,7 @@ pub struct Settings {
     pub pitch_deg: f64,
     /// roll [deg] — 발사축 기준 롤 (스핀 축·발사구 위치 회전)
     pub roll_deg: f64,
-    /// 마운트 월드 오프셋 [m] — 기본 설치점(`shooter::Layout::MOUNT_*`) 기준
+    /// 마운트 월드 오프셋 [m] — 기본 설치점(`layout::Layout::MOUNT_*`) 기준
     pub pos_offset_x_m: f64,
     pub pos_offset_y_m: f64,
     pub pos_offset_z_m: f64,
@@ -57,9 +57,9 @@ impl Settings {
     /// 슈터 마운트 기준점 (월드) — 탄도·오프셋의 원점.
     pub fn mount_position(&self) -> Vector {
         return Vector::new(
-            (shooter::Layout::MOUNT_X + self.pos_offset_x_m) as f32,
-            (shooter::Layout::MOUNT_Y + self.pos_offset_y_m) as f32,
-            (table::SURFACE_Z + shooter::Layout::BODY_HEIGHT * 0.5 + self.pos_offset_z_m) as f32,
+            (layout::Layout::MOUNT_X + self.pos_offset_x_m) as f32,
+            (layout::Layout::MOUNT_Y + self.pos_offset_y_m) as f32,
+            (table::SURFACE_Z + layout::Layout::BODY_HEIGHT * 0.5 + self.pos_offset_z_m) as f32,
         );
     }
 
@@ -105,7 +105,7 @@ impl Settings {
     /// 발사구 위치 — 슈터 로컬 오프셋을 월드로 변환 (탄도 SSOT).
     pub fn muzzle_position(&self) -> Vector {
         let (forward, right, up) = self.local_basis();
-        let local = forward * (shooter::Layout::BARREL_FORWARD_M as f32)
+        let local = forward * (layout::Layout::BARREL_FORWARD_M as f32)
             + up * self.height_offset_m as f32
             + right * self.lateral_offset_m as f32;
         return self.mount_position() + local;
@@ -114,7 +114,7 @@ impl Settings {
     /// 뷰어 직육면체 중심 — 발사구가 전면에 오도록 조준축 뒤로 반 길이.
     pub fn visual_position(&self) -> Vector {
         let (forward, _, _) = self.local_basis();
-        let half_depth = (shooter::Layout::VISUAL_SIZE_Y * 0.5) as f32;
+        let half_depth = (layout::Layout::VISUAL_SIZE_Y * 0.5) as f32;
         return self.muzzle_position() - forward * half_depth;
     }
 
@@ -141,8 +141,8 @@ impl Settings {
     /// 바꾸는 평행이동과 달리.
     pub(crate) fn yaw_range_for_lateral_deg(lateral_offset_m: f64) -> (f64, f64) {
         return Self::yaw_range_for_mount_deg(
-            shooter::Layout::MOUNT_X + lateral_offset_m,
-            shooter::Layout::MOUNT_Y,
+            layout::Layout::MOUNT_X + lateral_offset_m,
+            layout::Layout::MOUNT_Y,
         );
     }
 
@@ -163,8 +163,8 @@ impl Settings {
     /// 접수·리치 회귀 테스트용 — 높이·스핀·pitch/roll은 호출 시점 값을 유지한다.
     pub fn randomized_aim(&self, rng: &mut impl Rng) -> Self {
         let lateral_offset_m = rng.gen_range(RANDOM_SHOT_LATERAL_MIN_M..=RANDOM_SHOT_LATERAL_MAX_M);
-        let mount_x = shooter::Layout::MOUNT_X + self.pos_offset_x_m + lateral_offset_m;
-        let mount_y = shooter::Layout::MOUNT_Y + self.pos_offset_y_m;
+        let mount_x = layout::Layout::MOUNT_X + self.pos_offset_x_m + lateral_offset_m;
+        let mount_y = layout::Layout::MOUNT_Y + self.pos_offset_y_m;
         let (yaw_min, yaw_max) = Self::yaw_range_for_mount_deg(mount_x, mount_y);
         let yaw_deg = rng.gen_range(yaw_min..=yaw_max);
         let speed_mps = rng.gen_range(RANDOM_SHOT_SPEED_MIN_MPS..=RANDOM_SHOT_SPEED_MAX_MPS);
@@ -195,7 +195,7 @@ impl Settings {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        return crate::ball::Kinematics::predict_to(
+        return crate::estimator::Kinematics::predict_to(
             position,
             velocity,
             spin,
@@ -428,7 +428,7 @@ mod tests {
     fn visual_front_face_matches_muzzle() {
         let s = Settings::default();
         let (forward, _, _) = s.local_basis();
-        let front = s.visual_position() + forward * (shooter::Layout::VISUAL_SIZE_Y * 0.5) as f32;
+        let front = s.visual_position() + forward * (layout::Layout::VISUAL_SIZE_Y * 0.5) as f32;
         let muzzle = s.muzzle_position();
         assert!(
             (front - muzzle).length_squared() < 1e-10,

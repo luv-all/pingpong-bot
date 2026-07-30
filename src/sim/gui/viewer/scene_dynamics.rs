@@ -17,7 +17,6 @@ use super::panel;
 use super::robot_render::RobotRender;
 use super::urdf_visual_node::UrdfVisualNode;
 use crate::Point3;
-use crate::ball;
 use crate::constants::table;
 use crate::constants::viewer::{
     CAMERA_DIST_DEFAULT, CAMERA_DIST_MAX, CAMERA_DIST_MIN, HIT_PLANE_WALL_HEIGHT,
@@ -25,7 +24,8 @@ use crate::constants::viewer::{
 use crate::defaults::sim::RANDOM_SHOT_TARGET_PADDING_M;
 use crate::error::SwingPlanError;
 use crate::robot::urdf::{UrdfLinkVisual, UrdfModel};
-use crate::shooter;
+use crate::sim::gui::ball;
+use crate::sim::launch;
 use crate::sim::physics::world::SimWorld;
 use tracing::info;
 
@@ -165,9 +165,9 @@ fn build_scene_dynamics(scene: &mut SceneNode3d, urdf: Option<&UrdfModel>) -> Sc
     let ball = ball::Visual::spawn(scene);
     let shooter = scene
         .add_cube(
-            shooter::Layout::VISUAL_SIZE_X as f32,
-            shooter::Layout::VISUAL_SIZE_Y as f32,
-            shooter::Layout::VISUAL_SIZE_Z as f32,
+            launch::Layout::VISUAL_SIZE_X as f32,
+            launch::Layout::VISUAL_SIZE_Y as f32,
+            launch::Layout::VISUAL_SIZE_Z as f32,
         )
         .set_color(Color::new(0.45, 0.45, 0.5, 1.0));
     let impact_marker = scene.add_sphere(0.018).set_color(rgba(colors::IDLE_PRED));

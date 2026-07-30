@@ -6,17 +6,15 @@ use std::time::Instant;
 use anyhow::{Result, bail};
 use opencv::core::Scalar;
 use opencv::prelude::*;
-use pingpong_bot::ball;
 use pingpong_bot::camera;
-use pingpong_bot::camera::{
-    Calibration, FrameSource, Preview, PreviewAction, StereoOfflineArgs, Triangulate,
-};
+use pingpong_bot::camera::{Calibration, FrameSource, Preview, PreviewAction, StereoOfflineArgs};
 use pingpong_bot::defaults::detector_for;
 use pingpong_bot::detector::Detector;
+use pingpong_bot::estimator;
 
 pub struct CaptureResult {
-    pub traj: Vec<ball::TrajPoint>,
-    pub rolls: Vec<ball::RollEvent>,
+    pub traj: Vec<estimator::TrajPoint>,
+    pub rolls: Vec<estimator::RollEvent>,
     pub mu: Option<f64>,
 }
 
@@ -118,16 +116,16 @@ pub fn run_capture(
                 0.0
             }
         };
-        if let Some(pos) = Triangulate::pixels(&hits, &calibration) {
-            traj.push(ball::TrajPoint {
+        if let Some(pos) = estimator::Triangulate::pixels(&hits, &calibration) {
+            traj.push(estimator::TrajPoint {
                 t: sync_t,
                 pos,
                 pixels: hits.clone(),
             });
         }
 
-        let rolls = ball::TrajAnalysis::detect_rolls(&traj);
-        let mu_mean = ball::TrajAnalysis::mean_roll_mu(&rolls);
+        let rolls = estimator::TrajAnalysis::detect_rolls(&traj);
+        let mu_mean = estimator::TrajAnalysis::mean_roll_mu(&rolls);
 
         if let Some(ev) = rolls.last() {
             for (i, panel) in panels.iter_mut().enumerate() {
@@ -180,9 +178,9 @@ pub fn run_capture(
         Preview::destroy_window(window);
     }
 
-    let rolls = ball::TrajAnalysis::detect_rolls(&traj);
+    let rolls = estimator::TrajAnalysis::detect_rolls(&traj);
     return Ok(CaptureResult {
-        mu: ball::TrajAnalysis::mean_roll_mu(&rolls),
+        mu: estimator::TrajAnalysis::mean_roll_mu(&rolls),
         traj,
         rolls,
     });

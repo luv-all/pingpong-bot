@@ -11,11 +11,12 @@ use opencv::prelude::*;
 use pingpong_bot::Point3;
 use pingpong_bot::camera;
 use pingpong_bot::camera::{
-    Calibration, Frame, FrameSource, Preview, PreviewAction, Triangulate, WorldGridParams,
+    Calibration, Frame, FrameSource, Preview, PreviewAction, WorldGridParams,
 };
 use pingpong_bot::defaults::calibration_path;
 use pingpong_bot::defaults::detector_for;
 use pingpong_bot::detector::Detector;
+use pingpong_bot::estimator;
 
 use crate::args::Args;
 
@@ -212,7 +213,7 @@ pub fn run_opencv(args: &Args) -> Result<()> {
             panels.push((panel, id));
         }
 
-        let world = Triangulate::pixels(&hits, &calibration);
+        let world = estimator::Triangulate::pixels(&hits, &calibration);
         let rmse = world.and_then(|w| reproj_rmse(w, &hits, &calibration));
 
         if let Some(stdin) = &mut sim_stdin {

@@ -171,7 +171,8 @@ pub fn semi_implicit_euler(
     let next_pos = pos + next_vel * dt;
     let floor_z = table::SURFACE_Z + ball::RADIUS;
     if next_pos.z <= floor_z && next_vel.z < 0.0 {
-        let (bounced_v, bounced_w) = crate::ball::bounce::table_bounce(next_vel, omega, physics);
+        let (bounced_v, bounced_w) =
+            crate::estimator::bounce::table_bounce(next_vel, omega, physics);
         return (
             Vector3::new(next_pos.x, next_pos.y, floor_z),
             bounced_v,

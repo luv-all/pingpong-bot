@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex};
 
 use super::super::layers::SceneLayers;
 use super::super::scene::TableSceneOptions;
-use crate::ball;
 use crate::robot;
 use crate::robot::urdf::UrdfModel;
-use crate::shooter;
+use crate::sim::gui::ball;
+use crate::sim::gui::shooter;
 use crate::sim::physics::world::SimWorld;
 use crate::sim::session::controls::SimRuntimeControls;
 

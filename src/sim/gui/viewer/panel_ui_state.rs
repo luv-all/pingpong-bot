@@ -7,13 +7,13 @@ use super::super::debug::overlays::DebugOverlays;
 use super::eval_live_run::EvalLiveRun;
 use crate::constants::viewer::CAMERA_DIST_DEFAULT;
 use crate::eval;
-use crate::shooter;
+use crate::sim::launch;
 use crate::sim::session::controls::SimRuntimeControls;
 
 /// 패널 슬라이더 상태 — 매 프레임 `controls` 락 없이 UI를 그린다.
 #[derive(Clone, Debug)]
 pub struct PanelUiState {
-    pub shooter: shooter::Settings,
+    pub shooter: launch::Settings,
     pub time_scale: f64,
     /// OrbitCamera3d 거리 [m]
     pub camera_dist: f32,

@@ -5,12 +5,12 @@
 //! 네트에 걸리는 서브를 로봇에게 먹이고, 로봇은 예측 높이에서 헛스윙한다
 //! (예측 z≈1.05 vs 실제 도착 z=0.78).
 
-use pingpong_bot::ball;
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
 use pingpong_bot::eval;
-use pingpong_bot::shooter;
 use pingpong_bot::sim::SimWorld;
+use pingpong_bot::sim::launch;
+use pingpong_bot::sim::physics;
 
 /// 공이 라켓에 닿아 있는가.
 fn ball_touches_racket(world: &SimWorld) -> bool {
@@ -38,7 +38,7 @@ fn ball_touches_racket(world: &SimWorld) -> bool {
 ///
 /// 라켓이 한 번 닿은 뒤는 모두 "리턴"이라 관심 밖이다. 약한 리턴이 자기
 /// 코트에 튀어 네트를 맞는 경우가 있어, 속도 부호만으로는 갈라지지 않는다.
-fn incoming_touches_net_in_sim(settings: &shooter::Settings) -> bool {
+fn incoming_touches_net_in_sim(settings: &launch::Settings) -> bool {
     const DT: f64 = 1.0 / 1000.0;
     let mut world = SimWorld::with_physics(
         defaults::robot().expect("robot"),
@@ -62,7 +62,7 @@ fn incoming_touches_net_in_sim(settings: &shooter::Settings) -> bool {
             return false;
         }
         previous_y = y;
-        if world.ball_state == ball::State::Parked {
+        if world.ball_state == physics::BallState::Parked {
             return false;
         }
     }
@@ -70,7 +70,7 @@ fn incoming_touches_net_in_sim(settings: &shooter::Settings) -> bool {
 }
 
 /// 본 시뮬에서 수신 공이 네트 평면을 지날 때의 상단 여유고(m).
-fn incoming_net_clearance_in_sim(settings: &shooter::Settings) -> Option<f64> {
+fn incoming_net_clearance_in_sim(settings: &launch::Settings) -> Option<f64> {
     const DT: f64 = 1.0 / 1000.0;
     let net_y = table::LENGTH_Y * 0.5;
     let net_top = table::SURFACE_Z + table::NET_HEIGHT;
@@ -102,9 +102,9 @@ fn incoming_net_clearance_in_sim(settings: &shooter::Settings) -> Option<f64> {
 #[test]
 #[ignore = "진단 전용"]
 fn diag_default_shot() {
-    let mut shot = shooter::Settings::default();
+    let mut shot = launch::Settings::default();
     for lift in [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0] {
-        shot.pitch_deg = shooter::Settings::default().pitch_deg + lift;
+        shot.pitch_deg = launch::Settings::default().pitch_deg + lift;
         println!(
             "pitch={:+.2} gate_clear={:<5} sim_touch={:<5} clearance={}",
             shot.pitch_deg,

@@ -4,16 +4,16 @@
 //! 짧은 전파와 hit-plane 예측은 반암시적 오일러 (`ballistics`).
 //!
 //! sim Rapier에는 이차 항력이 없어서(기본 drag=0) 파이프라인은
-//! `ball::Ekf::new(0.0)` 을 쓴다. Magnus는 ω 상태 확장 전까지 예측에서 0.
+//! `estimator::Ekf::new(0.0)` 을 쓴다. Magnus는 ω 상태 확장 전까지 예측에서 0.
 
 use std::time::Instant;
 
 use nalgebra::{Matrix3, Matrix6, Vector3, Vector6};
 
 use crate::Point3;
-use crate::ball;
 use crate::defaults;
 use crate::defaults::PhysicsParams;
+use crate::estimator;
 use crate::estimator::{Estimator, HitPlane, Prediction};
 
 /// EKF 상태: 위치/속도 + 공분산.
@@ -172,7 +172,7 @@ impl Ekf {
 
     fn predict_step(&mut self, dt: f64) {
         // ω 추정 전 — 각속도 0으로 전파.
-        let (pos, vel, _) = ball::Kinematics::step(
+        let (pos, vel, _) = estimator::Kinematics::step(
             self.position,
             self.velocity,
             Vector3::zeros(),
@@ -210,7 +210,7 @@ impl Estimator for Ekf {
         if !self.initialized || !self.velocity_seeded {
             return None;
         }
-        return ball::Kinematics::predict_to(
+        return estimator::Kinematics::predict_to(
             self.position,
             self.velocity,
             Vector3::zeros(),
@@ -225,8 +225,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::ball;
     use crate::constants::table;
+    use crate::estimator;
     use crate::estimator::HitPlane;
     use crate::swing;
 
@@ -299,8 +299,8 @@ mod tests {
         let p0 = Vector3::new(table::WIDTH_X * 0.5, 2.4, table::SURFACE_Z + 0.25);
         let v0 = Vector3::new(0.0, -5.5, 0.8);
         let physics = crate::defaults::PhysicsParams::default();
-        let truth0 =
-            ball::Kinematics::predict_to(p0, v0, Vector3::zeros(), plane, &physics).expect("truth");
+        let truth0 = estimator::Kinematics::predict_to(p0, v0, Vector3::zeros(), plane, &physics)
+            .expect("truth");
 
         let mut ekf = Ekf::new(0.0);
         let t0 = Instant::now();
@@ -323,7 +323,8 @@ mod tests {
                     best_err = best_err.min(err);
                 }
             }
-            let (np, nv, _) = ball::Kinematics::step(pos, vel, Vector3::zeros(), 0.008, &physics);
+            let (np, nv, _) =
+                estimator::Kinematics::step(pos, vel, Vector3::zeros(), 0.008, &physics);
             pos = np;
             vel = nv;
             t += 0.008;

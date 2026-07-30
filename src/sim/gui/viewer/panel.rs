@@ -3,7 +3,6 @@
 pub use super::panel_ui_state::PanelUiState;
 pub use super::status_snapshot::StatusSnapshot;
 
-use crate::ball;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -15,6 +14,7 @@ use crate::constants::viewer::{CAMERA_DIST_MAX, CAMERA_DIST_MIN};
 use crate::defaults;
 use crate::eval;
 use crate::robot::Robot;
+use crate::sim::physics;
 use crate::sim::physics::world::SimWorld;
 use crate::sim::session::controls::SimRuntimeControls;
 
@@ -619,8 +619,8 @@ fn debug_checkbox(
 
 fn draw_status_panel(ui: &mut egui::Ui, status: &StatusSnapshot, debug: &DebugOverlays) {
     let ball_ko = match status.ball_state {
-        ball::State::Parked => "주차 (슈터에 대기)",
-        ball::State::InFlight => "비행 중",
+        physics::BallState::Parked => "주차 (슈터에 대기)",
+        physics::BallState::InFlight => "비행 중",
     };
     let swing_ko = if status.swing_committed {
         "확정 — 치는 중"
