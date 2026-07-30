@@ -76,7 +76,40 @@ impl AxlRail {
         return Ok(normalize_m(self.config.board_to_domain_abs(board_m)));
     }
 
-    /// 도메인 절대 목표를 건다. Live는 모션 완료를 기다리지 않는다 (궤적 샘플링용).
+    /// 궤적 시작 시 한 번만 레일을 이동한다. 속도는 `|Δx|/duration` (램프 무시).
+    pub fn command_abs_in_secs(&mut self, x: f64, duration_secs: f64) -> Result<f64, HwError> {
+        let domain_m = normalize_m(self.config.clamp_m(x));
+        let current_m = self.read_x_m()?;
+        let distance_m = (domain_m - current_m).abs();
+        if distance_m <= 1e-9 || duration_secs <= f64::EPSILON {
+            return self.set_domain_position(domain_m);
+        }
+
+        let vel = (distance_m / duration_secs).clamp(self.config.min_vel, self.config.max_vel);
+        match &mut self.kind {
+            RailKind::DryRun { position_m } => {
+                let _ = vel;
+                *position_m = domain_m;
+            }
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => {
+                let board_m = normalize_m(self.config.domain_to_board_abs(domain_m));
+                live.start_move_abs_m(&self.config, board_m, vel)?;
+            }
+        }
+        return Ok(domain_m);
+    }
+
+    fn set_domain_position(&mut self, domain_m: f64) -> Result<f64, HwError> {
+        match &mut self.kind {
+            RailKind::DryRun { position_m } => *position_m = domain_m,
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(_) => {}
+        }
+        return Ok(domain_m);
+    }
+
+    /// 도메인 절대 목표를 건다. Live는 `AxmMovePos`로 블로킹 이동한다.
     pub fn command_abs_m(&mut self, x: f64) -> Result<f64, HwError> {
         let domain_m = normalize_m(self.config.clamp_m(x));
         match &mut self.kind {
@@ -84,7 +117,7 @@ impl AxlRail {
             #[cfg(all(windows, feature = "real"))]
             RailKind::Live(live) => {
                 let board_m = normalize_m(self.config.domain_to_board_abs(domain_m));
-                live.command_abs_m(&self.config, board_m)?;
+                live.move_abs_m_blocking(&self.config, board_m)?;
             }
         }
         return Ok(domain_m);
@@ -123,6 +156,40 @@ mod tests {
 
     use super::AxlRail;
     use crate::hardware::rail::RailConfig;
+
+    #[test]
+    fn command_abs_in_secs_uses_distance_over_duration() {
+        let cfg = RailConfig {
+            enabled: true,
+            dll_path: PathBuf::from("unused.dll"),
+            pulses_per_meter: 1000,
+            x_min_m: 0.0,
+            x_max_m: 1.0,
+            min_vel: 0.01,
+            max_vel: 2.0,
+            ..RailConfig::default()
+        };
+        let mut rail = AxlRail::dry_run(cfg).unwrap();
+        let commanded = rail.command_abs_in_secs(0.2, 0.4).unwrap();
+        assert_eq!(commanded, 0.2);
+        assert_eq!(rail.read_x_m().unwrap(), 0.2);
+    }
+
+    #[test]
+    fn command_abs_in_secs_skips_zero_move() {
+        let cfg = RailConfig {
+            enabled: true,
+            dll_path: PathBuf::from("unused.dll"),
+            pulses_per_meter: 1000,
+            x_min_m: 0.0,
+            x_max_m: 1.0,
+            ..RailConfig::default()
+        };
+        let mut rail = AxlRail::dry_run(cfg).unwrap();
+        rail.command_abs_in_secs(0.0, 0.5).unwrap();
+        let commanded = rail.command_abs_in_secs(0.0, 0.5).unwrap();
+        assert_eq!(commanded, 0.0);
+    }
 
     #[test]
     fn dry_run_move_abs_clamps_and_updates_position() {

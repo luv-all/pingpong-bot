@@ -167,7 +167,23 @@ impl Hardware for RealHardware {
         let cancel = Arc::clone(&self.cancel);
         let tick = Duration::from_secs_f64(1.0 / self.stream_hz);
         let torque_ff = self.torque_feedforward;
+        let rail_target = trajectory.follow_through_rail_x;
+        let rail_duration = trajectory.duration_secs;
         self.executor = Some(thread::spawn(move || {
+            if let Ok(mut guard) = rail.lock()
+                && let Some(rail_hw) = guard.as_mut()
+                && let Err(error) = rail_hw.command_abs_in_secs(rail_target, rail_duration)
+            {
+                error!(
+                    rail_target,
+                    rail_duration,
+                    error = %error,
+                    "AXL 레일 이동 시작 실패 — 스윙 중단"
+                );
+                busy.store(false, Ordering::Release);
+                return;
+            }
+
             let started = Instant::now();
             loop {
                 if cancel.load(Ordering::Acquire) {
@@ -176,7 +192,6 @@ impl Hardware for RealHardware {
                 let elapsed = started.elapsed().as_secs_f64();
                 let sample_time = elapsed.min(trajectory.duration_secs);
                 let joints = trajectory.sample_at(sample_time);
-                let rail_x = trajectory.sample_rail_at(sample_time);
 
                 let joints_ok = match bus.lock() {
                     Ok(mut bus) => match bus.write_joints(&joints) {
@@ -207,19 +222,6 @@ impl Hardware for RealHardware {
                             let _ = bus.write_goal_currents_from_torques(&tau);
                         });
                     }
-                }
-
-                if let Ok(mut guard) = rail.lock()
-                    && let Some(rail_hw) = guard.as_mut()
-                    && let Err(error) = rail_hw.command_abs_m(rail_x)
-                {
-                    error!(
-                        sample_time,
-                        rail_x,
-                        error = %error,
-                        "AXL 레일 목표 전송 실패 — 스윙 중단"
-                    );
-                    break;
                 }
 
                 if elapsed >= trajectory.duration_secs {

@@ -104,7 +104,28 @@ impl AxlLive {
         return Err(read_position_error(actual_status, command_status));
     }
 
-    pub(super) fn command_abs_m(
+    pub(super) fn start_move_abs_m(
+        &mut self,
+        config: &RailConfig,
+        commanded_m: f64,
+        vel: f64,
+    ) -> Result<(), HwError> {
+        check_axl("AxmMotSetAbsRelMode", unsafe {
+            (self.ffi.axm_mot_set_abs_rel_mode)(config.axis, 0)
+        })?;
+        check_axl("AxmMoveStartPos", unsafe {
+            (self.ffi.axm_move_start_pos)(
+                config.axis,
+                commanded_m,
+                vel,
+                config.accel,
+                config.decel,
+            )
+        })?;
+        return Ok(());
+    }
+
+    pub(super) fn move_abs_m_blocking(
         &mut self,
         config: &RailConfig,
         commanded_m: f64,
