@@ -49,6 +49,17 @@ pub enum Decision {
     Attempt,
 }
 
+/// 후보 중 **가장 늦게** 도달하는 tti [s]. 후보가 없으면 `None`.
+///
+/// "너무 늦음" 판정의 근거값이다 — `min`이 아니라 `max`인 이유는 [`decide`] 참고.
+/// 로그에 실을 때도 같은 값을 쓰도록 여기서 한 번만 계산한다.
+pub fn latest_tti_secs(predictions: &[Prediction]) -> Option<f64> {
+    return predictions
+        .iter()
+        .map(|prediction| prediction.time_to_impact_secs)
+        .reduce(f64::max);
+}
+
 /// 게이트를 순서대로 통과시킨다.
 ///
 /// `ball_y`는 EKF가 추정한 현재 공 y [m]. `None`이면 아직 추적 전으로 본다.

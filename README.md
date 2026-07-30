@@ -153,8 +153,12 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 |--------|------|-----|
 | `--dry-run` | off | 모터·레일 정지. 나머지 체인은 그대로 |
 | `--preview` | on | 좌/우 검출 오버레이 창 (ESC·`q` 종료) |
+| `--sim` | on | 관전용 3D 창 (로봇·예측 도달점·스윙 재생) |
 | `--home` | on | 시작 시 센터(ready) 자세로 이동 |
+| `--release-torque` | off | 종료 시 토크 해제. 기본은 켠 채로 둬서 팔이 안 주저앉게 한다 |
 | `--timeout-secs` | 60 | 공을 기다리는 최대 시간 |
+
+샷이 끝나도 창이 열려 있는 동안은 **동작만 멈추고 종료하지 않는다** (ESC·`q`로 종료).
 
 카메라 2대(`data/calibration.json`)와 `data/colormask.json`이 있어야 한다.
 `Ekf`·`Calibration`·`Hardware`를 스레드별로 단독 소유하고 crossbeam 채널로만 잇는다 —

@@ -37,23 +37,32 @@ pub mod estimator_worker;
 
 mod commit_request;
 mod decision;
+pub mod fmt;
 mod options;
 mod preview;
 mod preview_event;
 mod run;
 mod shot_event;
 mod shutdown;
+mod sim_child;
+mod sim_host;
+mod sim_update;
 mod throttle;
 mod vision_event;
 
 pub use commit_request::CommitRequest;
-pub use decision::{Decision, decide};
+pub use decision::{Decision, decide, latest_tti_secs};
 pub use options::Options;
 pub use preview::PreviewWindow;
 pub use preview_event::PreviewEvent;
 pub use shot_event::ShotEvent;
 pub use shutdown::{Shutdown, ShutdownGuard, shutdown_channel};
+pub use sim_update::{PoseMsg, SimUpdate, SwingMsg};
 pub use throttle::Throttle;
 pub use vision_event::VisionEvent;
 
 pub use run::run;
+pub use sim_child::run as run_sim_child;
+
+/// 관전용 sim 창을 띄우는 내부 플래그 (사용자 대상 아님).
+pub const SIM_CHILD_FLAG: &str = "--sim-child";

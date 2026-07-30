@@ -8,12 +8,15 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use pingpong_bot::camera;
 use pingpong_bot::camera::Calibration;
+use pingpong_bot::defaults::ControlParams;
 use pingpong_bot::estimator::{Ekf, Estimator, GateOutcome, Prediction, Triangulate};
-use pingpong_bot::robot::motion::InterceptWindow;
+use pingpong_bot::robot::motion::{InterceptWindow, Planner};
 use tracing::{debug, info_span};
 
+use super::fmt::f2;
 use super::{
-    CommitRequest, Decision, PreviewEvent, ShotEvent, Shutdown, Throttle, VisionEvent, decide,
+    CommitRequest, Decision, PreviewEvent, ShotEvent, Shutdown, SimUpdate, Throttle, VisionEvent,
+    decide, latest_tti_secs,
 };
 
 /// 스테레오 쌍으로 인정할 최대 타임스탬프 차 [s].
@@ -76,6 +79,7 @@ pub fn spawn(
     intercept: InterceptWindow,
     commit_tx: Sender<CommitRequest>,
     preview_tx: Option<Sender<PreviewEvent>>,
+    sim_tx: Option<Sender<SimUpdate>>,
     event_tx: Sender<ShotEvent>,
     shutdown: Shutdown,
 ) -> JoinHandle<EstimatorStats> {
@@ -121,12 +125,12 @@ pub fn spawn(
                 if !outcome.used_measurement() || matches!(outcome, GateOutcome::Reset) {
                     debug!(
                         outcome = ?outcome,
-                        d2 = ekf.last_gate_d2(),
                         reject_streak = ekf.reject_streak(),
-                        x = point.coords.x,
-                        y = point.coords.y,
-                        z = point.coords.z,
-                        skew_ms = skew * 1e3,
+                        d2 = ekf.last_gate_d2().map(f2),
+                        x = f2(point.coords.x),
+                        y = f2(point.coords.y),
+                        z = f2(point.coords.z),
+                        skew_ms = f2(skew * 1e3),
                         "측정 거부"
                     );
                 }
@@ -171,6 +175,9 @@ pub fn spawn(
                 );
             }
 
+            // 화면·sim에 보여줄 대표 후보 — 커밋 창 안의 첫 후보, 없으면 가장 이른 것.
+            let shown = display_candidate(&predictions);
+
             match decision {
                 Decision::Attempt => {
                     let request = CommitRequest {
@@ -183,20 +190,39 @@ pub fn spawn(
                         stats.commit_dropped += 1;
                     }
                 }
-                Decision::Abandon(reason) if !announced_abandon => {
+                Decision::Abandon(_) if !announced_abandon => {
                     announced_abandon = true;
-                    let _ = event_tx.send(ShotEvent::Abandoned {
-                        reason: reason.to_owned(),
+                    // 판정에 쓴 값을 그대로 실어 보낸다 — 로그만 보고 "얼마나 늦었나"를 안다.
+                    let _ = event_tx.send(ShotEvent::TooLate {
+                        latest_tti_secs: latest_tti_secs(&predictions).unwrap_or(f64::NAN),
+                        min_swing_secs: ControlParams::default().min_swing_secs,
+                        candidates: predictions.len(),
+                        ball_y: ball_y.unwrap_or(f64::NAN),
                     });
                 }
                 Decision::Abandon(_) | Decision::Wait(_) => {}
             }
 
+            if let Some(sim_tx) = &sim_tx {
+                let _ = sim_tx.try_send(SimUpdate {
+                    ball: ekf.position(),
+                    impact: shown.map(|prediction| prediction.impact_position),
+                    ..SimUpdate::default()
+                });
+            }
+
             if let Some(preview_tx) = &preview_tx {
-                let hud = hud_lines(&ekf, &decision, ball_y);
+                let hud = hud_lines(&ekf, &decision, shown.as_ref());
+                // 예측 도달점을 **이 카메라로 재투영**해 화면 위에 찍는다.
+                let impact_pixel = shown.and_then(|prediction| {
+                    calibration
+                        .params(event.frame.camera_id)?
+                        .project_world(prediction.impact_position)
+                });
                 let preview = PreviewEvent {
                     frame: event.frame,
                     pixel: event.pixel,
+                    impact_pixel,
                     hud,
                 };
                 if let Err(TrySendError::Full(_)) = preview_tx.try_send(preview) {
@@ -256,36 +282,61 @@ fn log_transition(ekf: &Ekf, decision: Decision, predictions: &[Prediction]) {
     debug!(
         decision = ?decision,
         candidates = predictions.len(),
-        tti_min = predictions.is_empty().then_some(f64::NAN).unwrap_or(tti_min),
-        tti_max = predictions.is_empty().then_some(f64::NAN).unwrap_or(tti_max),
-        ball_x = position.map(|p| p.coords.x),
-        ball_y = position.map(|p| p.coords.y),
-        ball_z = position.map(|p| p.coords.z),
-        speed = ekf.velocity().map(|v| v.norm()),
+        tti_min = (!predictions.is_empty()).then(|| f2(tti_min)),
+        tti_max = (!predictions.is_empty()).then(|| f2(tti_max)),
+        ball_x = position.map(|p| f2(p.coords.x)),
+        ball_y = position.map(|p| f2(p.coords.y)),
+        ball_z = position.map(|p| f2(p.coords.z)),
+        speed = ekf.velocity().map(|v| f2(v.norm())),
         "real shot: 게이트 전이"
     );
 }
 
+/// 화면에 대표로 보여줄 후보 — 커밋 창 안의 첫 후보, 없으면 tti가 가장 이른 것.
+///
+/// `plan_best`가 실제로 고르는 후보(점수 순)와 반드시 같지는 않다 — 어디를 칠 셈인지
+/// 가늠하는 표시일 뿐이다.
+fn display_candidate(predictions: &[Prediction]) -> Option<Prediction> {
+    return predictions
+        .iter()
+        .find(|prediction| Planner::in_commit_window(prediction.time_to_impact_secs))
+        .or_else(|| {
+            predictions.iter().min_by(|a, b| {
+                a.time_to_impact_secs
+                    .partial_cmp(&b.time_to_impact_secs)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        })
+        .copied();
+}
+
 /// HUD 문자열은 **ASCII만** 쓴다 — Hershey 폰트가 유니코드를 못 그린다 (한글은 `??????`).
 /// 한글 사유는 `ShotEvent` 로그로만 나간다.
-fn hud_lines(ekf: &Ekf, decision: &Decision, ball_y: Option<f64>) -> Vec<String> {
+fn hud_lines(ekf: &Ekf, decision: &Decision, shown: Option<&Prediction>) -> Vec<String> {
     let state = match decision {
         Decision::Attempt => "ATTEMPT plan request".to_owned(),
-        Decision::Abandon(_) => "ABANDON".to_owned(),
+        Decision::Abandon(_) => "ABANDON too late".to_owned(),
         Decision::Wait(reason) => reason.label().to_owned(),
     };
     let mut lines = vec![state];
     if let Some(position) = ekf.position() {
         let speed = ekf.velocity().map(|v| v.norm()).unwrap_or(0.0);
         lines.push(format!(
-            "ball  x{:+.2} y{:+.2} z{:+.2}  |v|{:.1} m/s",
+            "ball   x{:+.2} y{:+.2} z{:+.2}  |v|{:.1}",
             position.coords.x, position.coords.y, position.coords.z, speed
         ));
-    } else if let Some(y) = ball_y {
-        lines.push(format!("ball y{y:+.2}"));
+    }
+    if let Some(prediction) = shown {
+        lines.push(format!(
+            "impact x{:+.2} y{:+.2} z{:+.2}  tti {:.3}s",
+            prediction.impact_position.coords.x,
+            prediction.impact_position.coords.y,
+            prediction.impact_position.coords.z,
+            prediction.time_to_impact_secs
+        ));
     }
     if let Some(d2) = ekf.last_gate_d2() {
-        lines.push(format!("gate d2 {d2:.1}  reject {}", ekf.reject_streak()));
+        lines.push(format!("gate   d2 {d2:.1}  reject {}", ekf.reject_streak()));
     }
     return lines;
 }

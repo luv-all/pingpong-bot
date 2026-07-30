@@ -8,6 +8,8 @@ use pingpong_bot::camera;
 pub struct PreviewEvent {
     pub frame: camera::Frame,
     pub pixel: Option<camera::Pixel>,
+    /// 예측 도달 위치를 **이 카메라로 재투영**한 픽셀. 프레임 밖이면 `None`.
+    pub impact_pixel: Option<camera::Pixel>,
     /// 화면 좌상단 HUD 줄들 (추정 상태·게이트 단계).
     pub hud: Vec<String>,
 }

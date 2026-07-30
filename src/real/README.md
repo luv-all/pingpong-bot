@@ -18,9 +18,22 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 |--------|------|-----|
 | `--dry-run` | off | `RealHardware::dry_run_with_arm` — 모터·레일 정지, 나머지 체인은 그대로 |
 | `--preview` | on | 좌/우 검출 오버레이 창. ESC·`q`로 종료 |
+| `--sim` | on | 관전용 3D 창 (테이블·로봇·예측 도달점·스윙 재생) |
 | `--home` | on | 시작 시 센터(ready) 자세로 이동 |
+| `--release-torque` | off | 종료 시 토크를 뺀다. 기본은 **켠 채로 둔다** (안 그러면 팔이 주저앉는다) |
 | `--timeout-secs` | 60 | 공을 기다리는 최대 시간 |
 | `--dxl-port` | `COM8` | `DynamixelConfig::default().port` 덮어쓰기 |
+
+**샷이 끝나도 프로그램은 안 꺼진다** (`--preview`가 켜져 있을 때). 커밋했든 포기했든
+동작만 멈추고 결과를 창에 띄운 채 기다린다 — 순식간에 끝나 아무것도 못 보는 걸 막기 위해서다.
+종료는 ESC·`q`. `--preview=false`면 볼 것이 없으니 끝나는 즉시 종료한다.
+
+**종료해도 토크는 유지된다.** `DynamixelBus::drop`이 토크를 끄면 프로그램이 끝나는 순간 팔이
+중력으로 주저앉는다 (AXL 레일도 같은 이유로 서보를 켠 채 닫는다). 손으로 옮기려면
+`--release-torque`를 쓰거나 전원을 내린다. 부작용으로 다음 실행의 EEPROM 설정(Operating Mode
+11 · PWM Limit 36 · Current Limit 38)이 토크 ON 상태에서 거부될 수 있어,
+`configure_position_mode_max_effort`가 **먼저 읽어보고 이미 맞으면 아무것도 쓰지 않는다** —
+그래서 재실행할 때도 팔이 잠깐 늘어지지 않는다.
 
 전제 파일: `data/calibration.json` (캠 2대) · `data/colormask.json`.
 
@@ -41,6 +54,7 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 | `Ekf` · `Calibration` · 게이트 | `estimator_worker` |
 | `Hardware` (버스 · 레일 · 커밋 래치) | `control_worker` |
 | highgui 창 | 메인 스레드 (`PreviewWindow`) |
+| kiss3d 관전 창 | **자식 프로세스** (`--sim-child`) |
 
 `Arc<Mutex<Hardware>>`가 없다. **`read_pose → plan_best → command`가 전부 `control_worker`
 안에서만** 일어나고, 추정 스레드는 로봇 포즈를 볼 방법 자체가 없다.
@@ -48,6 +62,10 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 ---
 
 ## 파이프라인
+
+kiss3d(3D 창)와 OpenCV highgui(프리뷰)가 **둘 다 메인 스레드를 요구**해서 한 프로세스에 같이
+못 띄운다. `tools/verify_stereo`와 같이 자기 자신을 `--sim-child`로 띄우고 stdin 한 줄
+JSON(`SimUpdate`)으로 먹인다. 자식이 죽어도 본 파이프라인은 그대로 간다.
 
 ```mermaid
 flowchart LR
@@ -68,6 +86,8 @@ flowchart LR
   est -->|"ShotEvent"| main
   ctl -->|"ShotEvent (unbounded)"| main
   ctl --> hw
+  est -->|"SimUpdate"| sim["sim 자식 프로세스<br/>kiss3d 관전 창"]
+  ctl -->|"SimUpdate (커밋 궤적)"| sim
 
   main -.->|"Shutdown 가드 drop"| cams
   main -.->|"Shutdown 가드 drop"| est
@@ -100,25 +120,51 @@ stateDiagram-v2
     Tracking --> Tracking: 게이트 Wait — 다음 관측
 
     Tracking --> Committed: plan_best Ok → command
-    Tracking --> Abandoned: 너무 늦음 / 토크·관절 한계
+    Tracking --> TooLate: max(tti) < min_swing_secs
+    Tracking --> Infeasible: 관절·토크 한계
     Armed --> TimedOut: --timeout-secs 초과
 
     Committed --> Finishing: 스윙 완주 대기
     Finishing --> Done: 센터 복귀
-    Abandoned --> Done
+    TooLate --> Done
+    Infeasible --> Done
     TimedOut --> Done
     Failed --> Done
-    Done --> [*]
+    Done --> Frozen: --preview
+    Frozen --> [*]: ESC / q
+    Done --> [*]: --preview=false
 ```
 
 `ShotEvent`는 전부 메인으로 모여 한 곳에서만 로그된다 (워커가 중복으로 찍지 않는다).
 `Committed`는 sim `"shot: swing commit"`과 **같은 필드**(`duration_secs` · `rail_end` ·
 `impact` · `tti` · `peak_joint_speed`)를 실어서 sim ↔ real 로그를 그대로 비교할 수 있다.
 
-`Done`은 항상 마지막이고 **제어 워커만** 보낸다. 메인은 `Done`을 받아야 정상 종료한다 —
-그래야 커밋 후 스윙 완주와 센터 복귀가 잘리지 않는다.
+포기 이벤트는 **근거 수치를 들고 온다** — `TooLate`는 `latest_tti_secs` · `min_swing_secs` ·
+`candidates` · `ball_y`를, `Infeasible`은 IK 목표 좌표를 싣는다. 문자열 사유만 남기면 벤치에서
+"얼마나 늦었길래 포기했나"를 되짚을 수 없다. 둘 다 **info** 레벨이라 `--debug` 없이 보인다.
+
+`Done`은 항상 마지막이고 **제어 워커만** 보낸다. `--preview`면 `Done` 뒤에도 프로그램은 살아
+있고 (Frozen) 화면만 갱신한다 — 제어 워커는 이미 래치돼 아무것도 하지 않는다.
 
 ---
+
+## 화면
+
+**프리뷰 창** (`real shot`) — 좌/우 프레임을 가로로 붙인다.
+
+- 초록 원 = 검출한 공
+- 빨간 원 = **예측 도달 위치**를 그 카메라로 재투영한 자리 (`camera::Params::project_world`)
+- 좌상단 노란 HUD = 게이트 상태 · 공 위치·속력 · 예측 도달점·tti · EKF 게이트 d²
+- 우하단 = 샷 결과 (커밋 요약 또는 포기 사유). 한 번 뜨면 창을 닫을 때까지 남는다
+
+**sim 창** (`real shot sim`) — 아무것도 조작하지 않는 관전 전용.
+
+- 주황 공 = EKF 추정 공 위치
+- 반투명 공 = 예측 도달 위치
+- 로봇 = 실기에서 읽은 포즈. 커밋하면 **그 궤적을 그대로 재생**한다
+
+HUD 문자열은 ASCII만 쓴다 — Hershey 폰트가 유니코드를 못 그려 한글은 `??????`가 된다.
+한글 사유는 로그로만 나간다.
 
 ## 커밋 결정 게이트
 
@@ -156,7 +202,7 @@ flowchart TD
     thr -->|no| pose["read_pose"]
     pose --> plan{"Planner::plan_best"}
     plan -->|Ok| cmd["command(그 궤적 그대로)<br/>→ Committed · 래치"]
-    plan -->|JointOrTorqueLimit| abandon["Abandoned<br/>모터 보호 — 재시도 안 함"]
+    plan -->|JointOrTorqueLimit| abandon["Infeasible<br/>모터 보호 — 재시도 안 함"]
     plan -->|InsufficientTime| retry["조용히 버림 — 다음 요청"]
     plan -->|그 외| warn["PlanFailed<br/>1초 스로틀 warn → 다음 요청"]
 ```
@@ -192,6 +238,11 @@ real 전용 튜닝 값을 새로 만들지 않는다 — sim과 갈리면 sim에
 | `control_worker.rs` | — | 하드웨어 단독 소유 · 계획 · 커밋 래치 |
 | `decision.rs` | `Decision` / `WaitReason` | 순수 게이트 + 단위 테스트 |
 | `preview.rs` | `PreviewWindow` | 메인 스레드 highgui |
+| `sim_child.rs` | — | `--sim-child` kiss3d 관전 창 (자식 프로세스) |
+| `sim_host.rs` | — | 부모 쪽 자식 관리 — 띄우고 stdin으로 먹인다 |
+| `sim_update.rs` | `SimUpdate` | 부모 → sim 자식 한 줄 JSON (공·도달점·포즈·스윙) |
+| `throttle.rs` | `Throttle` | 주기 로그 스로틀 |
+| `fmt.rs` | — | 로그 숫자 소수점 2자리 |
 | `vision_event.rs` | `VisionEvent` | cam → estimator |
 | `commit_request.rs` | `CommitRequest` | estimator → control |
 | `preview_event.rs` | `PreviewEvent` | estimator → main |
@@ -205,6 +256,7 @@ real 전용 튜닝 값을 새로 만들지 않는다 — sim과 갈리면 sim에
 
 | 로그 | 스레드 | 언제 | 왜 보나 |
 |------|--------|------|---------|
+| `real shot: 포기 — …` | main | 포기할 때 (**info** — `--debug` 불필요) |
 | `real shot: 게이트 전이` | estimator | `Decision`이 **바뀔 때만** | "왜 안 쳤나"를 로그만으로 되짚는다. `decision` · `candidates` · `tti_min/max` · 공 위치·속력 |
 | `측정 거부` | estimator | EKF가 측정을 버리거나 리셋할 때 | 마할라노비스 `d2` · `reject_streak` · 그 3D 점 · `skew_ms` |
 | `추정 진척` | estimator | 1초마다 | triangulated·accepted·rejected 누적, 현재 게이트 |
@@ -212,6 +264,10 @@ real 전용 튜닝 값을 새로 만들지 않는다 — sim과 갈리면 sim에
 | `스윙 계획 실패 — 재시도` | control | 시도마다 | 실패 원인 + 후보 수 + 그때의 시작 포즈 |
 | `InsufficientTime` | control | 늦은 예측을 버릴 때 | `tti` vs `min_swing_secs` |
 | `커밋 요청 소비` | control | 계획 직전 | `request_age_secs` — 예측이 얼마나 낡았나 |
+
+포기·커밋 로그는 판정 근거 **수치를 같이 싣는다** — `latest_tti` · `min_swing_secs` ·
+`shortfall` · `candidates` · `ball_y`. 문자열 사유만 남으면 "얼마나 늦었길래"를 못 되짚는다.
+로그의 실수는 전부 소수점 2자리다 (`fmt::f2`).
 
 per-tick 로그는 없다. 120 fps × 2캠이면 초당 수백 줄이라 쓸 수 없어서, **전이 시점**과
 **1초 주기**로만 묶는다 (`throttle.rs`). tracing span이 붙어 있어 `cam{id=0}` · `estimator` ·

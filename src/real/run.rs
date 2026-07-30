@@ -20,20 +20,25 @@ use crate::cli::Args;
 
 use super::camera_worker::{self, CameraStats};
 use super::estimator_worker::{self, EstimatorStats};
+use super::fmt::{f2, f2_slice};
 use super::{
     Options, PreviewEvent, PreviewWindow, ShotEvent, ShutdownGuard, control_worker,
-    shutdown_channel,
+    shutdown_channel, sim_host,
 };
 
 /// 카메라 → 추정 버퍼. 실시간이라 크게 잡을 이유가 없다 (밀리면 어차피 버린다).
 const VISION_CAPACITY: usize = 8;
 const PREVIEW_CAPACITY: usize = 2;
+const SIM_CAPACITY: usize = 2;
 /// 프리뷰가 없을 때 메인 루프 tick.
 const IDLE_TICK: Duration = Duration::from_millis(5);
-/// 커밋/포기 후 제어 워커가 마무리(스윙 완주 + 센터 복귀)할 여유.
+/// 샷이 끝난 뒤 제어 워커가 마무리(스윙 완주 + 센터 복귀)할 여유.
 const FINISH_GRACE: Duration = Duration::from_secs(15);
 
-/// 공 하나를 받아 스윙 한 번을 커밋하고 종료한다.
+/// 공 하나를 받아 스윙 한 번을 커밋하고 멈춘다.
+///
+/// 창이 있으면(`--preview`) 샷이 끝나도 **프로그램을 끄지 않는다** — 동작만 멈추고
+/// 결과를 띄운 채 기다린다. 종료는 ESC·`q`. 창이 없으면 끝나는 즉시 종료한다.
 pub fn run(args: &Args) -> Result<()> {
     let options = Options::from_args(args);
     let robot = robot().context("defaults::robot")?;
@@ -56,6 +61,15 @@ pub fn run(args: &Args) -> Result<()> {
     let (preview_tx, preview_rx) = if options.preview {
         let (tx, rx) = bounded(PREVIEW_CAPACITY);
         (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
+    let (sim_tx, sim_handle) = if options.sim {
+        let (tx, rx) = bounded(SIM_CAPACITY);
+        match sim_host::spawn(rx) {
+            Some(handle) => (Some(tx), Some(handle)),
+            None => (None, None),
+        }
     } else {
         (None, None)
     };
@@ -84,6 +98,7 @@ pub fn run(args: &Args) -> Result<()> {
         InterceptWindow::default(),
         commit_tx,
         preview_tx,
+        sim_tx.clone(),
         event_tx.clone(),
         shutdown.clone(),
     );
@@ -92,6 +107,7 @@ pub fn run(args: &Args) -> Result<()> {
         Arc::clone(&arm),
         options.home,
         commit_rx,
+        sim_tx,
         event_tx,
     );
 
@@ -105,6 +121,9 @@ pub fn run(args: &Args) -> Result<()> {
     if control_handle.join().is_err() {
         warn!("제어 워커 패닉");
     }
+    if let Some(handle) = sim_handle {
+        let _ = handle.join();
+    }
 
     log_summary(&outcome, &camera_stats, estimator_stats.as_ref());
     return Ok(());
@@ -113,7 +132,8 @@ pub fn run(args: &Args) -> Result<()> {
 /// 메인 루프가 끝난 이유.
 enum Outcome {
     Committed,
-    Abandoned(String),
+    TooLate,
+    Infeasible(String),
     Failed(String),
     TimedOut,
     Quit,
@@ -123,7 +143,8 @@ impl Outcome {
     fn label(&self) -> String {
         return match self {
             Self::Committed => "커밋".to_owned(),
-            Self::Abandoned(reason) => format!("포기 - {reason}"),
+            Self::TooLate => "포기 - 너무 늦음".to_owned(),
+            Self::Infeasible(reason) => format!("포기 - {reason}"),
             Self::Failed(reason) => format!("실패 - {reason}"),
             Self::TimedOut => "타임아웃 - 공이 오지 않음".to_owned(),
             Self::Quit => "사용자 종료".to_owned(),
@@ -131,7 +152,10 @@ impl Outcome {
     }
 }
 
-/// 샷 이벤트를 찍고 프리뷰를 돌린다. 종료가 확정되면 셧다운을 걸고 `Done`까지 기다린다.
+/// 샷 이벤트를 찍고 프리뷰를 돌린다.
+///
+/// 샷이 끝나면 **셧다운을 걸지 않고** 결과를 화면에 고정한 채 계속 돈다 (창이 있을 때).
+/// 카메라·추정은 계속 돌아 화면이 살아 있고, 제어 워커는 이미 래치돼 아무것도 안 한다.
 fn main_loop(
     options: &Options,
     event_rx: &Receiver<ShotEvent>,
@@ -143,41 +167,47 @@ fn main_loop(
     let wait_deadline = Instant::now() + Duration::from_secs_f64(options.timeout_secs);
     let mut finish_deadline: Option<Instant> = None;
     let mut outcome: Option<Outcome> = None;
+    // 창이 없으면 볼 것도 없으니 끝나는 즉시 내려간다.
+    let freeze = options.preview;
 
     let result = loop {
-        // 제어 워커가 마무리(스윙 완주 + 센터 복귀)까지 끝냈는가 — 유일한 정상 종료.
-        let mut done = false;
+        let mut control_done = false;
         while let Ok(event) = event_rx.try_recv() {
             log_event(&event);
+            if let Some(preview) = &mut preview
+                && let Some(lines) = result_lines(&event)
+            {
+                preview.set_result(lines);
+            }
             if matches!(event, ShotEvent::Done) {
-                done = true;
-                break;
+                control_done = true;
+                continue;
             }
             if outcome.is_none() && event.ends_shot() {
-                outcome = Some(match event {
-                    ShotEvent::Committed { .. } => Outcome::Committed,
-                    ShotEvent::Abandoned { reason } => Outcome::Abandoned(reason),
-                    ShotEvent::Failed { reason } => Outcome::Failed(reason),
-                    _ => Outcome::Quit,
-                });
+                outcome = Some(Outcome::from_event(event));
                 finish_deadline = Some(Instant::now() + FINISH_GRACE);
-                drop(guard.take());
+                if !freeze {
+                    drop(guard.take());
+                }
             }
         }
-        if done {
+        // 창 없이 돌 때만 제어 워커 종료가 곧 프로그램 종료다.
+        if control_done && !freeze {
             break outcome.unwrap_or(Outcome::Quit);
         }
 
         if outcome.is_none() && Instant::now() >= wait_deadline {
             warn!(
-                timeout_secs = options.timeout_secs,
-                "공을 기다리다 시간 초과 — 종료"
+                timeout_secs = f2(options.timeout_secs),
+                "공을 기다리다 시간 초과"
             );
             outcome = Some(Outcome::TimedOut);
             finish_deadline = Some(Instant::now() + FINISH_GRACE);
-            drop(guard.take());
+            if !freeze {
+                drop(guard.take());
+            }
         }
-        if finish_deadline.is_some_and(|at| Instant::now() >= at) {
+        if !freeze && finish_deadline.is_some_and(|at| Instant::now() >= at) {
             warn!("제어 워커 마무리 대기 시간 초과");
             break outcome.unwrap_or(Outcome::Quit);
         }
@@ -189,21 +219,82 @@ fn main_loop(
                         preview.push(event);
                     }
                 }
-                // show가 waitKey(1)로 루프를 페이싱한다.
-                if preview.show() && outcome.is_none() {
-                    outcome = Some(Outcome::Quit);
-                    finish_deadline = Some(Instant::now() + FINISH_GRACE);
-                    drop(guard.take());
+                // show가 waitKey(1)로 루프를 페이싱한다. 종료는 여기서만.
+                if preview.show() {
+                    break outcome.unwrap_or(Outcome::Quit);
                 }
             }
             None => thread::sleep(IDLE_TICK),
         }
     };
 
+    // 여기서 셧다운 — 카메라·추정 워커가 내려간다.
+    drop(guard.take());
     if let Some(preview) = &preview {
         preview.close();
     }
     return result;
+}
+
+impl Outcome {
+    fn from_event(event: ShotEvent) -> Self {
+        return match event {
+            ShotEvent::Committed { .. } => Self::Committed,
+            ShotEvent::TooLate { .. } => Self::TooLate,
+            ShotEvent::Infeasible { reason } => Self::Infeasible(reason),
+            ShotEvent::Failed { reason } => Self::Failed(reason),
+            _ => Self::Quit,
+        };
+    }
+}
+
+/// 샷이 끝난 뒤 화면에 고정할 줄 (ASCII — Hershey 폰트 제약).
+fn result_lines(event: &ShotEvent) -> Option<Vec<String>> {
+    return match event {
+        ShotEvent::Committed {
+            time_to_impact_secs,
+            duration_secs,
+            impact,
+            rail_start,
+            rail_end,
+            peak_joint_speed,
+        } => Some(vec![
+            "COMMITTED".to_owned(),
+            format!(
+                "impact x{} y{} z{}  tti {}s",
+                f2(impact.coords.x),
+                f2(impact.coords.y),
+                f2(impact.coords.z),
+                f2(*time_to_impact_secs)
+            ),
+            format!(
+                "swing  {}s  rail {} -> {}  peak {} rad/s",
+                f2(*duration_secs),
+                f2(*rail_start),
+                f2(*rail_end),
+                f2(*peak_joint_speed)
+            ),
+        ]),
+        ShotEvent::TooLate {
+            latest_tti_secs,
+            min_swing_secs,
+            candidates,
+            ball_y,
+        } => Some(vec![
+            "ABANDONED - too late".to_owned(),
+            format!(
+                "latest tti {}s < min swing {}s",
+                f2(*latest_tti_secs),
+                f2(*min_swing_secs)
+            ),
+            format!("candidates {candidates}  ball y {}", f2(*ball_y)),
+        ]),
+        ShotEvent::Infeasible { reason } => {
+            Some(vec!["ABANDONED - infeasible".to_owned(), reason.clone()])
+        }
+        ShotEvent::Failed { reason } => Some(vec!["FAILED".to_owned(), reason.clone()]),
+        _ => None,
+    };
 }
 
 fn open_hardware(options: &Options, arm: &Arc<pingpong_bot::robot::Arm>) -> Result<RealHardware> {
@@ -211,11 +302,13 @@ fn open_hardware(options: &Options, arm: &Arc<pingpong_bot::robot::Arm>) -> Resu
     if let Some(port) = &options.dxl_port {
         dxl.port = port.clone();
     }
+    dxl.hold_torque_on_close = !options.release_torque;
     let rail = RailConfig::default();
     info!(
         port = %dxl.port,
         dry_run = options.dry_run,
         rail_enabled = rail.enabled,
+        hold_torque_on_close = dxl.hold_torque_on_close,
         "real 하드웨어 (mirror ID1↔ID2)"
     );
     let hardware = if options.dry_run {
@@ -258,15 +351,15 @@ fn open_cameras() -> Result<OpenedCameras> {
 fn log_event(event: &ShotEvent) {
     match event {
         ShotEvent::Armed { pose } => info!(
-            rail_x = pose.rail_x,
-            joints = ?pose.joints.values,
+            rail_x = f2(pose.rail_x),
+            joints = f2_slice(&pose.joints.values),
             "real shot: armed"
         ),
         ShotEvent::Tracking { position, speed } => info!(
-            x = position.coords.x,
-            y = position.coords.y,
-            z = position.coords.z,
-            speed,
+            x = f2(position.coords.x),
+            y = f2(position.coords.y),
+            z = f2(position.coords.z),
+            speed = f2(*speed),
             "real shot: track"
         ),
         // 필드는 sim `"shot: swing commit"`과 동일 — sim ↔ real 로그를 그대로 비교할 수 있다.
@@ -274,19 +367,37 @@ fn log_event(event: &ShotEvent) {
             time_to_impact_secs,
             duration_secs,
             impact,
+            rail_start,
             rail_end,
             peak_joint_speed,
         } => info!(
-            duration_secs,
-            rail_end,
-            impact_x = impact.coords.x,
-            impact_y = impact.coords.y,
-            impact_z = impact.coords.z,
-            tti = time_to_impact_secs,
-            peak_joint_speed,
+            duration_secs = f2(*duration_secs),
+            rail_start = f2(*rail_start),
+            rail_end = f2(*rail_end),
+            impact_x = f2(impact.coords.x),
+            impact_y = f2(impact.coords.y),
+            impact_z = f2(impact.coords.z),
+            tti = f2(*time_to_impact_secs),
+            peak_joint_speed = f2(*peak_joint_speed),
             "real shot: swing commit"
         ),
-        ShotEvent::Abandoned { reason } => info!(reason, "real shot: 포기"),
+        // 포기 근거 수치를 info로 — `--debug` 없이도 왜 못 쳤는지 보여야 한다.
+        ShotEvent::TooLate {
+            latest_tti_secs,
+            min_swing_secs,
+            candidates,
+            ball_y,
+        } => info!(
+            latest_tti = f2(*latest_tti_secs),
+            min_swing_secs = f2(*min_swing_secs),
+            shortfall = f2(min_swing_secs - latest_tti_secs),
+            candidates,
+            ball_y = f2(*ball_y),
+            "real shot: 포기 — 남은 시간이 최소 스윙 시간 미만"
+        ),
+        ShotEvent::Infeasible { reason } => {
+            info!(reason, "real shot: 포기 — 관절·토크 한계 (모터 보호)")
+        }
         ShotEvent::PlanFailed { reason } => tracing::debug!(reason, "real shot: 계획 실패"),
         ShotEvent::Failed { reason } => warn!(reason, "real shot: 실패"),
         ShotEvent::Done => {}
@@ -299,7 +410,7 @@ fn log_summary(outcome: &Outcome, cameras: &[CameraStats], estimator: Option<&Es
             cam = stats.camera_id,
             frames = stats.frames,
             detections = stats.detections,
-            detection_rate = stats.detection_rate(),
+            detection_rate = f2(stats.detection_rate()),
             dropped = stats.dropped,
             undistort_failures = stats.undistort_failures,
             "real shot: end — 카메라"
@@ -312,8 +423,8 @@ fn log_summary(outcome: &Outcome, cameras: &[CameraStats], estimator: Option<&Es
             rejected = stats.rejected,
             seeded = stats.seeded,
             reset = stats.reset,
-            skew_p50_ms = stats.skew_percentile(0.50).map(|s| s * 1e3),
-            skew_p95_ms = stats.skew_percentile(0.95).map(|s| s * 1e3),
+            skew_p50_ms = stats.skew_percentile(0.50).map(|s| f2(s * 1e3)),
+            skew_p95_ms = stats.skew_percentile(0.95).map(|s| f2(s * 1e3)),
             commit_dropped = stats.commit_dropped,
             preview_dropped = stats.preview_dropped,
             "real shot: end — 추정"

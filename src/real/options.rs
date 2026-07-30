@@ -13,6 +13,10 @@ pub struct Options {
     pub preview: bool,
     /// 시작 시 센터(ready) 자세로 이동.
     pub home: bool,
+    /// 관전용 sim 창 (자식 프로세스).
+    pub sim: bool,
+    /// 종료 시 토크를 빼서 팔을 손으로 옮길 수 있게 한다.
+    pub release_torque: bool,
     /// 공을 기다리는 최대 시간 [s].
     pub timeout_secs: f64,
     /// Dynamixel 포트 오버라이드.
@@ -25,6 +29,8 @@ impl Options {
             dry_run: args.dry_run,
             preview: args.preview,
             home: args.home,
+            sim: args.sim,
+            release_torque: args.release_torque,
             timeout_secs: args.timeout_secs,
             dxl_port: args.dxl_port.clone(),
         };

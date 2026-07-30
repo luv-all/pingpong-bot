@@ -19,7 +19,8 @@ use pingpong_bot::robot::motion::Planner;
 use pingpong_bot::robot::{self, Arm};
 use tracing::{debug, info, info_span, warn};
 
-use super::{CommitRequest, ShotEvent};
+use super::fmt::{f2, f2_slice};
+use super::{CommitRequest, PoseMsg, ShotEvent, SimUpdate, SwingMsg};
 
 /// 예측의 `time_to_impact_secs`는 요청 시각 기준이다. 계획을 시작할 때 이미 이만큼 낡았으면
 /// 그 예측으로 세운 궤적은 임팩트 시점이 어긋난다 — 버리고 다음 요청을 기다린다.
@@ -38,6 +39,7 @@ pub fn spawn(
     arm: Arc<Arm>,
     home: bool,
     rx: Receiver<CommitRequest>,
+    sim_tx: Option<Sender<SimUpdate>>,
     event_tx: Sender<ShotEvent>,
 ) -> JoinHandle<()> {
     return thread::spawn(move || {
@@ -50,6 +52,12 @@ pub fn spawn(
         match hardware.read_pose() {
             // armed 로그는 메인이 `ShotEvent::Armed`로 한 곳에서만 찍는다.
             Ok(pose) => {
+                if let Some(sim_tx) = &sim_tx {
+                    let _ = sim_tx.try_send(SimUpdate {
+                        pose: Some(PoseMsg::from(&pose)),
+                        ..SimUpdate::default()
+                    });
+                }
                 let _ = event_tx.send(ShotEvent::Armed { pose });
             }
             Err(error) => {
@@ -61,7 +69,7 @@ pub fn spawn(
             }
         }
 
-        let committed = wait_for_commit(hardware.as_mut(), &arm, &rx, &event_tx);
+        let committed = wait_for_commit(hardware.as_mut(), &arm, &rx, sim_tx.as_ref(), &event_tx);
 
         if committed {
             wait_idle(hardware.as_mut());
@@ -78,6 +86,7 @@ fn wait_for_commit(
     hardware: &mut dyn Hardware,
     arm: &Arm,
     rx: &Receiver<CommitRequest>,
+    sim_tx: Option<&Sender<SimUpdate>>,
     event_tx: &Sender<ShotEvent>,
 ) -> bool {
     let mut last_attempt: Option<Instant> = None;
@@ -96,7 +105,7 @@ fn wait_for_commit(
         if age > MAX_REQUEST_AGE_SECS {
             stale += 1;
             if stale % 50 == 1 {
-                warn!(age_secs = age, stale, "커밋 요청이 낡음 — 버림");
+                warn!(age_secs = f2(age), stale, "커밋 요청이 낡음 — 버림");
             }
             continue;
         }
@@ -124,24 +133,41 @@ fn wait_for_commit(
                 }
                 let trajectory = &planned.trajectory;
                 debug!(
-                    ball_y = request.ball_y,
-                    request_age_secs = age,
+                    ball_y = f2(request.ball_y),
+                    request_age_secs = f2(age),
                     "커밋 요청 소비"
                 );
+                // 커밋한 궤적을 sim 창이 그대로 재생하게 보낸다 (관전용).
+                if let Some(sim_tx) = sim_tx {
+                    let _ = sim_tx.try_send(SimUpdate {
+                        swing: Some(SwingMsg::from_trajectory(trajectory)),
+                        ..SimUpdate::default()
+                    });
+                }
                 // 커밋 로그는 메인이 `ShotEvent::Committed` 필드로 한 곳에서만 찍는다.
                 let _ = event_tx.send(ShotEvent::Committed {
                     time_to_impact_secs: planned.prediction.time_to_impact_secs,
                     duration_secs: trajectory.duration_secs,
                     impact: planned.prediction.impact_position,
+                    rail_start: trajectory.rail.start,
                     rail_end: trajectory.rail.end,
                     peak_joint_speed: trajectory.peak_joint_speed(),
                 });
                 return true;
             }
             // 모터 보호 — sim과 같이 이번 공은 다시 시도하지 않는다.
-            Err(DomainError::InfeasibleSwing(SwingPlanError::JointOrTorqueLimit { .. })) => {
-                let _ = event_tx.send(ShotEvent::Abandoned {
-                    reason: "토크·관절 한계 초과 — 모터 보호로 포기".to_owned(),
+            Err(DomainError::InfeasibleSwing(SwingPlanError::JointOrTorqueLimit {
+                target_x,
+                target_y,
+                target_z,
+            })) => {
+                let _ = event_tx.send(ShotEvent::Infeasible {
+                    reason: format!(
+                        "토크·관절 한계 초과 (목표 x{} y{} z{})",
+                        f2(target_x),
+                        f2(target_y),
+                        f2(target_z)
+                    ),
                 });
                 return false;
             }
@@ -150,16 +176,17 @@ fn wait_for_commit(
                 time_to_impact_secs,
                 min_swing_secs,
             })) => debug!(
-                time_to_impact_secs,
-                min_swing_secs, "InsufficientTime — 창 재진입 대기"
+                time_to_impact_secs = f2(time_to_impact_secs),
+                min_swing_secs = f2(min_swing_secs),
+                "InsufficientTime — 창 재진입 대기"
             ),
             Err(error) => {
                 // 계획 실패는 매 시도마다 debug로 남긴다 (원인 추적), warn은 1초 스로틀.
                 debug!(
                     %error,
                     candidates = request.predictions.len(),
-                    rail_x = start.rail_x,
-                    start_joints = ?start.joints.values,
+                    rail_x = f2(start.rail_x),
+                    start_joints = f2_slice(&start.joints.values),
                     "스윙 계획 실패 — 재시도"
                 );
                 if last_warn.elapsed() >= Duration::from_secs(1) {
@@ -186,10 +213,10 @@ fn move_to_center(hardware: &mut dyn Hardware, arm: &Arm) -> Result<(), MoveErro
 
 fn log_home(start: &robot::Pose, trajectory: &pingpong_bot::robot::motion::Trajectory) {
     info!(
-        from_rail_x = start.rail_x,
-        to_rail_x = trajectory.follow_through_rail_x,
-        duration_secs = trajectory.duration_secs,
-        target = ?trajectory.end_joints().values,
+        from_rail_x = f2(start.rail_x),
+        to_rail_x = f2(trajectory.follow_through_rail_x),
+        duration_secs = f2(trajectory.duration_secs),
+        target = f2_slice(&trajectory.end_joints().values),
         "real shot: 센터 이동 — 팔이 움직입니다"
     );
 }

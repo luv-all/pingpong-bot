@@ -32,6 +32,14 @@ use tracing::warn;
 use cli::{Args, ModeArg};
 
 fn main() -> Result<()> {
+    // 관전용 sim 창 자식 — kiss3d와 OpenCV highgui가 둘 다 메인 스레드를 요구해서
+    // 한 프로세스에 못 띄운다. clap 파싱 전에 가로챈다 (사용자 대상 플래그가 아니다).
+    #[cfg(feature = "real")]
+    if std::env::args().any(|arg| arg == real::SIM_CHILD_FLAG) {
+        init_tracing(false, &["pingpong_bot"]);
+        return real::run_sim_child();
+    }
+
     let args = Args::parse();
     init_tracing(args.debug, &["pingpong_bot"]);
     if args.debug {
