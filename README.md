@@ -5,7 +5,8 @@ Rust 경연용 단일 애플리케이션 크레이트다. 카메라·검출·추
 계획을 `src/` 아래 기능별 모듈로 나눈다. OpenCV는 필수 의존성이며,
 Rapier·실물 하드웨어 경계는 feature와 모듈로 격리한다.
 
-상세 설계는 [`plan.md`](plan.md). 결정은 [`docs/decisions.md`](docs/decisions.md).
+확정된 설계와 이유는 [`docs/decisions.md`](docs/decisions.md), 남은 작업은
+[`TODO.md`](TODO.md)를 기준으로 본다.
 
 ---
 
@@ -344,7 +345,7 @@ flowchart LR
 
 - 외참(운영): [calib_table_pnp](tools/calib_table_pnp/README.md) (클릭 → 자동 PnP → 무지개 격자 → 저장) → [verify-stereo](tools/verify_stereo/README.md) / DLT
 - Charuco 인트린식: [calib_charuco](tools/calib_charuco/README.md) (비운영·레거시)
-- 설계: [비전 스펙](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md) · [verify-proj 스펙(superseded)](docs/superpowers/specs/2026-07-24-verify-proj-design.md) · [decisions J](docs/decisions.md)
+- 설계: [decisions J](docs/decisions.md)
 
 ---
 
@@ -372,7 +373,7 @@ cargo build -p pingpong-bot --release
 | Dynamixel 4축 · AXL 레일 · `jog` | ✅ (Windows 재검증) |
 | real 풀 비전 파이프라인 | 🔲 pose 스모크만 |
 
-**로드맵:** [`docs/phase2.md`](docs/phase2.md) · [`TODO.md`](TODO.md) · [`docs/decisions.md`](docs/decisions.md)
+**로드맵:** [`TODO.md`](TODO.md) · [`docs/decisions.md`](docs/decisions.md)
 
 ---
 

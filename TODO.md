@@ -1,120 +1,211 @@
 # TODO — pingpong-bot
 
-실행 체크리스트. 상세 스펙은 [`plan.md`](plan.md)·[`docs/phase2.md`](docs/phase2.md)·[`docs/decisions.md`](docs/decisions.md).  
-앱 숫자는 [`src/defaults/`](src/defaults/) SSOT. 로봇 활성 프리셋은 `defaults::robot()` 본문만.
+새 개발 순서를 위에서부터 차근차근 진행한다. 한 단계를 구현하고 테스트한 뒤
+다음 단계로 넘어간다.
 
-공개 API는 도메인 모듈 경로 (`estimator::Impact` / `robot::motion::Planner` /
-`estimator::Kinematics` / `camera::Preview` / `sim::eval::Protocol` …).
-자유함수 root dump·호환 alias는 쓰지 않는다.
+## 1. 공 궤적 반환 API
 
-파이프라인은 역할 기준: `detector` (검출) → `estimator` (삼각측량·EKF·예측·반발 역산)
-→ `robot::motion` (관절공간 계획) → `hardware`.
-`ball`/`shooter`/`swing`/`planner`/`eval` 도메인은 해체됨 — 공 상태·피더·채점은
-`sim::physics`/`sim::launch`/`sim::eval`, 팔–테이블 관통은 `robot::collision`.
+공 위치 검출·삼각측량·EKF·탄도 예측을 하나의 궤적 출력으로 묶는다.
+실제 관측 궤적과 미래 예측 궤적을 같은 형식으로 반환한다.
 
-**우선순위:** **리턴 파워(eval)** → 실기 단발 1발 계측 / Windows 벤치 → 시뮬 품질·포기 정책 → ω 추정 → 풀 동역학 후속.
+**이 API는 타격 예측 지점을 반환하지 않는다.** 시간 순서대로 샘플링된
+전체 궤적만 반환한다. 최고 타격 지점·타격 시각·타격 가능성은 나중에
+이 궤적을 입력으로 받는 별도 계산기에서 구한다.
 
-> **🔴 지금 최우선 — 리턴 파워:** eval 30/90 (통과선 45). 30발 전부 1점.
-> 진단·반증: [`docs/superpowers/plans/2026-07-27-return-power.md`](docs/superpowers/plans/2026-07-27-return-power.md).
-> **새 세션은 이 문서부터** — 배제·반증한 레버를 다시 밟지 말 것.
+### 1.1 반환 형식 확정
 
----
+각 궤적은 `N×7` 행렬이다. 행 하나는 한 시점의 공 상태를 뜻한다.
 
-## 0. 지금 당장
-
-### 0.1 시뮬·제어 (대체로 완료)
-
-- [x] URDF → domain 직렬 체인 / FK·IK / 레일
-- [x] 동적 인터셉트·quintic·Rapier 다물체 EE 폐루프
-- [x] EKF control 튜닝 (drag=0 sim, C4 미드코트 게이트) — decisions C2 문서화
-- [ ] C2 승격 — EKF 타격 성공률 스모크 후 기본값 GT→EKF 전환
-
-### 0.2 측정으로 잠글 상수
-
-- [x] e / μ / drag 측정 툴 + [`docs/measure-physics.md`](docs/measure-physics.md)
-- [x] 테이블 바운스 커널 `estimator::Kinematics::bounce_on_table`
-- [ ] Rapier 테이블–공 μ ↔ 커널 정렬 (랜덤샷·랠리 재튜닝 동반)
-- [ ] A4 e·마찰·drag **실측값**으로 `PhysicsParams` / `impact()` 갱신 (보드 준비 후)
-
----
-
-## 1. 제어 API (현황)
-
-| 역할 | facade |
-|------|--------|
-| 리턴·라켓 속도 | `estimator::Impact::rally_return` / `required_racket_velocity` |
-| 스윙 | `robot::motion::Planner::plan` / `plan_best` / `plan_bang_bang` |
-| IK·속도 | `Arm::inverse_pose_with_rail` / `velocities_for_racket_velocity` |
-| 토크 | `Arm::required_torque` / `Arm::torque_feasible` |
-
-- [x] RNEA·토크 게이트·FF (`torque_feedforward` default true)
-- [x] Dynamixel Goal Current + sim RNEA→다물체 effort + τ HUD
-
----
-
-## 2. 공 추적·스핀 / Magnus
-
-순방향 Model C는 sim·탄도·플래너에 들어감. **역방향 ω 추정**만 남음.
-
-- [x] Model C 순방향 (`estimator::Kinematics` / Rapier 외력 / `sim::launch` spin)
-- [ ] 스펙 — `docs/`에 카메라·Model A/B/C·bounce 구간
-- [ ] 궤적 fitting → ω 추정 · EKF 확장 또는 별도 추정기
-- [ ] prediction_error · spin_confidence · A/B fallback · 바운드 전후 분리
-- [ ] sim 슈터 spin ↔ 추정 ω 교차검증
-
----
-
-## 3. 관측 파이프라인
-
-설계: [`docs/superpowers/specs/2026-07-18-vision-pipeline-design.md`](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md)  
-조립 SSOT: `defaults::detector_for` · `data/colormask.json`.  
-진입: `camera::Preview` / `camera::Charuco` / `camera::TablePnp` / `estimator::Triangulate` / `detector::Detector`.
-
-- [x] 삼각·검출·ROI·colormask·ChArUco·탁구대 PnP·UVC/파일·undistort 파이프
-- [ ] 멀티캠 동기·타임스탬프 — **비범위**
-
----
-
-## 4. 하드웨어
-
-- [x] `RealHardware` · SwingExecutor · jog · AXL 레일 · URDF↔motor_ids
-- [x] `run_real` **단발 타격** — `src/real/` (채널 단일소유 파이프라인).
-      설계 [`src/real/README.md`](src/real/README.md) ·
-      계획 [`docs/superpowers/plans/2026-07-31-run-real-single-shot.md`](docs/superpowers/plans/2026-07-31-run-real-single-shot.md)
-- [ ] Windows 벤치: `jog --dry-run` → 작은 `j`/`rd` → `swing` → `--mode real --dry-run` → 실기 1발
-- [ ] 실기 1발 계측 후 랠리 확장 (커밋 래치 해제·샷 간 EKF 리셋·연속 포기 정책)
-- [ ] 실물 E-stop 경로 (tick clamp·profile은 적용됨)
-
----
-
-## 5. 시뮬레이터 품질
-
-- [x] GUI 렉 (dev opt-level) · 라켓–공 physical SSOT · GUI 기본 디버그
-- [ ] 테이블 위 구름 공 포기 조건 — decisions I (인터셉트 평면 교차 없음 → 스윙 안 나감)
-- [ ] GT/EKF 타격 성공률 스모크 → C2
-- [ ] 네트 넘김 / 바운스 후 / 사이드 샷 시나리오 세트
-- [ ] GUI: 활성 로봇 프리셋 표시, hit-plane·예측 마커 유지보수
-
----
-
-## 6. 문서·후속
-
-- [ ] `docs/phase2.md` ↔ 이 TODO·defaults 동기
-- [ ] 공 추적 MD → `docs/spin-tracking.md`
-- [ ] ML (plan §10) — vision API 뒤 교체 전제, 고전 파이프라인 우선
-
----
-
-## 빠른 검증
-
-```bash
-cargo test --workspace
-cargo run -p pingpong-bot -- --mode sim
-# 실캠 단발 리허설 (모터 정지, macOS에서도 됨)
-cargo run -p pingpong-bot -- --mode real --dry-run
-# Windows real:
-# cargo run -p pingpong-bot -- --mode real --dxl-port COM8
+```text
+[x, y, z, vx, vy, vz, t]
 ```
 
-갱신: 2026-07-30 — 도메인 재편: ball/shooter/swing/planner/eval 해체, 계획은 `robot::motion`,
-공 반발 역산은 `estimator::Impact`, robot↔hardware 레이어 분리, 호환 alias 제거.
+| 열 | 뜻 | 단위 |
+|---|---|---|
+| `x, y, z` | 월드 좌표계의 공 중심 | m |
+| `vx, vy, vz` | 해당 시점의 속도 벡터 | m/s |
+| `t` | 기준 시각으로부터의 상대 시간 | s |
+
+시간 기준은 **가장 최근의 EKF 채택 관측 시각**으로 통일한다.
+
+- 실제 관측 궤적: 과거 행은 `t ≤ 0`, 가장 최근 행은 `t = 0`
+- 미래 예측 궤적: 첫 미래 행부터 `t > 0`
+- 행은 항상 `t` 오름차순으로 정렬
+
+내부 코드는 열 인덱스 실수를 막기 위해 명시적인 샘플 타입을 사용하고,
+외부 반환 경계에서만 `N×7` 행렬로 변환한다.
+
+- [ ] `TrajectorySample { position, velocity, time_secs }` 타입 추가
+- [ ] `BallTrajectory { observed, predicted, reference_time }` 타입 추가
+- [ ] `TrajectorySample` 목록 ↔ `N×7` 행렬 변환 API 추가
+- [ ] 행렬의 열 순서·단위·시간 기준 단위 테스트
+
+### 1.2 실제 관측 궤적
+
+스테레오 삼각측량을 통과한 3D 관측과 EKF가 추정한 속도를 기록한다.
+재투영 오차나 EKF 게이트에서 거부된 점은 반환 궤적에 포함하지 않는다.
+
+- [ ] EKF가 채택한 3D 관측을 샷별 링 버퍼에 보관
+- [ ] 각 관측 시각의 EKF 속도를 함께 보관
+- [ ] 새 공으로 EKF를 리셋할 때 관측 궤적도 분리
+- [ ] 버퍼 최대 길이와 최대 보관 시간을 `defaults` 값으로 제한
+- [ ] 두 번째 관측 이전에는 속도가 없으므로 해당 행을 반환하지 않도록 처리
+
+### 1.3 미래 예측 궤적
+
+현재의 `predict_to(HitPlane) -> Prediction` 중심 출력을 전체 궤적 출력으로
+바꾼다. 탄도 적분기가 일정한 간격으로 미래 상태 여러 개를 샘플링한다.
+
+- [ ] `Kinematics` 또는 `ballistics`에 궤적 샘플링 API 추가
+- [ ] EKF의 최신 위치·속도에서 예측 시작
+- [ ] 현재 물리 모델의 중력·drag·Magnus·테이블 바운스를 그대로 사용
+- [ ] `integrate_dt`를 샘플 간격으로 사용하고 `max_lead`까지 반환
+- [ ] 테이블 아래, 유효 영역 밖, 예측 시간 초과 종료 조건 적용
+- [ ] 출력에 `impact_position`, `HitPlane`, 대표 타격 점을 포함하지 않음
+- [ ] 첫 행부터 마지막 행까지 위치·속도·시간이 연속적인지 회귀 테스트
+
+### 1.4 통합 반환
+
+- [ ] 추정 파이프라인이 `observed` 궤적과 `predicted` 궤적을 함께 생성
+- [ ] 공 위치 검출·추정 API의 최종 반환값은 두 궤적만 포함
+- [ ] 기존 `Prediction`/hit-plane 계산은 궤적 생성 API에서 분리
+- [ ] 기존 제어가 필요하면 임시 어댑터가 궤적에서 평면 교차를 계산하게 하고,
+  궤적 반환 API에는 타격점을 다시 넣지 않음
+- [ ] 프리뷰·시뮬레이션·텔레메트리가 두 궤적을 구분해 소비할 수 있게 전달
+- [ ] 실제 관측은 `t ≤ 0`, 미래 예측은 `t > 0`인지 통합 테스트
+- [ ] 새 공 리셋 후 이전 공의 궤적이 섞이지 않는지 통합 테스트
+- [ ] `cargo test --workspace`
+
+### 1.5 진행 순서
+
+1. 반환 타입과 `N×7` 행렬 규약을 먼저 구현한다.
+2. 실제 관측 궤적 버퍼를 붙인다.
+3. 미래 탄도 샘플링을 붙인다.
+4. 두 궤적을 하나의 결과로 묶는다.
+5. 타격점 계산이 궤적 반환 기능과 분리됐는지 검증한다.
+
+---
+
+## 2. 제어 단순화 — 목표 위치까지 이동
+
+1번이 반환한 궤적에서 나중에 별도 계산기가 목표 위치를 고른다.
+제어기는 이 위치를 직접 고르지 않고, 선택된 목표를 받아 라켓을
+해당 위치까지 이동시킨 뒤 그 자리에서 대기한다.
+
+**이 단계에서는 공을 스윙해 돌려보내지 않는다.** 목표 위치에 안전하게
+도달하는 것까지만 제어 범위로 한다.
+
+### 2.1 단순 제어 입력
+
+제어기의 입력은 스윙 요청이 아니라 하나의 목표다.
+
+```text
+Target {
+    position: [x, y, z],
+    arrival_time_secs: t,
+}
+```
+
+- `position`: 라켓 중심을 놓을 월드 좌표
+- `arrival_time_secs`: 궤적의 기준 시각으로부터 목표에 도달해야 하는 시간
+- 라켓 방향은 일단 고정된 안전 방향을 사용
+- 라켓 타격 속도나 반환 공 속도는 입력으로 받지 않음
+
+- [ ] `Target` 타입 추가
+- [ ] 입력에 `Prediction`, `Impact`, 입사·출사 속도를 포함하지 않음
+- [ ] 목표를 고르는 로직과 이동하는 로직을 모듈 경계로 분리
+
+### 2.2 목표 위치 이동
+
+- [ ] 현재 로봇 포즈를 하드웨어에서 읽음
+- [ ] 레일 + 팔 IK로 목표 위치의 관절각을 계산
+- [ ] 현재 포즈에서 목표 포즈까지 단일 point-to-point 궤적 생성
+- [ ] `arrival_time_secs`보다 일찍 도달하면 목표 자세를 유지
+- [ ] 시간 내 도달이 불가능하면 이동하지 않고 `Unreachable` 반환
+- [ ] 새 목표가 오면 아직 커밋하지 않은 이전 목표를 최신값으로 교체
+
+### 2.3 안전 기능은 유지
+
+스윙 로직을 제거해도 아래 안전 기능은 없애지 않는다.
+
+- [ ] 관절각·관절 속도·관절 가속도 제한 유지
+- [ ] 레일 위치·속도 제한 유지
+- [ ] 테이블–팔·라켓 충돌 검사 유지
+- [ ] 토크 상한과 하드웨어 명령 clamp 유지
+- [ ] E-stop·timeout·하드웨어 오류 처리 유지
+
+### 2.4 이후 타격 제어도 새 궤적 형식 사용
+
+단순 위치 이동을 검증한 뒤 타격 제어를 다시 추가할 때도 예전의
+`Prediction` / `HitPlane` 형식으로 돌아가지 않는다. 1번의 `N×7` 궤적이
+유일한 공 상태 입력이다.
+
+```text
+BallTrajectory {
+    observed:  N×7,
+    predicted: M×7,
+    reference_time,
+}
+        ↓
+HitTargetSelector
+        ↓
+HitTarget {
+    position: [x, y, z],
+    incoming_velocity: [vx, vy, vz],
+    time_secs: t,
+}
+        ↓
+PositionController (우선) / HitController (후속)
+```
+
+- `HitTargetSelector`만 궤적에서 타격 위치·시각을 고른다.
+- 위치 이동 단계는 `HitTarget.position` / `time_secs`만 사용한다.
+- 후속 타격 제어는 같은 `HitTarget`의 `incoming_velocity`까지 사용한다.
+- 라켓 방향·타격 속도·반환 목표는 궤적 반환 API가 아니라 타격
+  제어 계층에서 별도로 계산한다.
+
+- [ ] `HitTargetSelector` 입력을 `BallTrajectory`로 고정
+- [ ] `HitTarget` 값은 예측 궤적의 행 또는 인접한 두 행의 시간 보간으로만 생성
+- [ ] `reference_time + time_secs`로 목표 만료 시각을 계산하여 stale 타격 거부
+- [ ] 새 궤적이 도착하면 커밋 전까지 `HitTarget`을 갱신
+- [ ] 커밋 후에는 선택된 궤적 샘플과 시각을 고정하고 하드웨어 계획 실행
+- [ ] 타격 제어 경로에서 `Prediction`, `impact_position`, `HitPlane` 참조 금지
+- [ ] 관측 → 예측 궤적 → `HitTarget` → 위치 제어의 시간 기준 통합 테스트
+- [ ] 후속 타격 제어가 `incoming_velocity`를 잘못된 행에서 읽지 않는지 테스트
+
+### 2.5 제거할 스윙 복잡도
+
+단순 이동 경로가 통합 테스트를 통과한 뒤에 아래 스윙 전용 코드를
+호출부부터 순서대로 제거한다.
+
+- [ ] `HitPlane` / `InterceptWindow` 기반 타격 후보 생성·순위 선정 제거
+- [ ] `Impact` / `required_racket_velocity` / 반환 탄도 역산 제거
+- [ ] 임팩트 시점 목표 관절 속도 계산 제거
+- [ ] 백스윙·임팩트 knot·팔로스루 궤적 제거
+- [ ] `plan_best`, `plan_swing`, `plan_bang_bang` 등 스윙 전용 플래너 제거
+- [ ] `Committed`, `InfeasibleSwing`, 샷 래치 등 스윙 전용 상태·이벤트 정리
+- [ ] 프리뷰·시뮬레이션 HUD의 타격점·스윙 전용 표시 제거
+- [ ] 사용하지 않는 타입·설정값·테스트·문서 제거
+
+### 2.6 완료 기준
+
+- [ ] 목표 위치가 주어지면 라켓이 스윙 없이 해당 위치로 이동
+- [ ] 도달 후 목표 자세를 안정적으로 유지
+- [ ] 도달 불가능·충돌 위험 목표는 명확한 오류로 거부
+- [ ] sim과 real dry-run이 같은 단순 제어 경로를 사용
+- [ ] 이후 타격 제어를 붙여도 `BallTrajectory` → `HitTarget` 경계는 변하지 않음
+- [ ] 스윙·임팩트·반환 계산을 제거한 후 `cargo test --workspace` 통과
+
+### 2.7 진행 순서
+
+1. `Target` 입력 규약을 구현한다.
+2. 기존 IK·point-to-point 이동을 재사용해 최소 제어 경로를 만든다.
+3. sim에서 이동·대기·거부 동작을 검증한다.
+4. real dry-run에서 같은 경로를 검증한다.
+5. 기존 스윙 호출부를 단순 이동으로 교체한다.
+6. 더 이상 참조되지 않는 스윙 전용 코드를 삭제한다.
+7. 후속 타격 제어는 `BallTrajectory` → `HitTarget` 경계 뒤에만 추가한다.
+
+---
+
+다음 기능은 요구사항을 받으면 `3.` 섹션으로 추가한다.

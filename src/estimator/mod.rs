@@ -10,6 +10,7 @@ mod kinematics;
 mod measure;
 mod prediction;
 mod snapshot;
+mod trajectory;
 mod tri;
 mod triangulate;
 
@@ -22,4 +23,7 @@ pub use kinematics::Kinematics;
 pub use measure::{BounceEvent, PhysicsIdentify, RollEvent, TrajAnalysis, TrajPoint};
 pub use prediction::Prediction;
 pub use snapshot::Snapshot;
+pub use trajectory::{
+    BallTrajectory, TrajectoryMatrixError, TrajectorySample, samples_from_matrix, samples_to_matrix,
+};
 pub use triangulate::Triangulate;

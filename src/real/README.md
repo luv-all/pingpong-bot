@@ -1,8 +1,7 @@
 # `src/real` — 실기 연속 급구 (1·2차)
 
-`--mode real` 런타임. 스윙 완주·센터 복귀 후 **다음 급구**를 반복한다. 결선(진짜 랠리)은
-아직 아니다 — [`specs/2026-07-31-real-continuous-feed-design.md`](../../docs/superpowers/specs/2026-07-31-real-continuous-feed-design.md)
-§Future.
+`--mode real` 런타임. 스윙 완주·센터 복귀 후 **다음 급구**를 반복한다.
+돌아오는 공을 이어 치는 결선 랠리는 아직 지원하지 않는다.
 
 bin 전용 모듈이라 `lib.rs`에 없다 ([`src/cli/`](../cli/)와 같은 방식). 도메인 로직은 전부
 `camera` / `detector` / `estimator` / `robot::motion` / `hardware`에서 가져다 쓰고, 여기는
@@ -324,10 +323,8 @@ real shot: end           outcome="타임아웃 - 공이 오지 않음"
    위치가 궤적과 어긋날 수 있다.
 5. **macOS는 실기 불가** — `AxlRail::open`이 Windows 전용. `--dry-run`은 `AxlRail::dry_run`을
    타므로 macOS에서도 전 체인 리허설은 된다.
-6. **진짜 랠리 미지원** — 연속 급구(완주+센터 복귀 후 재무장)는 지원. 돌아오는 공을 이어서
-   치는 결선 랠리는
-   [spec §Future](../../docs/superpowers/specs/2026-07-31-real-continuous-feed-design.md)만
-   기록. 재무장 조건은 `control_worker`의 NOTE(결선)가 분기점이다.
+6. **진짜 랠리 미지원** — 연속 급구(완주+센터 복귀 후 재무장)는 지원하지만,
+   돌아오는 공을 이어서 치는 결선 랠리는 아직 지원하지 않는다.
 7. **죽은 카메라의 종료 지연** — `ThreadedCapture::next_frame`이 첫 프레임을 최대 8초 기다리는
    동안 카메라 워커는 셧다운 플래그를 못 본다. 장치 경합이나 device 인덱스 오류면 요약에
    `frames=0`으로 찍히고 `"프레임 소스 종료"` warn이 함께 나온다 — 그때는

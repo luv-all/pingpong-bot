@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use crate::Point3;
 use crate::estimator;
-use crate::estimator::{Estimator, HitPlane, Prediction};
+use crate::estimator::{BallTrajectory, Estimator, HitPlane, Prediction};
 use crate::sim::physics;
 use crate::sim::physics::world::SimWorld;
 use nalgebra::Vector3;
@@ -73,6 +73,10 @@ impl Estimator for SimBallEstimator {
         };
         // 진실 위치·속도로 EKF를 리셋해 파이프라인 예측이 스윙과 맞게 유지
         self.ekf.set_state(snap.position, snap.velocity, timestamp);
+    }
+
+    fn trajectory(&self) -> Option<BallTrajectory> {
+        return self.ekf.trajectory();
     }
 
     fn predict_to(&self, plane: HitPlane) -> Option<Prediction> {

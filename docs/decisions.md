@@ -1,7 +1,8 @@
 # 결정 사항 (decisions)
 
 코드에 “왜 이렇게 했지?”가 남을 만한 값·경로·폴백을 모아 둔다.  
-숫자는 가능하면 `src/constants/`(물리 상수) 또는 **`src/defaults.rs / `(앱 배선)** 이 SSOT이고, 여기는 **의도**를 적는다.
+숫자는 가능하면 `src/constants/`(물리 상수) 또는 `src/defaults/`(앱 배선)이
+SSOT이고, 여기는 **의도**를 적는다.
 TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 
 관련 공식(유지): `required_racket_velocity` — \(v_{out}, n, e \rightarrow v_r\) (`planner/impact.rs`).
@@ -145,7 +146,7 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 | E1 | 다중 y 샘플 `InterceptWindow` | ✅ |
 | E2 | 평면 지난 공 → 예측 안 함 | ✅ |
 | E3 | 테이블 바운스 \(e\) = 공 \(e\) (≈0.88, ITTF 테이블) | ✅ |
-| E3b | 테이블–공 바운스 커널 SSOT: `estimator::table_bounce` (`e`, μ=`friction`, ω 유지). Rapier Average μ≈0.3과의 갭은 `rapier_table_ball_mu`로 문서화 — 재료/combine 정렬은 시뮬 그리드 재튜닝 후속 ([스펙](superpowers/specs/2026-07-26-table-bounce-ssot-design.md)) | ✅ 커널 / ⏳ Rapier 정렬 |
+| E3b | 테이블–공 바운스 커널 SSOT: `estimator::table_bounce` (`e`, μ=`friction`, ω 유지). Rapier Average μ≈0.3과의 갭은 `rapier_table_ball_mu`로 문서화. 재료/combine 정렬은 시뮬 그리드 재튜닝 후속 | ✅ 커널 / ⏳ Rapier 정렬 |
 | E4 | lead `0.05..1.2` s | ✅ |
 | E5 | Rapier 테이블·공 restitution = E3; 라켓은 A4 \(e_{eff}\)+Min | ✅ |
 | E6 | 접촉→리턴→네트→중앙 바운스 통합 테스트 | ✅ |
@@ -249,8 +250,6 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 3. **FF (sim only)** — RNEA로 다물체 `motor_max_force` 상한 갱신.
    `ControlParams::default().torque_feedforward` 기본 **true** (시뮬).  
    **Real**은 Position Control Mode(3) + PWM Limit / Current Limit 최대. Goal Current FF 없음.
-
-스펙: [`superpowers/specs/2026-07-26-manipulator-dynamics-design.md`](superpowers/specs/2026-07-26-manipulator-dynamics-design.md).
 
 ---
 

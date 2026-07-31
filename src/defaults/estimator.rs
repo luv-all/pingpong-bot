@@ -54,6 +54,10 @@ pub struct EstimatorParams {
     pub gate_reject_limit: u32,
     /// 측정 공백 상한 [s]. 넘으면 하드 리셋 (세션 공백·프레임 드롭).
     pub stale_gap_secs: f64,
+    /// 샷별 채택 관측 링 버퍼의 최대 행 수.
+    pub observed_max_samples: usize,
+    /// 기준 관측으로부터 과거 관측을 보관할 최대 시간 [s].
+    pub observed_max_age_secs: f64,
     /// 커밋을 허용할 **예측 도달점 불확실성** 상한 [m].
     ///
     /// `σ_impact ≈ hypot(σ_p, σ_v × 리드타임)`. 속도는 측정되지 않고 위치 차분에서 나오므로
@@ -95,6 +99,11 @@ impl EstimatorParams {
         ensure!(self.gate_chi2 > 0.0, "gate_chi2 > 0");
         ensure!(self.gate_reject_limit >= 1, "gate_reject_limit >= 1");
         ensure!(self.stale_gap_secs > 0.0, "stale_gap_secs > 0");
+        ensure!(self.observed_max_samples >= 1, "observed_max_samples >= 1");
+        ensure!(
+            self.observed_max_age_secs > 0.0,
+            "observed_max_age_secs > 0"
+        );
         ensure!(self.max_impact_sigma > 0.0, "max_impact_sigma > 0");
         return Ok(());
     }
@@ -114,6 +123,8 @@ impl Default for EstimatorParams {
             gate_chi2: 11.34,
             gate_reject_limit: 5,
             stale_gap_secs: 0.5,
+            observed_max_samples: 256,
+            observed_max_age_secs: 2.0,
             max_impact_sigma: 0.15,
         };
     }

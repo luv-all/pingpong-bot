@@ -10,6 +10,7 @@
 //! sim Rapier에는 이차 항력이 없어서(기본 drag=0) 파이프라인은
 //! `estimator::Ekf::new(0.0)` 을 쓴다. Magnus는 ω 상태 확장 전까지 예측에서 0.
 
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use nalgebra::{Matrix3, Matrix6, Vector3, Vector6};
@@ -18,7 +19,14 @@ use crate::Point3;
 use crate::defaults;
 use crate::defaults::PhysicsParams;
 use crate::estimator;
-use crate::estimator::{Estimator, HitPlane, Prediction};
+use crate::estimator::{BallTrajectory, Estimator, TrajectorySample};
+
+#[derive(Debug, Clone)]
+struct AcceptedObservation {
+    position: Point3,
+    velocity: Vector3<f64>,
+    timestamp: Instant,
+}
 
 /// 시드 직후 공분산 대각 (위치만 알고 속도는 모름).
 const SEED_COV: f64 = 0.1;
@@ -89,6 +97,8 @@ pub struct Ekf {
     reject_streak: u32,
     /// 직전 측정의 마할라노비스 d² (게이트 판정 전 값).
     last_gate_d2: Option<f64>,
+    /// 삼각측량과 EKF 게이트를 모두 통과한 현재 공의 관측만 보관한다.
+    observations: VecDeque<AcceptedObservation>,
 }
 
 impl Ekf {
@@ -112,6 +122,7 @@ impl Ekf {
             velocity_seeded: false,
             reject_streak: 0,
             last_gate_d2: None,
+            observations: VecDeque::new(),
         };
     }
 
@@ -125,6 +136,7 @@ impl Ekf {
         self.covariance = Matrix6::identity();
         self.reject_streak = 0;
         self.last_gate_d2 = None;
+        self.observations.clear();
     }
 
     /// 연속 거부 수 — 0이면 직전 측정을 받아들였다.
@@ -196,6 +208,30 @@ impl Ekf {
         self.last_time = Some(time);
         self.reject_streak = 0;
         self.last_gate_d2 = None;
+        self.record_observation(Point3::from(position), time);
+    }
+
+    fn record_observation(&mut self, measured: Point3, timestamp: Instant) {
+        if !self.velocity_seeded {
+            return;
+        }
+        self.observations.push_back(AcceptedObservation {
+            position: measured,
+            velocity: self.velocity,
+            timestamp,
+        });
+        let params = defaults::EstimatorParams::default();
+        while self.observations.len() > params.observed_max_samples {
+            self.observations.pop_front();
+        }
+        while self.observations.front().is_some_and(|oldest| {
+            timestamp
+                .saturating_duration_since(oldest.timestamp)
+                .as_secs_f64()
+                > params.observed_max_age_secs
+        }) {
+            self.observations.pop_front();
+        }
     }
 
     /// 위치만 심는다 (첫 측정 · 리셋 직후).
@@ -284,6 +320,7 @@ impl Ekf {
                     self.covariance = velocity_seed_covariance(params.r_meas, dt);
                     self.velocity_seeded = true;
                     self.last_time = Some(timestamp);
+                    self.record_observation(measured, timestamp);
                     return GateOutcome::VelocitySeeded;
                 }
             }
@@ -304,6 +341,7 @@ impl Ekf {
         self.covariance = 0.5 * (self.covariance + self.covariance.transpose());
 
         self.last_time = Some(timestamp);
+        self.record_observation(measured, timestamp);
         return GateOutcome::Accepted;
     }
 
@@ -343,17 +381,49 @@ impl Estimator for Ekf {
         let _ = self.update_position(position, timestamp);
     }
 
-    fn predict_to(&self, plane: HitPlane) -> Option<Prediction> {
-        if !self.initialized || !self.velocity_seeded {
+    fn trajectory(&self) -> Option<BallTrajectory> {
+        if !self.is_tracking() {
             return None;
         }
-        return estimator::Kinematics::predict_to(
+        let reference_time = self.observations.back()?.timestamp;
+        let observed = self
+            .observations
+            .iter()
+            .map(|observation| {
+                let time_secs = if observation.timestamp <= reference_time {
+                    -reference_time
+                        .duration_since(observation.timestamp)
+                        .as_secs_f64()
+                } else {
+                    observation
+                        .timestamp
+                        .duration_since(reference_time)
+                        .as_secs_f64()
+                };
+                TrajectorySample::new(observation.position, observation.velocity, time_secs)
+            })
+            .collect();
+
+        // 거부된 측정 시각까지 필터만 전파됐을 수 있으므로,
+        // 예측 시간은 마지막 채택 관측을 기준으로 보정한다.
+        let state_offset = self
+            .last_time
+            .map(|time| time.saturating_duration_since(reference_time).as_secs_f64())
+            .unwrap_or(0.0);
+        let max_lead = defaults::EstimatorParams::default().max_lead;
+        let predicted = estimator::Kinematics::sample_trajectory(
             self.position,
             self.velocity,
             Vector3::zeros(),
-            plane,
             &self.physics,
-        );
+        )
+        .into_iter()
+        .filter_map(|mut sample| {
+            sample.time_secs += state_offset;
+            (sample.time_secs <= max_lead).then_some(sample)
+        })
+        .collect();
+        return BallTrajectory::new(observed, predicted, reference_time).ok();
     }
 }
 
@@ -547,6 +617,58 @@ mod tests {
 
         assert_eq!(outcome, GateOutcome::Reset);
         assert!(ekf.velocity().is_none());
+    }
+
+    #[test]
+    fn trajectory_contains_only_velocity_bearing_accepted_observations() {
+        let t0 = Instant::now();
+        let mut ekf = Ekf::new(0.0);
+        ekf.update_position(Point3::new(0.7, 2.20, 1.0), t0);
+        assert!(ekf.trajectory().is_none(), "속도 시드 전은 궤적이 없음");
+        ekf.update_position(Point3::new(0.7, 2.15, 1.0), t0 + Duration::from_millis(10));
+        ekf.update_position(
+            Point3::new(0.7, 2.10, 0.999),
+            t0 + Duration::from_millis(20),
+        );
+
+        let trajectory = ekf.trajectory().expect("관측+예측 궤적");
+        assert_eq!(trajectory.observed.len(), 2, "속도 없는 첫 관측은 제외");
+        assert!((trajectory.observed[0].time_secs + 0.01).abs() < 1e-12);
+        assert_eq!(trajectory.observed[1].time_secs, 0.0);
+        assert!(
+            trajectory
+                .predicted
+                .iter()
+                .all(|sample| sample.time_secs > 0.0)
+        );
+        assert!(
+            trajectory
+                .predicted
+                .windows(2)
+                .all(|pair| pair[0].time_secs < pair[1].time_secs)
+        );
+    }
+
+    #[test]
+    fn rejected_observation_is_not_returned_and_reset_starts_new_shot() {
+        let t0 = Instant::now();
+        let (mut ekf, _, _) = tracked_ekf(t0, 5);
+        let before = ekf.trajectory().unwrap().observed.len();
+        assert_eq!(
+            ekf.update_position(Point3::new(-2.0, -2.0, 3.0), t0 + Duration::from_millis(40),),
+            GateOutcome::Rejected
+        );
+        assert_eq!(ekf.trajectory().unwrap().observed.len(), before);
+
+        ekf.reset();
+        ekf.update_position(Point3::new(0.6, 2.0, 1.0), t0 + Duration::from_secs(1));
+        ekf.update_position(
+            Point3::new(0.6, 1.95, 1.0),
+            t0 + Duration::from_millis(1010),
+        );
+        let trajectory = ekf.trajectory().unwrap();
+        assert_eq!(trajectory.observed.len(), 1);
+        assert_eq!(trajectory.observed[0].position, Point3::new(0.6, 1.95, 1.0));
     }
 
     #[test]
