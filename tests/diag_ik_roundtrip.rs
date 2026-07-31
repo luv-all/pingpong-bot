@@ -530,3 +530,98 @@ fn separate_position_reach_from_orientation_feasibility() {
         );
     }
 }
+
+/// 요구 법선을 못 맞출 때 **얼마나** 어긋나는지 잰다.
+///
+/// 팔 4축 + 레일 1축에 위치 구속은 3개뿐이라 한 위치를 만드는 자세는 2차원 족(族)을
+/// 이룬다. 그 족을 훑어 달성 가능한 법선 중 요구 법선에 가장 가까운 것을 찾는다.
+/// 어긋남이 작으면 "그냥 치게" 하는 것이 옳고, 90°에 가까우면 라켓 모서리로 맞는
+/// 것이라 타격이 아니다 — 그 경계를 수치로 봐야 정할 수 있다.
+#[test]
+fn how_far_off_is_the_achievable_racket_normal() {
+    let arm = pingpong_bot::defaults::primitive_4dof().expect("arm").arm;
+    let rail = arm.rail.expect("rail");
+
+    println!("\n=== 달성 가능한 최선 법선과 요구 법선의 각도차 ===");
+    for (label, x, y, z, nx, ny, nz) in [
+        ("fly_05", 1.585, 0.328, 0.993, -0.37, 0.89, 0.26),
+        ("fly_07", 1.652, 0.328, 0.955, -0.37, 0.89, 0.26),
+        ("fly_04(대조군)", 0.640, 0.230, 1.010, 0.0, 1.0, 0.2),
+    ] {
+        let target = nalgebra::Point3::new(x, y, z);
+        let desired = Vector3::new(nx, ny, nz).normalize();
+        let rail_x = rail.clamp_x(x);
+
+        // 자세 족을 시드로 훑는다 — 위치만 구속하고 달성된 법선을 모은다.
+        let mut best_deg = f64::INFINITY;
+        let mut best_position_error = f64::INFINITY;
+        let mut reached = 0usize;
+        for seed in multistart_seeds(&arm, 64) {
+            let Ok(joints) = arm.inverse_kinematics_with_rail(&rail, rail_x, target, Some(&seed))
+            else {
+                continue;
+            };
+            let Some(pose) = arm.forward_kinematics_with_rail(rail_x, &joints) else {
+                continue;
+            };
+            let position_error = (pose.position.coords - target.coords).norm();
+            if position_error > 2e-3 {
+                continue; // 위치를 못 맞춘 해는 타격이 아니다.
+            }
+            reached += 1;
+            let cos = pose.normal.dot(&desired).clamp(-1.0, 1.0);
+            let deg = cos.acos().to_degrees();
+            if deg < best_deg {
+                best_deg = deg;
+                best_position_error = position_error;
+            }
+        }
+
+        if reached == 0 {
+            println!("  {label:14} → 위치 자체가 도달 불가");
+        } else {
+            println!(
+                "  {label:14} → 위치해 {reached}개 · 최선 법선 어긋남 {best_deg:.1}° \
+                 (위치오차 {:.4} m)",
+                best_position_error
+            );
+        }
+    }
+}
+
+/// 위치우선 재시도가 실제로 fly_05 표적을 푸는지 직접 확인한다.
+#[test]
+fn best_normal_solves_the_fly05_target() {
+    let arm = pingpong_bot::defaults::primitive_4dof().expect("arm").arm;
+    let rail = arm.rail.expect("rail");
+    let hint = Pose::new(rail.default_x(), arm.default_joints.clone());
+    let desired = Vector3::new(-0.37, 0.89, 0.26).normalize();
+
+    println!("\n=== best_normal 직접 호출 ===");
+    for (label, x, y, z) in [
+        ("fly_05", 1.585, 0.328, 0.993),
+        ("fly_07", 1.652, 0.328, 0.955),
+        ("fly_04", 0.640, 0.230, 1.010),
+    ] {
+        let target = nalgebra::Point3::new(x, y, z);
+        match arm.inverse_pose_with_rail_best_normal(target, desired, &hint, IkSearch::Global) {
+            Ok((pose, normal_error)) => {
+                let actual = arm
+                    .forward_kinematics_with_rail(pose.rail_x, &pose.joints)
+                    .expect("FK");
+                let position_error = (actual.position.coords - target.coords).norm();
+                let deg = actual
+                    .normal
+                    .dot(&desired)
+                    .clamp(-1.0, 1.0)
+                    .acos()
+                    .to_degrees();
+                println!(
+                    "  {label} → 성공 · 위치오차 {position_error:.5} m · 법선 어긋남 \
+                     {deg:.1}° (노름 {normal_error:.3})"
+                );
+            }
+            Err(error) => println!("  {label} → 실패: {error}"),
+        }
+    }
+}

@@ -102,13 +102,18 @@ pub(crate) fn best_impact_candidate_for_outgoing(
                     search: robot::IkSearch,
                     best: &mut Option<ImpactCandidate>,
                     last_error: &mut Option<SwingPlanError>| {
-        let solved = match arm.inverse_pose_with_rail(
+        // 법선은 **목표**지 물리 한계가 아니다 — 못 맞춰도 리턴 방향만 달라질 뿐
+        // 타격은 성립한다. 라켓 중심만 정확히 두고 면 각도는 갈 수 있는 데까지 간다.
+        // 하류가 요구 법선이 아니라 `impact_normal`(달성 법선)으로 `v_r·n`을 계산하고
+        // 리턴 속도·테이블 관통·관절/토크/속도를 이미 검사하므로, 여기서 각도로
+        // 자르면 그 검사들이 판단할 기회를 뺏는 것이다.
+        let solved = match arm.inverse_pose_with_rail_best_normal(
             racket_center,
             desired_normal,
             &robot::Pose::new(start.rail_x, hint),
             search,
         ) {
-            Ok(solved) => solved,
+            Ok((solved, _normal_error)) => solved,
             Err(error) => {
                 *last_error = Some(error);
                 return;

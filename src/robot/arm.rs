@@ -312,7 +312,12 @@ impl Arm {
         return self.inverse_kinematics_at_mount(rail.mount_point(rail_x), target, hint);
     }
 
-    /// 레일과 관절을 함께 움직여 라켓 중심과 면 법선을 맞춘다.
+    /// 레일과 관절을 함께 움직여 라켓 중심과 면 법선을 **둘 다** 맞춘다.
+    ///
+    /// 법선까지 맞아야 하므로 "닿기는 하는데 각도가 안 나온다"는 경우엔
+    /// [`SwingPlanError::RacketOrientationUnreachable`]. 실제로 공을 치는 경로라면
+    /// [`Self::inverse_pose_with_rail_best_normal`]을 써야 한다 — 법선은 물리 한계가
+    /// 아니라 목표라서, 어긋나도 리턴 방향만 달라질 뿐 타격 자체는 성립한다.
     pub fn inverse_pose_with_rail(
         &self,
         target: Point3,
@@ -320,9 +325,148 @@ impl Arm {
         hint: &Pose,
         search: IkSearch,
     ) -> Result<Pose, SwingPlanError> {
+        let (pose, normal_error) =
+            self.solve_pose_with_rail(target, target_normal, hint, search, 1.0)?;
+        if normal_error > Self::POSE_IK_NORMAL_TOLERANCE {
+            let target_normal = target_normal.normalize();
+            return Err(SwingPlanError::RacketOrientationUnreachable {
+                target_x: target.coords.x,
+                target_y: target.coords.y,
+                target_z: target.coords.z,
+                normal_x: target_normal.x,
+                normal_y: target_normal.y,
+                normal_z: target_normal.z,
+            });
+        }
+        return Ok(pose);
+    }
+
+    /// 라켓 **중심은 반드시** 목표에 두고, 면 법선은 갈 수 있는 데까지만 간다.
+    /// 반환값의 두 번째 항은 달성 법선과 요구 법선의 차 노름(0이면 정확).
+    ///
+    /// 둘을 가르는 이유: 위치는 **접촉 여부**를 정하고(라켓이 공에 안 닿으면 타격이
+    /// 아니다) 법선은 **리턴 방향**만 정한다. 후자는 관절 한계·토크·속도 같은 물리
+    /// 한계가 아니라 목표이므로, 못 맞춘다고 스윙을 포기할 일이 아니다 — 실측
+    /// (fly_05, 2026-07-31)에서 위치는 오차 0.0 m로 닿는데 법선이 18.2° 어긋난다는
+    /// 이유로 공을 그냥 보냈다.
+    ///
+    /// 어긋남이 얼마나 허용되는지는 여기서 자르지 않는다. 라켓 면은 반경 75 mm이고
+    /// 중심 오프셋은 25 mm라 18°에서 접촉점이 8 mm 밀릴 뿐이라 여전히 면으로 맞는다.
+    /// 스윙이 실제로 쓸 만한지는 하류의 물리 검사(리턴 속도·테이블 관통·관절/토크/속도)가
+    /// 이미 판정하며, 랭킹도 요구 법선이 아니라 **달성 법선**으로 `v_r·n`을 계산한다.
+    pub fn inverse_pose_with_rail_best_normal(
+        &self,
+        target: Point3,
+        target_normal: Vector3<f64>,
+        hint: &Pose,
+        search: IkSearch,
+    ) -> Result<(Pose, f64), SwingPlanError> {
+        // 1차는 법선을 동등하게 본다 — 맞출 수 있으면 정확히 맞추는 게 낫다.
+        if let Ok(exact) = self.solve_pose_with_rail(target, target_normal, hint, search, 1.0) {
+            return Ok(exact);
+        }
+        let Some(rail) = &self.rail else {
+            return Err(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: target.coords.x,
+                target_y: target.coords.y,
+                target_z: target.coords.z,
+            });
+        };
+        // 실패했다는 건 위치 허용오차를 만족한 해가 하나도 없었다는 뜻인데, 원인이
+        // **위치를 못 닿아서**인지 **불가능한 법선이 위치까지 끌고 가서**인지 구분해야
+        // 한다. DLS는 위치 3 + 법선 2를 한 벡터로 놓고 동시에 줄이므로, 법선이 불가능한
+        // 지점은 대개 자코비안이 특이해 감쇠가 지배하고 **위치까지 어중간한 타협점**에
+        // 앉는다 (실측 fly_05: 위치만 따로 풀면 오차 0.0 m로 닿는데 자세 IK는 "도달 범위
+        // 밖"이라 보고했다). 법선 항 가중치만 낮추는 것으론 안 풀린다 — 같은 특이점을
+        // 그대로 지나기 때문이고, 실제로 그렇게 해보니 정상 표적(fly_04)까지 실패했다.
+        //
+        // 그래서 과제를 아예 나눈다: 위치는 3구속짜리 IK로 **정확히** 풀고, 남는 자세
+        // 족(관절 4 + 레일 1 - 위치 3 = 2차원)을 시드로 훑어 법선이 가장 가까운 해를
+        // 고른다. 위치가 하드 구속이라 "라켓이 공에 안 닿는" 해는 원천적으로 안 나온다.
+        let target_normal = target_normal.normalize();
+        // 레일 x도 자유변수다 — 같은 점을 다른 레일 위치에서 잡으면 팔 자세가 달라져
+        // 만들 수 있는 법선이 달라진다.
+        const RAIL_SAMPLES: usize = 5;
+        const RAIL_SPAN_M: f64 = 0.20;
+        let center_rail_x = rail.clamp_x(target.coords.x);
+        let mut best: Option<(f64, Pose)> = None;
+        for rail_step in 0..RAIL_SAMPLES {
+            let fraction = (rail_step as f64) / ((RAIL_SAMPLES - 1) as f64) - 0.5;
+            let rail_x = rail.clamp_x(center_rail_x + RAIL_SPAN_M * fraction * 2.0);
+            for seed in self.pose_ik_seeds(hint, search) {
+                let Ok(joints) =
+                    self.inverse_kinematics_with_rail(rail, rail_x, target, Some(&seed))
+                else {
+                    continue;
+                };
+                let Some(pose) = self.forward_kinematics_with_rail(rail_x, &joints) else {
+                    continue;
+                };
+                if (pose.position.coords - target.coords).norm() > Self::POSE_IK_POSITION_TOLERANCE
+                {
+                    continue;
+                }
+                let normal_error = (target_normal - pose.normal).norm();
+                if best
+                    .as_ref()
+                    .is_none_or(|(best_error, _)| normal_error < *best_error)
+                {
+                    best = Some((normal_error, Pose::new(rail_x, joints)));
+                }
+            }
+        }
+        if let Some((normal_error, pose)) = best {
+            return Ok((pose, normal_error));
+        }
+        return Err(SwingPlanError::InverseKinematicsNoSolution {
+            target_x: target.coords.x,
+            target_y: target.coords.y,
+            target_z: target.coords.z,
+        });
+    }
+
+    /// 자세 IK 시드 — 위치전용 폴백도 같은 분기 커버리지를 써야 한다.
+    fn pose_ik_seeds(&self, hint: &Pose, search: IkSearch) -> Vec<Joints> {
+        let mut seeds = vec![hint.joints.clone(), self.default_joints.clone()];
+        if search == IkSearch::Local {
+            return seeds;
+        }
+        const SPREAD_SEEDS: usize = 16;
+        const GOLDEN_RATIO: f64 = 0.618_033_988_749_895;
+        for index in 1..=SPREAD_SEEDS {
+            let values = (0..self.joint_count())
+                .map(|joint| {
+                    let (min, max) = self.joint_limit(joint).map_or(
+                        (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+                        |limit| (limit.min, limit.max),
+                    );
+                    let fraction = ((index as f64) * GOLDEN_RATIO * ((joint + 1) as f64)).fract();
+                    min + (max - min) * fraction
+                })
+                .collect();
+            seeds.push(Joints { values });
+        }
+        return seeds;
+    }
+
+    /// 법선 허용오차 - 이 안이면 "정확히 맞췄다"로 본다.
+    pub const POSE_IK_NORMAL_TOLERANCE: f64 = 1e-3;
+    /// 라켓 중심 허용오차 [m] - 이건 접촉 여부라 최선노력 대상이 아니다.
+    pub const POSE_IK_POSITION_TOLERANCE: f64 = 2e-4;
+
+    fn solve_pose_with_rail(
+        &self,
+        target: Point3,
+        target_normal: Vector3<f64>,
+        hint: &Pose,
+        search: IkSearch,
+        // 과제 벡터에서 법선 2성분에 곱할 가중치. 1.0이면 위치와 동등,
+        // 작을수록 위치를 우선하고 법선은 남는 자유도 안에서만 맞춘다.
+        normal_weight: f64,
+    ) -> Result<(Pose, f64), SwingPlanError> {
         const MAX_ITERS: usize = 250;
-        const POSITION_TOLERANCE: f64 = 2e-4;
-        const NORMAL_TOLERANCE: f64 = 1e-3;
+        const POSITION_TOLERANCE: f64 = Arm::POSE_IK_POSITION_TOLERANCE;
+        const NORMAL_TOLERANCE: f64 = Arm::POSE_IK_NORMAL_TOLERANCE;
         const STEP: f64 = 1e-6;
         const DAMPING: f64 = 1e-3;
         const MAX_UPDATE: f64 = 0.2;
@@ -400,8 +544,8 @@ impl Arm {
                 target.coords.x - pose.position.coords.x,
                 target.coords.y - pose.position.coords.y,
                 target.coords.z - pose.position.coords.z,
-                normal_error.dot(&tangent_a),
-                normal_error.dot(&tangent_b),
+                normal_weight * normal_error.dot(&tangent_a),
+                normal_weight * normal_error.dot(&tangent_b),
             ])
         };
 
@@ -463,6 +607,11 @@ impl Arm {
         });
 
         let mut best: Option<(f64, Pose)> = None;
+        // 위치는 맞췄지만 법선이 못 미친 해 중 **법선이 가장 가까운 것**. `best`는
+        // 위치오차+법선오차 합으로 고르기 때문에 법선이 좋고 위치가 나쁜 해를 집을 수
+        // 있는데, 그건 라켓이 공에 안 닿는 것이라 타격이 아니다. 둘은 성격이 다르므로
+        // (위치는 접촉 여부, 법선은 리턴 방향) 따로 추적한다.
+        let mut best_with_position: Option<(f64, Pose)> = None;
         for mut values in seeds.into_iter().chain(spread) {
             // 이 시드에서의 최고 점수 — 개선이 멈추면 남은 반복을 태우지 않고 다음 시드로
             // 넘어간다. 실패 시드가 매번 MAX_ITERS를 다 도는 것이 위 1.048 ms의 정체다.
@@ -482,8 +631,17 @@ impl Arm {
                 {
                     best = Some((score, Pose::new(rail_x, joints.clone())));
                 }
-                if position_error <= POSITION_TOLERANCE && normal_error <= NORMAL_TOLERANCE {
-                    return Ok(Pose::new(rail_x, joints));
+                if position_error <= POSITION_TOLERANCE {
+                    if normal_error <= NORMAL_TOLERANCE {
+                        return Ok((Pose::new(rail_x, joints), normal_error));
+                    }
+                    if best_with_position
+                        .as_ref()
+                        .is_none_or(|(best_normal, _)| normal_error < *best_normal)
+                    {
+                        best_with_position =
+                            Some((normal_error, Pose::new(rail_x, joints.clone())));
+                    }
                 }
                 // DLS는 평탄 구간을 지나 다시 내려가기도 하므로 즉시 포기하지 않고
                 // STALL_ITERS만큼 지켜본다.
@@ -555,37 +713,19 @@ impl Arm {
             let pose = self
                 .forward_kinematics_with_rail(candidate.rail_x, &candidate.joints)
                 .expect("validated pose IK candidate");
+            let normal_error = (target_normal - pose.normal).norm();
             if (target.coords - pose.position.coords).norm() <= POSITION_TOLERANCE
-                && (target_normal - pose.normal).norm() <= NORMAL_TOLERANCE
+                && normal_error <= NORMAL_TOLERANCE
             {
-                return Ok(candidate);
+                return Ok((candidate, normal_error));
             }
         }
-        // 여기까지 왔으면 자세를 못 맞춘 것인데, 원인이 **위치**인지 **법선**인지는 아직
-        // 모른다. 위치만 따로 풀어 갈라준다 — 실패 경로에서만 도는 IK 한 번이라 성공
-        // 경로는 그대로다. 뭉뚱그리면 위치는 닿는데도 "도달 범위 밖"이라 보고해
-        // 마운트·법선이 진짜 원인일 때 팔 길이를 의심하게 만든다.
-        let position_reachable = match &self.rail {
-            Some(rail) => self
-                .inverse_kinematics_with_rail(
-                    rail,
-                    rail.clamp_x(target.coords.x),
-                    target,
-                    Some(&hint.joints),
-                )
-                .is_ok(),
-            None => self.inverse_kinematics(target).is_ok(),
-        };
-        if position_reachable {
-            return Err(SwingPlanError::RacketOrientationUnreachable {
-                target_x: target.coords.x,
-                target_y: target.coords.y,
-                target_z: target.coords.z,
-                normal_x: target_normal.x,
-                normal_y: target_normal.y,
-                normal_z: target_normal.z,
-            });
+        // 위치는 맞췄는데 법선만 못 미친 해가 있으면 그걸 돌려준다 — 자를지 말지는
+        // 호출부가 정한다 ([`Self::inverse_pose_with_rail`]는 여기서 에러로 바꾼다).
+        if let Some((normal_error, candidate)) = best_with_position {
+            return Ok((candidate, normal_error));
         }
+        // 위치를 맞춘 해가 하나도 없었다 — 이건 법선과 무관하게 **못 닿는** 것이다.
         return Err(SwingPlanError::InverseKinematicsNoSolution {
             target_x: target.coords.x,
             target_y: target.coords.y,
