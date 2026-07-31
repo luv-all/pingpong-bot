@@ -13,7 +13,6 @@ pub struct Options {
     pub preview: bool,
     /// 시작 시 센터(ready) 자세로 이동.
     pub home: bool,
-    pub coarse_track: bool,
     /// 녹화 클립 재생 경로 — `None`이면 라이브 캠.
     pub clip: Option<std::path::PathBuf>,
     /// 관전용 sim 창 (자식 프로세스).
@@ -32,7 +31,6 @@ impl Options {
             dry_run: args.dry_run,
             preview: args.preview,
             home: args.home,
-            coarse_track: args.coarse_track,
             clip: args.clip.clone(),
             sim: args.sim,
             release_torque: args.release_torque,

@@ -8,10 +8,11 @@ use std::sync::Arc;
 
 use crate::constants::{ball, table};
 use crate::defaults::PhysicsParams;
-use crate::error::{DomainError, SwingPlanError};
+use crate::error::DomainError;
 use crate::estimator;
 use crate::estimator::Prediction;
 use crate::robot::Arm;
+use crate::robot::control::{HitTargetSelector, PositionController, REFINED_MIN_OBSERVATION_SECS};
 use crate::robot::motion;
 use crate::robot::motion::InterceptWindow;
 use rapier3d::prelude::*;
@@ -27,14 +28,6 @@ pub use super::step_input::SimStepInput;
 /// "새 요청을 보낼지" 스로틀 — 둘 다 매 틱 무거운 계획을 다시 돌리지 않게
 /// 빈도만 제한한다. `InsufficientTime`(아직 이름)은 재시도하되 이 간격으로만.
 const SWING_RETRY_THROTTLE_SECS: f64 = 0.02;
-
-/// coarse 추종이 쫓을 평면(`coarse_track_preferred_y`)을 WP2b 점수로
-/// 재채점하는 주기. 평면마다 IK가 필요해(`Planner::best_scored_coarse_plane_y`)
-/// 매 물리 틱(1kHz) 직접 부르기엔 비싸다 — `SWING_RETRY_THROTTLE_SECS`와
-/// 같은 간격을 재사용해 "무거운 재계획은 이 주기로만" 관례를 그대로 따른다.
-/// 그 사이 틱은 `plan_coarse_track_targets_for_plane`(IK 1회, 기존과 동일
-/// 비용)이 캐시된 값으로 매 틱 위치만 갱신한다.
-const COARSE_TRACK_RESCORE_THROTTLE_SECS: f64 = SWING_RETRY_THROTTLE_SECS;
 
 /// Rapier 물리 월드 — 탁구대, 슈터, 공, 다물체 암(EE 충돌 · τ_max · 폐루프 관절).
 pub struct SimWorld {
@@ -98,6 +91,8 @@ pub struct SimWorld {
     use_bang_bang_swing: bool,
     /// 이번 비행에서 스윙을 이미 commit했는지 (재계획·팔 떨림 방지)
     swing_committed: bool,
+    /// 1차 이동 후 0.25 s 시점의 정밀 목표로 재계획했는지.
+    position_refined: bool,
     /// 이번 비행에서 스윙을 포기했는지 (도달 불능·너무 늦음). commit 없이 손 뗌.
     swing_abandoned: bool,
     /// 발사마다 증가 — 터미널 샷 로그 상관용.
@@ -112,14 +107,6 @@ pub struct SimWorld {
     /// `InsufficientTime`(아직 이름)은 재시도하되, 매 틱 IK를 돌리지 않도록
     /// `SWING_RETRY_THROTTLE_SECS`로 빈도만 제한한다.
     last_swing_attempt_at: f64,
-    /// coarse 추종이 쫓을 평면의 y — `plan_best_swing`과 같은 WP2b 점수로
-    /// [`COARSE_TRACK_RESCORE_THROTTLE_SECS`]마다만 재계산해 캐시한다(평면당
-    /// IK가 필요해 매 틱 부르면 비싸다). `None`이면 아직 한 번도 채점 못 함
-    /// (또는 전부 IK 실패) — 이때 `plan_coarse_track_targets_for_plane`은
-    /// 기존 로봇-최근접 기하로 폴백한다.
-    coarse_track_preferred_y: Option<f64>,
-    /// 마지막으로 `coarse_track_preferred_y`를 재계산한 `sim_time`.
-    last_coarse_track_score_at: f64,
     /// 이번 비행이 발사된 `sim_time` — `park_if_out_of_play`의 최대 비행
     /// 시간 안전장치(`MAX_BALL_FLIGHT_SECS`)가 기준으로 삼는다.
     flight_started_at: f64,
@@ -261,8 +248,6 @@ pub struct SimWorld {
 /// 유지한다. 세기 1.5배 격차의 실제 레버는 **사전축소 `1/r`**, 즉 임팩트
 /// 자세의 조건수 쪽이다(`min_swing_secs`·랠리 리턴 타겟 거리·`max_joint_speed`
 /// — WP2b §7의 나머지 항목). 상세: `docs/wp10-coarse-track-per-joint.md`.
-const COARSE_TRACK_JOINT_FRACTION: f64 = crate::defaults::COARSE_TRACK_JOINT_FRACTION;
-
 impl SimWorld {
     /// 탁구대·슈터·주차된 공·로봇 라켓을 배치한다.
     ///
@@ -416,12 +401,11 @@ impl SimWorld {
             kinematic_robot: false,
             use_bang_bang_swing: false,
             swing_committed: false,
+            position_refined: false,
             swing_abandoned: false,
             shot_seq: 0,
             hard_fail_streak: 0,
             last_swing_attempt_at: f64::NEG_INFINITY,
-            coarse_track_preferred_y: None,
-            last_coarse_track_score_at: f64::NEG_INFINITY,
             flight_started_at: 0.0,
             debug_snap: SimDebugSnapshot::default(),
             diag_marker_secs: 0.0,
@@ -733,8 +717,7 @@ impl SimWorld {
     /// - `InsufficientTime`: 스로틀 재시도. 모든 후보가 `tti < min_swing`이면 포기.
     /// - 포기 후에는 팔이 움직이지 않는다.
     ///
-    /// `dt`는 commit 전 coarse 선추종의 관절 슬루 rate-limit에 쓰인다.
-    fn try_auto_swing(&mut self, dt: f64) {
+    fn try_auto_swing(&mut self, _dt: f64) {
         if self.ball_state != crate::sim::physics::BallState::InFlight {
             self.diag_marker_secs = 0.0;
             self.diag_predictions_secs = 0.0;
@@ -763,7 +746,13 @@ impl SimWorld {
             return;
         }
 
-        if self.swing_committed || self.swing_abandoned || self.robot.is_swinging() {
+        let refine_due = self.swing_committed
+            && !self.position_refined
+            && self.sim_time - self.flight_started_at >= REFINED_MIN_OBSERVATION_SECS;
+        if self.swing_abandoned
+            || (self.swing_committed && !refine_due)
+            || (self.robot.is_swinging() && !refine_due)
+        {
             if let Some(prediction) = marker {
                 self.set_debug_prediction(Some(prediction));
             }
@@ -788,67 +777,12 @@ impl SimWorld {
             return;
         }
 
-        // 상대 코트에 있으면 아직 이름 — 바운스·탄도 안정화 대기.
-        // 다만 손 놓고 기다리지 말고, 값싼 rough 추종(rough-to-fine의 rough)으로
-        // 레일/관절을 예측 임팩트 쪽으로 미리 옮겨 둔다.
-        //
-        // 레일 목표는 `set_rail_target`으로 두면 `RobotState::advance_rail`이
-        // `rail.max_speed`+`RAIL_ACCEL_M_S2`로 슬루한다. 회전 관절 목표는
-        // **여기서 직접 rate-limit 해야 한다** — Rapier 위치-PD 모터는
-        // `targets`를 그대로 스텝 입력으로 받고 `motor_max_force`(토크 한계)로만
-        // 눌리므로, `set_targets`로 목표를 통째로 갈아끼우면 실기에 없는 무제한
-        // 스텝 입력이 된다(`RobotState::slew_targets_toward` 참고).
         let ball_y = f64::from(self.ball_position().y);
         if !motion::Planner::past_midcourt(ball_y) {
             self.debug_snap.commit_phase = CommitPhase::WaitMidcourt;
             if let Some(prediction) = predictions.first() {
                 self.set_debug_prediction(Some(prediction.clone()));
             }
-            // coarse 추종이 쫓을 평면을 최종 커밋(`plan_best_swing`)과 같은
-            // WP2b 점수로 고른다 — 예전엔 로봇 베이스 최근접 기하만 썼는데,
-            // 그 기준이 최종 커밋 랭킹과 어긋나는 샷(예: 6.5 m/s 가운데 샷,
-            // `tests/diag_scoop_vs_overhead_6_5.rs`)에서 사전 추종이 비행
-            // 내내 엉뚱한 평면을 쫓다가 커밋 순간 크게 보정해 net-clear율이
-            // 붕괴하는 게 실측으로 확인됐다(`coarse_track_geometry_scored`
-            // 문서 참고). 평면마다 IK가 필요해 비싸므로 재채점 자체는
-            // `COARSE_TRACK_RESCORE_THROTTLE_SECS`로만 하고, 그 사이 틱은
-            // 캐시된 평면으로 기존과 같은 비용(IK 1회)만 쓴다.
-            if self.sim_time - self.last_coarse_track_score_at >= COARSE_TRACK_RESCORE_THROTTLE_SECS
-                || self.coarse_track_preferred_y.is_none()
-            {
-                self.last_coarse_track_score_at = self.sim_time;
-                let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-                self.coarse_track_preferred_y =
-                    motion::Planner::best_scored_coarse_plane_y(&self.arm, &predictions, &start);
-            }
-            // 레일은 항상 선추종한다 — 레일 x는 IK를 안
-            // 풀고 `rail.clamp_x` 순수 기하로만 내므로 IK가 수렴 못 해도
-            // 레일 추종이 죽지 않는다(전체 포즈 IK에 묶여 있던 예전 동작보다
-            // 견고하다).
-            let coarse = motion::Planner::plan_coarse_track_targets_for_plane(
-                &self.arm,
-                &predictions,
-                self.coarse_track_preferred_y,
-            );
-            if let Some((rail_x, _)) = coarse.as_ref() {
-                self.robot.set_rail_target(*rail_x);
-            }
-            // 회전 관절은 예측 임팩트 자세 쪽으로 **부분만** 미리 옮긴다
-            // ([`COARSE_TRACK_JOINT_FRACTION`]). 목표 자체를 `max_joint_speed`로
-            // 슬루하고 `clamp_above_table`을 태워, 명령이 실기 관절속도를 넘거나
-            // 테이블을 파고드는 자세를 지시하지 않게 한다.
-            if COARSE_TRACK_JOINT_FRACTION > 0.0
-                && let Some((_, Some(joints))) = coarse
-            {
-                let rest = &self.arm.default_joints;
-                let mut blended = joints;
-                for (i, value) in blended.values.iter_mut().enumerate() {
-                    let from = rest.values.get(i).copied().unwrap_or(*value);
-                    *value = from + (*value - from) * COARSE_TRACK_JOINT_FRACTION;
-                }
-                self.robot.slew_targets_toward(&self.arm, &blended, dt);
-            }
-            return;
         }
 
         // WP2a/2026-07-30: 예전엔 `f64::min`(가장 먼저 지나가는 평면, 즉
@@ -860,10 +794,6 @@ impl SimWorld {
         // 작을 때(예전 0.08)는 두 값의 차이가 게이트를 거의 안 건드려 드러나지
         // 않았지만, WP2a 실측 근거로 값을 올리자(0.24) 커밋률이 0%로 붕괴해
         // 발견했다.
-        let latest_tti = predictions
-            .iter()
-            .map(|p| p.time_to_impact_secs)
-            .fold(f64::NEG_INFINITY, f64::max);
         // 2026-07-31: "너무 늦어서 포기"를 없앴다. 시간이 촉박하다는 것 자체는 위험하지
         // 않다 — 위험한 건 그 시간에 맞추려고 요구되는 관절 속도·가속·토크이고, 그건
         // `build_feasible_trajectory`가 `kinematic_limit_violation`·`peak_torque_utilization`
@@ -871,19 +801,10 @@ impl SimWorld {
         // 스윙까지 버리게 된다 (실기 벤치에서 다수 관찰 — 사용자 결정).
         // 포기는 이제 토크·관절 한계(`JointOrTorqueLimit`)와 네트 실격에서만 일어난다.
 
-        // commit 창 밖(너무 이름)이면 계획하지 않고 대기.
+        // bang-bang 디버그 스윙만 예전 commit 창을 사용한다.
         let any_in_window = predictions
             .iter()
             .any(|p| motion::Planner::in_commit_window(p.time_to_impact_secs));
-        if !any_in_window {
-            self.debug_snap.commit_phase = CommitPhase::WaitWindow;
-            if let Some(prediction) = predictions.first() {
-                self.set_debug_prediction(Some(prediction.clone()));
-            }
-            return;
-        }
-
-        self.debug_snap.commit_phase = CommitPhase::InWindow;
 
         // GUI "Bang-bang swing (debug)" 토글 - quintic(plan_best_swing) 대신
         // 순수 토크 기반 bang-bang(plan_bang_bang_swing)을 계획한다. 이 경로는
@@ -892,9 +813,14 @@ impl SimWorld {
         // 보낼지"에만 적용돼야 하기 때문이다(`poll_and_advance_bang_bang`
         // 문서 참고).
         if self.use_bang_bang_swing {
+            if !any_in_window {
+                self.debug_snap.commit_phase = CommitPhase::WaitWindow;
+                return;
+            }
             self.poll_and_advance_bang_bang(&predictions);
             return;
         }
+        self.debug_snap.commit_phase = CommitPhase::InWindow;
 
         if self.sim_time - self.last_swing_attempt_at < SWING_RETRY_THROTTLE_SECS {
             if let Some(prediction) = predictions.first() {
@@ -904,98 +830,55 @@ impl SimWorld {
         }
         self.last_swing_attempt_at = self.sim_time;
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        let planned = match motion::Planner::plan_best(&self.arm, &predictions, &start) {
-            Ok(planned) => {
-                self.hard_fail_streak = 0;
-                planned
-            }
-            Err(DomainError::InfeasibleSwing(
-                ref err @ SwingPlanError::JointOrTorqueLimit { .. },
-            )) => {
-                // τ 초과는 시간이 줄수록 더 나쁨 → 재시도 없이 이번 공 포기 (모터 보호).
-                self.debug_snap.record_fail(err);
-                self.debug_snap.commit_phase = CommitPhase::Abandoned;
-                self.abandon_swing("토크 한계 초과 — 이번 공 스윙 포기 (모터 보호)");
-                if let Some(prediction) = predictions.first() {
-                    self.set_debug_prediction(Some(prediction.clone()));
-                }
-                return;
-            }
-            Err(DomainError::InfeasibleSwing(ref err)) if err.is_hard_unreachable() => {
-                // IK/테이블 등: 이번 시도만 스킵. 비행 포기는 tti < min_swing에서만 —
-                // 초반 hit-plane 오판으로 닿는 공을 버리지 않기 위함.
-                self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
-                self.debug_snap.record_fail(err);
-                if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
-                    warn!(
-                        shot = self.shot_seq,
-                        %err,
-                        streak = self.hard_fail_streak,
-                        latest_tti,
-                        "shot: 스윙 계획 하드 실패 — 재시도"
-                    );
-                } else {
-                    debug!(
-                        %err,
-                        streak = self.hard_fail_streak,
-                        latest_tti,
-                        "plan_swing 하드 불능 — 재시도"
-                    );
-                }
-                if let Some(prediction) = predictions.first() {
-                    self.set_debug_prediction(Some(prediction.clone()));
-                }
-                return;
-            }
-            Err(DomainError::InfeasibleSwing(
-                ref err @ SwingPlanError::InsufficientTime { .. },
-            )) => {
-                self.debug_snap.record_fail(err);
-                if self.hard_fail_streak == 0 {
-                    info!(
-                        shot = self.shot_seq,
-                        %err,
-                        latest_tti,
-                        "shot: InsufficientTime — 창 재진입 대기"
-                    );
-                }
-                debug!("plan_swing InsufficientTime — 재시도 대기");
-                if let Some(prediction) = predictions.first() {
-                    self.set_debug_prediction(Some(prediction.clone()));
-                }
-                return;
-            }
-            Err(other) => {
-                self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
-                self.debug_snap.last_fail_text = Some(other.to_string());
-                warn!(
-                    shot = self.shot_seq,
-                    %other,
-                    streak = self.hard_fail_streak,
-                    "shot: 스윙 계획 예외"
-                );
-                if let Some(prediction) = predictions.first() {
-                    self.set_debug_prediction(Some(prediction.clone()));
-                }
-                return;
-            }
+        let position = self.ball_position();
+        let velocity = self.ball_velocity();
+        let omega = self.ball_angular_velocity();
+        let predicted = estimator::Kinematics::sample_trajectory(
+            nalgebra::Vector3::new(position.x.into(), position.y.into(), position.z.into()),
+            nalgebra::Vector3::new(velocity.x.into(), velocity.y.into(), velocity.z.into()),
+            nalgebra::Vector3::new(omega.x.into(), omega.y.into(), omega.z.into()),
+            &self.physics,
+        );
+        let Ok(ball_trajectory) =
+            estimator::BallTrajectory::new(Vec::new(), predicted, std::time::Instant::now())
+        else {
+            return;
         };
+        let Ok(selector) = HitTargetSelector::new(self.intercept.y_min, self.intercept.y_max)
+        else {
+            return;
+        };
+        let planned =
+            match PositionController::plan_best(&self.arm, &start, &ball_trajectory, &selector) {
+                Ok(planned) => planned,
+                Err(error) => {
+                    self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
+                    self.debug_snap.last_fail_text = Some(error.to_string());
+                    if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
+                        warn!(shot = self.shot_seq, %error, "shot: 최적 목표 위치 계획 실패");
+                    }
+                    return;
+                }
+            };
+        self.hard_fail_streak = 0;
         self.debug_snap.clear_fail_on_success();
-        self.set_debug_prediction(Some(planned.prediction));
         let trajectory = planned.trajectory;
         self.debug_snap.set_committed_path(&self.arm, &trajectory);
-        let pred = self.debug_prediction.clone();
+        let refined = self.sim_time - self.flight_started_at >= REFINED_MIN_OBSERVATION_SECS;
         info!(
             shot = self.shot_seq,
+            stage = if refined { "refined" } else { "provisional" },
             duration_secs = trajectory.duration_secs,
             rail_end = trajectory.rail.end,
-            impact = ?pred.as_ref().map(|p| p.impact_position.coords),
-            tti = pred.as_ref().map(|p| p.time_to_impact_secs),
+            target = ?planned.target.position.coords,
+            arrival_secs = planned.target.time_secs,
             peak_joint_speed = trajectory.peak_joint_speed(),
-            "shot: swing commit"
+            "shot: 최적 목표 위치 이동 commit"
         );
-        self.robot.replace_swing(trajectory);
+        self.robot.set_auto_return_to_center(false);
+        self.robot.replace_motion_and_return(trajectory, start);
         self.swing_committed = true;
+        self.position_refined = refined;
     }
 
     /// bang-bang(GUI 디버그) 커밋 경로 — `plan_bang_bang_swing`을 이 스레드
@@ -1164,11 +1047,10 @@ impl SimWorld {
         // 도는 것 자체는 안전하다 — 그냥 결과가 버려질 뿐).
         self.bang_bang_worker.cancel_inflight();
         self.swing_committed = false;
+        self.position_refined = false;
         self.swing_abandoned = false;
         self.hard_fail_streak = 0;
         self.last_swing_attempt_at = f64::NEG_INFINITY;
-        self.coarse_track_preferred_y = None;
-        self.last_coarse_track_score_at = f64::NEG_INFINITY;
         self.flight_started_at = self.sim_time;
         self.debug_snap.reset_for_new_flight();
         self.try_auto_swing(f64::from(self.integration_parameters.dt));
@@ -1531,8 +1413,9 @@ mod tests {
     fn shoot_sends_ball_toward_robot_side() {
         let arm = test_robot();
         let mut world = SimWorld::new(arm);
-        let settings = launch::Settings::default();
-        world.shoot_ball(&settings);
+        // 정밀 시점 뒤에도 물리 한계 안에서 재계획할 시간이 남도록 느리고 높은
+        // 검증용 탄도를 직접 발사한다.
+        world.launch_ball_at([0.0, 2.5, 1.5], [0.0, -2.0, 0.0], [0.0, 0.0, 0.0]);
         let y0 = world.ball_position().y;
         for _ in 0..300 {
             world.step(1.0 / 1000.0, None);
@@ -1542,9 +1425,8 @@ mod tests {
     }
 
     #[test]
-    fn hard_unreachable_flight_is_abandoned_without_committing_swing() {
-        // 리치 밖 가장자리로 조준 — commit 창에서 IK가 계속 실패하다
-        // tti < min_swing이 되면 포기 (억지 commit 없음).
+    fn position_only_accepts_shot_that_old_return_swing_rejected() {
+        // 예전 리턴 속도 스윙은 불가능했지만, 공 위치에 대기만 하는 제어는 가능한 샷.
         let mut world = SimWorld::new(fourdof_robot());
         world.set_use_ground_truth(true);
         world.set_intercept_window(InterceptWindow::default());
@@ -1556,16 +1438,11 @@ mod tests {
         };
         world.shoot_ball(&settings);
 
-        let mut saw_abandon = false;
+        let mut committed = world.swing_committed();
         for _ in 0..8_000 {
             world.step(1.0 / 1000.0, None);
-            if world.swing_abandoned() {
-                saw_abandon = true;
-                assert!(!world.swing_committed(), "포기한 비행은 commit되면 안 됨");
-                assert!(
-                    !world.robot().is_swinging(),
-                    "포기 후 팔이 스윙 중이면 안 됨"
-                );
+            if world.swing_committed() {
+                committed = true;
                 break;
             }
             if world.ball_state == crate::sim::physics::BallState::Parked {
@@ -1573,9 +1450,8 @@ mod tests {
             }
         }
         assert!(
-            saw_abandon,
-            "리치 밖 샷은 swing_abandoned 되어야 함 (committed={})",
-            world.swing_committed()
+            committed && !world.swing_abandoned(),
+            "위치 제어는 예전 리턴 스윙 불가 샷을 받아야 함"
         );
     }
 
@@ -1604,7 +1480,7 @@ mod tests {
     }
 
     #[test]
-    fn contact_swing_reaches_impact_fk_at_duration() {
+    fn position_control_reaches_ball_side_before_returning() {
         let arm = test_robot();
         let mut world = SimWorld::new(arm.clone());
         world.set_use_ground_truth(true);
@@ -1618,14 +1494,17 @@ mod tests {
                 break;
             }
         }
-        assert!(started, "네트 통과 후 commit 창에서 스윙이 시작되어야 함");
+        assert!(
+            started,
+            "네트 통과 후 위치 이동이 시작되어야 함: {:?}",
+            world.debug_snap.last_fail_text
+        );
+        let mut farthest = world.robot().rail_x();
         for _ in 0..800 {
             world.step(1.0 / 1000.0, None);
+            farthest = farthest.max(world.robot().rail_x());
         }
-        assert!(
-            world.robot().rail_x() > 0.2,
-            "스윙 중 레일이 impact 쪽으로 이동해야 함"
-        );
+        assert!(farthest > 0.2, "위치 제어 중 레일이 공 쪽으로 이동해야 함");
     }
 
     #[test]
@@ -2013,28 +1892,20 @@ mod tests {
         let mut world = SimWorld::new(arm);
         world.set_use_ground_truth(true);
         let settings = launch::Settings::default();
-        assert_eq!(world.robot().rail_x(), 0.0, "대기 위치 x=0");
+        let origin = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         world.shoot_ball(&settings);
         assert!(
-            !world.robot().is_swinging(),
-            "발사 직후는 commit 창 밖 — 스윙 대기"
+            world.robot().is_swinging(),
+            "위치 제어는 발사 직후 미리 이동을 시작해야 함"
         );
-        let mut started = false;
-        for _ in 0..800 {
+        let mut farthest = origin.rail_x;
+        for _ in 0..1_500 {
             world.step(1.0 / 1000.0, None);
-            if world.robot().is_swinging() || world.swing_committed() {
-                started = true;
-                break;
-            }
+            farthest = farthest.max(world.robot().rail_x());
         }
-        assert!(started, "네트 통과 후 commit 창에서 스윙이 시작되어야 함");
-        for _ in 0..500 {
-            world.step(1.0 / 1000.0, None);
-        }
-        let rail_after = world.robot().rail_x();
         assert!(
-            rail_after > 0.2,
-            "레일이 impact x 방향으로 이동해야 함 (after={rail_after})"
+            farthest > origin.rail_x + 0.2,
+            "레일이 공 위치 방향으로 이동해야 함 (max={farthest})"
         );
     }
 
@@ -2045,18 +1916,11 @@ mod tests {
     /// 말하는 중앙이 아니다. 스윙이 끝난 뒤 다음 공을 쏘지 않아도 로봇이
     /// 저절로 복귀하는지 검증한다.
     #[test]
-    fn robot_returns_to_center_after_swing_without_next_shot() {
+    fn robot_returns_to_start_after_positioning_without_next_shot() {
         let arm = test_robot();
-        let center_rail_x = arm
-            .arm
-            .rail
-            .as_ref()
-            .expect("테스트 arm은 리니어 포함")
-            .default_x();
-        let center_joints = arm.arm.default_joints.clone();
-
         let mut world = SimWorld::new(arm);
         world.set_use_ground_truth(true);
+        let origin = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         world.shoot_ball(&launch::Settings::default());
 
         let mut swing_started = false;
@@ -2090,14 +1954,15 @@ mod tests {
             .joints()
             .values
             .iter()
-            .zip(center_joints.values.iter())
-            .all(|(actual, center)| (actual - center).abs() < 1e-2);
+            .zip(origin.joints.values.iter())
+            .all(|(actual, expected)| (actual - expected).abs() < 1e-2);
         assert!(
-            (rail_x - center_rail_x).abs() < 1e-2 && joints_close,
-            "스윙 뒤 다음 발사 없이도 로봇이 저절로 중앙(rail={center_rail_x})으로 복귀해야 함 \
-             (실제 rail={rail_x}, joints={:?}, center={:?})",
+            (rail_x - origin.rail_x).abs() < 1e-2 && joints_close,
+            "위치 이동 뒤 출발 자세(rail={})로 복귀해야 함 \
+             (실제 rail={rail_x}, joints={:?}, origin={:?})",
+            origin.rail_x,
             world.robot().joints().values,
-            center_joints.values,
+            origin.joints.values,
         );
     }
 
@@ -2438,74 +2303,36 @@ mod tests {
     }
 
     #[test]
-    fn coarse_tracking_moves_rail_toward_impact_before_commit() {
-        // rough-to-fine의 rough: 공이 아직 commit 임계(ball_past_midcourt) 전이라도,
-        // 값싼 coarse 추종이 레일을 예측 임팩트 쪽으로 미리 옮겨 둔다. 로봇을
-        // 테이블 중앙에서 시작시키고, 한쪽으로 치우친 샷을 쏜 뒤 commit 진입
-        // 전까지만 스텝을 돌려 레일이 임팩트 쪽으로 측정 가능하게 움직였는지 본다.
+    fn provisional_motion_is_replanned_at_refined_prediction_time() {
+        // 추적 직후 1차 목표로 레일이 움직이고, 0.25초가 지나면 정밀 목표로
+        // 진행 중 궤적이 한 번 교체되는지 확인한다.
         let robot = test_robot();
         let center_rail_x = robot.arm.rail.as_ref().expect("리니어").default_x();
         let mut world = SimWorld::new(robot.clone());
         world.set_use_ground_truth(true);
         *world.robot_mut() = robot::State::new(robot.arm.default_joints.clone(), center_rail_x);
 
-        // 한쪽으로 크게 치우친 느린 샷 — 예측 임팩트 x가 중앙에서 벗어나고,
-        // 느려서 commit 전 추종 시간이 넉넉하다.
-        let (yaw_min, _yaw_max) = launch::Settings::yaw_range_for_lateral_deg(0.5);
-        let settings = launch::Settings {
-            lateral_offset_m: 0.5,
-            // yaw_max(+0.24°)는 min speed에서 ballistics·Rapier 네트 게이트 미달.
-            // 코너 lateral에서 네트를 넘는 yaw_min(-18.88°)으로 off-center 샷을 쏜다.
-            yaw_deg: yaw_min,
-            speed_mps: crate::defaults::sim::RANDOM_SHOT_SPEED_MIN_MPS,
-            ..launch::Settings::default()
-        };
+        let settings = launch::Settings::default();
         world.shoot_ball(&settings);
-
-        let mut target_rail_x: Option<f64> = None;
-        let mut stepped_precommit = false;
-        for _ in 0..5_000 {
-            let ball_y = f64::from(world.ball_position().y);
-            if motion::Planner::past_midcourt(ball_y) {
-                break; // commit 단계 진입 — pre-commit 이동만 관찰한다
-            }
-            // 이 시점의 coarse 목표(있으면)를 기록해 기대 이동 방향으로 삼는다.
-            let predictions: Vec<Prediction> = world
-                .intercept
-                .hit_planes()
-                .into_iter()
-                .filter_map(|plane| world.predict_impact(plane))
-                .collect();
-            if let Some(pose) = motion::Planner::plan_coarse_track(&world.arm, &predictions) {
-                target_rail_x = Some(pose.rail_x);
-            }
+        assert!(world.swing_committed(), "1차 위치 제어는 즉시 시작해야 함");
+        assert!(
+            !world.position_refined,
+            "발사 직후에는 아직 1차 단계여야 함"
+        );
+        for _ in 0..300 {
             world.step(1.0 / 1000.0, None);
-            stepped_precommit = true;
-            assert!(!world.robot().is_swinging(), "commit 전엔 스윙 시작 금지");
-            assert!(
-                !world.swing_committed,
-                "pre-commit 단계에서 commit되면 안 됨"
-            );
         }
-
-        assert!(stepped_precommit, "pre-commit 스텝이 실행돼야 함");
-        let target_rail_x = target_rail_x.expect("pre-commit 중 coarse 목표(예측)가 나와야 함");
-        let rail_after = world.robot().rail_x();
-        let target_offset = target_rail_x - center_rail_x;
-        let moved = rail_after - center_rail_x;
-        // off-center 샷이라 coarse 목표가 중앙과 충분히 달라야 의미가 있다.
+        // 기본 샷은 0.25초 시점에 남은 시간이 0.15초뿐이라, 물리 한계를 유지하면
+        // 정밀 재계획이 명시적으로 거부될 수 있다. 성공 또는 명시적 시간 부족만 허용한다.
         assert!(
-            target_offset.abs() > 0.02,
-            "off-center 샷의 coarse 목표가 중앙과 충분히 달라야: target={target_rail_x}, center={center_rail_x}"
-        );
-        // 레일이 중앙에서 예측 임팩트 쪽으로 측정 가능하게 움직였어야 한다.
-        assert!(
-            moved.abs() > 1e-3,
-            "coarse 추종으로 레일이 commit 전에 움직였어야: moved={moved}"
-        );
-        assert!(
-            moved.signum() == target_offset.signum(),
-            "레일이 예측 임팩트 쪽으로 움직였어야: moved={moved}, target_offset={target_offset}"
+            world.position_refined
+                || world
+                    .debug_snap
+                    .last_fail_text
+                    .as_deref()
+                    .is_some_and(|text| text.contains("남은 시간")),
+            "정밀 재계획 성공 또는 명시적 시간 부족이어야 함: {:?}",
+            world.debug_snap.last_fail_text
         );
     }
 

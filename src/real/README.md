@@ -63,6 +63,11 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 
 ## 파이프라인
 
+> **2026-08-01 현재:** real도 `BallTrajectory`(`observed`/`predicted`, 각 `N×7`)를
+> `HitTargetSelector → PositionController`로 직접 전달한다. 추적 성립 즉시
+> 1차 위치로 이동하고, 0.25초·10 cm 수렴 후 정밀 위치로 재계획한다.
+> 상세 기준은 [`docs/two-stage-position-control.md`](../../docs/two-stage-position-control.md)에 있다.
+
 kiss3d(3D 창)와 OpenCV highgui(프리뷰)가 **둘 다 메인 스레드를 요구**해서 한 프로세스에 같이
 못 띄운다. `tools/verify_stereo`와 같이 자기 자신을 `--sim-child`로 띄우고 stdin 한 줄
 JSON(`SimUpdate`)으로 먹인다. 자식이 죽어도 본 파이프라인은 그대로 간다.
@@ -81,7 +86,7 @@ flowchart LR
 
   camL -->|"VisionEvent<br/>bounded(8) drop-on-full"| est
   camR -->|"VisionEvent"| est
-  est -->|"CommitRequest<br/>bounded(1) drop-on-full"| ctl
+  est -->|"CommitRequest<br/>BallTrajectory + stage<br/>bounded(8)"| ctl
   est -->|"PreviewEvent<br/>bounded(2) drop-on-full"| main
   est -->|"ShotEvent"| main
   ctl -->|"ShotEvent (unbounded)"| main

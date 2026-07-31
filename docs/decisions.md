@@ -230,6 +230,11 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 
 ## 열린 과제 (TODO와 맞출 것)
 
+- `BallTrajectory` 반환 타입·EKF 관측 버퍼·미래 샘플러는 구현 완료.
+- real `CommitRequest.predictions: Vec<Prediction>`은 아직 남아 있음.
+- 다음 경계는 `BallTrajectory → HitTargetSelector → Target → PositionController`.
+- 제어 경로의 `Prediction` / `HitPlane` / `Impact` 제거는 위치 이동
+  통합 테스트 후에 진행.
 - 구름 공 / 포기 조건 명문화 (위 I)
 - EKF 타격 스모크 → C2 승격
 - A4 \(e\)·마찰·drag 실측값으로 constants 갱신

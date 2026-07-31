@@ -24,6 +24,8 @@ pub struct State {
     targets: Joints,
     /// 스윙 재생(quintic 또는 순수 토크 bang-bang)
     active_swing: Option<SwingPlayback>,
+    /// 위치 이동 후 이어서 돌아갈 출발 포즈.
+    return_pose_after_motion: Option<crate::robot::Pose>,
     /// 스윙 종료 후 `plan_return_to_center` 자동 복귀 (메인 sim 기본 on, jog off).
     auto_return_to_center: bool,
 }
@@ -38,6 +40,7 @@ impl State {
             targets: initial.clone(),
             angles: initial,
             active_swing: None,
+            return_pose_after_motion: None,
             auto_return_to_center: true,
         };
     }
@@ -54,6 +57,7 @@ impl State {
     /// 스윙 취소 후 관절·레일을 즉시 스냅 (플래그 유지).
     pub fn snap_to_pose(&mut self, pose: crate::robot::Pose) {
         self.active_swing = None;
+        self.return_pose_after_motion = None;
         self.rail_x = pose.rail_x;
         self.rail_target = pose.rail_x;
         self.rail_vel = 0.0;
@@ -123,6 +127,20 @@ impl State {
         self.replace_playback(PlaybackTrajectory::Quintic(trajectory), 0.0);
     }
 
+    /// 목표 위치 이동을 시작하고, 완료 후 출발 포즈로 복귀한다.
+    pub fn replace_motion_and_return(
+        &mut self,
+        trajectory: motion::Trajectory,
+        return_pose: crate::robot::Pose,
+    ) {
+        // 정밀 예측으로 진행 중 궤적을 교체해도 복귀점은 재계획 순간의
+        // 자세가 아니라 공을 받기 전 출발 자세여야 한다.
+        if self.return_pose_after_motion.is_none() {
+            self.return_pose_after_motion = Some(return_pose);
+        }
+        self.replace_swing(trajectory);
+    }
+
     /// 스윙을 현재 포즈 기준 새 순수 토크 bang-bang 궤적으로 교체한다
     /// (elapsed=0) - GUI "bang-bang swing" 토글이 켜졌을 때 `replace_swing`
     /// 대신 쓴다.
@@ -171,13 +189,16 @@ impl State {
     /// 진행 중 스윙을 취소한다 (다음 공 발사 전).
     pub fn cancel_swing(&mut self) {
         self.active_swing = None;
+        self.return_pose_after_motion = None;
     }
 
     /// 시뮬 폐루프: 궤적·레일 명령만 갱신한다. 측정 관절각은 건드리지 않는다.
     pub fn step_commands(&mut self, arm: &Arm, dt: f64) {
         if self.active_swing.is_some() {
             let finished = self.advance_swing_commands(dt);
-            if finished && self.auto_return_to_center && !self.is_at_center(arm) {
+            if finished && let Some(return_pose) = self.return_pose_after_motion.take() {
+                self.start_return_to_pose(arm, return_pose);
+            } else if finished && self.auto_return_to_center && !self.is_at_center(arm) {
                 let start = crate::robot::Pose::new(self.rail_x, self.angles.clone());
                 if let Ok(trajectory) = motion::Planner::return_to_center(arm, &start) {
                     self.replace_swing(trajectory);
@@ -350,7 +371,9 @@ impl State {
     pub fn step_toward_targets(&mut self, arm: &Arm, dt: f64) {
         if self.active_swing.is_some() {
             let finished = self.advance_swing(arm, dt);
-            if finished && self.auto_return_to_center && !self.is_at_center(arm) {
+            if finished && let Some(return_pose) = self.return_pose_after_motion.take() {
+                self.start_return_to_pose(arm, return_pose);
+            } else if finished && self.auto_return_to_center && !self.is_at_center(arm) {
                 let start = crate::robot::Pose::new(self.rail_x, self.angles.clone());
                 if let Ok(trajectory) = motion::Planner::return_to_center(arm, &start) {
                     self.replace_swing(trajectory);
@@ -372,6 +395,16 @@ impl State {
             self.angles.values[i] += diff.signum() * step;
         }
         self.angles = crate::robot::collision::clamp_above_table(arm, self.rail_x, &self.angles);
+    }
+
+    fn start_return_to_pose(&mut self, arm: &Arm, return_pose: crate::robot::Pose) {
+        let start = crate::robot::Pose::new(self.rail_x, self.angles.clone());
+        if let Ok(trajectory) =
+            motion::Planner::move_to(arm, &start, return_pose.joints, return_pose.rail_x)
+        {
+            // 복귀 궤적 완료 후에는 다시 자동 복귀를 시작하지 않는다.
+            self.replace_swing(trajectory);
+        }
     }
 
     /// 레일·관절이 이미 중앙 포즈(`Arm::default_joints`, `LinearRail::default_x`

@@ -53,14 +53,13 @@ impl Hardware for SimHardware {
                 debug!("이번 공에 이미 스윙 commit — 재계획 무시");
                 return Ok(());
             }
-            // decisions C4: 네트 통과 전 commit 금지 (ground truth 경로와 동일)
-            let ball_y = f64::from(world.ball_position().y);
-            if !motion::Planner::past_midcourt(ball_y) {
-                debug!(ball_y, "상대 코트 — EKF control commit 대기");
-                return Ok(());
-            }
             let arm = Arc::clone(&world.arm);
-            world.robot_mut().begin_swing(trajectory.clone());
+            let return_pose =
+                robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
+            world.robot_mut().set_auto_return_to_center(false);
+            world
+                .robot_mut()
+                .replace_motion_and_return(trajectory.clone(), return_pose);
             world.mark_swing_committed();
             world.debug_snap_mut().set_committed_path(&arm, &trajectory);
         }

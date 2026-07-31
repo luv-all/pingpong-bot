@@ -2,7 +2,7 @@ use crate::error::HwError;
 use crate::robot;
 use crate::robot::motion;
 
-/// 로봇 팔과 리니어 구동 인터페이스.
+/// 로봇 팔과 리니어 구동 인터페이스. 위치 이동과 후속 타격 제어가 공유한다.
 pub trait Hardware: Send {
     fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError>;
     fn read_pose(&mut self) -> Result<robot::Pose, HwError>;

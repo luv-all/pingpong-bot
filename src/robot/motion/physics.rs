@@ -769,7 +769,8 @@ fn trajectory_collision_free(arm: &Arm, trajectory: &Trajectory) -> bool {
 /// (`Arm::joint_reflected_inertias`)까지 포함한
 /// `required_joint_torques_with_rotor_into`를 쓴다 — 감속비 200:1이면
 /// 반사관성이 링크 관성과 같은 자릿수라, 빼면 여유를 낙관적으로 본다(WP8).
-/// 관절 마찰은 아직 미모델이며 `CONTINUOUS_TORQUE_DERATE`가 그 몫을 흡수한다.
+/// 관절 마찰은 아직 미모델이다. 현재 짧은 위치 차단 동작은 stall 토크 100%를
+/// 허용하므로 이 값은 연속 운전 열 한계로 해석하면 안 된다.
 fn peak_torque_utilization(arm: &Arm, trajectory: &Trajectory) -> f64 {
     // 토크 한계가 전부 무한(무제한)이면 동역학을 돌릴 필요가 없다.
     if arm
@@ -965,11 +966,11 @@ fn fit_end_velocity(
     rail: Rail,
 ) -> (Vec<f64>, Rail) {
     let scaled = |scale: f64| -> (Vec<f64>, Rail) {
-        let mut scaled_rail = rail;
-        scaled_rail.end_velocity = rail.end_velocity * scale;
+        // 이 배율은 Dynamixel 관절의 속도·토크 디레이팅이다. AXL 리니어
+        // 축은 독립 구동계이므로 전체 힘을 줄일 때도 그 속도를 줄이지 않는다.
         return (
             end_velocity.iter().map(|value| value * scale).collect(),
-            scaled_rail,
+            rail,
         );
     };
     let feasible = |velocities: Vec<f64>, candidate_rail: Rail| -> bool {

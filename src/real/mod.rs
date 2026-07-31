@@ -53,7 +53,6 @@ mod sim_child;
 mod sim_host;
 mod sim_update;
 mod throttle;
-mod track_request;
 mod vision_event;
 
 pub use commit_request::CommitRequest;
@@ -67,7 +66,6 @@ pub use shot_event::ShotEvent;
 pub use shutdown::{Shutdown, ShutdownGuard, shutdown_channel};
 pub use sim_update::{PoseMsg, SimUpdate, SwingMsg};
 pub use throttle::Throttle;
-pub use track_request::TrackRequest;
 pub use vision_event::VisionEvent;
 
 pub use run::run;

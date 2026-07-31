@@ -8,13 +8,11 @@ use std::time::{Duration, Instant};
 use crate::camera;
 use crate::detector;
 use crate::detector::Detector;
-use crate::error::DomainError;
-use crate::error::SwingPlanError;
 use crate::estimator;
+use crate::estimator::BallTrajectory;
 use crate::estimator::Estimator;
-use crate::estimator::Prediction;
 use crate::hardware::Hardware;
-use crate::robot::motion;
+use crate::robot::control::{HitTargetSelector, PositionControlError, PositionController};
 use crate::telemetry::{Telemetry, TelemetryEvent};
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
@@ -34,7 +32,7 @@ pub fn run(
 ) -> Result<(), PipelineError> {
     let (observation_tx, observation_rx) =
         bounded::<detector::Observation>(OBSERVATION_CHANNEL_CAPACITY);
-    let predictions: Arc<ArrayQueue<Vec<Prediction>>> = Arc::new(ArrayQueue::new(1));
+    let trajectories: Arc<ArrayQueue<BallTrajectory>> = Arc::new(ArrayQueue::new(1));
     let shutdown = Arc::new(AtomicBool::new(false));
     let mut handles: Vec<(PipelineThread, JoinHandle<()>)> = Vec::new();
 
@@ -94,9 +92,7 @@ pub fn run(
     }
     drop(observation_tx);
 
-    let slot = Arc::clone(&predictions);
-    let telemetry_estimation = Arc::clone(&telemetry);
-    let intercept = config.intercept;
+    let slot = Arc::clone(&trajectories);
     let calibration = config.calibration;
     let shutdown_estimation = Arc::clone(&shutdown);
     handles.push((
@@ -141,16 +137,8 @@ pub fn run(
                 match estimator::Triangulate::synced(&refs, sync_time, &calibration) {
                     Ok(point) => {
                         estimator.update(point, sync_time);
-                        let candidates: Vec<Prediction> = intercept
-                            .hit_planes()
-                            .into_iter()
-                            .filter_map(|plane| estimator.predict_to(plane))
-                            .inspect(|prediction| {
-                                telemetry_estimation.log(TelemetryEvent::Prediction(*prediction));
-                            })
-                            .collect();
-                        if !candidates.is_empty() {
-                            let _ = slot.force_push(candidates);
+                        if let Some(trajectory) = estimator.trajectory() {
+                            let _ = slot.force_push(trajectory);
                         }
                     }
                     Err(_) => {
@@ -162,30 +150,32 @@ pub fn run(
         }),
     ));
 
-    let slot = Arc::clone(&predictions);
+    let slot = Arc::clone(&trajectories);
     let telemetry_control = Arc::clone(&telemetry);
     let shutdown_control = Arc::clone(&shutdown);
     let arm = Arc::clone(&config.robot.arm);
+    let selector = HitTargetSelector::new(config.intercept.y_min, config.intercept.y_max)
+        .map_err(|error| PipelineError::Configuration(error.to_string()))?;
     let tick = Duration::from_secs_f64(1.0 / config.control_hz);
     handles.push((
         PipelineThread::Control,
         thread::spawn(move || {
             let mut last_plan_warn = Instant::now() - Duration::from_secs(10);
             loop {
-                if let Some(candidates) = slot.pop() {
+                if let Some(ball_trajectory) = slot.pop() {
                     let _span = info_span!("control").entered();
                     if hardware.is_busy() {
-                        // sim 물리 스레드가 이미 plan_swing 중 — 늦은 예측으로 InsufficientTime 스팸 방지
+                        // 이전 위치 이동이 끝나기 전에는 새 명령을 보내지 않는다.
                         continue;
                     }
                     let start = match hardware.read_pose() {
                         Ok(pose) => pose,
                         Err(error) => {
-                            warn!(?error, "로봇 포즈 읽기 실패 — 스윙 계획 건너뜀");
+                            warn!(?error, "로봇 포즈 읽기 실패 — 위치 계획 건너뜀");
                             continue;
                         }
                     };
-                    match motion::Planner::plan_best(&arm, &candidates, &start) {
+                    match PositionController::plan_best(&arm, &start, &ball_trajectory, &selector) {
                         Ok(planned) => {
                             let trajectory = planned.trajectory;
                             telemetry_control.log(TelemetryEvent::SwingCommand(trajectory.clone()));
@@ -197,15 +187,14 @@ pub fn run(
                                 );
                             }
                         }
-                        Err(DomainError::InfeasibleSwing(SwingPlanError::InsufficientTime {
-                            ..
-                        })) => {
-                            // 이미 늦은 예측 — 버림
-                        }
+                        Err(
+                            PositionControlError::Stale { .. }
+                            | PositionControlError::InsufficientTime { .. },
+                        ) => {}
                         Err(error) => {
                             let now = Instant::now();
                             if now.duration_since(last_plan_warn) >= Duration::from_secs(1) {
-                                warn!(%error, "스윙 계획 실패");
+                                warn!(%error, "목표 위치 계획 실패");
                                 last_plan_warn = now;
                             }
                         }

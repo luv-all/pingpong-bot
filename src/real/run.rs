@@ -54,9 +54,9 @@ pub fn run(args: &Args) -> Result<()> {
 
     let (guard, shutdown) = shutdown_channel();
     let (vision_tx, vision_rx) = bounded(VISION_CAPACITY);
-    let (commit_tx, commit_rx) = bounded(1);
-    // 선추종은 커밋과 채널을 나눈다 — 같은 bounded(1)에 끼면 커밋이 밀려 버려진다.
-    let (track_tx, track_rx) = bounded(1);
+    // 제어 워커가 계획하는 동안 도착한 새 궤적을 보관했다가,
+    // 수신 시 가장 최신 항목만 사용한다.
+    let (commit_tx, commit_rx) = bounded(8);
     let (status_tx, status_rx) = unbounded::<ControlStatus>();
     let (event_tx, event_rx) = unbounded();
     let (preview_tx, preview_rx) = if options.preview {
@@ -98,7 +98,6 @@ pub fn run(args: &Args) -> Result<()> {
         calibration,
         InterceptWindow::default(),
         commit_tx,
-        track_tx,
         status_rx,
         preview_tx,
         sim_tx.clone(),
@@ -109,9 +108,7 @@ pub fn run(args: &Args) -> Result<()> {
         Box::new(hardware),
         Arc::clone(&arm),
         options.home,
-        options.coarse_track,
         commit_rx,
-        track_rx,
         status_tx,
         sim_tx,
         event_tx,

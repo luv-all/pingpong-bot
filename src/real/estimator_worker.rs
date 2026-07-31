@@ -11,6 +11,7 @@ use pingpong_bot::camera::Calibration;
 use pingpong_bot::defaults::EstimatorParams;
 use pingpong_bot::detector;
 use pingpong_bot::estimator::{Ekf, Estimator, GateOutcome, Prediction, Triangulate};
+use pingpong_bot::robot::control::{HitTargetSelector, PredictionStability};
 use pingpong_bot::robot::motion::{InterceptWindow, Planner};
 use tracing::{debug, info_span};
 
@@ -18,7 +19,7 @@ use super::ball_receding::{BallReceding, MIN_DELTA_Y, MIN_SAMPLES};
 use super::fmt::f2;
 use super::{
     CommitRequest, ControlStatus, Decision, PreviewEvent, ShotEvent, Shutdown, SimUpdate, Throttle,
-    TrackRequest, VisionEvent, decide,
+    VisionEvent, decide,
 };
 
 /// 카메라당 보관할 관측 수 — `Triangulate::synced`가 보간에 쓸 앞뒤 프레임.
@@ -106,7 +107,6 @@ pub fn spawn(
     calibration: Calibration,
     intercept: InterceptWindow,
     commit_tx: Sender<CommitRequest>,
-    track_tx: Sender<TrackRequest>,
     status_rx: Receiver<ControlStatus>,
     preview_tx: Option<Sender<PreviewEvent>>,
     sim_tx: Option<Sender<SimUpdate>>,
@@ -133,6 +133,9 @@ pub fn spawn(
         let mut last_sync: Option<Instant> = None;
         let required = calibration.min_cameras_for_triangulation();
         let planes = intercept.hit_planes();
+        let selector =
+            HitTargetSelector::new(intercept.y_min, intercept.y_max).expect("기본 목표 선택 구간");
+        let mut prediction_stability = PredictionStability::default();
         let mut accepting = false;
         let mut shot_seq: u64 = 0;
         let mut receding = BallReceding::new(MIN_DELTA_Y, MIN_SAMPLES);
@@ -150,6 +153,7 @@ pub fn spawn(
                         last_decision = None;
                         receding.reset();
                         ekf.reset();
+                        prediction_stability.reset();
                     }
                     ControlStatus::Recovering { .. } => {
                         accepting = false;
@@ -228,6 +232,7 @@ pub fn spawn(
                 && receding.observe(y)
             {
                 ekf.reset();
+                prediction_stability.reset();
                 announced_track = false;
                 last_decision = None;
                 receding.reset();
@@ -259,6 +264,7 @@ pub fn spawn(
             } else {
                 Vec::new()
             };
+            let trajectory = tracking.then(|| ekf.trajectory()).flatten();
 
             // 대표 후보의 리드타임으로 도달점 불확실성을 낸다 — 리드가 길수록 σ_v가 크게 실린다.
             let impact_sigma = display_candidate(&predictions).and_then(|prediction| {
@@ -288,29 +294,31 @@ pub fn spawn(
             // 화면·sim에 보여줄 대표 후보 — 커밋 창 안의 첫 후보, 없으면 가장 이른 것.
             let shown = display_candidate(&predictions);
 
-            match decision {
-                Decision::Attempt if accepting => {
-                    let request = CommitRequest {
-                        predictions,
-                        ball_y: ball_y.unwrap_or(f64::NAN),
-                        at: Instant::now(),
-                    };
-                    // 제어 워커가 아직 앞 요청을 계획 중이면 버린다 — 어차피 더 새 예측이 곧 온다.
-                    if let Err(TrySendError::Full(_)) = commit_tx.try_send(request) {
-                        stats.commit_dropped += 1;
-                    }
-                }
-                // 아직 칠 때가 아니어도 예측이 있으면 제어 워커가 미리 옮길 수 있게 보낸다.
-                // sim은 이 선추종을 하는데(`world.rs` 미드코트 대기 분기) real엔 없었고,
-                // 그래서 real의 스윙은 센터에서 출발해 **이동과 타격을 한 궤적에** 몰아넣었다.
-                Decision::Attempt | Decision::Wait(_) => {
-                    if !predictions.is_empty() {
-                        let request = TrackRequest {
-                            predictions,
+            // 물리 안전 검사는 제어 플래너에 남기고, 위치 이동을 시작시키던
+            // 예측 불확실성 게이트만 제거한다. 속도가 추정되어 정상 추적이
+            // 성립하면 1차 목표를 보내고, 0.25 s·10 cm 수렴 후 정밀 목표로 올린다.
+            let position_ready = tracking && accepting;
+            if position_ready {
+                if let Some(trajectory) = trajectory {
+                    let observed_span_secs = trajectory
+                        .observed
+                        .first()
+                        .map(|sample| -sample.time_secs)
+                        .unwrap_or(0.0);
+                    if let Ok(target) = selector.select(&trajectory) {
+                        let stage =
+                            prediction_stability.observe(target.position, observed_span_secs);
+                        let request = CommitRequest {
+                            trajectory,
+                            stage,
+                            ball_y: ball_y.unwrap_or(f64::NAN),
                             at: Instant::now(),
                         };
-                        // 놓쳐도 다음 프레임에 다시 온다 — 밀리면 그냥 버린다.
-                        let _ = track_tx.try_send(request);
+                        // 제어 워커가 앞 요청을 계획 중이면 버린다. 다음
+                        // 프레임의 더 새로운 목표가 곧 온다.
+                        if let Err(TrySendError::Full(_)) = commit_tx.try_send(request) {
+                            stats.commit_dropped += 1;
+                        }
                     }
                 }
             }

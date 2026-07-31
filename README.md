@@ -8,6 +8,24 @@ Rapier·실물 하드웨어 경계는 feature와 모듈로 격리한다.
 확정된 설계와 이유는 [`docs/decisions.md`](docs/decisions.md), 남은 작업은
 [`TODO.md`](TODO.md)를 기준으로 본다.
 
+## 현재 개발 상태
+
+`Estimator` 계층은 검출·삼각측량·EKF 결과를 다음 형식으로 반환할 수 있다.
+
+```text
+BallTrajectory {
+    observed:  N×7  [x, y, z, vx, vy, vz, t],  t ≤ 0
+    predicted: M×7  [x, y, z, vx, vy, vz, t],  t > 0
+    reference_time
+}
+```
+
+단, real 모션 제어는 아직 `CommitRequest { predictions: Vec<Prediction> }` → 기존 스윙
+플래너를 사용한다. 현재 연결은 과도기적으로
+`BallTrajectory → hit-plane 교차 어댑터 → Prediction`이다.
+`HitTargetSelector`와 `Target { position, arrival_time_secs }` 기반 위치 이동은
+[`TODO.md`](TODO.md) 2번의 다음 작업이다.
+
 ---
 
 ## 요구 사항
@@ -73,6 +91,132 @@ cargo run -p pingpong-bot -- --debug
 실행하면 Rapier 디지털 트윈(탁구대·공·로봇) + kiss3d/egui 뷰어가 뜬다.  
 슈터 GUI로 발사하고, 기본은 월드 ground-truth로 스윙을 커밋한다.
 
+### 시뮬레이션 사용법
+
+```bash
+# 기본 GUI sim
+cargo run -p pingpong-bot
+
+# 스윙 계획·포기 사유까지 자세한 로그
+cargo run -p pingpong-bot -- --mode sim --debug
+```
+
+1. 좌측 **Shooter** 패널에서 위치·조준·속도·스핀을 조정한다.
+2. **Shoot**로 현재 조건을 발사하거나 **Random**으로 무작위 조건을 만든다.
+3. 우측 **Status**에서 스윙 커밋·포기 사유를 확인한다. **View → Debug overlays**에서 예측 탄도, 타점, 관절 한계, 토크 HUD를 켤 수 있다.
+4. **Park**는 공을 회수한다. 마우스 드래그/스크롤은 시점 회전/줌이다.
+
+자동 회귀 평가는 **Eval**에서 `Block` 또는 `Alternating`을 고른 뒤 **Run 30**으로 실행한다. 기본 sim은 카메라 추정값이 아닌 월드 ground-truth로 스윙을 커밋한다.
+
+### 실기 실행 순서
+
+실기는 **Windows 2단계** 환경을 기준으로 한다. 현재는 공을 한 번 친 뒤 센터 자세로 복귀해 다음 급구를 받는 방식이며, 결선 랠리는 아직 지원하지 않는다.
+
+실행 전 체크리스트:
+
+- `data/calibration.json`과 `data/colormask.json`에 left/right 값이 모두 있다.
+- `src/defaults/calib.rs`의 `LEFT_DEVICE` / `RIGHT_DEVICE`가 실제 USB 배치와 같다.
+- `src/defaults/hardware.rs`의 Dynamixel ID·관절 부호·제한과 AXL DLL 경로가 벤치와 맞다.
+- 로봇 가동 범위에 사람·장애물이 없고 비상 정지 수단을 바로 쓸 수 있다.
+
+하드웨어를 처음 연결했거나 영점·부호를 바꿘다면 메인 런타임 전에 jog로 작은 이동부터 검증한다.
+
+```bash
+cargo run -p jog -- --dry-run
+cargo run -p jog -- --port COM8 --debug
+```
+
+jog 창에서 **Sync → Preview → Apply** 순서를 지킨다. 다음으로 실제 카메라와 런타임을 쓰되 모터만 정지한 리허설을 한다.
+
+```bash
+# 실캠·검출·삼각측량·EKF·플래너, 모터/레일만 정지
+cargo run -p pingpong-bot -- --mode real --dry-run --debug
+
+# 녹화 클립으로 재현
+cargo run -p pingpong-bot -- --mode real --dry-run --clip fly_02 --debug
+```
+
+검출점·재투영점이 안정적으로 공을 따라가고, 로그에 예측·커밋 또는 합리적인 포기 사유가 나오는지 확인한 뒤 실기를 실행한다.
+
+```bash
+cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
+```
+
+기본으로 ready 자세로 이동하고 좌/우 프리뷰와 관전용 3D 창을 연다. 프리뷰에서 `q`/`ESC`로 종료한다. `--preview=false`면 `Ctrl+C`로 종료한다.
+
+> **토크 주의:** 기본은 종료 후에도 팔이 주저앉지 않게 토크를 유지한다. 토크를 끌 때만 `--release-torque`를 붙이고, 이때는 팔을 받칠 준비를 한다.
+
+### 카메라·비전 캘리브레이션
+
+카메라를 탁구대에 고정한 뒤 아래 순서를 따른다. 위치·각도, 렌즈 초점, 해상도, 캡처 프리셋을 바꾸면 다시 보정해야 한다. 운영 산출물은 `data/calibration.json`과 `data/colormask.json`이다.
+
+#### 1. left/right 장치 번호
+
+```bash
+cargo run -p cam-list -- --preview
+cargo run -p cam-list -- --all-backends  # Windows에서 백엔드별 확인
+```
+
+출력과 프리뷰로 left/right를 확인하고 `src/defaults/calib.rs`의 `LEFT_DEVICE`, `RIGHT_DEVICE`를 맞춘다. 두 카메라가 동시에 열리는지도 확인한다.
+
+```bash
+cargo run -p cam-preview
+# USB 대역폭이 부족하면 보정·실행 모두 같은 프리셋 사용
+cargo run -p cam-preview -- --preset mid
+```
+
+#### 2. 탁구대 기준 카메라 자세
+
+운영 기본 방법은 탁구대 규격 랜드마크 8점 PnP다. left/right를 한 대씩 실행하면 같은 JSON의 `cameras[]`에 추가·갱신된다.
+
+```bash
+cargo run -p calib-table-pnp -- --cam left
+cargo run -p calib-table-pnp -- --cam right
+```
+
+`Space`로 화면을 고정하고 화면 안내 순서대로 8점을 클릭한다. 마젠타 평면·무지개 격자가 실제 탁구대와 맞는지 확인한 뒤 `s`로 저장한다. 잔차가 큰 점은 `1`–`8`로 고르고 방향키로 미세 조정할 수 있다. `q`로 나가도 pending은 남지만 **본 파일 반영은 `s`**다.
+
+RMSE는 기본 허용치 `7 px` 이하여야 한다. 숫자만 낮추기보다 격자가 영상 속 탁구대 평면과 일치하는지가 더 중요하다. 상세 키는 [calib-table-pnp](tools/calib_table_pnp/README.md)를 본다.
+
+#### 3. 탁구공 색 마스크
+
+실제 경기 조명·노출을 유지하고 공의 밝은 부분과 어두운 부분을 고루 찍는다.
+
+```bash
+cargo run -p tune-colormask -- --cam left
+cargo run -p tune-colormask -- --cam right
+```
+
+`Space`로 멈춘 뒤 마우스 좌클릭으로 공 픽셀을 추가한다. 마스크가 공은 유지하고 배경은 제거하면 `p`로 저장한다. `s`로 YCrCb/HSV를 바꿔 비교할 수 있다.
+
+#### 4. 검출·스테레오 3D 검증
+
+```bash
+cargo run -p detect-full -- --cam left
+cargo run -p detect-full -- --cam right
+cargo run -p verify-stereo
+```
+
+`verify-stereo`에서 격자가 양쪽 탁구대와 맞고, 초록 검출점과 마젠타 재투영점 사이가 작아야 한다. 3D 공이 실제 움직임과 같은 방향·높이로 부드럽게 움직이면 완료다. 재투영점이 벌어지면 카메라 동기·PnP·장치 흔들림을 재확인한다.
+
+녹화본으로 반복 검증하려면:
+
+```bash
+cargo run -p record-stereo -- --scene fly
+cargo run -p verify-stereo -- --clip fly_01
+```
+
+#### 선택: ChArUco 렌즈 보정
+
+ChArUco는 카메라 내부 파라미터·왜곡을 정밀하게 측정하는 보조/레거시 경로다. 현재 운영 table-PnP는 FOV로 `K`를 근사하고 외부 자세를 구한다.
+
+```bash
+cargo run -p calib-charuco -- --cam left --images-dir ./boards/left --min-frames 12 -o left-charuco.json
+cargo run -p calib-charuco -- --cam right --images-dir ./boards/right --min-frames 12 -o right-charuco.json
+```
+
+`Space` → 코너 오버레이 확인 → `s` 저장을 반복하고 `q`로 보정한다. ChArUco는 멀티캄 외부 `R|t`를 자동으로 합치지 않으므로 운영용 `data/calibration.json`에 바로 덮어쓰지 않는다. 상세 방법은 [calib-charuco](tools/calib_charuco/README.md)를 본다.
+
 툴용으로 같은 탁구대 씬을 **레이어로 조립**한다 (`feature = "gui"`, [`src/sim/gui/`](src/sim/gui/)):
 
 | 폴더 | 역할 |
@@ -137,9 +281,10 @@ cargo run -p jog -- --port COM8 --debug
 cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 ```
 
-### `--mode real` — 단발 타격
+### `--mode real` — 연속 급구 타격
 
-공 하나를 받아 **스윙 한 번**을 커밋하고 종료한다 (랠리는 아직).
+공 하나를 받아 **스윙 한 번**을 커밋하고 센터로 복귀한 뒤 다음 급구를 받는다
+(결선 랠리는 아직).
 이벤트·결정·스레드 상세는 [`src/real/README.md`](src/real/README.md).
 
 ```bash
@@ -157,9 +302,9 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 | `--sim` | on | 관전용 3D 창 (로봇·예측 도달점·스윙 재생) |
 | `--home` | on | 시작 시 센터(ready) 자세로 이동 |
 | `--release-torque` | off | 종료 시 토크 해제. 기본은 켠 채로 둬서 팔이 안 주저앉게 한다 |
-| `--timeout-secs` | 60 | 공을 기다리는 최대 시간 |
+| `--timeout-secs` | 60 | 공 대기 경고 간격. 초과해도 세션은 계속 |
 
-샷이 끝나도 창이 열려 있는 동안은 **동작만 멈추고 종료하지 않는다** (ESC·`q`로 종료).
+샷이 끝나면 ready 자세로 복귀해 다음 공을 기다린다. ESC·`q`로 세션을 종료한다.
 
 카메라 2대(`data/calibration.json`)와 `data/colormask.json`이 있어야 한다.
 `Ekf`·`Calibration`·`Hardware`를 스레드별로 단독 소유하고 crossbeam 채널로만 잇는다 —
@@ -229,10 +374,10 @@ flowchart LR
   ctrlT["Control × 1"]
   actuator["Hardware"]
 
-  frames --> camT -->|"Observation"| estT -->|"Prediction"| ctrlT --> actuator
+  frames --> camT -->|"Observation"| estT -->|"BallTrajectory<br/>(현재 real은 Prediction 어댑터)"| ctrlT --> actuator
 ```
 
-실기(`--mode real`)는 [`src/real/`](src/real/)이 돌린다 — 단발 타격 전용이고,
+실기(`--mode real`)는 [`src/real/`](src/real/)이 돌린다 — 연속 급구 타격 전용이고,
 상태를 스레드별로 단독 소유하며 crossbeam 채널로만 잇는다
 ([`src/real/README.md`](src/real/README.md)).
 [`src/pipeline/`](src/pipeline/)은 랠리를 전제로 먼저 써 둔 골격이라 **아직 호출부가 없다**.
@@ -248,7 +393,7 @@ flowchart LR
     simHw --> physics
   end
 
-  subgraph realSide ["real — 단발 타격"]
+  subgraph realSide ["real — 연속 급구 타격"]
     realCamera["UVC × 2"]
     realWorkers["src/real 워커<br/>cam × 2 · 추정 · 제어"]
     realHw["RealHardware"]
@@ -273,7 +418,7 @@ src/
   planner/      swing/ · impact · collision
   robot/        build/ · urdf/ · Arm · state
   sim/          physics/ · session/ · gui/
-  real/         실기 단발 타격 런타임 (bin 전용 · README.md)
+  real/         실기 연속 급구 타격 런타임 (bin 전용 · README.md)
   hardware/     rail/ · SimHardware · RealHardware
   pipeline/     카메라→추정→제어 오케스트레이션 (랠리 전제 · 호출부 없음)
   telemetry/
@@ -371,7 +516,7 @@ cargo build -p pingpong-bot --release
 | fuse 검출 · measure_* → defaults 스니펫 | ✅ |
 | EKF (sim 기본은 ground truth) | ✅ |
 | Dynamixel 4축 · AXL 레일 · `jog` | ✅ (Windows 재검증) |
-| real 풀 비전 파이프라인 | 🔲 pose 스모크만 |
+| real 풀 비전 파이프라인 | ✅ 연속 급구 (결선 랠리는 미지원) |
 
 **로드맵:** [`TODO.md`](TODO.md) · [`docs/decisions.md`](docs/decisions.md)
 

@@ -112,10 +112,10 @@ mod tests {
         DynamixelConfig::default().validate().unwrap();
         RailConfig::default().validate().unwrap();
         let c = ControlParams::default();
-        assert!((c.max_joint_torques[0] - 6.0).abs() < 1e-12);
-        assert!((c.max_joint_torques[1] - 3.0).abs() < 1e-12);
-        assert!((c.max_joint_torques[2] - 1.25).abs() < 1e-12);
-        assert!((c.max_joint_torques[3] - 1.25).abs() < 1e-12);
+        assert!((c.max_joint_torques[0] - 12.0).abs() < 1e-12);
+        assert!((c.max_joint_torques[1] - 6.0).abs() < 1e-12);
+        assert!((c.max_joint_torques[2] - 2.5).abs() < 1e-12);
+        assert!((c.max_joint_torques[3] - 2.5).abs() < 1e-12);
         assert!((ImpactParams::default().max_return_speed - 6.0).abs() < 1e-12);
     }
 
