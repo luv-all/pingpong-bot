@@ -85,6 +85,16 @@ impl Planner {
         return physics::plan_return_to_center(arm, start);
     }
 
+    /// 정지 → 정지로 임의 포즈까지 잇는 최단 실행가능 궤적 (coarse 선추종용).
+    pub fn move_to(
+        arm: &Arm,
+        start: &robot::Pose,
+        end_joints: crate::robot::Joints,
+        end_rail_x: f64,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_move_to(arm, start, end_joints, end_rail_x);
+    }
+
     pub fn plan_bang_bang(
         arm: &Arm,
         predictions: &[Prediction],

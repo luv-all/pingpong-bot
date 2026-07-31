@@ -245,6 +245,12 @@ impl Hardware for RealHardware {
         self.reap_executor();
         return self.busy.load(Ordering::Acquire);
     }
+
+    fn cancel(&mut self) {
+        // executor 루프가 매 틱 이 플래그를 보고 빠져나오며 `busy`를 내린다.
+        // `Drop`이 쓰는 것과 같은 경로다.
+        self.cancel.store(true, Ordering::Release);
+    }
 }
 
 impl Drop for RealHardware {

@@ -34,3 +34,11 @@ impl Default for InterceptWindow {
         };
     }
 }
+
+/// coarse 선추종에서 임팩트 자세 쪽으로 미리 옮길 비율.
+///
+/// 값의 근거(관절별 차등 vs 균일, 통과 평면 수 계측표)는 이 값을 처음 정한
+/// `sim::physics::world::COARSE_TRACK_JOINT_FRACTION`의 문서와
+/// `docs/wp10-coarse-track-per-joint.md`에 있다. sim과 real이 **같은 값**을 써야
+/// 해서 여기로 뺐다 — 다르면 sim에서 맞춘 커밋 타이밍이 실기에서 어긋난다.
+pub const COARSE_TRACK_JOINT_FRACTION: f64 = 0.80;

@@ -18,7 +18,7 @@ use super::ball_receding::{BallReceding, MIN_DELTA_Y, MIN_SAMPLES};
 use super::fmt::f2;
 use super::{
     CommitRequest, ControlStatus, Decision, PreviewEvent, ShotEvent, Shutdown, SimUpdate, Throttle,
-    VisionEvent, decide,
+    TrackRequest, VisionEvent, decide,
 };
 
 /// 카메라당 보관할 관측 수 — `Triangulate::synced`가 보간에 쓸 앞뒤 프레임.
@@ -106,6 +106,7 @@ pub fn spawn(
     calibration: Calibration,
     intercept: InterceptWindow,
     commit_tx: Sender<CommitRequest>,
+    track_tx: Sender<TrackRequest>,
     status_rx: Receiver<ControlStatus>,
     preview_tx: Option<Sender<PreviewEvent>>,
     sim_tx: Option<Sender<SimUpdate>>,
@@ -299,7 +300,19 @@ pub fn spawn(
                         stats.commit_dropped += 1;
                     }
                 }
-                Decision::Attempt | Decision::Wait(_) => {}
+                // 아직 칠 때가 아니어도 예측이 있으면 제어 워커가 미리 옮길 수 있게 보낸다.
+                // sim은 이 선추종을 하는데(`world.rs` 미드코트 대기 분기) real엔 없었고,
+                // 그래서 real의 스윙은 센터에서 출발해 **이동과 타격을 한 궤적에** 몰아넣었다.
+                Decision::Attempt | Decision::Wait(_) => {
+                    if !predictions.is_empty() {
+                        let request = TrackRequest {
+                            predictions,
+                            at: Instant::now(),
+                        };
+                        // 놓쳐도 다음 프레임에 다시 온다 — 밀리면 그냥 버린다.
+                        let _ = track_tx.try_send(request);
+                    }
+                }
             }
 
             if let Some(sim_tx) = &sim_tx {

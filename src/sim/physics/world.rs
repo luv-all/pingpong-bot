@@ -261,7 +261,7 @@ pub struct SimWorld {
 /// 유지한다. 세기 1.5배 격차의 실제 레버는 **사전축소 `1/r`**, 즉 임팩트
 /// 자세의 조건수 쪽이다(`min_swing_secs`·랠리 리턴 타겟 거리·`max_joint_speed`
 /// — WP2b §7의 나머지 항목). 상세: `docs/wp10-coarse-track-per-joint.md`.
-const COARSE_TRACK_JOINT_FRACTION: f64 = 0.80;
+const COARSE_TRACK_JOINT_FRACTION: f64 = crate::defaults::COARSE_TRACK_JOINT_FRACTION;
 
 impl SimWorld {
     /// 탁구대·슈터·주차된 공·로봇 라켓을 배치한다.

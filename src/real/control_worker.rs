@@ -13,7 +13,8 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{Receiver, Sender, select};
+use pingpong_bot::defaults;
 use pingpong_bot::error::{DomainError, HwError, SwingPlanError};
 use pingpong_bot::hardware::Hardware;
 use pingpong_bot::robot::motion::{self, Planner};
@@ -21,7 +22,9 @@ use pingpong_bot::robot::{self, Arm};
 use tracing::{debug, info, info_span, warn};
 
 use super::fmt::{f2, f2_slice};
-use super::{CommitRequest, ControlStatus, PoseMsg, ShotEvent, Shutdown, SimUpdate, SwingMsg};
+use super::{
+    CommitRequest, ControlStatus, PoseMsg, ShotEvent, Shutdown, SimUpdate, SwingMsg, TrackRequest,
+};
 
 /// 예측의 `time_to_impact_secs`는 요청 시각 기준이다. 계획을 시작할 때 이미 이만큼 낡았으면
 /// 그 예측으로 세운 궤적은 임팩트 시점이 어긋난다 — 버리고 다음 요청을 기다린다.
@@ -38,6 +41,8 @@ enum CommitOutcome {
     /// 커밋한 궤적 — 임팩트 시점 추종 오차를 재는 데 쓴다.
     Committed(Box<motion::Trajectory>),
     Infeasible,
+    /// 선추종으로 팔을 옮겨 뒀는데 공 신호가 끊겼다 — 스윙 여부와 무관하게 홈으로.
+    BallGone,
     Disconnected,
     Failed,
 }
@@ -47,7 +52,9 @@ pub fn spawn(
     mut hardware: Box<dyn Hardware>,
     arm: Arc<Arm>,
     home: bool,
+    coarse_track_enabled: bool,
     rx: Receiver<CommitRequest>,
+    track_rx: Receiver<TrackRequest>,
     status_tx: Sender<ControlStatus>,
     sim_tx: Option<Sender<SimUpdate>>,
     event_tx: Sender<ShotEvent>,
@@ -87,6 +94,8 @@ pub fn spawn(
                 hardware.as_mut(),
                 &arm,
                 &rx,
+                &track_rx,
+                coarse_track_enabled,
                 sim_tx.as_ref(),
                 &event_tx,
                 shot_seq,
@@ -95,7 +104,9 @@ pub fn spawn(
 
             match outcome {
                 CommitOutcome::Failed | CommitOutcome::Disconnected => break,
-                CommitOutcome::Committed(_) | CommitOutcome::Infeasible => {}
+                CommitOutcome::Committed(_)
+                | CommitOutcome::Infeasible
+                | CommitOutcome::BallGone => {}
             }
 
             let _ = status_tx.send(ControlStatus::Recovering { shot_seq });
@@ -121,6 +132,8 @@ fn wait_for_commit(
     hardware: &mut dyn Hardware,
     arm: &Arm,
     rx: &Receiver<CommitRequest>,
+    track_rx: &Receiver<TrackRequest>,
+    coarse_track_enabled: bool,
     sim_tx: Option<&Sender<SimUpdate>>,
     event_tx: &Sender<ShotEvent>,
     shot_seq: u64,
@@ -129,15 +142,43 @@ fn wait_for_commit(
     let mut last_attempt: Option<Instant> = None;
     let mut last_warn = Instant::now() - Duration::from_secs(10);
     let mut stale = 0_u64;
+    let mut coarse = CoarseTrack::default();
 
     loop {
         if shutdown.is_down() {
             return CommitOutcome::Disconnected;
         }
-        let request = match rx.recv_timeout(RECV_TIMEOUT) {
-            Ok(request) => request,
-            Err(RecvTimeoutError::Timeout) => continue,
-            Err(RecvTimeoutError::Disconnected) => return CommitOutcome::Disconnected,
+        // 커밋과 선추종을 함께 기다린다. 커밋이 오면 그걸 우선 처리하고, 그 전까지는
+        // 선추종으로 팔을 임팩트 쪽에 붙여 둔다.
+        let request = select! {
+            recv(rx) -> received => match received {
+                Ok(request) => request,
+                Err(_) => return CommitOutcome::Disconnected,
+            },
+            recv(track_rx) -> received => {
+                match received {
+                    Ok(track) => {
+                        if coarse_track_enabled {
+                            coarse_track(hardware, arm, &track, &mut coarse);
+                        }
+                    }
+                    Err(_) => return CommitOutcome::Disconnected,
+                }
+                continue;
+            },
+            default(RECV_TIMEOUT) => {
+                // 선추종으로 팔을 옮겨 놓고 공 신호가 끊기면 그 자세에 굳어버린다.
+                // 스윙을 했든 못 했든 홈으로 돌아가야 다음 급구를 받을 수 있다.
+                if coarse.moved_away
+                    && coarse
+                        .last_signal
+                        .is_none_or(|at| at.elapsed().as_secs_f64() >= COARSE_IDLE_HOME_SECS)
+                {
+                    info!("real shot: 공 신호 끊김 — 선추종 자세에서 홈 복귀");
+                    return CommitOutcome::BallGone;
+                }
+                continue;
+            }
         };
 
         let age = request.age_secs();
@@ -163,6 +204,12 @@ fn wait_for_commit(
 
         match Planner::plan_best(arm, &request.predictions, &start) {
             Ok(planned) => {
+                // 선추종 이동이 아직 돌고 있으면 여기서 끊는다. `command`는 busy면
+                // **조용히 무시하고 `Ok`를 돌려주므로**, 안 끊으면 스윙이 통째로 사라진다.
+                if hardware.is_busy() {
+                    hardware.cancel();
+                    wait_idle(hardware);
+                }
                 if let Err(error) = hardware.command(&planned.trajectory) {
                     let _ = event_tx.send(ShotEvent::Failed {
                         shot_seq,
@@ -370,5 +417,119 @@ impl std::fmt::Display for MoveError {
             Self::Hardware(error) => write!(f, "{error}"),
             Self::Plan(error) => write!(f, "{error}"),
         };
+    }
+}
+
+/// coarse 선추종 상태 — 쫓을 평면과 마지막 명령 시각.
+#[derive(Default)]
+struct CoarseTrack {
+    /// [`Planner::best_scored_coarse_plane_y`]가 고른 평면 y. 평면마다 IK가 필요해 비싸므로
+    /// [`COARSE_RESCORE_THROTTLE_SECS`]마다만 다시 고르고 그 사이엔 캐시를 쓴다.
+    preferred_y: Option<f64>,
+    last_rescore: Option<Instant>,
+    last_command: Option<Instant>,
+    /// 선추종 명령을 한 번이라도 보냈는가 — 홈 복귀가 필요한지 판단한다.
+    moved_away: bool,
+    /// 마지막으로 선추종 요청을 받은 시각.
+    last_signal: Option<Instant>,
+}
+
+/// 평면 재채점 주기 — sim `COARSE_TRACK_RESCORE_THROTTLE_SECS`와 같은 값.
+const COARSE_RESCORE_THROTTLE_SECS: f64 = 0.020;
+/// 선추종 명령 주기. 매 프레임 새 궤적을 던지면 실행 중인 이동을 계속 갈아엎는다.
+const COARSE_COMMAND_THROTTLE_SECS: f64 = 0.060;
+/// 선추종 궤적이 남은 시간을 다 먹으면 안 된다 — 커밋이 오면 즉시 넘겨줘야 한다.
+const COARSE_MAX_LEAD_SECS: f64 = 0.25;
+/// 선추종 후 이만큼 아무 신호가 없으면 공이 사라진 것으로 보고 홈으로 돌아간다.
+const COARSE_IDLE_HOME_SECS: f64 = 0.50;
+
+/// 커밋 전에 팔을 예측 임팩트 쪽으로 미리 옮긴다.
+///
+/// sim은 미드코트 대기 중 이걸 매 물리 틱 한다(`world.rs`). real엔 없어서 스윙이 센터에서
+/// 출발해 **이동과 타격을 한 궤적에 몰아넣었고**, 그래서 요구 관절속도가 한계의 1.38~1.87배로
+/// 나왔다. 같은 플래너(`plan_best`)를 쓰면서 결과가 달랐던 진짜 이유가 여기다.
+///
+/// sim과 다른 점은 인터페이스뿐이다. sim은 `set_rail_target`+`slew_targets_toward`로 목표만
+/// 갈아끼우는데, [`Hardware`]에는 궤적 명령밖에 없어서 짧은 이동 궤적을 스로틀해 보낸다.
+fn coarse_track(
+    hardware: &mut dyn Hardware,
+    arm: &Arm,
+    request: &TrackRequest,
+    state: &mut CoarseTrack,
+) {
+    state.last_signal = Some(Instant::now());
+    // 스윙이 실행 중이면 끼어들지 않는다 — `command`는 busy면 조용히 무시하므로
+    // 여기서 걸러야 "보냈는데 안 갔다"가 안 생긴다.
+    if hardware.is_busy() {
+        return;
+    }
+    if state
+        .last_command
+        .is_some_and(|at| at.elapsed().as_secs_f64() < COARSE_COMMAND_THROTTLE_SECS)
+    {
+        return;
+    }
+    let start = match hardware.read_pose() {
+        Ok(pose) => pose,
+        Err(error) => {
+            warn!(%error, "선추종 포즈 읽기 실패");
+            return;
+        }
+    };
+
+    // 쫓을 평면은 최종 커밋과 **같은 점수**로 고른다. 기하 최근접으로 고르면 비행 내내
+    // 엉뚱한 평면을 쫓다가 커밋 순간 크게 보정하게 되고, sim 실측에서 그게 net-clear율을
+    // 무너뜨렸다 (`coarse_track_geometry_scored` 참고).
+    if state
+        .last_rescore
+        .is_none_or(|at| at.elapsed().as_secs_f64() >= COARSE_RESCORE_THROTTLE_SECS)
+    {
+        state.last_rescore = Some(Instant::now());
+        state.preferred_y = Planner::best_scored_coarse_plane_y(arm, &request.predictions, &start);
+    }
+
+    let Some((rail_x, joints)) =
+        Planner::plan_coarse_track_targets_for_plane(arm, &request.predictions, state.preferred_y)
+    else {
+        return;
+    };
+
+    // 회전 관절은 **부분만** 옮긴다. coarse 목표는 평면 하나의 자세라 거기 과하게 커밋할수록
+    // 나머지 후보 평면까지의 Δq가 커진다 — sim 계측에서 0.80이 통과 평면 수의 천장이었다.
+    // 레일은 IK 없이 순수 기하라 IK가 수렴 못 해도 선추종이 죽지 않는다.
+    let target_joints = match joints {
+        Some(joints) => {
+            let mut blended = joints;
+            for (index, value) in blended.values.iter_mut().enumerate() {
+                let rest = arm
+                    .default_joints
+                    .values
+                    .get(index)
+                    .copied()
+                    .unwrap_or(*value);
+                *value = rest + (*value - rest) * defaults::COARSE_TRACK_JOINT_FRACTION;
+            }
+            blended
+        }
+        None => start.joints.clone(),
+    };
+
+    let trajectory = match Planner::move_to(arm, &start, target_joints, rail_x) {
+        Ok(trajectory) => trajectory,
+        Err(error) => {
+            debug!(%error, "선추종 계획 실패 — 이번 틱 건너뜀");
+            return;
+        }
+    };
+    // 남은 시간을 다 먹는 이동은 보내지 않는다. 커밋이 곧 올 텐데 `command`가 busy를
+    // 이유로 그걸 버리면 공을 통째로 놓친다.
+    if trajectory.duration_secs > COARSE_MAX_LEAD_SECS {
+        return;
+    }
+
+    state.last_command = Some(Instant::now());
+    state.moved_away = true;
+    if let Err(error) = hardware.command(&trajectory) {
+        warn!(%error, "선추종 명령 실패");
     }
 }

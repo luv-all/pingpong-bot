@@ -504,7 +504,19 @@ pub fn plan_return_to_center(arm: &Arm, start: &robot::Pose) -> Result<Trajector
         .as_ref()
         .map(|rail| rail.default_x())
         .unwrap_or(start.rail_x);
+    return plan_move_to(arm, start, center_joints, center_rail_x);
+}
 
+/// 정지 → 정지로 임의의 포즈까지 잇는 최단 실행가능 궤적.
+///
+/// [`plan_return_to_center`]가 목표만 센터로 고정한 특수형이고, real의 coarse 선추종도
+/// 같은 것이 필요하다 — 임팩트 근처로 미리 옮겨두면 커밋 스윙이 이동까지 떠맡지 않는다.
+pub fn plan_move_to(
+    arm: &Arm,
+    start: &robot::Pose,
+    center_joints: Joints,
+    center_rail_x: f64,
+) -> Result<Trajectory, DomainError> {
     let start_velocity = vec![0.0; start.joints.values.len()];
     let end_velocity = vec![0.0; center_joints.values.len()];
 
