@@ -6,7 +6,7 @@
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Sender, TrySendError};
+use crossbeam_channel::{Receiver, Sender, TrySendError};
 use opencv::prelude::MatTraitConst;
 use pingpong_bot::camera;
 use pingpong_bot::camera::FrameSource;
@@ -55,6 +55,7 @@ pub fn spawn(
     mut detector: Box<Detector>,
     params: camera::Params,
     tx: Sender<VisionEvent>,
+    evict_rx: Receiver<VisionEvent>,
     shutdown: Shutdown,
 ) -> JoinHandle<CameraStats> {
     let camera_id = source.camera_id();
@@ -126,10 +127,16 @@ pub fn spawn(
                 stats.detections += 1;
             }
 
-            match tx.try_send(VisionEvent { frame, pixel }) {
+            let event = VisionEvent { frame, pixel };
+            match tx.try_send(event) {
                 Ok(()) => {}
-                // 실시간 경로 — 밀린 프레임은 쓸모가 없다. 버리고 센다.
-                Err(TrySendError::Full(_)) => stats.dropped += 1,
+                // 실시간 경로: 버퍼가 차면 새 프레임을 버리지 말고
+                // 가장 오래된 프레임 하나를 빼서 최신 캡처를 남긴다.
+                Err(TrySendError::Full(event)) => {
+                    let _ = evict_rx.try_recv();
+                    let _ = tx.try_send(event);
+                    stats.dropped += 1;
+                }
                 Err(TrySendError::Disconnected(_)) => break,
             }
 

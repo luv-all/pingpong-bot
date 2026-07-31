@@ -193,8 +193,10 @@ fn wait_for_commit(
             }
         };
 
+        let plan_started = Instant::now();
         match PositionController::plan_best(arm, &start, &request.trajectory, &selector) {
             Ok(planned) => {
+                let planning_secs = plan_started.elapsed().as_secs_f64();
                 // 선추종 이동이 아직 돌고 있으면 여기서 끊는다. `command`는 busy면
                 // **조용히 무시하고 `Ok`를 돌려주므로**, 안 끊으면 스윙이 통째로 사라진다.
                 if hardware.is_busy() {
@@ -238,7 +240,12 @@ fn wait_for_commit(
                     return CommitOutcome::Committed(Box::new(planned.trajectory));
                 }
                 provisional_sent = true;
-                info!(shot = shot_seq, "real shot: 1차 예측 위치로 이동 시작");
+                info!(
+                    shot = shot_seq,
+                    planning_ms = f2(planning_secs * 1e3),
+                    detection_to_command_ms = f2(request.age_secs() * 1e3),
+                    "real shot: 1차 예측 위치로 이동 시작"
+                );
             }
             Err(
                 PositionControlError::Stale { .. } | PositionControlError::InsufficientTime { .. },

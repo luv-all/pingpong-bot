@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use pingpong_bot::camera;
 use pingpong_bot::camera::Calibration;
+use pingpong_bot::constants::table;
 use pingpong_bot::defaults::EstimatorParams;
 use pingpong_bot::detector;
 use pingpong_bot::estimator::{Ekf, Estimator, GateOutcome, Prediction, Triangulate};
@@ -66,6 +67,8 @@ pub struct EstimatorStats {
     ///
     /// 두 캠이 서로 다른 것을 잡은 쌍이다. 크면 한쪽 검출에 오검출이 섞이고 있다.
     pub reprojection_rejected: u64,
+    /// 테이블 주변의 물리적으로 가능한 공간을 벗어나 버린 3D 점.
+    pub workspace_rejected: u64,
     /// 두 캠 다 관측이 있는데도 삼각측량을 건너뛴 프레임 수.
     ///
     /// 대부분 `MAX_SYNC_LAG` 초과(한 캠이 검출을 놓쳐 뒤처짐)다. 이 값이 크면 한쪽 캠의
@@ -107,6 +110,7 @@ pub fn spawn(
     calibration: Calibration,
     intercept: InterceptWindow,
     commit_tx: Sender<CommitRequest>,
+    commit_evict_rx: Receiver<CommitRequest>,
     status_rx: Receiver<ControlStatus>,
     preview_tx: Option<Sender<PreviewEvent>>,
     sim_tx: Option<Sender<SimUpdate>>,
@@ -206,6 +210,16 @@ pub fn spawn(
                 stats.triangulated += 1;
                 stats.skew_samples.push(fused.skew);
                 stats.reprojection_samples.push(fused.reprojection_px);
+                if !plausible_ball_point(point) {
+                    stats.workspace_rejected += 1;
+                    debug!(
+                        x = f2(point.x),
+                        y = f2(point.y),
+                        z = f2(point.z),
+                        "물리 작업공간 밖 3D 점 거부"
+                    );
+                    continue;
+                }
                 let outcome = ekf.update_position(point, sync_time);
                 stats.record(outcome);
                 // 버려진 측정만 찍는다 — Accepted는 초당 100건이라 요약 카운트로 충분하다.
@@ -314,11 +328,7 @@ pub fn spawn(
                             ball_y: ball_y.unwrap_or(f64::NAN),
                             at: Instant::now(),
                         };
-                        // 제어 워커가 앞 요청을 계획 중이면 버린다. 다음
-                        // 프레임의 더 새로운 목표가 곧 온다.
-                        if let Err(TrySendError::Full(_)) = commit_tx.try_send(request) {
-                            stats.commit_dropped += 1;
-                        }
+                        send_latest_commit(&commit_tx, &commit_evict_rx, request, &mut stats);
                     }
                 }
             }
@@ -381,6 +391,79 @@ pub fn spawn(
         );
         return stats;
     });
+}
+
+/// 캘리브레이션이 순간적으로 잘못 대응돼도 수십 미터 밖 점을 EKF에 넣지 않는다.
+///
+/// 로그의 (-26, -5.5, -18)m는 재투영 오차만으로 통과했지만 탁구공일 수 없다.
+/// 테이블 둘레와 슈터 쪽 여유만 허용하고 실제 접수·바운스 공간은 넉넉히 남긴다.
+fn plausible_ball_point(point: pingpong_bot::Point3) -> bool {
+    const SIDE_MARGIN_M: f64 = 0.75;
+    const ROBOT_SIDE_MARGIN_M: f64 = 0.75;
+    const SHOOTER_SIDE_MARGIN_M: f64 = 1.25;
+    const Z_MIN_M: f64 = -0.10;
+    const Z_MAX_M: f64 = 3.0;
+
+    return point.x >= -SIDE_MARGIN_M
+        && point.x <= table::WIDTH_X + SIDE_MARGIN_M
+        && point.y >= -ROBOT_SIDE_MARGIN_M
+        && point.y <= table::LENGTH_Y + SHOOTER_SIDE_MARGIN_M
+        && point.z >= Z_MIN_M
+        && point.z <= Z_MAX_M;
+}
+
+/// 제어가 계획 중이어도 오래된 요청 대신 최신 요청 한 건만 큐에 남긴다.
+fn send_latest_commit(
+    tx: &Sender<CommitRequest>,
+    evict_rx: &Receiver<CommitRequest>,
+    request: CommitRequest,
+    stats: &mut EstimatorStats,
+) {
+    match tx.try_send(request) {
+        Ok(()) => {}
+        Err(TrySendError::Full(request)) => {
+            let _ = evict_rx.try_recv();
+            if tx.try_send(request).is_err() {
+                stats.commit_dropped += 1;
+            }
+        }
+        Err(TrySendError::Disconnected(_)) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pingpong_bot::estimator::BallTrajectory;
+    use pingpong_bot::robot::control::PredictionStage;
+
+    fn request(ball_y: f64) -> CommitRequest {
+        return CommitRequest {
+            trajectory: BallTrajectory::new(Vec::new(), Vec::new(), Instant::now()).unwrap(),
+            stage: PredictionStage::Provisional,
+            ball_y,
+            at: Instant::now(),
+        };
+    }
+
+    #[test]
+    fn impossible_world_point_is_rejected_before_ekf() {
+        assert!(!plausible_ball_point(pingpong_bot::Point3::new(
+            -26.0, -5.51, -18.15
+        )));
+        assert!(plausible_ball_point(pingpong_bot::Point3::new(
+            0.99, 2.16, 1.03
+        )));
+    }
+
+    #[test]
+    fn full_commit_queue_keeps_latest_request() {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let mut stats = EstimatorStats::default();
+        send_latest_commit(&tx, &rx, request(1.0), &mut stats);
+        send_latest_commit(&tx, &rx, request(2.0), &mut stats);
+        assert_eq!(rx.recv().unwrap().ball_y, 2.0);
+    }
 }
 
 /// 정렬 후 백분위수. 표본이 없으면 `None`.

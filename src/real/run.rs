@@ -54,9 +54,10 @@ pub fn run(args: &Args) -> Result<()> {
 
     let (guard, shutdown) = shutdown_channel();
     let (vision_tx, vision_rx) = bounded(VISION_CAPACITY);
-    // 제어 워커가 계획하는 동안 도착한 새 궤적을 보관했다가,
-    // 수신 시 가장 최신 항목만 사용한다.
-    let (commit_tx, commit_rx) = bounded(8);
+    let vision_evict_rx = vision_rx.clone();
+    // 제어 워커가 계획 중일 때는 이전 요청을 버리고 최신 한 건만 남긴다.
+    let (commit_tx, commit_rx) = bounded(1);
+    let commit_evict_rx = commit_rx.clone();
     let (status_tx, status_rx) = unbounded::<ControlStatus>();
     let (event_tx, event_rx) = unbounded();
     let (preview_tx, preview_rx) = if options.preview {
@@ -87,6 +88,7 @@ pub fn run(args: &Args) -> Result<()> {
             Box::new(detector),
             params,
             vision_tx.clone(),
+            vision_evict_rx.clone(),
             shutdown.clone(),
         ));
     }
@@ -98,6 +100,7 @@ pub fn run(args: &Args) -> Result<()> {
         calibration,
         InterceptWindow::default(),
         commit_tx,
+        commit_evict_rx,
         status_rx,
         preview_tx,
         sim_tx.clone(),
@@ -456,6 +459,7 @@ fn log_summary(outcome: &Outcome, cameras: &[CameraStats], estimator: Option<&Es
             reproj_p50_px = stats.reprojection_percentile(0.50).map(f2),
             reproj_p95_px = stats.reprojection_percentile(0.95).map(f2),
             reprojection_rejected = stats.reprojection_rejected,
+            workspace_rejected = stats.workspace_rejected,
             stale_skipped = stats.stale_skipped,
             commit_dropped = stats.commit_dropped,
             preview_dropped = stats.preview_dropped,

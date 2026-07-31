@@ -12,10 +12,10 @@ use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector3};
 
 use crate::Point3;
 use crate::constants::geometry;
-use crate::constants::table;
 use crate::defaults::dxl_limits::{
     DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, joint_reflected_inertias_4dof, joint_torque_limits_4dof,
 };
+use crate::defaults::hardware::{RAIL_X_MAX_M, RAIL_X_MIN_M};
 use crate::robot::{
     Arm, JointLimit, Joints, LinkInertial, MountPreset, RailFrame, Robot, RobotBuildError,
     RobotBuilder, SerialChain, SerialJoint,
@@ -167,7 +167,7 @@ pub fn primitive_4dof_with_mount(mount_y: f64, mount_z: f64) -> Result<Robot, Ro
 
     let built = Arm::builder()
         .base_xyz(0.0, mount_y, mount_z)
-        .linear_rail(mount_y, mount_z, 0.0, table::WIDTH_X, RAIL_MAX_SPEED)
+        .linear_rail(mount_y, mount_z, RAIL_X_MIN_M, RAIL_X_MAX_M, RAIL_MAX_SPEED)
         .serial_chain(
             chain,
             vec![
@@ -480,7 +480,6 @@ pub fn robot() -> Result<Robot, RobotBuildError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::table;
 
     /// 실측 회귀: 베이스는 바닥 기준 0.935 m (= 하단 0.88 + 두께 0.055).
     ///
@@ -492,7 +491,7 @@ mod tests {
         assert!((frame.mount_y() - (-0.10)).abs() < 1e-12);
         assert!((frame.mount_z() - 0.935).abs() < 1e-12);
         assert_eq!(frame.mount_xyz0(), [0.0, -0.10, frame.mount_z()]);
-        assert!((frame.mount_z() - table::SURFACE_Z - 0.175).abs() < 1e-12);
+        assert!((frame.mount_z() - crate::constants::table::SURFACE_Z - 0.175).abs() < 1e-12);
     }
 
     #[test]

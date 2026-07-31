@@ -224,6 +224,15 @@ impl Hardware for RealHardware {
                 }
                 thread::sleep(tick);
             }
+            // 정상 완주에서는 관절뿐 아니라 레일까지 실제 정지해야 명령 완료다.
+            // 취소된 경우에는 다음 정밀 명령이 AxmMoveSStop 후 즉시 재목표하므로 기다리지 않는다.
+            if !cancel.load(Ordering::Acquire)
+                && let Ok(mut guard) = rail.lock()
+                && let Some(rail_hw) = guard.as_mut()
+                && let Err(error) = rail_hw.wait_idle()
+            {
+                error!(error = %error, "AXL 레일 완료 대기 실패");
+            }
             busy.store(false, Ordering::Release);
         }));
         return Ok(());

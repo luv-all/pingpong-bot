@@ -3,6 +3,10 @@
 use crate::hardware::dynamixel::{DynamixelConfig, MirrorSlave};
 use crate::hardware::rail::RailConfig;
 
+/// 실측 AXL 레일의 앱 좌표 범위 [m]. 로봇 IK와 실기 드라이버가 반드시 같은 값을 쓴다.
+pub const RAIL_X_MIN_M: f64 = 0.0;
+pub const RAIL_X_MAX_M: f64 = 1.41;
+
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.
     fn default() -> Self {
@@ -83,8 +87,8 @@ impl Default for RailConfig {
             irq_no: 7,
             pulses_per_meter: 250_000,
             reverse: true,
-            x_min_m: 0.0,
-            x_max_m: 1.41,
+            x_min_m: RAIL_X_MIN_M,
+            x_max_m: RAIL_X_MAX_M,
             vel: 5.0,
             accel: 12.0,
             decel: 12.0,

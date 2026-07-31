@@ -1,6 +1,7 @@
 //! AXL 리니어 레일 dry-run 및 Windows 실물 어댑터.
 
 use crate::error::HwError;
+use tracing::info;
 
 use super::rail_config::RailConfig;
 use super::rail_kind::RailKind;
@@ -86,6 +87,13 @@ impl AxlRail {
         }
 
         let vel = (distance_m / duration_secs).clamp(self.config.min_vel, self.config.max_vel);
+        info!(
+            current_m,
+            target_m = domain_m,
+            velocity_m_s = vel,
+            duration_secs,
+            "AXL 레일 이동 명령"
+        );
         match &mut self.kind {
             RailKind::DryRun { position_m } => {
                 let _ = vel;
@@ -137,6 +145,15 @@ impl AxlRail {
     pub fn move_rel_m(&mut self, dx: f64) -> Result<f64, HwError> {
         let current_domain = self.read_x_m()?;
         return self.move_abs_m(current_domain + dx);
+    }
+
+    /// 진행 중 절대 이동이 실제로 끝날 때까지 기다린다.
+    pub fn wait_idle(&mut self) -> Result<(), HwError> {
+        match &mut self.kind {
+            RailKind::DryRun { .. } => Ok(()),
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => live.wait_idle(self.config.axis),
+        }
     }
 }
 

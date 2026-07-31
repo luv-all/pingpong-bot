@@ -228,31 +228,20 @@ impl PositionController {
             .map_err(|error| PositionControlError::Unreachable(error.to_string()))?;
         let elapsed = ball_trajectory.reference_time.elapsed().as_secs_f64();
         let mut last_error = None;
-        let mut best: Option<(f64, PositionPlan)> = None;
         for hit_target in candidates {
             match Self::plan(arm, start, hit_target.target(), elapsed) {
                 Ok(trajectory) => {
-                    // 안전 여유(도착까지 남는 시간)을 가장 크게 보고, 같은
-                    // 여유라면 이동 거리가 짧고 테이블에서 높은 점을 선호한다.
-                    let slack = hit_target.time_secs - elapsed - trajectory.impact_time_secs;
-                    let distance = (hit_target.position - current).norm();
-                    let score = slack - distance * 0.1 + hit_target.position.z * 0.02;
-                    let plan = PositionPlan {
+                    // `ranked_candidates`는 준비 시간·이동 거리·높이 순으로 이미
+                    // 정렬되어 있다. 실행 가능한 첫 후보가 곧 최적 후보이므로
+                    // 즉시 반환한다. 예측 샘플 수십 개에 대해 전체 IK·충돌
+                    // 계획을 모두 돌리면 실기 반응이 수백 ms~수 초 늦어진다.
+                    return Ok(PositionPlan {
                         target: hit_target,
                         trajectory,
-                    };
-                    if best
-                        .as_ref()
-                        .is_none_or(|(best_score, _)| score > *best_score)
-                    {
-                        best = Some((score, plan));
-                    }
+                    });
                 }
                 Err(error) => last_error = Some(error),
             }
-        }
-        if let Some((_, plan)) = best {
-            return Ok(plan);
         }
         return Err(last_error.unwrap_or_else(|| {
             PositionControlError::Unreachable("실행 가능한 궤적 후보가 없음".into())
@@ -285,13 +274,23 @@ impl PositionController {
 
         // 스윙 방향 계산은 하지 않는다. 상대 코트를 향하는 고정 안전 법선만 사용한다.
         let safe_normal = Vector3::new(0.0, 1.0, 0.0);
+        // 실기에서는 바로 전 자세가 가장 좋은 IK 시드다. 빠른 지역 탐색을
+        // 먼저 쓰고, 그 분기에 해가 없을 때만 전역 시드를 훑어 도달률을 보존한다.
         let goal = arm
             .inverse_pose_with_rail_best_normal(
                 target.position,
                 safe_normal,
                 start,
-                IkSearch::Global,
+                IkSearch::Local,
             )
+            .or_else(|_| {
+                arm.inverse_pose_with_rail_best_normal(
+                    target.position,
+                    safe_normal,
+                    start,
+                    IkSearch::Global,
+                )
+            })
             .map(|(pose, _normal_error)| pose)
             .map_err(|error| PositionControlError::Unreachable(error.to_string()))?;
         let mut trajectory = Planner::move_to(arm, start, goal.joints, goal.rail_x)

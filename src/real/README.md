@@ -84,9 +84,9 @@ flowchart LR
   main["main<br/>highgui · 로그 · 종료"]
   hw["RealHardware"]
 
-  camL -->|"VisionEvent<br/>bounded(8) drop-on-full"| est
+  camL -->|"VisionEvent<br/>bounded(8) latest-on-full"| est
   camR -->|"VisionEvent"| est
-  est -->|"CommitRequest<br/>BallTrajectory + stage<br/>bounded(8)"| ctl
+  est -->|"CommitRequest<br/>BallTrajectory + stage<br/>bounded(1), latest only"| ctl
   est -->|"PreviewEvent<br/>bounded(2) drop-on-full"| main
   est -->|"ShotEvent"| main
   ctl -->|"ShotEvent (unbounded)"| main
@@ -98,7 +98,7 @@ flowchart LR
   main -.->|"Shutdown 가드 drop"| est
 ```
 
-**드롭 정책** — 실시간 경로다. 채널이 차면 `try_send` 실패를 버리고 센다. 밀린 프레임·예측은
+**드롭 정책** — 실시간 경로다. 카메라·예측 채널이 차면 가장 오래된 항목을 버리고 최신값을 남긴다. 밀린 프레임·예측은
 어차피 쓸모가 없다. 드롭 수는 종료 요약에 찍힌다.
 
 **셧다운** — `AtomicBool` 대신 채널 파기 브로드캐스트 (`shutdown.rs`). 메인이 `ShutdownGuard`
