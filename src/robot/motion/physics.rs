@@ -840,26 +840,12 @@ fn kinematic_limits_ok(arm: &Arm, trajectory: &Trajectory) -> bool {
 /// 튜닝으로 고칠 수 있는 문제인지(관절 각도·레일 범위) 아니면 시간
 /// 예산 문제인지(속도·가속) 구분이 안 된다. 실제로 이 구분이 없어서
 /// 2026-07-23 조사가 한동안 엉뚱한 축(리치/관절속도 재보정)을 팠다.
-/// 레일 가속도 한계 검사 스위치.
+/// 레일 가속도 한계 검사.
 ///
-/// **2026-07-31 실측 — 켜면 커밋률이 무너진다.** 시간 게이트를 없애면서 같이 켜 봤고,
-/// 67샷 그리드로 세 조합을 비교했다:
-///
-/// | 구성 | 커밋 | 포기 | 무결정 | 접촉 |
-/// |------|------|------|--------|------|
-/// | 시간 게이트 O · 레일가속 X (이전) | 49 (73%) | 18 | 0 | 51 |
-/// | 시간 게이트 X · 레일가속 **O** | 19 (28%) | 4 | 44 | 50 |
-/// | 시간 게이트 X · 레일가속 X (현재) | 49 (73%) | **1** | 17 | 51 |
-///
-/// 즉 커밋률 45%p 손실은 전적으로 이 검사 탓이고, 시간 게이트 제거는 커밋률을 건드리지
-/// 않으면서 포기만 18 → 1로 줄였다. 원인은 검사 로직이 아니라 `RAIL_ACCEL_M_S2 = 12.0`이
-/// 여전히 **미검증 placeholder**라는 것이다 (`docs/superpowers/plans/2026-07-22-axl-rail.md`가
-/// 최초부터 "values above are placeholders"로 명시). 사용자가 실기에서 리니어 모터가 "매우
-/// 빠르게" 움직이는 걸 직접 확인해 줬으므로 12.0은 실제보다 훨씬 보수적일 가능성이 높다.
-///
-/// **벤치 스텝 응답으로 `RAIL_ACCEL_M_S2`를 실측한 뒤** 이 스위치를 `true`로 되돌릴 것.
-/// 검사·계측(`Trajectory::peak_rail_acceleration`)은 그대로 살아 있다.
-const RAIL_ACCEL_CHECK_ENABLED: bool = false;
+/// 0.702 m 센터 이동을 0.36 s로 계획했던 실기 로그에서 잔차가
+/// 0.27 m 남았다. AXL과 같은 12 m/s²를 강제해 계획 자세와 실제
+/// 자세가 갈라지지 않게 한다.
+const RAIL_ACCEL_CHECK_ENABLED: bool = true;
 
 fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'static str> {
     if trajectory.peak_joint_speed() > arm.max_joint_speed {
@@ -875,7 +861,7 @@ fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'sta
     {
         return Some("레일 속도");
     }
-    // 레일 가속도 검사 — **2026-07-30 임시 비활성화, 켜지 말 것 (재측정 전까지)**.
+    // 레일 가속도 검사 — 실제 자세와 계획 자세가 갈라지지 않게 활성화한다.
     //
     // WP5/WP2a: 예전엔 이 항이 없어 레일이 실제로 못 내는 가속을 요구하는
     // 궤적도 "OK"로 통과시켰다(실측: dx=0.25/0.50m 시나리오 다수 행이 τ

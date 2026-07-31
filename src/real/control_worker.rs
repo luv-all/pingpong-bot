@@ -28,7 +28,10 @@ use super::{CommitRequest, ControlStatus, PoseMsg, ShotEvent, Shutdown, SimUpdat
 
 /// 예측의 `time_to_impact_secs`는 요청 시각 기준이다. 계획을 시작할 때 이미 이만큼 낡았으면
 /// 그 예측으로 세운 궤적은 임팩트 시점이 어긋난다 — 버리고 다음 요청을 기다린다.
-const MAX_REQUEST_AGE_SECS: f64 = 0.015;
+// Windows 실기 로그에서 최신 요청도 스케줄링 때문에 20 ms가 걸려
+// 15 ms 게이트에 버려졌다. 큐엔 최신 1건만 남으므로 50 ms는 현실적인
+// 통신 여유이며, 로그의 1.51 s 같은 진짜 낡은 요청은 그대로 거부한다.
+const MAX_REQUEST_AGE_SECS: f64 = 0.050;
 
 /// 계획 재시도 스로틀. sim `SWING_RETRY_THROTTLE_SECS`와 같은 값이다.
 /// 57600 baud에서 `read_pose`는 sync_read 왕복이라 매 프레임 때리면 안 된다.

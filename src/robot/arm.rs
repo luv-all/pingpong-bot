@@ -740,9 +740,19 @@ impl Arm {
         hint: Option<&Joints>,
     ) -> Result<Joints, SwingPlanError> {
         const MAX_ITERS: usize = 300;
-        const TOLERANCE: f64 = 1e-5;
+        const TOLERANCE: f64 = Arm::POSE_IK_POSITION_TOLERANCE;
         const DAMPING: f64 = 1e-3;
         const MAX_STEP: f64 = 0.25;
+
+        // 링크 길이 합은 FK가 만들 수 있는 거리의 절대 상한이다.
+        // 이 경계 밖은 시드 5개×300회 DLS를 돌려도 해가 없으므로 즉시 끝낸다.
+        if (target.coords - mount.coords).norm() > self.arm_length() + TOLERANCE {
+            return Err(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: target.coords.x,
+                target_y: target.coords.y,
+                target_z: target.coords.z,
+            });
+        }
 
         let mut seeds = Vec::new();
         if let Some(hint) = hint.filter(|joints| joints.values.len() == self.joint_count()) {

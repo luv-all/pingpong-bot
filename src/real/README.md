@@ -210,7 +210,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    req(["CommitRequest 수신"]) --> stale{"age > 15 ms?"}
+    req(["CommitRequest 수신"]) --> stale{"age > 50 ms?"}
     stale -->|yes| drop["버림 — 예측이 낡음"]
     stale -->|no| thr{"직전 시도 < 20 ms?"}
     thr -->|yes| drop2["버림 — 스로틀"]
@@ -231,7 +231,7 @@ flowchart TD
 | 상수 | 값 | 위치 | 왜 |
 |------|-----|------|-----|
 | `SERIES_CAPACITY` | 8 | `estimator_worker` | `Triangulate::synced`가 보간에 쓸 캠별 관측 수 |
-| `MAX_REQUEST_AGE_SECS` | 15 ms | `control_worker` | 예측의 `tti`는 요청 시각 기준 — 이보다 낡으면 임팩트 시점이 어긋난다 |
+| `MAX_REQUEST_AGE_SECS` | 50 ms | `control_worker` | Windows 스케줄링 20 ms 실측을 수용하되, 최신 1건 외의 낡은 예측은 거부한다 |
 | `PLAN_THROTTLE_SECS` | 20 ms | `control_worker` | sim `SWING_RETRY_THROTTLE_SECS`와 같은 값. 57600 baud `read_pose`는 sync_read 왕복이다 |
 | `FINISH_GRACE` | 15 s | `run` | 커밋 후 제어 워커가 스윙 완주 + 센터 복귀할 여유 |
 | 게이트 임계 | — | `defaults::ControlParams` | `min_swing_secs` 0.20 · `swing_commit_max_secs` 0.60 · `swing_commit_max_ball_y_frac` 0.55 |

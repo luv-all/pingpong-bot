@@ -7,7 +7,7 @@ use crate::Point3;
 use crate::estimator::{BallTrajectory, TrajectorySample};
 
 use super::motion::{Planner, Trajectory};
-use super::{Arm, IkSearch, Pose};
+use super::{Arm, Pose};
 
 /// 위치 제어기가 받는 유일한 명령.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -86,14 +86,13 @@ impl HitTargetSelector {
         if trajectory.predicted.is_empty() {
             return Err(TargetSelectionError::EmptyPrediction);
         }
-        let mut candidates: Vec<HitTarget> = trajectory
-            .predicted
-            .iter()
-            .filter(|sample| sample.position.y >= self.y_min && sample.position.y <= self.y_max)
-            .copied()
-            .map(HitTarget::from)
-            .collect();
-        for y in [self.y_min, (self.y_min + self.y_max) * 0.5, self.y_max] {
+        // 5 ms 예측 행을 전부 IK로 풀 필요는 없다. 접수 구간을
+        // 균등 표본하여 공간적으로 다른 후보만 남긴다.
+        const LEVELS: usize = 9;
+        let mut candidates: Vec<HitTarget> = Vec::with_capacity(LEVELS);
+        for level in 0..LEVELS {
+            let fraction = level as f64 / (LEVELS - 1) as f64;
+            let y = self.y_min + (self.y_max - self.y_min) * fraction;
             if let Some(candidate) = interpolate_at_y(&trajectory.predicted, y)
                 && candidates
                     .iter()
@@ -102,8 +101,24 @@ impl HitTargetSelector {
                 candidates.push(candidate);
             }
         }
+        // 예측이 구간 경계까지 못 간 짧은 궤적은 구간 안의
+        // 실제 샘플 중 중앙에 가장 가까운 한 점을 사용한다.
         if candidates.is_empty() {
-            return Err(TargetSelectionError::OutsideWindow);
+            let target_y = (self.y_min + self.y_max) * 0.5;
+            if let Some(sample) = trajectory
+                .predicted
+                .iter()
+                .filter(|sample| sample.position.y >= self.y_min && sample.position.y <= self.y_max)
+                .min_by(|left, right| {
+                    (left.position.y - target_y)
+                        .abs()
+                        .total_cmp(&(right.position.y - target_y).abs())
+                })
+            {
+                candidates.push((*sample).into());
+            } else {
+                return Err(TargetSelectionError::OutsideWindow);
+            }
         }
         candidates.sort_by(|left, right| {
             candidate_score(*right, current_position)
@@ -272,27 +287,10 @@ impl PositionController {
             });
         }
 
-        // 스윙 방향 계산은 하지 않는다. 상대 코트를 향하는 고정 안전 법선만 사용한다.
-        let safe_normal = Vector3::new(0.0, 1.0, 0.0);
-        // 실기에서는 바로 전 자세가 가장 좋은 IK 시드다. 빠른 지역 탐색을
-        // 먼저 쓰고, 그 분기에 해가 없을 때만 전역 시드를 훑어 도달률을 보존한다.
-        let goal = arm
-            .inverse_pose_with_rail_best_normal(
-                target.position,
-                safe_normal,
-                start,
-                IkSearch::Local,
-            )
-            .or_else(|_| {
-                arm.inverse_pose_with_rail_best_normal(
-                    target.position,
-                    safe_normal,
-                    start,
-                    IkSearch::Global,
-                )
-            })
-            .map(|(pose, _normal_error)| pose)
-            .map_err(|error| PositionControlError::Unreachable(error.to_string()))?;
+        // 이 제어기의 계약은 '라켓 중심을 공 위치에 대기'다. 법선까지
+        // 맞추는 5차원 자세 IK는 스윙용이며, 위치 제어에서는 필요 없는
+        // 실패 분기와 수치 탐색 비용만 만든다.
+        let goal = position_only_goal(arm, start, target.position)?;
         let mut trajectory = Planner::move_to(arm, start, goal.joints, goal.rail_x)
             .map_err(|error| PositionControlError::Unreachable(error.to_string()))?;
         if trajectory.duration_secs > remaining_secs {
@@ -306,6 +304,67 @@ impl PositionController {
         trajectory.duration_secs = remaining_secs;
         return Ok(trajectory);
     }
+}
+
+fn position_only_goal(
+    arm: &Arm,
+    start: &Pose,
+    target: Point3,
+) -> Result<Pose, PositionControlError> {
+    let Some(rail) = arm.rail else {
+        let joints = arm
+            .inverse_kinematics_near(target, Some(&start.joints))
+            .map_err(|error| PositionControlError::Unreachable(error.to_string()))?;
+        return Ok(Pose::new(start.rail_x, joints));
+    };
+
+    // 현재 레일, 표적 x 직하, 그 중간을 풀어 레일·관절 동시 이동
+    // 시간이 짧은 해를 고른다. 모두 고정 레일의 3차원 위치 IK이다.
+    let target_rail = rail.clamp_x(target.x);
+    let rail_candidates = [
+        rail.clamp_x(start.rail_x),
+        target_rail,
+        rail.clamp_x((start.rail_x + target_rail) * 0.5),
+    ];
+    let mut best: Option<(f64, Pose)> = None;
+    let mut last_error = None;
+    let mut attempted_rails: Vec<f64> = Vec::with_capacity(rail_candidates.len());
+    for rail_x in rail_candidates {
+        if attempted_rails
+            .iter()
+            .any(|attempted| (*attempted - rail_x).abs() <= 1e-9)
+        {
+            continue;
+        }
+        attempted_rails.push(rail_x);
+        match arm.inverse_kinematics_with_rail(&rail, rail_x, target, Some(&start.joints)) {
+            Ok(joints) => {
+                let rail_secs = (rail_x - start.rail_x).abs() / rail.max_speed.max(1e-9);
+                let joint_secs = joints
+                    .values
+                    .iter()
+                    .zip(&start.joints.values)
+                    .map(|(goal, current)| (goal - current).abs() / arm.max_joint_speed.max(1e-9))
+                    .fold(0.0_f64, f64::max);
+                let score = rail_secs.max(joint_secs);
+                if best
+                    .as_ref()
+                    .is_none_or(|(best_score, _)| score < *best_score)
+                {
+                    best = Some((score, Pose::new(rail_x, joints)));
+                }
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    if let Some((_, pose)) = best {
+        return Ok(pose);
+    }
+    return Err(PositionControlError::Unreachable(
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "위치 IK 해 없음".into()),
+    ));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -443,6 +502,21 @@ mod tests {
     }
 
     #[test]
+    fn center_move_respects_the_real_rail_acceleration() {
+        let robot = crate::defaults::robot().unwrap();
+        let rail = robot.arm.rail.expect("기본 레일");
+        let start = Pose::new(rail.x_max, robot.arm.default_joints.clone());
+        let trajectory = Planner::return_to_center(&robot.arm, &start).unwrap();
+        assert!(
+            trajectory.peak_rail_acceleration() <= crate::defaults::motion::RAIL_ACCEL_M_S2 + 1e-9
+        );
+        assert!(
+            trajectory.duration_secs > 0.36,
+            "0.702 m를 0.36 s로 이동하던 실기 회귀를 막아야 함"
+        );
+    }
+
+    #[test]
     fn default_sim_shot_has_a_reachable_position_target() {
         let robot = crate::defaults::robot().unwrap();
         let rail_x = robot.arm.rail.as_ref().unwrap().default_x();
@@ -460,7 +534,23 @@ mod tests {
         let trajectory = BallTrajectory::new(vec![], predicted, Instant::now()).unwrap();
         let window = crate::robot::motion::InterceptWindow::default();
         let selector = HitTargetSelector::new(window.y_min, window.y_max).unwrap();
-        PositionController::plan_best(&robot.arm, &start, &trajectory, &selector)
+        let launch_position = Point3::new(position.x.into(), position.y.into(), position.z.into());
+        let candidates = selector
+            .ranked_candidates(&trajectory, launch_position)
+            .unwrap();
+        assert!(candidates.len() <= 9, "IK 후보는 균등 표본 9개 이하");
+        let planned = PositionController::plan_best(&robot.arm, &start, &trajectory, &selector)
             .expect("기본 sim 샷의 위치 목표는 실행 가능해야 함");
+        let reached = robot
+            .arm
+            .forward_kinematics_with_rail(
+                planned.trajectory.follow_through_rail_x,
+                &planned.trajectory.end_joints(),
+            )
+            .expect("계획 종료 자세 FK");
+        assert!(
+            (reached.position - planned.target.position).norm()
+                <= crate::robot::Arm::POSE_IK_POSITION_TOLERANCE
+        );
     }
 }
