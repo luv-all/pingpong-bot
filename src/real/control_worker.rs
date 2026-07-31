@@ -248,7 +248,52 @@ fn move_to_center(hardware: &mut dyn Hardware, arm: &Arm) -> Result<(), MoveErro
     log_home(&start, &trajectory);
     hardware.command(&trajectory).map_err(MoveError::Hardware)?;
     wait_idle(hardware);
+    verify_centered(hardware, &trajectory);
     return Ok(());
+}
+
+/// 실제로 센터에 도착했는지 되읽어 확인한다.
+///
+/// 여기까지 왔다는 건 "명령을 보냈다"는 뜻이지 "도착했다"는 뜻이 아니다. 실기에서
+/// 조용히 안 돌아올 수 있는 경로가 둘 있다: [`RealHardware::command`]는 이미 스윙
+/// 실행 중이면 **명령을 버리고 `Ok`를 돌려주고**, `is_busy`는 관절 스트리밍만 보고
+/// AXL 레일 이동은 안 본다 — 둘 다 "센터 이동 — 팔이 움직입니다" 로그는 그대로 찍힌다.
+/// 로그만 보고 복귀했다고 믿을 수 없으므로 잔차를 숫자로 남긴다.
+fn verify_centered(hardware: &mut dyn Hardware, trajectory: &motion::Trajectory) {
+    let Ok(actual) = hardware.read_pose() else {
+        warn!("센터 복귀 확인 실패 — 포즈를 못 읽었다");
+        return;
+    };
+    let target = trajectory.end_joints();
+    let worst_joint = actual
+        .joints
+        .values
+        .iter()
+        .zip(target.values.iter())
+        .map(|(actual, target)| (actual - target).abs())
+        .fold(0.0_f64, f64::max);
+    let rail_error = (actual.rail_x - trajectory.follow_through_rail_x).abs();
+
+    // 임팩트 추종 오차가 0.01 rad(0.6°) 수준이니, 정지 자세에서 그보다 훨씬 큰
+    // 잔차는 "명령이 무시됐다"는 신호다.
+    const JOINT_TOLERANCE_RAD: f64 = 0.05;
+    const RAIL_TOLERANCE_M: f64 = 0.02;
+    if worst_joint > JOINT_TOLERANCE_RAD || rail_error > RAIL_TOLERANCE_M {
+        warn!(
+            worst_joint_rad = f2(worst_joint),
+            worst_joint_deg = f2(worst_joint.to_degrees()),
+            rail_error_m = f2(rail_error),
+            actual = f2_slice(&actual.joints.values),
+            target = f2_slice(&target.values),
+            "real shot: 센터 복귀 미완 — 명령은 보냈는데 팔이 그 자리에 없다"
+        );
+    } else {
+        info!(
+            worst_joint_deg = f2(worst_joint.to_degrees()),
+            rail_error_m = f2(rail_error),
+            "real shot: 센터 복귀 확인"
+        );
+    }
 }
 
 fn log_home(start: &robot::Pose, trajectory: &pingpong_bot::robot::motion::Trajectory) {
