@@ -566,39 +566,23 @@ impl DynamixelBus {
             #[cfg(feature = "real")]
             BusBackend::Real(real) => {
                 let ids = self.mapping.config.motor_ids.clone();
-                // 예전 실기 코드에서 정상 사용하던 Sync Read를 먼저 그대로 시도한다.
-                // USB 변환기/배선 상태에 따라 연속 Status Packet이 깨지는 경우에만
-                // C++ SDK와 같은 모터별 개별 읽기로 한 번 더 복구한다.
-                let raw = match real.sync_read_with_retry(
+                // 기본 라이브러리 reader는 입력 시작점이 한 바이트만 어긋나도 정상 패킷의
+                // 헤더를 다시 찾지 못한다. 토크 락용 위치는 헤더 재동기화 + CRC 검증 경로로
+                // 모터별 읽어, 깨진/늦은 응답을 현재 위치로 사용하지 않는다.
+                let raw = real
+                    .robust_read_many_with_retry(
                     &ids,
                     self.mapping.config.addr_present_position,
                     4,
                     self.mapping.config.comm_retries,
                     self.mapping.config.comm_retry_delay_ms,
-                ) {
-                    Ok(raw) => raw,
-                    Err(sync_error) => {
-                        warn!(
-                            error = %sync_error,
-                            ids = ?ids,
-                            "Present Position Sync Read 실패 — 모터별 순차 읽기로 복구 시도"
-                        );
-                        real.read_many_with_retry(
-                            &ids,
-                            self.mapping.config.addr_present_position,
-                            4,
-                            self.mapping.config.comm_retries,
-                            self.mapping.config.comm_retry_delay_ms,
-                        )
-                        .map_err(|sequential_error| {
-                            read_transport_error(format!(
-                                "Present Position 읽기 실패 (addr={}, ids={ids:?}); \
-                                 이전 Sync Read: {sync_error}; 순차 read: {sequential_error}",
-                                self.mapping.config.addr_present_position
-                            ))
-                        })?
-                    }
-                };
+                )
+                .map_err(|error| {
+                    read_transport_error(format!(
+                        "Present Position 헤더 재동기화 read 실패 (addr={}, ids={ids:?}): {error}",
+                        self.mapping.config.addr_present_position
+                    ))
+                })?;
                 raw.into_iter()
                     .map(|bytes| {
                         let raw: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
