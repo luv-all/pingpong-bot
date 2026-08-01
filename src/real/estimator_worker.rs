@@ -322,18 +322,23 @@ pub fn spawn(
                     if let Ok(target) = selector.select(&trajectory) {
                         let stage =
                             prediction_stability.observe(target.position, observed_span_secs);
-                        let request = CommitRequest {
-                            trajectory,
-                            stage,
-                            ball_x: ekf.position().map_or(f64::NAN, |point| point.x),
-                            ball_y: ball_y.unwrap_or(f64::NAN),
-                            ball_vx: ekf.velocity().map_or(f64::NAN, |velocity| velocity.x),
-                            raw_ball_x: last_raw
-                                .filter(|(_, at)| at.elapsed() <= RAW_MARKER_TTL)
-                                .map(|(point, _)| point.x),
-                            at: Instant::now(),
-                        };
-                        send_latest_commit(&commit_tx, &commit_evict_rx, request, &mut stats);
+                        let command_ready = stage
+                            == pingpong_bot::robot::control::PredictionStage::Refined
+                            || prediction_stability.provisional_ready(observed_span_secs);
+                        if command_ready {
+                            let request = CommitRequest {
+                                trajectory,
+                                stage,
+                                ball_x: ekf.position().map_or(f64::NAN, |point| point.x),
+                                ball_y: ball_y.unwrap_or(f64::NAN),
+                                ball_vx: ekf.velocity().map_or(f64::NAN, |velocity| velocity.x),
+                                raw_ball_x: last_raw
+                                    .filter(|(_, at)| at.elapsed() <= RAW_MARKER_TTL)
+                                    .map(|(point, _)| point.x),
+                                at: Instant::now(),
+                            };
+                            send_latest_commit(&commit_tx, &commit_evict_rx, request, &mut stats);
+                        }
                     }
                 }
             }

@@ -176,6 +176,9 @@ pub struct PositionController;
 pub const REFINED_MIN_OBSERVATION_SECS: f64 = 0.25;
 pub const REFINED_TARGET_TOLERANCE_M: f64 = 0.10;
 const REFINED_STABLE_SAMPLES: usize = 3;
+/// 1차 레일 명령도 EKF 속도가 잡히기 전 첫 값을 바로 쓰지 않는다.
+pub const PROVISIONAL_MIN_OBSERVATION_SECS: f64 = 0.08;
+pub const PROVISIONAL_TARGET_TOLERANCE_M: f64 = 0.15;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PredictionStage {
@@ -213,6 +216,18 @@ impl PredictionStability {
         } else {
             PredictionStage::Provisional
         };
+    }
+
+    /// 최근 3개 예측이 15 cm 안에 모였고 최소 80 ms를 관측했는지.
+    /// 즉시 예측을 실물에 보내지 않고, 이 조건을 1차 명령 게이트로 쓴다.
+    pub fn provisional_ready(&self, observed_span_secs: f64) -> bool {
+        return observed_span_secs >= PROVISIONAL_MIN_OBSERVATION_SECS
+            && self.recent_targets.len() == REFINED_STABLE_SAMPLES
+            && self.recent_targets.iter().all(|sample| {
+                self.recent_targets.back().is_some_and(|latest| {
+                    (*sample - *latest).norm() <= PROVISIONAL_TARGET_TOLERANCE_M
+                })
+            });
     }
 }
 
@@ -458,6 +473,19 @@ mod tests {
             stability.observe(Point3::new(0.20, 0.3, 0.4), 0.27),
             PredictionStage::Provisional
         );
+    }
+
+    #[test]
+    fn provisional_command_waits_for_three_stable_targets_and_eighty_ms() {
+        let mut stability = PredictionStability::default();
+        stability.observe(Point3::new(0.80, 0.3, 0.4), 0.04);
+        stability.observe(Point3::new(0.84, 0.3, 0.4), 0.07);
+        assert!(!stability.provisional_ready(0.07));
+        stability.observe(Point3::new(0.86, 0.3, 0.4), 0.08);
+        assert!(stability.provisional_ready(0.08));
+
+        stability.observe(Point3::new(1.20, 0.3, 0.4), 0.09);
+        assert!(!stability.provisional_ready(0.09));
     }
 
     #[test]
