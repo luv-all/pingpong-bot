@@ -47,6 +47,7 @@ struct TwoStageLatch {
 }
 
 struct PendingImpactDiagnostic {
+    shot: u64,
     command: u64,
     stage: PredictionStage,
     predicted_ball: Point3,
@@ -163,8 +164,9 @@ pub fn spawn(
                 "초기 포즈",
             );
         }
-        let _ = event_tx.send(ShotEvent::Armed { shot_seq: 1, pose });
-        let _ = status_tx.send(ControlStatus::Ready { shot_seq: 1 });
+        let mut shot_seq: u64 = 1;
+        let _ = event_tx.send(ShotEvent::Armed { shot_seq, pose });
+        let _ = status_tx.send(ControlStatus::Ready { shot_seq });
         info!(
             wrist_ready_rad = f2(ready_wrist),
             "2단계 단순 제어 준비 — 공마다 레일 최대 2회, 손목축만 추가 제어"
@@ -184,25 +186,40 @@ pub fn spawn(
             {
                 let sampled_at = Instant::now();
                 match hardware.read_rail_x_m() {
-                    Ok(actual_rail_x) => info!(
-                        command = diagnostic.command,
-                        stage = ?diagnostic.stage,
-                        predicted_ball_x = f2(diagnostic.predicted_ball.x),
-                        predicted_ball_y = f2(diagnostic.predicted_ball.y),
-                        predicted_ball_z = f2(diagnostic.predicted_ball.z),
-                        rail_target_x = f2(diagnostic.rail_target_x),
-                        actual_rail_x = f2(actual_rail_x),
-                        rail_error_m = f2(actual_rail_x - diagnostic.rail_target_x),
-                        wrist_target_deg = f2(diagnostic.wrist_target_rad.to_degrees()),
-                        elapsed_secs = f2(sampled_at.duration_since(diagnostic.issued_at).as_secs_f64()),
-                        deadline_late_ms = f2(
-                            sampled_at
-                                .saturating_duration_since(diagnostic.expected_at)
-                                .as_secs_f64()
-                                * 1e3,
-                        ),
-                        "공 로봇 라인 도달 예정 시각의 실제 레일 위치"
-                    ),
+                    Ok(actual_rail_x) => {
+                        // 현재 단순 제어는 나머지 관절을 기본 자세로 두고
+                        // 마지막 손목축만 바꾸므로, 해당 명령 자세의 FK를 같이 찍는다.
+                        let mut racket_joints = arm.default_joints.clone();
+                        if let Some(racket) = racket_joints.values.last_mut() {
+                            *racket = diagnostic.wrist_target_rad;
+                        }
+                        let racket_center = arm
+                            .forward_kinematics_with_rail(actual_rail_x, &racket_joints)
+                            .map(|pose| pose.position);
+                        info!(
+                            command = diagnostic.command,
+                            shot = diagnostic.shot,
+                            stage = ?diagnostic.stage,
+                            predicted_ball_x = f2(diagnostic.predicted_ball.x),
+                            predicted_ball_y = f2(diagnostic.predicted_ball.y),
+                            predicted_ball_z = f2(diagnostic.predicted_ball.z),
+                            rail_target_x = f2(diagnostic.rail_target_x),
+                            actual_rail_x = f2(actual_rail_x),
+                            rail_error_m = f2(actual_rail_x - diagnostic.rail_target_x),
+                            racket_center_x = racket_center.map(|point| f2(point.x)),
+                            predicted_to_racket_error_m = racket_center
+                                .map(|point| f2(point.x - diagnostic.predicted_ball.x)),
+                            wrist_target_deg = f2(diagnostic.wrist_target_rad.to_degrees()),
+                            elapsed_secs = f2(sampled_at.duration_since(diagnostic.issued_at).as_secs_f64()),
+                            deadline_late_ms = f2(
+                                sampled_at
+                                    .saturating_duration_since(diagnostic.expected_at)
+                                    .as_secs_f64()
+                                    * 1e3,
+                            ),
+                            "공 로봇 라인 도달 예정 시각의 실제 레일·라켓 위치"
+                        );
+                    }
                     Err(error) => warn!(
                         %error,
                         command = diagnostic.command,
@@ -218,11 +235,11 @@ pub fn spawn(
                 } else {
                     "2차 예측 없음·예상 도달 시각 경과"
                 };
-                let _ = status_tx.send(ControlStatus::Recovering { shot_seq: 1 });
+                let _ = status_tx.send(ControlStatus::Recovering { shot_seq });
                 if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
                     warn!(%error, return_reason, "중앙 복귀 실패 — 제어 중단");
                     let _ = event_tx.send(ShotEvent::Failed {
-                        shot_seq: 1,
+                        shot_seq,
                         reason: format!("중앙 복귀 실패: {error}"),
                     });
                     break;
@@ -242,8 +259,12 @@ pub fn spawn(
                 last_command = None;
                 impact_diagnostic = None;
                 recovery_deadline = None;
-                let _ = status_tx.send(ControlStatus::Ready { shot_seq: 1 });
-                info!(return_reason, "리니어 중앙 + 로봇 기본 자세 재정렬 완료");
+                shot_seq = shot_seq.saturating_add(1);
+                let _ = status_tx.send(ControlStatus::Ready { shot_seq });
+                info!(
+                    shot = shot_seq,
+                    return_reason, "리니어 중앙 + 로봇 기본 자세 재정렬 완료"
+                );
                 continue;
             }
 
@@ -281,15 +302,29 @@ pub fn spawn(
             }
 
             // 레일은 1차·2차 예측 위치의 x만 사용한다. 중간 관측은 추종하지 않는다.
-            let rail_x = arm
-                .rail
-                .map_or(target.position.x, |rail| rail.clamp_x(target.position.x));
+            // 범위 밖 예측을 끝점으로 clamp하면 잘못된 공을 정상 제어로
+            // 보이게 하고 레일을 끝까지 급출발시킨다. 이 경우는 명령을 보내지 않는다.
+            if let Some(rail) = arm.rail.as_ref()
+                && (target.position.x < rail.x_min || target.position.x > rail.x_max)
+            {
+                warn!(
+                    requested_stage = ?requested_stage,
+                    sent_stage = ?stage,
+                    prediction_x = f2(target.position.x),
+                    rail_x_min = f2(rail.x_min),
+                    rail_x_max = f2(rail.x_max),
+                    target_side_launcher = launcher_side(target.position.x - rail_center),
+                    "레일 범위 밖 예측 제외 — 레일 명령 안 보냄"
+                );
+                continue;
+            }
+            let rail_x = target.position.x;
             let previous_target_x = sim_pose.rail_x;
             let wrist = test_wrist_goal(ready_wrist, stage);
             let duration = remaining.clamp(MIN_RAIL_COMMAND_SECS, MAX_RAIL_COMMAND_SECS);
             if let Err(error) = hardware.command_rail_and_racket(rail_x, wrist, duration) {
                 let _ = event_tx.send(ShotEvent::Failed {
-                    shot_seq: 1,
+                    shot_seq,
                     reason: format!("레일·라켓 2단계 명령 실패: {error}"),
                 });
                 break;
@@ -332,6 +367,7 @@ pub fn spawn(
             command_seq = command_seq.saturating_add(1);
             let expected_at = issued_at + Duration::from_secs_f64(remaining.max(0.0));
             impact_diagnostic = Some(PendingImpactDiagnostic {
+                shot: shot_seq,
                 command: command_seq,
                 stage,
                 predicted_ball: target.position,
@@ -343,6 +379,7 @@ pub fn spawn(
             recovery_deadline = Some(expected_at + RETURN_AFTER_IMPACT_MARGIN);
 
             info!(
+                shot = shot_seq,
                 command = command_seq,
                 requested_stage = ?requested_stage,
                 sent_stage = ?stage,
@@ -374,7 +411,7 @@ pub fn spawn(
             if stage == PredictionStage::Refined {
                 // 진짜 2차가 들어오면 추정을 멈추고, 위에서 예상 도달
                 // 시각이 되었을 때 중앙으로 복귀한다.
-                let _ = status_tx.send(ControlStatus::Recovering { shot_seq: 1 });
+                let _ = status_tx.send(ControlStatus::Recovering { shot_seq });
             }
         }
 

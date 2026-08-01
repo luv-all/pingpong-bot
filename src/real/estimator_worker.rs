@@ -6,6 +6,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
+use pingpong_bot::Point3;
 use pingpong_bot::camera;
 use pingpong_bot::camera::Calibration;
 use pingpong_bot::constants::table;
@@ -146,7 +147,7 @@ pub fn spawn(
         let mut receding = BallReceding::new(MIN_DELTA_Y, MIN_SAMPLES);
         let mut announced_track = false;
         let mut last_decision: Option<Decision> = None;
-        let mut previous_ball_y: Option<f64> = None;
+        let mut previous_ball_position: Option<Point3> = None;
         let mut robot_line_logged = false;
         let mut progress = Throttle::new(PROGRESS_PERIOD);
 
@@ -161,7 +162,7 @@ pub fn spawn(
                         receding.reset();
                         ekf.reset();
                         prediction_stability.reset();
-                        previous_ball_y = None;
+                        previous_ball_position = None;
                         robot_line_logged = false;
                     }
                     ControlStatus::Recovering { .. } => {
@@ -247,26 +248,39 @@ pub fn spawn(
 
             if let Some(position) = ekf.position() {
                 if !robot_line_logged
-                    && previous_ball_y.is_some_and(|previous| previous > robot_line_y)
+                    && previous_ball_position.is_some_and(|previous| previous.y > robot_line_y)
                     && position.y <= robot_line_y
                 {
+                    let previous = previous_ball_position.expect("위에서 교차 확인");
+                    let dy = position.y - previous.y;
+                    let ratio = if dy.abs() <= f64::EPSILON {
+                        1.0
+                    } else {
+                        ((robot_line_y - previous.y) / dy).clamp(0.0, 1.0)
+                    };
+                    let crossing =
+                        Point3::from(previous.coords + (position.coords - previous.coords) * ratio);
                     let raw = last_raw
                         .filter(|(_, at)| at.elapsed() <= RAW_MARKER_TTL)
                         .map(|(point, _)| point);
                     info!(
                         shot = shot_seq,
                         robot_line_y = f2(robot_line_y),
-                        ekf_ball_x = f2(position.x),
-                        ekf_ball_y = f2(position.y),
-                        ekf_ball_z = f2(position.z),
+                        ekf_ball_x = f2(crossing.x),
+                        ekf_ball_y = f2(crossing.y),
+                        ekf_ball_z = f2(crossing.z),
+                        crossing_interpolation_ratio = f2(ratio),
+                        current_sample_x = f2(position.x),
+                        current_sample_y = f2(position.y),
+                        current_sample_z = f2(position.z),
                         raw_ball_x = raw.map(|point| f2(point.x)),
                         raw_ball_y = raw.map(|point| f2(point.y)),
                         raw_ball_z = raw.map(|point| f2(point.z)),
-                        "공이 로봇 라인을 통과할 때의 EKF·생 삼각측량 위치"
+                        "공이 로봇 라인을 통과할 때의 보간 EKF·생 삼각측량 위치"
                     );
                     robot_line_logged = true;
                 }
-                previous_ball_y = Some(position.y);
+                previous_ball_position = Some(position);
             }
 
             // 공 y가 로봇에서 멀어지면(증가) 새 급구 루프 — EKF를 새로 시드한다.
@@ -279,7 +293,7 @@ pub fn spawn(
                 announced_track = false;
                 last_decision = None;
                 receding.reset();
-                previous_ball_y = None;
+                previous_ball_position = None;
                 robot_line_logged = false;
                 ball_y = None;
                 debug!(shot = shot_seq, y = f2(y), "공 y 증가 — EKF 리셋 (새 루프)");
