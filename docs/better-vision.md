@@ -15,22 +15,27 @@
 /// 한 시점의 공 상태 — 7차원 `[x y z vx vy vz t]`.
 #[derive(Clone, Copy, Debug)]
 pub struct State {
-    /// `BallTrack::origin` 기준 경과 [s].
+    /// [`Trajectory::origin`] 기준 경과 [s].
     pub t: f64,
     pub position: Point3,
     pub velocity: Vector3<f64>,
 }
 
+/// 공 하나의 궤적 — 지금을 기준으로 지나온 길과 앞으로 갈 길.
+///
 /// 비전이 기구학에 넘기는 **유일한** 타입. 다른 건 아무것도 안 넘긴다.
+///
+/// 이름이 `measured`/`predicted`인 건 **믿을 만한 정도가 다르기 때문**이다. 둘 다 필터
+/// 상태지만 앞쪽은 관측에 묶여 있고 뒤쪽은 외삽이다. 소비자가 그 차이를 알아야 한다.
 #[derive(Clone, Debug)]
-pub struct BallTrack {
+pub struct Trajectory {
     /// 샷 일련번호 — 기구학이 "같은 공인가"를 판단하는 근거.
     pub seq: u64,
     /// `t = 0`의 벽시계. 지연 보상은 소비자가 `origin.elapsed()`로 한다.
     pub origin: Instant,
-    /// 측정 궤적 — 지금까지 실제로 지나온 길 (과거).
+    /// 지나온 길 — 관측이 있던 시각의 필터 상태.
     pub measured: Vec<State>,
-    /// 예측 궤적 — 지금부터 앞으로 (미래).
+    /// 앞으로 갈 길 — 지금 상태에서 굴린 것. 공이 플레이 부피를 벗어날 때까지.
     pub predicted: Vec<State>,
 }
 ```
@@ -115,7 +120,7 @@ COMMIT  frame 394 t=5.351s  tti 0.42s  sigma 12cm
 | `src/estimator/ekf.rs` (601) | 🗑 삭제 | 3D 관측 모델 자체가 틀렸다 |
 | `src/estimator/decision.rs` (272) | 🗑 삭제 | 커밋 판단이 기구학으로 넘어갔다 |
 | `src/estimator/triangulate.rs` + `tri/` (392) | ✂️ 축소 | **N-view DLT 하나만** 남긴다 (시드용). 지금은 2-view일 때 OpenCV `triangulate_points`로 빠지는 특수 분기가 따로 있는데, 실패하면 어차피 같은 DLT로 폴백한다 — 분기를 지우면 코드가 줄고 3대 이상이 공짜로 된다. `Calibration::min_cameras_for_triangulation()`의 하드코딩 `2`도 같이 푼다 |
-| `src/estimator/prediction.rs`, `estimator.rs`, `hit_plane.rs`, `snapshot.rs` | 🗑 삭제 | 계약이 `BallTrack`으로 대체 |
+| `src/estimator/prediction.rs`, `estimator.rs`, `hit_plane.rs`, `snapshot.rs` | 🗑 삭제 | 계약이 `Trajectory`로 대체 |
 | `src/real/estimator_worker.rs` | 🗑 삭제 | `fuse`/skew/보간 전부 소멸 |
 | `src/pipeline/` | 🗑 삭제 | 동기 로직의 두 번째 사본 |
 | **`ballistics.rs`·`bounce.rs`·`kinematics.rs`** (540) | ✅ **유지** | ⚠️ **sim이 6곳에서 쓰고 회귀 테스트가 핀으로 박아뒀다** (`tests/bounce_kernel_matches_sim.rs`). 건드리면 sim이 깨진다 |
@@ -129,13 +134,13 @@ COMMIT  frame 394 t=5.351s  tti 0.42s  sigma 12cm
 
 ```
 src/vision/
-  mod.rs           Vision — 단일 진입점
-  contract.rs      State · BallTrack           ← §1, 밖으로 나가는 유일한 타입
+  mod.rs           Vision · Camera — 단일 진입점
+  contract.rs      State · Trajectory           ← §1, 밖으로 나가는 유일한 타입
   detect/
-    mod.rs         Detector — 캐스케이드 조립
-    background.rs  Background — 정지한 것을 지운다
-    color.rs       ColorGate  — 포함·제외로 피팅한 판별면
-    shape.rs       ShapeGate  — 크기·원형도 → Candidate
+    mod.rs         Layer 트레잇 · Detector — 캐스케이드 조립
+    background.rs  Background : Layer — 정지한 것을 지운다
+    color.rs       ColorGate  : Layer — 포함·제외로 피팅한 판별면
+    shape.rs       ShapeGate         — 종단, 마스크 → Candidate
   track/
     mod.rs         Tracker — 생애주기 (Idle → Tracking → Declared)
     filter.rs      Filter  — 픽셀 공간 EKF
@@ -146,22 +151,35 @@ src/vision/
 ### 4.1 단일 진입점
 
 ```rust
+/// 카메라 하나 — **자기 캘리브와 자기 검출기를 자기가 든다.**
+///
+/// `Calibration`을 상위가 통째로 들고 다니면 쓸 때마다 `params(id)`로 되찾아야 하고,
+/// 그 조회가 매번 `Option`이라 "없을 리 없는데" 분기가 곳곳에 생긴다. 로드할 때 한 번
+/// 나눠 주면 그 뒤로는 전부 있는 값이다.
+pub struct Camera {
+    pub id: camera::Id,
+    pub params: camera::Params,
+    detector: Detector,
+}
+
 /// 프레임을 먹이면 계약이 나온다. 이게 비전의 전부다.
 pub struct Vision {
-    /// 카메라당 하나. **개수는 캘리브레이션이 정한다** — 코드는 2대인지 3대인지 모른다.
-    detectors: Vec<Detector>,
+    /// **개수는 캘리브레이션 파일이 정한다** — 코드는 2대인지 3대인지 모른다.
+    cameras: Vec<Camera>,
     tracker: Tracker,
-    calibration: Calibration,
 }
 
 impl Vision {
+    /// 캘리브레이션을 카메라들에게 나눠 주고 끝 — `Vision`은 그걸 들고 있지 않는다.
+    pub fn load(calibration: Calibration, color: &ColorSamples) -> Result<Self>;
+
     /// 프레임 하나. 선언된 트랙이 있으면 그 순간의 계약을 돌려준다.
     ///
     /// **프레임은 경계를 넘지 않는다** — 이미지는 여기서 끝나고 밖으로는 숫자만 나간다.
-    pub fn feed(&mut self, frame: &Frame) -> Option<BallTrack>;
+    pub fn feed(&mut self, frame: &Frame) -> Option<Trajectory>;
 
     /// 툴 전용. 본선 경로는 [`Trace`]를 **만들지 않는다** (비용 0).
-    pub fn feed_traced(&mut self, frame: &Frame) -> (Option<BallTrack>, Trace);
+    pub fn feed_traced(&mut self, frame: &Frame) -> (Option<Trajectory>, Trace);
 }
 ```
 
@@ -177,10 +195,29 @@ pub struct Candidate {
     pub score: f64,
 }
 
+/// 캐스케이드의 한 단계. **모든 단계가 같은 일을 한다 — 켜진 픽셀을 끈다.**
+///
+/// 이 프로젝트의 목적이 실험이라 단계를 바꿔 끼우고 순서를 뒤집으며 재는 일이 계속 생긴다.
+/// 같은 트레잇을 먹이면 그게 조립 한 줄이고, `detect-full`이 단계 구성을 몰라도 패널을
+/// 그릴 수 있다 ([`Layer::name`]으로 제목을 뽑는다).
+///
+/// # 불변식 — 줄이기만 한다
+///
+/// 켜진 픽셀을 **끄기만** 한다. 늘리면 뒤 단계의 비용 가정이 깨지고(각 단계는 "앞에서
+/// 이미 대부분 껐다"를 전제로 짜인다) 순서를 바꿀 수 있다는 성질도 함께 무너진다.
+pub trait Layer {
+    /// 패널 제목·스윕 라벨. 짧게.
+    fn name(&self) -> &'static str;
+
+    /// `mask`를 줄인다.
+    fn refine(&mut self, frame: &Frame, mask: &mut Mask);
+}
+
 pub struct Detector {
-    background: Background,
-    color: ColorGate,
-    shape: ShapeGate,
+    /// **순서 = 실행 순서.** 싸고 잘 거르는 것부터 꽂는다.
+    layers: Vec<Box<dyn Layer>>,
+    /// 종단 — 마스크를 후보로. 이건 하는 일이 달라서 [`Layer`]가 아니다.
+    extract: ShapeGate,
     /// 프레임마다 재할당하지 않는다 — 지금 구조가 느린 주범이었다.
     scratch: Scratch,
 }
@@ -191,14 +228,20 @@ impl Detector {
 }
 ```
 
-**순서가 뒤집혔다.** 싸고 잘 거르는 것부터:
+기본 조립 — 싸고 잘 거르는 것부터:
 
-```text
-frame
- └─ background.foreground()   정지한 것 전멸 + 태양광 자동 적응. 다운스케일 2×
-     └─ color.keep()          움직이는 것 중 공 색만. 남은 픽셀에만 돈다
-         └─ shape.candidates() 크기·원형도 → 상위 K개
+```rust
+Detector::new(
+    vec![
+        Box::new(Background::new()),  // 정지한 것 전멸 + 태양광 적응. 다운스케일 2×
+        Box::new(ColorGate::fit(..)), // 움직이는 것 중 공 색만. 남은 픽셀에만 돈다
+    ],
+    ShapeGate::from_calib(&params),   // 크기·원형도 → 상위 K개
+)
 ```
+
+순서를 바꾸거나 단계를 빼는 게 이 `vec!` 한 줄이라, "배경 모델 없이 색만"·"색 없이 배경만"
+같은 비교가 코드 변경 없이 스윕으로 돈다.
 
 #### `Background` — 두 문제를 동시에 푼다
 
@@ -330,7 +373,7 @@ pub enum Phase {
     Idle,
     /// 추적 중, 아직 안 보낸다.
     Tracking,
-    /// 네트를 넘었다 — 이제부터 매 프레임 `BallTrack`을 낸다.
+    /// 네트를 넘었다 — 이제부터 매 프레임 [`Trajectory`]를 낸다.
     Declared { seq: u64 },
 }
 ```
@@ -354,11 +397,13 @@ pub enum Phase {
 /// 본선 경로(`Vision::feed`)는 이걸 **만들지 않는다.** 진단이 공짜여야 켜 두는데,
 /// 공짜가 아니면 아무도 안 켜고 결국 아무도 진단을 안 한다.
 pub struct Trace {
-    pub foreground: Mask,
-    pub color: Mask,
+    /// 단계마다 `(이름, 그 단계 직후 마스크)`. **단계 구성이 바뀌면 패널도 같이 바뀐다** —
+    /// 툴이 단계를 하드코딩하지 않으므로 새 레이어를 꽂아도 뷰어를 안 고친다.
+    pub stages: Vec<(&'static str, Mask)>,
     pub candidates: Vec<Candidate>,
     pub chosen: Option<Candidate>,
     pub gate: Gate,
+    /// 축별 σ — 스칼라로 뭉치면 §2.2를 또 놓친다.
     pub sigma: [f64; 6],
     pub phase: Phase,
 }
@@ -408,7 +453,7 @@ tokei src/vision src/detector src/estimator
 |---|---|---|---|
 | 0 | **baseline 박기** | 9개 클립을 `clip-review`로 돌려 `MISS`·검출률을 §8에 기록 | 표가 §8에 박힘 |
 | 1 | **캡처 정상화** | 모노/컬러 모순 확인, `request_short_exposure` 호출, **프레임 중복 원인 확정**, 실제 120 fps | `meas_fps`가 고유 프레임 수와 일치 |
-| 2 | **`contract.rs` + 툴 어댑터** | `State`/`BallTrack` 먼저 만들고 두 툴을 여기에 맞춘다 | 툴이 새 타입으로 돈다 |
+| 2 | **`contract.rs` + 툴 어댑터** | `State`/`Trajectory` 먼저 만들고 두 툴을 여기에 맞춘다 | 툴이 새 타입으로 돈다 |
 | 3 | **`detect/` 새로** | Background → ColorGate → ShapeGate → 후보 K개 | `detect-full`에서 떨어진 공·팔이 죽는다 |
 | 4 | **`track/` 새로** | 픽셀 EKF + 연관 + 생애주기 | `clip-review` `MISS` 감소, 측정 수 증가 |
 | 5 | **레이턴시** | 셔터→계약 실측, `origin` 오프셋 보정 | 구간별 예산표 |
