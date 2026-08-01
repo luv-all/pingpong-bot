@@ -36,6 +36,45 @@ const SAMPLE_DT: f64 = 0.005;
 /// 예측을 끊는 플레이 부피 여유 [m].
 const VOLUME_MARGIN_M: f64 = 1.0;
 
+/// 로봇 마운트 y [m] — 궤적을 그릴 하한.
+///
+/// 그 뒤는 로봇이 이미 지나친 자리라 볼 이유가 없고, 길게 그려 두면 화면만 어지럽다.
+/// 예측은 여전히 그 너머까지 적분한다(바운스·평면 통과 계산에 필요하다) — **그리기만**
+/// 여기서 자른다.
+pub fn draw_limit_y() -> f64 {
+    return defaults::rail_frame().mount_y();
+}
+
+/// `y >= draw_limit_y()` 구간만 남긴다. 경계를 지나는 선분은 그 지점에서 끊는다.
+pub fn clip_to_mount(points: &[Point3]) -> Vec<Point3> {
+    let limit = draw_limit_y();
+    let mut out = Vec::with_capacity(points.len());
+    for pair in points.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if a.y >= limit {
+            out.push(a);
+        }
+        // 경계를 가로지르면 정확히 그 점까지만 그린다.
+        if (a.y >= limit) != (b.y >= limit) {
+            let span = a.y - b.y;
+            if span.abs() > f64::EPSILON {
+                out.push(a.lerp(&b, (a.y - limit) / span));
+            }
+            break;
+        }
+    }
+    if let Some(last) = points.last()
+        && last.y >= limit
+        && points.len() > 1
+    {
+        out.push(*last);
+    }
+    if points.len() == 1 && points[0].y >= limit {
+        out.push(points[0]);
+    }
+    return out;
+}
+
 /// `[x y z vx vy vz t]`. `t`는 클립 시작 기준 [s].
 #[derive(Debug, Clone, Copy)]
 pub struct State7 {
@@ -468,6 +507,35 @@ mod tests {
             reprojection_px: 1.0,
         }];
         assert!(convergence_error(&track, &observed, 0.0, 0.2, 100.0).is_none());
+    }
+
+    fn at_y(y: f64) -> Point3 {
+        return Point3::new(0.5, y, 1.0);
+    }
+
+    #[test]
+    fn clip_keeps_a_track_that_never_reaches_the_mount() {
+        let limit = draw_limit_y();
+        let track = vec![at_y(limit + 1.0), at_y(limit + 0.5), at_y(limit + 0.2)];
+        assert_eq!(clip_to_mount(&track).len(), 3);
+    }
+
+    #[test]
+    fn clip_ends_exactly_at_the_mount() {
+        let limit = draw_limit_y();
+        let track = vec![at_y(limit + 0.4), at_y(limit + 0.2), at_y(limit - 0.3)];
+        let clipped = clip_to_mount(&track);
+        let last = clipped.last().expect("경계점이 남는다");
+        assert!((last.y - limit).abs() < 1e-9, "y={} != {limit}", last.y);
+        // 마운트 뒤 점은 하나도 안 남는다.
+        assert!(clipped.iter().all(|p| p.y >= limit - 1e-9));
+    }
+
+    #[test]
+    fn clip_drops_a_track_entirely_behind_the_mount() {
+        let limit = draw_limit_y();
+        let track = vec![at_y(limit - 0.1), at_y(limit - 0.5)];
+        assert!(clip_to_mount(&track).len() < 2, "그릴 선분이 없어야 한다");
     }
 
     #[test]

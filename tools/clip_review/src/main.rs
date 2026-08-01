@@ -135,7 +135,11 @@ fn run(args: &Args) -> Result<()> {
         100.0 * reviewed.observed.len() as f64 / reviewed.len() as f64,
         first_ball.map_or("없음".to_owned(), |f| f.to_string())
     );
+    print_commit_summary(&reviewed);
     println!("keys: Space 일시정지 | ←/→ or ,/. 한 프레임 | [/] 10프레임 | 0 처음 | q 종료");
+    println!(
+        "frame  t     | cam0 cam1 | 3d x y z reproj | ekf x y z |v| sigma_p sigma_v | gate si | live +.1/+.2/+.3s [cm]"
+    );
 
     let mut player = Player {
         left: OpenCvCapture::from_path(camera::Id(0), &clip.left).map_err(anyhow::Error::msg)?,
@@ -152,6 +156,7 @@ fn run(args: &Args) -> Result<()> {
     let live_wait_ms = ((1000.0 / fps).round() as i32).max(1);
     let mut index = args.start.min(reviewed.len() - 1);
     let mut paused = false;
+    let mut printed: Option<usize> = None;
     // 실제 궤적은 pass 1이 클립을 통째로 훑어 **이미 다 안다**. 커밋 예측이 이후로 어디로
     // 갔는지와 나란히 보려면 미래도 있어야 하므로 잘라 주지 않는다 — 대신 현재 프레임을
     // 기준으로 과거·미래를 나눠 그려서 "지금 아는 것"과 구분되게 한다.
@@ -170,21 +175,43 @@ fn run(args: &Args) -> Result<()> {
             continue;
         };
         let state = &reviewed.frames[index];
-        let (actual_past, actual_future) = reviewed.observed_split(index);
-        let predicted: Vec<_> = state.predicted.iter().map(|s| s.position).collect();
+        // 그리는 건 로봇 마운트까지만 — 그 뒤는 로봇이 이미 지나친 자리다. 예측 자체는
+        // 여전히 끝까지 적분한다 (평면 통과·MISS 계산에 필요하다).
+        let (past, future) = reviewed.observed_split(index);
+        let actual_past = track::clip_to_mount(&past);
+        let actual_future = track::clip_to_mount(&future);
+        let predicted = track::clip_to_mount(
+            &state
+                .predicted
+                .iter()
+                .map(|s| s.position)
+                .collect::<Vec<_>>(),
+        );
         // 커밋 예측은 얼려 둔 것 — 프레임이 지나도 안 바뀐다. 아직 커밋 전이면 비어 있다.
-        let committed: Vec<_> = reviewed
+        let committed = reviewed
             .commit
             .as_ref()
             .filter(|commit| index >= commit.frame)
-            .map(|commit| commit.predicted.iter().map(|s| s.position).collect())
+            .map(|commit| {
+                track::clip_to_mount(
+                    &commit
+                        .predicted
+                        .iter()
+                        .map(|s| s.position)
+                        .collect::<Vec<_>>(),
+                )
+            })
             .unwrap_or_default();
         let fast = first_ball.is_some_and(|first| index < first);
 
-        let shared = shared_hud(&reviewed, state, index, speed, paused, fast);
+        // 추적 중인 프레임만, 그리고 같은 프레임을 두 번 찍지 않는다.
+        if state.tracking && printed != Some(index) {
+            printed = Some(index);
+            println!("{}", console_line(&reviewed, state, index));
+        }
+
         for (slot, frame) in [(0usize, &left), (1usize, &right)] {
-            let mut hud = camera_hud(state, slot);
-            hud.extend(shared.iter().cloned());
+            let hud = overlay_hud(&reviewed, state, index, slot, speed, paused, fast);
             let panel = overlay::draw(
                 &frame.image,
                 &params[slot],
@@ -322,73 +349,69 @@ fn shift(index: usize, delta: i64, len: usize) -> usize {
     return next.clamp(0, len as i64 - 1) as usize;
 }
 
-/// 그 카메라에서만 나오는 줄.
-fn camera_hud(state: &FrameState, slot: usize) -> Vec<String> {
-    let mut lines = vec![match state.pixels[slot] {
-        Some(p) => format!("detect ({:.1}, {:.1})", p.x, p.y),
-        None => "detect miss".to_owned(),
-    }];
-    lines.push(match state.observed {
-        Some(o) => format!(
-            "3d  x{:+.2} y{:+.2} z{:+.2}  reproj {:.1}px",
-            o.point.x, o.point.y, o.point.z, o.reprojection_px
-        ),
-        None => "3d  none (한쪽만 잡았거나 재투영 게이트)".to_owned(),
-    });
-    return lines;
-}
-
-/// 두 카메라 창에 똑같이 붙는 줄 — 어느 쪽을 보고 있든 같은 숫자가 보이게.
-fn shared_hud(
+/// 화면에 남기는 것은 **두 줄**뿐이다 — 지금 몇 번째 프레임인지, 이 카메라가 뭘 잡았는지.
+///
+/// 숫자를 화면에 다 쌓으면 정작 봐야 할 궤적을 가린다. 나머지는 [`console_line`]으로
+/// 콘솔에 흘린다 — 거기서는 스크롤해서 앞뒤 프레임을 비교할 수도 있다.
+fn overlay_hud(
     reviewed: &Reviewed,
     state: &FrameState,
     index: usize,
+    slot: usize,
     speed: f64,
     paused: bool,
     fast: bool,
 ) -> Vec<String> {
-    let now = reviewed.time_of(index);
     let rate = if fast {
-        "1.00x (preroll)".to_owned()
+        "1.00x preroll".to_owned()
     } else {
         format!("{speed:.2}x")
     };
-    let mut lines = vec![format!(
-        "frame {index}/{}  t={now:.3}s  {rate}{}",
-        reviewed.len() - 1,
-        if paused { "  [PAUSED]" } else { "" }
-    )];
+    return vec![
+        format!(
+            "f{index}/{}  t={:.3}s  {rate}{}",
+            reviewed.len() - 1,
+            reviewed.time_of(index),
+            if paused { "  PAUSED" } else { "" }
+        ),
+        match state.pixels[slot] {
+            Some(p) => format!("detect ({:.0}, {:.0})", p.x, p.y),
+            None => "detect MISS".to_owned(),
+        },
+    ];
+}
 
-    lines.push(if state.tracking {
-        match (state.ekf_position, state.ekf_speed) {
-            (Some(p), Some(v)) => {
-                format!("ekf  x{:+.2} y{:+.2} z{:+.2}  |v|{v:.1}", p.x, p.y, p.z)
-            }
-            _ => "ekf  tracking".to_owned(),
-        }
-    } else {
-        "ekf  not tracking".to_owned()
-    });
-    if let Some(gate) = state.gate {
-        lines.push(match state.gate_d2 {
-            Some(d2) => format!("gate {gate:?}  d2={d2:.1}"),
-            None => format!("gate {gate:?}"),
-        });
-    }
-
-    // 실기와 같은 게이트 — 왜 아직 안 넘겼는지가 여기 그대로 나온다.
-    if let Some(decision) = state.decision {
-        let sigma = state
-            .impact_sigma
-            .map_or("--".to_owned(), |s| format!("{:.0}cm", s * 100.0));
-        lines.push(match decision {
-            Decision::Attempt => format!("gate  ATTEMPT  sigma {sigma}"),
-            Decision::Wait(reason) => format!("gate  {}  sigma {sigma}", reason.label()),
-        });
-    }
-
-    // 매 프레임 다시 굴린 예측이 얼마나 앞을 맞히나 — 수렴 여부.
-    let errors: Vec<String> = LEADS_SECS
+/// 프레임 하나를 한 줄로 — 콘솔용. 추적 중일 때만 찍는다 (프리롤은 볼 게 없다).
+fn console_line(reviewed: &Reviewed, state: &FrameState, index: usize) -> String {
+    let now = reviewed.time_of(index);
+    let px = |slot: usize| match state.pixels[slot] {
+        Some(p) => format!("{:.0},{:.0}", p.x, p.y),
+        None => "----".to_owned(),
+    };
+    let three_d = match state.observed {
+        Some(o) => format!(
+            "3d {:+.2} {:+.2} {:+.2} rp{:.1}",
+            o.point.x, o.point.y, o.point.z, o.reprojection_px
+        ),
+        None => "3d ----".to_owned(),
+    };
+    let ekf = match (state.ekf_position, state.ekf_speed) {
+        (Some(p), Some(v)) => format!("ekf {:+.2} {:+.2} {:+.2} |v|{v:.1}", p.x, p.y, p.z),
+        _ => "ekf ----".to_owned(),
+    };
+    let sigma = match (state.position_sigma, state.velocity_sigma) {
+        (Some(sp), Some(sv)) => format!("sp{:.1} sv{:.0}", sp * 100.0, sv * 100.0),
+        _ => "sp-- sv--".to_owned(),
+    };
+    let gate = match state.decision {
+        Some(Decision::Attempt) => "ATTEMPT".to_owned(),
+        Some(Decision::Wait(reason)) => reason.label().replace("WAIT ", ""),
+        None => "--".to_owned(),
+    };
+    let impact_sigma = state
+        .impact_sigma
+        .map_or("--".to_owned(), |v| format!("{:.0}", v * 100.0));
+    let live: Vec<String> = LEADS_SECS
         .iter()
         .map(|lead| {
             match track::convergence_error(
@@ -398,58 +421,47 @@ fn shared_hud(
                 *lead,
                 reviewed.fps,
             ) {
-                Some(error) => format!("+{lead:.1}s {:.1}cm", error * 100.0),
-                None => format!("+{lead:.1}s --"),
+                Some(error) => format!("{:.0}", error * 100.0),
+                None => "--".to_owned(),
             }
         })
         .collect();
-    lines.push(format!("live      {}", errors.join("  ")));
-
-    // 본론 — 실기가 하드웨어에 넘겼을 그 예측이 실제와 얼마나 어긋났나.
-    lines.extend(commit_lines(reviewed, index));
-
-    if let (Some(sp), Some(sv)) = (state.position_sigma, state.velocity_sigma) {
-        lines.push(format!(
-            "sigma  p {:.1}cm  v {:.0}cm/s",
-            sp * 100.0,
-            sv * 100.0
-        ));
-    }
-    return lines;
+    return format!(
+        "f{index:<4} t={now:6.3} | {} {} | {three_d} | {ekf} {sigma} | {gate} si{impact_sigma} | live {}",
+        px(0),
+        px(1),
+        live.join("/")
+    );
 }
 
-/// 커밋 순간과 그 결과. 아직 커밋 전이면 그렇다고 말한다 — 빈 줄로 두면 "커밋이 없었다"와
-/// "아직 안 왔다"가 구분이 안 된다.
-fn commit_lines(reviewed: &Reviewed, index: usize) -> Vec<String> {
-    let Some(commit) = &reviewed.commit else {
-        return vec!["COMMIT  never (게이트를 끝내 못 넘음)".to_owned()];
-    };
-    if index < commit.frame {
-        return vec![format!("COMMIT  at frame {} (아직 전)", commit.frame)];
-    }
-
+/// 커밋 결과 — 이 툴의 결론이다. pass 1이 끝나자마자 한 번 찍는다.
+///
+/// 실기가 하드웨어에 넘겼을 그 예측이 실제와 얼마나 어긋났는가. `MISS`가 그 숫자다.
+fn print_commit_summary(reviewed: &Reviewed) {
     let plane = table::DEFAULT_HIT_PLANE_Y;
-    let mut lines = vec![
-        format!(
-            "COMMIT  frame {} t={:.3}s  tti {:.2}s  sigma {:.0}cm",
-            commit.frame,
-            commit.t,
-            commit.time_to_impact,
-            commit.impact_sigma * 100.0
-        ),
-        // 실기가 "여기를 치겠다"고 넘겼을 대표 후보.
-        format!(
-            "  target x{:+.2} y{:+.2} z{:+.2}",
-            commit.impact.x, commit.impact.y, commit.impact.z
-        ),
-    ];
-
-    // 얼린 예측의 평면 통과점 vs 실제 통과점 — 이 한 줄이 "예측이 맞았나"의 답이다.
+    let Some(commit) = &reviewed.commit else {
+        println!("COMMIT  never — 게이트를 끝내 못 넘었다");
+        if let Some(last) = reviewed.frames.iter().rev().find_map(|f| f.decision) {
+            println!("  마지막 판정: {last:?}");
+        }
+        return;
+    };
+    println!(
+        "COMMIT  frame {} t={:.3}s  tti {:.2}s  sigma {:.0}cm",
+        commit.frame,
+        commit.t,
+        commit.time_to_impact,
+        commit.impact_sigma * 100.0
+    );
+    println!(
+        "  target  x{:+.2} y{:+.2} z{:+.2}",
+        commit.impact.x, commit.impact.y, commit.impact.z
+    );
     let guess = track::crossing_y(&commit.predicted, plane);
     let truth = reviewed.observed_crossing_y(plane);
-    lines.push(match (guess, truth) {
-        (Some(g), Some(t)) => format!(
-            "  at y={plane:.2}  pred x{:+.2} z{:+.2} |v|{:.1}  real x{:+.2} z{:+.2}  MISS {:.1}cm",
+    match (guess, truth) {
+        (Some(g), Some(t)) => println!(
+            "  at y={plane:.2}  pred x{:+.2} z{:+.2} |v|{:.1}   real x{:+.2} z{:+.2}   MISS {:.1}cm",
             g.position.x,
             g.position.z,
             g.velocity.norm(),
@@ -457,17 +469,16 @@ fn commit_lines(reviewed: &Reviewed, index: usize) -> Vec<String> {
             t.z,
             (g.position - t).norm() * 100.0
         ),
-        (Some(g), None) => format!(
-            "  at y={plane:.2}  pred x{:+.2} z{:+.2} |v|{:.1}  real -- (실제가 평면을 안 지남)",
+        (Some(g), None) => println!(
+            "  at y={plane:.2}  pred x{:+.2} z{:+.2} |v|{:.1}   real -- (실제가 평면을 안 지남)",
             g.position.x,
             g.position.z,
             g.velocity.norm()
         ),
-        (None, Some(t)) => format!(
-            "  at y={plane:.2}  pred -- (예측이 평면을 안 지남)  real x{:+.2} z{:+.2}",
+        (None, Some(t)) => println!(
+            "  at y={plane:.2}  pred -- (예측이 평면을 안 지남)   real x{:+.2} z{:+.2}",
             t.x, t.z
         ),
-        (None, None) => format!("  at y={plane:.2}  둘 다 평면을 안 지남"),
-    });
-    return lines;
+        (None, None) => println!("  at y={plane:.2}  둘 다 평면을 안 지난다"),
+    }
 }
