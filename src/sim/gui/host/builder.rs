@@ -5,6 +5,7 @@ use super::super::scene::TableSceneOptions;
 use crate::robot::urdf::UrdfModel;
 use crate::sim::gui::ball;
 use crate::sim::gui::shooter;
+use crate::sim::gui::trail;
 use crate::sim::physics::world::SimWorld;
 use crate::sim::session::controls::SimRuntimeControls;
 
@@ -20,6 +21,7 @@ pub struct SimSceneBuilder {
     ghost: Option<ball::Handle>,
     robot: Option<robot::Handle>,
     shooter: Option<shooter::Handle>,
+    trails: Vec<trail::Handle>,
     world: Option<Arc<Mutex<SimWorld>>>,
     controls: Option<Arc<Mutex<SimRuntimeControls>>>,
     urdf: Option<Arc<UrdfModel>>,
@@ -54,6 +56,12 @@ impl SimSceneBuilder {
     /// 본 공과 겹쳐 볼 비교용 반투명 공 (`ghost_ball` 플래그와 달리 별도 레이어).
     pub fn with_ghost_ball(mut self) -> Self {
         self.ghost = Some(ball::Handle::new());
+        return self;
+    }
+
+    /// 씬에 그릴 궤적 하나. 여러 번 불러 겹칠 수 있다 (실제 vs 예측).
+    pub fn with_trail(mut self, handle: trail::Handle) -> Self {
+        self.trails.push(handle);
         return self;
     }
 
@@ -136,6 +144,7 @@ impl SimSceneBuilder {
                 ghost: self.ghost,
                 robot: self.robot,
                 shooter: self.shooter,
+                trails: self.trails,
             },
             world: self.world,
             controls: self.controls,

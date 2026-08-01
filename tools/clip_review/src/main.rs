@@ -1,12 +1,16 @@
-//! 클립 리뷰어 — 카메라 2창 + 월드 2면도를 0.1x로 돌려 **예측 궤적이 실제 궤적으로
-//! 수렴하는지**를 눈으로 본다.
+//! 클립 리뷰어 — 카메라 2창(OpenCV) + sim 창(kiss3d)을 0.1x로 돌려 **예측 궤적이
+//! 실제 궤적으로 수렴하는지**를 눈으로 본다.
 //!
 //! 흰 선 = 검출·삼각측량이 말하는 실제 궤적. 하늘색 선 = 그 시점 EKF의 예측 궤적.
-//! 둘이 붙으면 예측이 맞은 것이고, 벌어지면 그 프레임이 어디서 틀렸는지 카메라 화면에서
-//! 바로 보인다 (검출이 튀었나, 3D가 밀렸나, 물리가 안 맞나).
+//! 세 창 모두 같은 색 규칙을 쓴다. 둘이 벌어졌을 때 **왜** 벌어졌는지는 카메라 창에서
+//! 갈린다 — 초록 동그라미(검출 픽셀)가 공 위에 있으면 물리·필터가 틀린 것이고,
+//! 바닥에 떨어진 공이나 팔에 가 있으면 검출이 틀린 것이다.
 //!
 //! 검출은 시작할 때 **한 번만** 돈다. 되감아도 값이 다시 계산되지 않으므로 앞뒤로 오가며
 //! 같은 프레임을 몇 번이든 다시 봐도 숫자가 흔들리지 않는다.
+//!
+//! 클립 대부분은 공이 아직 발사되지 않은 프리롤이다. **첫 삼각측량 전까지는 1배속**으로
+//! 지나가고, 거기서부터 `--speed`가 걸린다.
 //!
 //! ```bash
 //! cargo run --release -p clip-review -- --clip fly_04
@@ -15,9 +19,13 @@
 //!
 //! 키: `Space` 일시정지 · `←`/`→` 또는 `,`/`.` 한 프레임 · `[`/`]` 10프레임 · `0` 처음으로 · `q` 종료
 
+mod msg;
 mod overlay;
-mod plot;
+mod sim_child;
 mod track;
+
+use std::io::Write;
+use std::process::{Child, ChildStdin, Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -29,6 +37,7 @@ use pingpong_bot::camera::{
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
 
+use msg::SceneMsg;
 use track::{FrameState, Reviewed};
 
 /// 수렴 오차를 보여줄 리드타임 [s].
@@ -36,15 +45,14 @@ const LEADS_SECS: [f64; 3] = [0.1, 0.2, 0.3];
 
 const WINDOW_CAM0: &str = "clip-review cam0";
 const WINDOW_CAM1: &str = "clip-review cam1";
-const WINDOW_WORLD: &str = "clip-review world";
 
 #[derive(Parser, Debug)]
-#[command(about = "클립 리뷰 — 실제 궤적 vs 예측 궤적 (카메라 2창 + 월드 2면도)")]
+#[command(about = "클립 리뷰 — 실제 궤적 vs 예측 궤적 (카메라 2창 + sim 창)")]
 struct Args {
     #[command(flatten)]
     offline: StereoOfflineArgs,
 
-    /// 재생 배속. 0.1 = 10배 느리게.
+    /// 재생 배속. 0.1 = 10배 느리게. 첫 공이 잡히기 전까지는 무시된다 (1배속).
     #[arg(long, default_value_t = 0.1)]
     speed: f64,
 
@@ -52,13 +60,13 @@ struct Args {
     #[arg(long, default_value_t = 0.5)]
     scale: f64,
 
-    /// 월드 2면도 가로 폭 [px].
-    #[arg(long, default_value_t = 900)]
-    plot_width: i32,
-
     /// 시작 프레임.
     #[arg(long, default_value_t = 0)]
     start: usize,
+
+    /// sim 창 자식 프로세스 (내부용).
+    #[arg(long, hide = true)]
+    sim_child: bool,
 }
 
 /// 표시용 프레임 공급 — 순차 재생이면 그냥 읽고, 되감으면 seek한다.
@@ -84,6 +92,13 @@ impl Player {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.sim_child {
+        return sim_child::run();
+    }
+    return run(&args);
+}
+
+fn run(args: &Args) -> Result<()> {
     let Some(clip) = args.offline.resolve().map_err(anyhow::Error::msg)? else {
         bail!("--clip 이 필요하다 (예: --clip fly_04)");
     };
@@ -108,11 +123,14 @@ fn main() -> Result<()> {
         })
         .collect::<Result<_>>()?;
 
+    // 프리롤은 공이 아직 없다 — 여기까지는 1배속으로 지나간다.
+    let first_ball = reviewed.observed.first().map(|o| o.frame);
     println!(
-        "frames={} observed={} ({:.0}% 삼각측량) fps={fps:.1}",
+        "frames={} observed={} ({:.0}% 삼각측량) fps={fps:.1} 첫 공={}",
         reviewed.len(),
         reviewed.observed.len(),
-        100.0 * reviewed.observed.len() as f64 / reviewed.len() as f64
+        100.0 * reviewed.observed.len() as f64 / reviewed.len() as f64,
+        first_ball.map_or("없음".to_owned(), |f| f.to_string())
     );
     println!("keys: Space 일시정지 | ←/→ or ,/. 한 프레임 | [/] 10프레임 | 0 처음 | q 종료");
 
@@ -121,10 +139,14 @@ fn main() -> Result<()> {
         right: OpenCvCapture::from_path(camera::Id(1), &clip.right).map_err(anyhow::Error::msg)?,
         next: 0,
     };
-    let world = plot::WorldPlot::new(args.plot_width);
+    // sim 창이 안 떠도 본 재생은 계속한다 — 관전용이다.
+    let mut sim = spawn_sim_child()
+        .map_err(|error| eprintln!("sim 창 띄우기 실패 — 카메라 창만으로 진행: {error}"))
+        .ok();
 
     let speed = args.speed.max(1e-3);
-    let play_wait_ms = ((1000.0 / fps / speed).round() as i32).max(1);
+    let slow_wait_ms = ((1000.0 / fps / speed).round() as i32).max(1);
+    let live_wait_ms = ((1000.0 / fps).round() as i32).max(1);
     let mut index = args.start.min(reviewed.len() - 1);
     let mut paused = false;
 
@@ -135,8 +157,12 @@ fn main() -> Result<()> {
         let state = &reviewed.frames[index];
         let observed = reviewed.observed_upto(index);
         let predicted: Vec<_> = state.predicted.iter().map(|s| s.position).collect();
+        let fast = first_ball.is_some_and(|first| index < first);
 
+        let shared = shared_hud(&reviewed, state, index, speed, paused, fast);
         for (slot, frame) in [(0usize, &left), (1usize, &right)] {
+            let mut hud = camera_hud(state, slot);
+            hud.extend(shared.iter().cloned());
             let panel = overlay::draw(
                 &frame.image,
                 &params[slot],
@@ -145,7 +171,7 @@ fn main() -> Result<()> {
                 state.pixels[slot],
                 state.ekf_position,
                 &format!("cam{slot}"),
-                &camera_hud(&reviewed, state, index, slot),
+                &hud,
             )?;
             let shown = Preview::fit_bgr_downscale(
                 &panel,
@@ -158,23 +184,29 @@ fn main() -> Result<()> {
             )?;
         }
 
-        let world_panel = world.render(
-            &observed,
-            &predicted,
-            state.ekf_position,
-            state.observed.map(|o| o.point),
-            &world_hud(&reviewed, state, index, speed, paused),
-        )?;
-        highgui::imshow(WINDOW_WORLD, &world_panel)?;
+        if let Some((_, stdin)) = &mut sim {
+            let message = SceneMsg {
+                ekf: state.ekf_position.map(Into::into),
+                raw: state.observed.map(|o| o.point.into()),
+                observed: observed.iter().copied().map(Into::into).collect(),
+                predicted: predicted.iter().copied().map(Into::into).collect(),
+            };
+            if writeln!(stdin, "{}", message.to_line()).is_err() || stdin.flush().is_err() {
+                // 사용자가 sim 창을 닫았다 — 조용히 그만 보낸다.
+                sim = None;
+            }
+        }
 
-        // 일시정지면 0 — 키가 올 때까지 블록한다.
-        let wait = if paused { 0 } else { play_wait_ms };
+        // 일시정지면 0 — 키가 올 때까지 블록한다. 프리롤은 1배속으로 지나간다.
+        let wait = match (paused, fast) {
+            (true, _) => 0,
+            (false, true) => live_wait_ms,
+            (false, false) => slow_wait_ms,
+        };
         let key = highgui::wait_key_ex(wait)?;
         match Step::of(key, &mut paused) {
             Step::Quit => break,
-            Step::Delta(delta) => {
-                index = shift(index, delta, reviewed.len());
-            }
+            Step::Delta(delta) => index = shift(index, delta, reviewed.len()),
             Step::Home => index = 0,
             Step::Stay => {}
             Step::Advance => {
@@ -187,10 +219,27 @@ fn main() -> Result<()> {
         }
     }
 
-    for window in [WINDOW_CAM0, WINDOW_CAM1, WINDOW_WORLD] {
+    for window in [WINDOW_CAM0, WINDOW_CAM1] {
         Preview::destroy_window(window);
     }
+    if let Some((mut child, stdin)) = sim {
+        drop(stdin);
+        let _ = child.wait();
+    }
     return Ok(());
+}
+
+fn spawn_sim_child() -> Result<(Child, ChildStdin)> {
+    let exe = std::env::current_exe().context("current_exe")?;
+    let mut child = Command::new(exe)
+        .arg("--sim-child")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .context("spawn sim child")?;
+    let stdin = child.stdin.take().context("sim child stdin")?;
+    return Ok((child, stdin));
 }
 
 /// 키 하나가 재생 위치에 하는 일.
@@ -244,16 +293,12 @@ fn shift(index: usize, delta: i64, len: usize) -> usize {
     return next.clamp(0, len as i64 - 1) as usize;
 }
 
-fn camera_hud(reviewed: &Reviewed, state: &FrameState, index: usize, slot: usize) -> Vec<String> {
-    let mut lines = vec![format!(
-        "frame {index}/{}  t={:.3}s",
-        reviewed.len() - 1,
-        reviewed.time_of(index)
-    )];
-    lines.push(match state.pixels[slot] {
+/// 그 카메라에서만 나오는 줄.
+fn camera_hud(state: &FrameState, slot: usize) -> Vec<String> {
+    let mut lines = vec![match state.pixels[slot] {
         Some(p) => format!("detect ({:.1}, {:.1})", p.x, p.y),
         None => "detect miss".to_owned(),
-    });
+    }];
     lines.push(match state.observed {
         Some(o) => format!(
             "3d  x{:+.2} y{:+.2} z{:+.2}  reproj {:.1}px",
@@ -261,37 +306,46 @@ fn camera_hud(reviewed: &Reviewed, state: &FrameState, index: usize, slot: usize
         ),
         None => "3d  none (한쪽만 잡았거나 재투영 게이트)".to_owned(),
     });
-    if let Some(gate) = state.gate {
-        lines.push(match state.gate_d2 {
-            Some(d2) => format!("gate {gate:?}  d2={d2:.1}"),
-            None => format!("gate {gate:?}"),
-        });
-    }
     return lines;
 }
 
-fn world_hud(
+/// 두 카메라 창에 똑같이 붙는 줄 — 어느 쪽을 보고 있든 같은 숫자가 보이게.
+fn shared_hud(
     reviewed: &Reviewed,
     state: &FrameState,
     index: usize,
     speed: f64,
     paused: bool,
+    fast: bool,
 ) -> Vec<String> {
     let now = reviewed.time_of(index);
+    let rate = if fast {
+        "1.00x (preroll)".to_owned()
+    } else {
+        format!("{speed:.2}x")
+    };
     let mut lines = vec![format!(
-        "frame {index}/{}  t={now:.3}s  {speed:.2}x{}",
+        "frame {index}/{}  t={now:.3}s  {rate}{}",
         reviewed.len() - 1,
         if paused { "  [PAUSED]" } else { "" }
     )];
 
     lines.push(if state.tracking {
         match (state.ekf_position, state.ekf_speed) {
-            (Some(p), Some(v)) => format!("ekf  x{:+.2} y{:+.2} z{:+.2}  |v|{v:.1}", p.x, p.y, p.z),
+            (Some(p), Some(v)) => {
+                format!("ekf  x{:+.2} y{:+.2} z{:+.2}  |v|{v:.1}", p.x, p.y, p.z)
+            }
             _ => "ekf  tracking".to_owned(),
         }
     } else {
         "ekf  not tracking".to_owned()
     });
+    if let Some(gate) = state.gate {
+        lines.push(match state.gate_d2 {
+            Some(d2) => format!("gate {gate:?}  d2={d2:.1}"),
+            None => format!("gate {gate:?}"),
+        });
+    }
 
     // 본론 — 그때 한 예측이 실제와 얼마나 벌어졌나.
     let errors: Vec<String> = LEADS_SECS
@@ -322,7 +376,6 @@ fn world_hud(
             crossing.t - now
         ));
     }
-
     if let (Some(sp), Some(sv)) = (state.position_sigma, state.velocity_sigma) {
         lines.push(format!(
             "sigma  p {:.1}cm  v {:.0}cm/s",
@@ -330,6 +383,5 @@ fn world_hud(
             sv * 100.0
         ));
     }
-    lines.push("white=observed  cyan=predicted  green=ekf  yellow=this frame".to_owned());
     return lines;
 }

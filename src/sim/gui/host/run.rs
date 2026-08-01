@@ -15,6 +15,10 @@ use crate::sim::gui::ball;
 use crate::sim::gui::robot;
 use crate::sim::gui::shooter;
 
+fn vec3(p: crate::Point3) -> Vec3 {
+    return Vec3::new(p.x as f32, p.y as f32, p.z as f32);
+}
+
 pub(crate) fn run_scene_host(options: SceneHostOptions) -> Result<(), String> {
     if options.enable_panel {
         let world = options
@@ -130,6 +134,14 @@ async fn run_lightweight(options: SceneHostOptions) -> Result<(), String> {
         {
             if let Some(guard) = lock_world_for_frame(world) {
                 visual.sync_from_world(&guard, options.urdf.as_deref());
+            }
+        }
+        // 선은 노드가 아니라 프레임 단위 draw call이다 — 매 프레임 다시 그려야 남는다.
+        for trail in &options.layers.trails {
+            let points = trail.points();
+            let (color, width) = (trail.color(), trail.width());
+            for pair in points.windows(2) {
+                window.draw_line(vec3(pair[0]), vec3(pair[1]), color, width, false);
             }
         }
         if let Some(hook) = &options.ui_hook {
