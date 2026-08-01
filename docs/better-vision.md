@@ -132,6 +132,60 @@ COMMIT  frame 394 t=5.351s  tti 0.42s  sigma 12cm
 
 ## 4. 새 틀
 
+### 4.0 한눈에
+
+**층이 셋, 계약이 하나다.** 나머지는 그 안에서 자기 일만 한다.
+
+```text
+              ┌──────────────────────────────────────────────┐
+   Frame ────▶│ 검출   픽셀을 줄여 후보를 낸다                │────▶ Vec<Candidate>
+              └──────────────────────────────────────────────┘
+              ┌──────────────────────────────────────────────┐
+              │ 추정   후보를 골라 상태를 갱신한다            │────▶ State
+              └──────────────────────────────────────────────┘
+              ┌──────────────────────────────────────────────┐
+              │ 계약   상태를 궤적으로 묶어 내보낸다          │────▶ Trajectory
+              └──────────────────────────────────────────────┘
+```
+
+**소유 관계** — 위가 아래를 든다. 곁가지가 없다.
+
+```text
+Vision                          단일 진입점. feed(frame) -> Option<Trajectory>
+├── cameras: Vec<Camera>        캠 수는 캘리브가 정한다
+│   └── Camera                  id + params + detector. 자기 캘리브를 자기가 든다
+│       └── Detector            layers를 순서대로 돌리고 후보를 뽑는다
+│           ├── layers: Vec<Box<dyn Layer>>
+│           │   ├── Background  정지한 것을 끈다
+│           │   └── ColorGate   공 색이 아닌 것을 끈다
+│           └── extract: ShapeGate   마스크 → Vec<Candidate>  (종단, Layer 아님)
+└── tracker: Tracker            정책 — 언제 시드/선언/폐기
+    └── filter: Filter          수학 — 픽셀 관측으로 [p,v] 갱신
+```
+
+**타입 전부** — 이게 다다.
+
+| 타입 | 층 | 한 줄 |
+|---|---|---|
+| `State` | 계약 | `[x y z vx vy vz t]` 한 점 |
+| `Trajectory` | 계약 | `measured` + `predicted`. **밖으로 나가는 유일한 타입** |
+| `Vision` | 조립 | 진입점. 프레임 넣으면 계약이 나온다 |
+| `Camera` | 조립 | id + params + detector |
+| `Candidate` | 검출 | 한 프레임의 공 후보 (픽셀·반지름·점수) |
+| `Layer` | 검출 | **트레잇.** 마스크를 줄인다. 순서 교체·추가가 자유 |
+| `Background` | 검출 | `Layer` — 정지한 것 |
+| `ColorGate` | 검출 | `Layer` — 색 판별면 |
+| `ShapeGate` | 검출 | 종단. 마스크 → 후보 |
+| `Detector` | 검출 | 위 넷을 조립 |
+| `Filter` | 추정 | 픽셀 공간 EKF. 카메라도 페이즈도 모른다 |
+| `Phase` | 추정 | `Idle` → `Tracking` → `Declared` |
+| `Gate` | 추정 | 이번 관측을 받았나 (`Accepted`/`Rejected`/`Seeded`) |
+| `Tracker` | 추정 | `Filter` + `Phase` + 폐기 정책 |
+| `Trace` | 툴 | **본선은 안 만든다.** 단계별 마스크 + 그 프레임 판정 |
+
+읽는 순서: **`Trajectory`(§1) → `Vision`(§4.1) → `Layer`(§4.2) → `Tracker`(§4.3).**
+나머지는 그 넷에 딸린 것이라 필요할 때 보면 된다.
+
 ```
 src/vision/
   mod.rs           Vision · Camera — 단일 진입점
@@ -171,7 +225,7 @@ pub struct Vision {
 
 impl Vision {
     /// 캘리브레이션을 카메라들에게 나눠 주고 끝 — `Vision`은 그걸 들고 있지 않는다.
-    pub fn load(calibration: Calibration, color: &ColorSamples) -> Result<Self>;
+    pub fn load(calibration: Calibration, color: &Path) -> Result<Self>;
 
     /// 프레임 하나. 선언된 트랙이 있으면 그 순간의 계약을 돌려준다.
     ///
@@ -274,8 +328,8 @@ pub struct ColorGate { w: [f64; 3], b: f64 }
 
 impl ColorGate {
     /// `tune-colormask`가 만든 포함/제외 샘플로 피팅.
-    pub fn fit(positive: &[Bgr], negative: &[Bgr]) -> Self;
-    pub fn keep(&self, bgr: Bgr) -> bool;
+    pub fn fit(positive: &[[u8; 3]], negative: &[[u8; 3]]) -> Self;
+    pub fn keep(&self, bgr: [u8; 3]) -> bool;
 }
 ```
 
@@ -288,7 +342,7 @@ impl ColorGate {
 ///
 /// 지금은 `area · circularity`라 가장 큰 블롭이 이긴다 — 그래서 팔이 공을 이겼다.
 /// 기대 반지름은 깊이에 따라 변하므로 트랙이 있으면 그 깊이를 쓰고, 없으면 밴드를 쓴다.
-pub struct ShapeGate { band: RadiusBand }
+pub struct ShapeGate { min_radius_px: f64, max_radius_px: f64 }
 
 impl ShapeGate {
     pub fn candidates(&self, mask: &Mask, expect: Option<f64>) -> Vec<Candidate>;
@@ -343,7 +397,7 @@ pub fn associate(f: &Filter, cam: &camera::Params, cs: &[Candidate], t: f64) -> 
 /// 한 대가 가려도 나머지로 계속 선다.
 ///
 /// **나쁜 시드보다 늦은 시드가 낫다.** 실패하면 조용히 다음 프레임에 재시도한다.
-pub fn seed(views: &[(&camera::Params, &[Candidate])]) -> Option<Seed>;
+pub fn seed(views: &[(&camera::Params, &[Candidate])]) -> Option<State>;
 ```
 
 배경에 주황이 있어도 **다른 캠에 에피폴라 정합 상대가 없고, 물리적으로 말 되는 궤적 위에도
