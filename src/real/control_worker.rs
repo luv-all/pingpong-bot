@@ -3,7 +3,7 @@
 //! 시작할 때만 기존 센터 궤적으로 레일과 4축 Dynamixel을 기본 자세에 둔다.
 //! 이후 공 하나당 1차·2차 예측을 각각 한 번만 소비한다. 각 예측 위치의 x로
 //! 레일을 옮기고, 2차에서만 라켓을 잡은 마지막 관절에 작은 시험 동작을 준다.
-//! IK·스윙 계획·팔로스루·자동 복귀는 실행하지 않는다.
+//! IK·스윙 계획·팔로스루는 실행하지 않고, 2차 동작 후에만 중앙으로 복귀한다.
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -18,7 +18,7 @@ use pingpong_bot::robot::motion;
 use tracing::{info, info_span, warn};
 
 use super::fmt::f2;
-use super::{CommitRequest, ControlStatus, PoseMsg, ShotEvent, Shutdown, SimUpdate};
+use super::{CommitRequest, ControlStatus, PoseMsg, ShotEvent, Shutdown, SimUpdate, SwingMsg};
 
 const MAX_REQUEST_AGE_SECS: f64 = 0.050;
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
@@ -31,6 +31,8 @@ const NEW_BALL_REQUEST_GAP: Duration = Duration::from_millis(500);
 const NEW_BALL_Y_RISE_M: f64 = 0.25;
 /// 예측 충돌 직후 라켓 시험 동작이 보인 다음 중앙 복귀를 시작하는 여유.
 const RETURN_AFTER_IMPACT_MARGIN: Duration = Duration::from_millis(150);
+/// 관전 sim 명령은 공 표시 큐가 차 있어도 잠시 기다려 유실을 피한다.
+const SIM_CONTROL_SEND_TIMEOUT: Duration = Duration::from_millis(20);
 
 /// 실제 타격용이 아닌, 응답 확인용 손목 이동량.
 const TEST_STROKE_RAD: f64 = 15.0_f64.to_radians();
@@ -142,11 +144,16 @@ pub fn spawn(
         let selector =
             HitTargetSelector::new(window.y_min, window.y_max).expect("기본 목표 선택 구간");
 
+        let mut sim_pose = pose.clone();
         if let Some(sim_tx) = &sim_tx {
-            let _ = sim_tx.try_send(SimUpdate {
-                pose: Some(PoseMsg::from(&pose)),
-                ..SimUpdate::default()
-            });
+            send_sim_control(
+                sim_tx,
+                SimUpdate {
+                    pose: Some(PoseMsg::from(&pose)),
+                    ..SimUpdate::default()
+                },
+                "초기 포즈",
+            );
         }
         let _ = event_tx.send(ShotEvent::Armed { shot_seq: 1, pose });
         let _ = status_tx.send(ControlStatus::Ready { shot_seq: 1 });
@@ -196,6 +203,38 @@ pub fn spawn(
                 });
                 break;
             }
+
+            // 실기와 동일한 레일+라켓 목표와 소요 시간을 관전 시뮬에도 보낸다.
+            // 나머지 세 Dynamixel 관절은 현재 기본 자세를 그대로 유지한다.
+            let mut sim_target_joints = sim_pose.joints.clone();
+            if let Some(racket) = sim_target_joints.values.last_mut() {
+                *racket = wrist;
+            }
+            let zero_velocity = vec![0.0; sim_target_joints.values.len()];
+            let sim_motion = motion::Trajectory::new(
+                sim_pose.joints.clone(),
+                sim_target_joints.clone(),
+                zero_velocity.clone(),
+                zero_velocity,
+                duration,
+                motion::Rail {
+                    start: sim_pose.rail_x,
+                    end: rail_x,
+                    start_velocity: 0.0,
+                    end_velocity: 0.0,
+                },
+            );
+            if let Some(sim_tx) = &sim_tx {
+                send_sim_control(
+                    sim_tx,
+                    SimUpdate {
+                        swing: Some(SwingMsg::from_trajectory(&sim_motion)),
+                        ..SimUpdate::default()
+                    },
+                    "레일·라켓 명령",
+                );
+            }
+            sim_pose = pingpong_bot::robot::Pose::new(rail_x, sim_target_joints);
             latch.mark_sent(stage);
             last_command = Some(Instant::now());
 
@@ -225,6 +264,23 @@ pub fn spawn(
                     });
                     break;
                 }
+                sim_pose = pingpong_bot::robot::Pose::new(
+                    arm.rail
+                        .as_ref()
+                        .map(|rail| rail.default_x())
+                        .unwrap_or(sim_pose.rail_x),
+                    arm.default_joints.clone(),
+                );
+                if let Some(sim_tx) = &sim_tx {
+                    send_sim_control(
+                        sim_tx,
+                        SimUpdate {
+                            pose: Some(PoseMsg::from(&sim_pose)),
+                            ..SimUpdate::default()
+                        },
+                        "중앙 복귀 포즈",
+                    );
+                }
                 latch = TwoStageLatch::default();
                 last_command = None;
                 let _ = status_tx.send(ControlStatus::Ready { shot_seq: 1 });
@@ -234,6 +290,14 @@ pub fn spawn(
 
         let _ = event_tx.send(ShotEvent::Done);
     });
+}
+
+/// 실물 제어 명령이 빈번한 공 표시 메시지에 밀려 조용히 사라지지 않게 한다.
+/// sim이 닫혔거나 느린 경우에도 실물 제어는 멈추지 않도록 대기 시간을 짧게 제한한다.
+fn send_sim_control(sim_tx: &Sender<SimUpdate>, update: SimUpdate, kind: &'static str) {
+    if let Err(error) = sim_tx.send_timeout(update, SIM_CONTROL_SEND_TIMEOUT) {
+        warn!(%error, kind, "실물 제어의 sim 반영 실패");
+    }
 }
 
 /// 1차에는 기본각을 유지하고, 2차에만 손목을 15° 전진시킨다.

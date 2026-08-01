@@ -112,6 +112,10 @@ mod tests {
         DynamixelConfig::default().validate().unwrap();
         RailConfig::default().validate().unwrap();
         let rail_config = RailConfig::default();
+        assert!(
+            !rail_config.reverse,
+            "실물과 앱의 절대좌표를 추가 min↔max 반전 없이 같게 써야 한다"
+        );
         let robot = robot().unwrap();
         let model_rail = robot.arm.rail.expect("기본 로봇 리니어 레일");
         assert_eq!(model_rail.x_min, rail_config.x_min_m);

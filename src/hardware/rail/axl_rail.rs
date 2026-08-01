@@ -87,9 +87,25 @@ impl AxlRail {
         }
 
         let vel = (distance_m / duration_secs).clamp(self.config.min_vel, self.config.max_vel);
+        let board_current_m = normalize_m(self.config.domain_to_board_abs(current_m));
+        let board_target_m = normalize_m(self.config.domain_to_board_abs(domain_m));
+        let board_delta_m = board_target_m - board_current_m;
+        // 레일 +는 로봇 시점 오른쪽, 발사기에서 볼 때는 왼쪽이다.
+        let launcher_view_direction = if board_delta_m > 1e-6 {
+            "왼쪽"
+        } else if board_delta_m < -1e-6 {
+            "오른쪽"
+        } else {
+            "정지"
+        };
         info!(
             current_m,
             target_m = domain_m,
+            board_current_m,
+            board_target_m,
+            board_delta_m,
+            launcher_view_direction,
+            reverse = self.config.reverse,
             velocity_m_s = vel,
             duration_secs,
             "AXL 레일 이동 명령"
@@ -101,8 +117,7 @@ impl AxlRail {
             }
             #[cfg(all(windows, feature = "real"))]
             RailKind::Live(live) => {
-                let board_m = normalize_m(self.config.domain_to_board_abs(domain_m));
-                live.start_move_abs_m(&self.config, board_m, vel)?;
+                live.start_move_abs_m(&self.config, board_target_m, vel)?;
             }
         }
         return Ok(domain_m);
