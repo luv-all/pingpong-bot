@@ -114,7 +114,7 @@ COMMIT  frame 394 t=5.351s  tti 0.42s  sigma 12cm
 | `src/detector/` 전체 (2,448줄) | 🗑 삭제 | §4로 새로 |
 | `src/estimator/ekf.rs` (601) | 🗑 삭제 | 3D 관측 모델 자체가 틀렸다 |
 | `src/estimator/decision.rs` (272) | 🗑 삭제 | 커밋 판단이 기구학으로 넘어갔다 |
-| `src/estimator/triangulate.rs` + `tri/` (392) | ✂️ 축소 | 시드용 2-view DLT만 남긴다 |
+| `src/estimator/triangulate.rs` + `tri/` (392) | ✂️ 축소 | **N-view DLT 하나만** 남긴다 (시드용). 지금은 2-view일 때 OpenCV `triangulate_points`로 빠지는 특수 분기가 따로 있는데, 실패하면 어차피 같은 DLT로 폴백한다 — 분기를 지우면 코드가 줄고 3대 이상이 공짜로 된다. `Calibration::min_cameras_for_triangulation()`의 하드코딩 `2`도 같이 푼다 |
 | `src/estimator/prediction.rs`, `estimator.rs`, `hit_plane.rs`, `snapshot.rs` | 🗑 삭제 | 계약이 `BallTrack`으로 대체 |
 | `src/real/estimator_worker.rs` | 🗑 삭제 | `fuse`/skew/보간 전부 소멸 |
 | `src/pipeline/` | 🗑 삭제 | 동기 로직의 두 번째 사본 |
@@ -148,7 +148,8 @@ src/vision/
 ```rust
 /// 프레임을 먹이면 계약이 나온다. 이게 비전의 전부다.
 pub struct Vision {
-    detectors: Vec<Detector>,     // 카메라당 하나
+    /// 카메라당 하나. **개수는 캘리브레이션이 정한다** — 코드는 2대인지 3대인지 모른다.
+    detectors: Vec<Detector>,
     tracker: Tracker,
     calibration: Calibration,
 }
@@ -291,15 +292,35 @@ impl Filter {
 /// 게이트 밖이면 `None`, 그 프레임은 예측으로 넘어간다.
 pub fn associate(f: &Filter, cam: &camera::Params, cs: &[Candidate], t: f64) -> Option<Candidate>;
 
-/// 트랙이 없을 때 — 두 캠 후보의 **모든 쌍**에서 에피폴라 거리 → 삼각측량 →
-/// 물리 타당성(비행 부피 안, 속도 범위 안). 통과한 최선으로 시드.
+/// 트랙이 없을 때 — 카메라 조합에서 물리적으로 말 되는 것 하나를 찾는다.
+///
+/// **카메라 수에 의존하지 않는다.** 모든 쌍을 삼각측량해 물리 게이트(비행 부피 안,
+/// 속도 범위 안)를 태우고, 살아남은 것마다 *나머지 카메라 중 재투영이 맞는 개수*를 세서
+/// 가장 많이 동의하는 것을 고른다. 2대면 쌍이 전부고, 3대면 셋째 캠이 표를 하나 더 준다.
+/// 한 대가 가려도 나머지로 계속 선다.
 ///
 /// **나쁜 시드보다 늦은 시드가 낫다.** 실패하면 조용히 다음 프레임에 재시도한다.
-pub fn seed(cams: [&camera::Params; 2], a: &[Candidate], b: &[Candidate]) -> Option<Seed>;
+pub fn seed(views: &[(&camera::Params, &[Candidate])]) -> Option<Seed>;
 ```
 
 배경에 주황이 있어도 **다른 캠에 에피폴라 정합 상대가 없고, 물리적으로 말 되는 궤적 위에도
 없다.** 그래서 색 임계를 오히려 풀 수 있다 — 지금 막힌 그 거래(FP 5→382)가 여기서 열린다.
+
+#### 카메라 대수는 설정이지 구조가 아니다
+
+이 설계는 **N대에 무관하다.** 3대로 늘리는 게 재작성이 아니라 캘리브레이션 파일 한 줄이
+되도록 처음부터 그렇게 짠다.
+
+| | 카메라가 늘면 |
+|---|---|
+| `Vision::feed` | 프레임이 오는 대로 처리한다. 캠 수를 아예 모른다 |
+| `Filter::update_pixel` | **바뀔 게 없다.** 관측 하나 = 픽셀 하나. 3대면 갱신이 1.5배 |
+| `seed` | 조합이 늘고 표가 늘어 시드가 더 튼튼해진다 |
+| N-view DLT | 시선이 늘수록 조건수가 좋아진다 |
+
+지금 구조가 2대에 묶여 있던 건 **삼각측량-후-필터**였기 때문이다. 두 캠이 같은 순간에 같은
+것을 잡아야만 한 번 갱신됐고, 그래서 캠이 늘어도 "짝 맞추기"만 더 어려워졌다. 픽셀 공간에서는
+카메라가 서로를 기다리지 않으므로 **한 대 추가 = 측정 소스 하나 추가**, 그게 전부다.
 
 #### 생애주기 — 추적과 선언을 분리
 
@@ -392,7 +413,7 @@ tokei src/vision src/detector src/estimator
 | 4 | **`track/` 새로** | 픽셀 EKF + 연관 + 생애주기 | `clip-review` `MISS` 감소, 측정 수 증가 |
 | 5 | **레이턴시** | 셔터→계약 실측, `origin` 오프셋 보정 | 구간별 예산표 |
 | 6 | **슈터 캘리브 + 스핀** | 눈금 → 실제 `v0`·`ω`. **ω를 아는 상태로 예측이 맞는지 먼저** 본 뒤 상태 확장 | 클립마다 진짜 GT |
-| 7 | **카메라 재배치** | 2대 유지 기본. 숫자가 요구하면 3대 | — |
+| 7 | **카메라 재배치·증설** | 2대 유지가 기본. §4.3대로 짜 두면 3대는 캘리브 파일 변경이지 재작성이 아니다 | 격자점 조건수 지도로 배치 비교 |
 
 **후순위:** 반발계수·마찰계수 위치별 정밀 계산 — 스핀보다 명백히 2차다.
 
@@ -414,7 +435,7 @@ tokei src/vision src/detector src/estimator
 
 - 기구학·IK·로봇 제어 — 다른 담당
 - 신경망 검출기 — GPU 없음
-- 하드웨어 genlock — §4.3이 소프트웨어로 무력화한다
+- 하드웨어 genlock — §4.3이 소프트웨어로 무력화한다 (카메라가 서로를 안 기다린다)
 - 물리 커널(`ballistics`/`bounce`/`kinematics`) 변경 — sim과 공유 SSOT
 - ChArUco 완전 캘리브레이션 — 현재 인트린식은 데이터시트 FOV 근사(`fx=fy=913.39`,
   `cx/cy` 중앙 고정, `dist=[]`)이고 cam0 rmse가 4.15 px로 cam1(1.35)의 3배다.
