@@ -45,7 +45,10 @@ impl RealHardware {
     ) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::open(config)?;
-        bus.configure_position_mode_max_effort()?;
+        // 실기 운전 때마다 Operating Mode/PWM/Current Limit EEPROM을 다시 읽고
+        // 검사하지 않는다. 단순 2단계 제어에는 필요 없고, 일부 MX-28(ID 4)의
+        // EEPROM 응답 체크섬 오류가 토크 락 이전에 전체 초기화를 막았다.
+        // 벤치 기본 설정은 유지하고 RAM Goal/토크만 초기화한다.
         bus.lock_current_position()?;
         // 실포트: is_dry_run = false → AXL 실개방
         return Self::from_bus(bus, stream_hz, rail, false, arm);
