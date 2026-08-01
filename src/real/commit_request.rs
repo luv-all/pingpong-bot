@@ -11,7 +11,7 @@ use pingpong_bot::robot::control::PredictionStage;
 /// 시각으로 사용한다. `BallTrajectory`에 타격점은 포함하지 않는다.
 pub struct CommitRequest {
     pub trajectory: BallTrajectory,
-    /// 초기 목표인지, 0.25 s 관측·10 cm 수렴을 통과한 정밀 목표인지.
+    /// 초기 목표인지, 0.15 s 관측·10 cm 수렴을 통과한 정밀 목표인지.
     pub stage: PredictionStage,
     /// 요청 시점 EKF 공 x [m].
     pub ball_x: f64,

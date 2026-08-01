@@ -310,7 +310,7 @@ pub fn spawn(
 
             // 물리 안전 검사는 제어 플래너에 남기고, 위치 이동을 시작시키던
             // 예측 불확실성 게이트만 제거한다. 속도가 추정되어 정상 추적이
-            // 성립하면 1차 목표를 보내고, 0.25 s·10 cm 수렴 후 정밀 목표로 올린다.
+            // 성립하면 1차 목표를 보내고, 0.15 s·10 cm 수렴 후 정밀 목표로 올린다.
             let position_ready = tracking && accepting;
             if position_ready {
                 if let Some(trajectory) = trajectory {

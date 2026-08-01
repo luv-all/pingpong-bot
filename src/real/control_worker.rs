@@ -36,8 +36,6 @@ const SIM_CONTROL_SEND_TIMEOUT: Duration = Duration::from_millis(20);
 const TEST_STROKE_RAD: f64 = 15.0_f64.to_radians();
 const MIN_RAIL_COMMAND_SECS: f64 = 0.05;
 const MAX_RAIL_COMMAND_SECS: f64 = 0.30;
-/// 제어 확인용 속도 상한. 빠르게 반응하되 5 m/s 최대치 급발진은 피한다.
-const TEST_RAIL_MAX_SPEED_M_S: f64 = 2.5;
 
 #[derive(Default)]
 struct TwoStageLatch {
@@ -163,10 +161,50 @@ pub fn spawn(
 
         let mut latch = TwoStageLatch::default();
         let mut last_command: Option<Instant> = None;
+        let mut recovery_deadline: Option<Instant> = None;
         let mut command_seq: u64 = 0;
 
         while !shutdown.is_down() {
-            let request = match rx.recv_timeout(RECV_TIMEOUT) {
+            if recovery_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                let return_reason = if latch.refined_sent {
+                    "2차 동작 완료"
+                } else {
+                    "2차 예측 없음·예상 도달 시각 경과"
+                };
+                let _ = status_tx.send(ControlStatus::Recovering { shot_seq: 1 });
+                if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
+                    warn!(%error, return_reason, "중앙 복귀 실패 — 제어 중단");
+                    let _ = event_tx.send(ShotEvent::Failed {
+                        shot_seq: 1,
+                        reason: format!("중앙 복귀 실패: {error}"),
+                    });
+                    break;
+                }
+                sim_pose = pingpong_bot::robot::Pose::new(rail_center, arm.default_joints.clone());
+                if let Some(sim_tx) = &sim_tx {
+                    send_sim_control(
+                        sim_tx,
+                        SimUpdate {
+                            pose: Some(PoseMsg::from(&sim_pose)),
+                            ..SimUpdate::default()
+                        },
+                        "중앙 복귀 포즈",
+                    );
+                }
+                latch = TwoStageLatch::default();
+                last_command = None;
+                recovery_deadline = None;
+                let _ = status_tx.send(ControlStatus::Ready { shot_seq: 1 });
+                info!(return_reason, "리니어 중앙 + 로봇 기본 자세 재정렬 완료");
+                continue;
+            }
+
+            let wait = recovery_deadline.map_or(RECV_TIMEOUT, |deadline| {
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(RECV_TIMEOUT)
+            });
+            let request = match rx.recv_timeout(wait) {
                 Ok(request) => request,
                 Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => continue,
@@ -198,10 +236,7 @@ pub fn spawn(
                 .map_or(target.position.x, |rail| rail.clamp_x(target.position.x));
             let previous_target_x = sim_pose.rail_x;
             let wrist = test_wrist_goal(ready_wrist, stage);
-            let base_duration = remaining.clamp(MIN_RAIL_COMMAND_SECS, MAX_RAIL_COMMAND_SECS);
-            let speed_limited_duration =
-                (rail_x - previous_target_x).abs() / TEST_RAIL_MAX_SPEED_M_S;
-            let duration = base_duration.max(speed_limited_duration);
+            let duration = remaining.clamp(MIN_RAIL_COMMAND_SECS, MAX_RAIL_COMMAND_SECS);
             if let Err(error) = hardware.command_rail_and_racket(rail_x, wrist, duration) {
                 let _ = event_tx.send(ShotEvent::Failed {
                     shot_seq: 1,
@@ -243,6 +278,11 @@ pub fn spawn(
             sim_pose = pingpong_bot::robot::Pose::new(rail_x, sim_target_joints);
             latch.mark_sent(stage);
             last_command = Some(Instant::now());
+            recovery_deadline = Some(
+                Instant::now()
+                    + Duration::from_secs_f64(remaining.max(0.0))
+                    + RETURN_AFTER_IMPACT_MARGIN,
+            );
             command_seq = command_seq.saturating_add(1);
 
             info!(
@@ -275,41 +315,9 @@ pub fn spawn(
             );
 
             if stage == PredictionStage::Refined {
-                // 2차 명령을 즉시 기본 자세로 덮어쓰지 않는다. 예측 충돌 시각까지
-                // 기다렸다가 팔 기본 자세와 리니어 중앙을 다시 맞춘 후 새 공을 받는다.
+                // 진짜 2차가 들어오면 추정을 멈추고, 위에서 예상 도달
+                // 시각이 되었을 때 중앙으로 복귀한다.
                 let _ = status_tx.send(ControlStatus::Recovering { shot_seq: 1 });
-                thread::sleep(
-                    Duration::from_secs_f64(remaining.max(0.0)) + RETURN_AFTER_IMPACT_MARGIN,
-                );
-                if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
-                    warn!(%error, "2차 동작 후 중앙 복귀 실패 — 제어 중단");
-                    let _ = event_tx.send(ShotEvent::Failed {
-                        shot_seq: 1,
-                        reason: format!("2차 동작 후 중앙 복귀 실패: {error}"),
-                    });
-                    break;
-                }
-                sim_pose = pingpong_bot::robot::Pose::new(
-                    arm.rail
-                        .as_ref()
-                        .map(|rail| rail.default_x())
-                        .unwrap_or(sim_pose.rail_x),
-                    arm.default_joints.clone(),
-                );
-                if let Some(sim_tx) = &sim_tx {
-                    send_sim_control(
-                        sim_tx,
-                        SimUpdate {
-                            pose: Some(PoseMsg::from(&sim_pose)),
-                            ..SimUpdate::default()
-                        },
-                        "중앙 복귀 포즈",
-                    );
-                }
-                latch = TwoStageLatch::default();
-                last_command = None;
-                let _ = status_tx.send(ControlStatus::Ready { shot_seq: 1 });
-                info!("2차 동작 완료 — 리니어 중앙 + 로봇 기본 자세 재정렬 완료");
             }
         }
 

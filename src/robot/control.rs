@@ -170,15 +170,16 @@ impl From<TrajectorySample> for HitTarget {
 /// real과 sim이 함께 쓰는 위치 이동 계획기.
 pub struct PositionController;
 
-/// fly_07·08·09에서 최종 도달점과 10 cm 이내로 계속 유지되기 시작한
-/// 시점은 첫 정상 3D 관측 후 0.23~0.27 s였다. 중앙값 0.25 s와 실제
-/// 수렴폭 10 cm를 둘 다 만족해야 정밀 예측으로 올린다.
-pub const REFINED_MIN_OBSERVATION_SECS: f64 = 0.25;
+/// 제어 반응성 확인을 위해 150 ms를 관측하고, 최근 예측 3개의
+/// 수렴폭 10 cm를 함께 만족하면 정밀 예측으로 올린다.
+pub const REFINED_MIN_OBSERVATION_SECS: f64 = 0.15;
 pub const REFINED_TARGET_TOLERANCE_M: f64 = 0.10;
 const REFINED_STABLE_SAMPLES: usize = 3;
-/// 1차 레일 명령도 EKF 속도가 잡히기 전 첫 값을 바로 쓰지 않는다.
-pub const PROVISIONAL_MIN_OBSERVATION_SECS: f64 = 0.08;
-pub const PROVISIONAL_TARGET_TOLERANCE_M: f64 = 0.15;
+/// 1차는 빠른 반응을 위해 50 ms·2개 표본만 사용하되,
+/// 서로 30 cm를 넘게 튀는 초기 예측은 실물에 보내지 않는다.
+pub const PROVISIONAL_MIN_OBSERVATION_SECS: f64 = 0.05;
+pub const PROVISIONAL_TARGET_TOLERANCE_M: f64 = 0.30;
+const PROVISIONAL_STABLE_SAMPLES: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PredictionStage {
@@ -218,16 +219,20 @@ impl PredictionStability {
         };
     }
 
-    /// 최근 3개 예측이 15 cm 안에 모였고 최소 80 ms를 관측했는지.
+    /// 최근 2개 예측이 30 cm 안에 모였고 최소 50 ms를 관측했는지.
     /// 즉시 예측을 실물에 보내지 않고, 이 조건을 1차 명령 게이트로 쓴다.
     pub fn provisional_ready(&self, observed_span_secs: f64) -> bool {
+        let Some(latest) = self.recent_targets.back() else {
+            return false;
+        };
         return observed_span_secs >= PROVISIONAL_MIN_OBSERVATION_SECS
-            && self.recent_targets.len() == REFINED_STABLE_SAMPLES
-            && self.recent_targets.iter().all(|sample| {
-                self.recent_targets.back().is_some_and(|latest| {
-                    (*sample - *latest).norm() <= PROVISIONAL_TARGET_TOLERANCE_M
-                })
-            });
+            && self.recent_targets.len() >= PROVISIONAL_STABLE_SAMPLES
+            && self
+                .recent_targets
+                .iter()
+                .rev()
+                .take(PROVISIONAL_STABLE_SAMPLES)
+                .all(|sample| (*sample - *latest).norm() <= PROVISIONAL_TARGET_TOLERANCE_M);
     }
 }
 
@@ -443,18 +448,18 @@ mod tests {
     }
 
     #[test]
-    fn refined_stage_needs_time_and_three_targets_within_ten_centimeters() {
+    fn refined_stage_needs_150ms_and_three_targets_within_ten_centimeters() {
         let mut stability = PredictionStability::default();
         assert_eq!(
             stability.observe(Point3::new(0.0, 0.3, 0.4), 0.10),
             PredictionStage::Provisional
         );
         assert_eq!(
-            stability.observe(Point3::new(0.04, 0.3, 0.4), 0.24),
+            stability.observe(Point3::new(0.04, 0.3, 0.4), 0.14),
             PredictionStage::Provisional
         );
         assert_eq!(
-            stability.observe(Point3::new(0.05, 0.3, 0.4), 0.25),
+            stability.observe(Point3::new(0.05, 0.3, 0.4), 0.15),
             PredictionStage::Refined
         );
         // 정밀 단계는 한 번 성립하면 다시 1차로 내려가지 않는다.
@@ -476,16 +481,17 @@ mod tests {
     }
 
     #[test]
-    fn provisional_command_waits_for_three_stable_targets_and_eighty_ms() {
+    fn provisional_command_waits_for_two_reasonably_stable_targets_and_fifty_ms() {
         let mut stability = PredictionStability::default();
-        stability.observe(Point3::new(0.80, 0.3, 0.4), 0.04);
-        stability.observe(Point3::new(0.84, 0.3, 0.4), 0.07);
-        assert!(!stability.provisional_ready(0.07));
-        stability.observe(Point3::new(0.86, 0.3, 0.4), 0.08);
-        assert!(stability.provisional_ready(0.08));
+        stability.observe(Point3::new(0.80, 0.3, 0.4), 0.03);
+        assert!(!stability.provisional_ready(0.03));
+        stability.observe(Point3::new(0.98, 0.3, 0.4), 0.05);
+        assert!(stability.provisional_ready(0.05));
 
         stability.observe(Point3::new(1.20, 0.3, 0.4), 0.09);
-        assert!(!stability.provisional_ready(0.09));
+        assert!(stability.provisional_ready(0.09));
+        stability.observe(Point3::new(0.70, 0.3, 0.4), 0.10);
+        assert!(!stability.provisional_ready(0.10));
     }
 
     #[test]
