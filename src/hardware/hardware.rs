@@ -7,6 +7,18 @@ pub trait Hardware: Send {
     fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError>;
     fn read_pose(&mut self) -> Result<robot::Pose, HwError>;
 
+    /// 실기 시작 전 레일 중앙 정렬과 전체 관절 기본 자세 설정.
+    /// 공 예측 제어와 분리해 초기화가 실제로 끝난 뒤에만 Ready가 되게 한다.
+    fn command_initial_pose(
+        &mut self,
+        _rail_x: f64,
+        _joints: &robot::Joints,
+    ) -> Result<(), HwError> {
+        return Err(HwError::InvalidConfig {
+            reason: "초기 자세 직접 설정을 지원하지 않는 하드웨어입니다".into(),
+        });
+    }
+
     /// 2단계 제어 시험 명령: 레일과 라켓을 잡은 마지막 관절만 갱신한다.
     ///
     /// 기본 궤적 명령과 분리해, 중앙 정렬이 끝난 뒤 다른 Dynamixel 축에 Goal을

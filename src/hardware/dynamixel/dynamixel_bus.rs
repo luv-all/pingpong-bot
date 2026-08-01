@@ -51,6 +51,9 @@ pub struct DynamixelBus {
     pub(super) mapping: MotorMapping,
     backend: BusBackend,
     torque_enabled: bool,
+    /// 마지막으로 안전하게 읽었거나 전송한 논리 관절 tick.
+    /// 단순 실기 제어에서는 초기 토크 락 이후 불안정한 버스를 다시 읽지 않고 이 값을 쓴다.
+    last_known_ticks: Option<Vec<i32>>,
     /// 클램프 경고 스로틀 — 200 Hz 스트리밍이라 매번 찍으면 로그가 잠긴다.
     last_clamp_warn: Option<std::time::Instant>,
 }
@@ -61,19 +64,20 @@ const CLAMP_WARN_PERIOD: std::time::Duration = std::time::Duration::from_secs(1)
 impl DynamixelBus {
     pub fn dry_run(config: DynamixelConfig) -> Result<Self, DynamixelConfigError> {
         let mapping = MotorMapping::new(config)?;
-        let ticks = (0..mapping.config.motor_ids.len())
+        let ticks: Vec<i32> = (0..mapping.config.motor_ids.len())
             .map(|index| mapping.radians_to_ticks(index, 0.0))
             .collect();
         return Ok(Self {
             mapping,
             backend: BusBackend::DryRun {
-                ticks,
+                ticks: ticks.clone(),
                 last_bus_goals: Vec::new(),
                 last_operating_mode: None,
                 last_pwm_limits: Vec::new(),
                 last_current_limits: Vec::new(),
             },
             torque_enabled: false,
+            last_known_ticks: Some(ticks),
             last_clamp_warn: None,
         });
     }
@@ -162,6 +166,7 @@ impl DynamixelBus {
                 port,
             )),
             torque_enabled: false,
+            last_known_ticks: None,
             last_clamp_warn: None,
         };
         bus.apply_motion_profile()?;
@@ -308,6 +313,13 @@ impl DynamixelBus {
                     )
                 })?;
             }
+        }
+        if let Some(cached) = &mut self.last_known_ticks {
+            cached[joint_index] = tick;
+        } else {
+            let mut cached = vec![self.mapping.config.zero_tick; joint_count];
+            cached[joint_index] = tick;
+            self.last_known_ticks = Some(cached);
         }
         return Ok(());
     }
@@ -544,6 +556,7 @@ impl DynamixelBus {
                     })?;
             }
         }
+        self.last_known_ticks = Some(ticks.to_vec());
         Ok(())
     }
 
@@ -557,6 +570,24 @@ impl DynamixelBus {
                 .map(|(index, tick)| self.mapping.ticks_to_radians(index, tick))
                 .collect(),
         })
+    }
+
+    /// 초기 토크 락 때 읽은 자세와 이후 Goal 명령으로 갱신한 논리 자세를 반환한다.
+    ///
+    /// 현재 실기 시험은 위치 피드백 검증이 목적이 아니므로 초기화 이후의 반복적인
+    /// Status Packet read를 피한다. 실제 폐루프 제어로 돌아갈 때는 [`Self::read_joints`]를 쓴다.
+    pub fn cached_joints(&self) -> Result<Joints, HwError> {
+        let ticks = self
+            .last_known_ticks
+            .as_ref()
+            .ok_or_else(|| read_transport_error("초기 토크 락 자세 캐시가 아직 준비되지 않음"))?;
+        return Ok(Joints {
+            values: ticks
+                .iter()
+                .enumerate()
+                .map(|(index, tick)| self.mapping.ticks_to_radians(index, *tick))
+                .collect(),
+        });
     }
 
     fn read_raw_ticks(&mut self) -> Result<Vec<i32>, HwError> {
@@ -603,6 +634,7 @@ impl DynamixelBus {
                 ticks.len()
             )));
         }
+        self.last_known_ticks = Some(ticks.clone());
         Ok(ticks)
     }
 

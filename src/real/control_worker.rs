@@ -10,11 +10,11 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
-use pingpong_bot::error::{DomainError, HwError};
+use pingpong_bot::error::HwError;
 use pingpong_bot::hardware::Hardware;
 use pingpong_bot::robot::Arm;
 use pingpong_bot::robot::control::{HitTargetSelector, PredictionStage};
-use pingpong_bot::robot::motion::{self, Planner};
+use pingpong_bot::robot::motion;
 use tracing::{info, info_span, warn};
 
 use super::fmt::f2;
@@ -23,7 +23,6 @@ use super::{CommitRequest, ControlStatus, PoseMsg, ShotEvent, Shutdown, SimUpdat
 const MAX_REQUEST_AGE_SECS: f64 = 0.050;
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
-const BUSY_POLL: Duration = Duration::from_millis(5);
 
 /// 실제 타격용이 아닌, 응답 확인용 손목 이동량.
 const TEST_STROKE_RAD: f64 = 15.0_f64.to_radians();
@@ -70,8 +69,17 @@ pub fn spawn(
     return thread::spawn(move || {
         let _span = info_span!("control").entered();
 
-        if home && let Err(error) = move_to_center(hardware.as_mut(), &arm) {
-            warn!(%error, "초기 센터 이동 실패 — 현재 자세에서 2단계 제어를 시작한다");
+        if home {
+            if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
+                warn!(%error, "초기 센터 정렬 실패 — 2단계 제어를 시작하지 않는다");
+                let _ = event_tx.send(ShotEvent::Failed {
+                    shot_seq: 1,
+                    reason: format!("초기 센터 정렬 실패: {error}"),
+                });
+                let _ = event_tx.send(ShotEvent::Done);
+                return;
+            }
+            info!("리니어 중앙 정렬 + 로봇 기본 자세 완료");
         }
 
         let pose = match hardware.read_pose() {
@@ -174,28 +182,28 @@ fn test_wrist_goal(ready: f64, stage: PredictionStage) -> f64 {
     };
 }
 
-/// 시작 시에만 기존 전체축 센터 이동을 사용한다.
+/// 시작 시 레일을 정확히 중앙으로 보내고 4축을 기본 자세로 만든다.
+/// 플래너나 추가 Dynamixel read에 의존하지 않는 실기 초기화 전용 경로다.
 fn move_to_center(hardware: &mut dyn Hardware, arm: &Arm) -> Result<(), MoveError> {
-    let start = hardware.read_pose().map_err(MoveError::Hardware)?;
-    let trajectory = Planner::return_to_center(arm, &start).map_err(MoveError::Plan)?;
-    hardware.command(&trajectory).map_err(MoveError::Hardware)?;
-    while hardware.is_busy() {
-        thread::sleep(BUSY_POLL);
-    }
-    return Ok(());
+    let rail_center = arm
+        .rail
+        .as_ref()
+        .map(|rail| rail.default_x())
+        .unwrap_or(0.0);
+    return hardware
+        .command_initial_pose(rail_center, &arm.default_joints)
+        .map_err(MoveError::Hardware);
 }
 
 #[derive(Debug)]
 enum MoveError {
     Hardware(HwError),
-    Plan(DomainError),
 }
 
 impl std::fmt::Display for MoveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::Hardware(error) => write!(f, "{error}"),
-            Self::Plan(error) => write!(f, "{error}"),
         };
     }
 }

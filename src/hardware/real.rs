@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(not(all(windows, feature = "real")))]
 use tracing::warn;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::AxlRail;
@@ -247,14 +247,58 @@ impl Hardware for RealHardware {
 
     fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
         self.reap_executor();
+        // 이번 2단계 실기 시험에서는 Dynamixel을 반복해서 읽지 않는다. 초기 토크 락 때
+        // 검증한 자세와 이후 보낸 Goal을 사용해 센터 이동/관전 포즈만 구성한다.
         let joints = self
             .bus
             .lock()
             .map_err(|_| HwError::ReadFailed {
                 reason: "Dynamixel bus mutex poisoned".into(),
             })?
-            .read_joints()?;
+            .cached_joints()?;
         return Ok(robot::Pose::new(self.read_rail_x_m()?, joints));
+    }
+
+    fn command_initial_pose(&mut self, rail_x: f64, joints: &robot::Joints) -> Result<(), HwError> {
+        self.reap_executor();
+        if self.busy.load(Ordering::Acquire) {
+            return Err(HwError::CommandFailed {
+                duration_secs: 0.0,
+                joint_count: joints.values.len(),
+                reason: "다른 하드웨어 명령이 실행 중입니다".into(),
+            });
+        }
+
+        // DYNAMIXEL의 내부 Profile Acceleration/Velocity가 기본 자세까지 부드럽게
+        // 이동시키므로 Goal을 한 번만 보낸다. 반복 Status Packet read는 하지 않는다.
+        self.bus
+            .lock()
+            .map_err(|_| HwError::CommandFailed {
+                duration_secs: 0.0,
+                joint_count: joints.values.len(),
+                reason: "Dynamixel bus mutex poisoned".into(),
+            })?
+            .write_joints(joints)?;
+        info!(goal = ?joints.values, "Dynamixel 기본 자세 이동 명령");
+
+        // 최악 관절 이동에도 내부 프로파일이 도달할 시간을 준 뒤 레일을 움직인다.
+        // 팔을 먼저 접어 둬 레일 이동 중 테이블/주변물과 간섭할 가능성을 줄인다.
+        thread::sleep(Duration::from_secs(3));
+
+        let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
+            duration_secs: 0.0,
+            joint_count: joints.values.len(),
+            reason: "레일 mutex poisoned".into(),
+        })?;
+        if let Some(rail) = rail.as_mut() {
+            // 끝에서 끝까지여도 약 0.7 m/s 이하가 되도록 2초 기준으로 이동시키고
+            // 실제 정지가 확인될 때까지 Ready로 넘어가지 않는다.
+            let commanded = rail.command_abs_in_secs(rail_x, 2.0)?;
+            rail.wait_idle()?;
+            self.direct_rail_target = Some(commanded);
+            info!(rail_x = commanded, "AXL 레일 중앙 정렬 완료");
+        }
+        return Ok(());
     }
 
     fn command_rail_and_racket(
