@@ -7,13 +7,16 @@
 //! **여기서 포기는 하지 않는다.** 남은 시간이 짧다는 것만으로 공을 버리지 않고, 실현
 //! 불가능한지는 `Planner::plan_best`의 속도·가속·토크·관절범위 검사가 판정한다.
 //!
-//! 하드웨어에 손대지 않는 순수 함수라 `cargo test --workspace`로 그대로 돈다.
+//! 하드웨어에 손대지 않는 순수 함수라 `cargo test --workspace`로 그대로 돈다. 그래서
+//! `src/real/`(바이너리)이 아니라 라이브러리에 둔다 — 오프라인 툴(`clip-review`)이 실기와
+//! **같은 게이트**로 판정해야 한다. 게이트가 두 벌이 되면 툴이 보여주는 커밋 시점이 실기와
+//! 달라져 진단이 거짓말을 한다.
 //!
 //! [`SimWorld::try_auto_swing`]: https://github.com/luv-all/pingpong-bot/blob/main/src/sim/physics/world.rs
 
-use pingpong_bot::defaults::EstimatorParams;
-use pingpong_bot::estimator::Prediction;
-use pingpong_bot::robot::motion::Planner;
+use crate::defaults::EstimatorParams;
+use crate::estimator::Prediction;
+use crate::robot::motion::Planner;
 
 /// 아직 칠 때가 아닌 이유 — HUD·로그용.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,10 +106,10 @@ pub fn decide(
 mod tests {
     use super::*;
 
+    use crate::Point3;
+    use crate::constants::table;
+    use crate::defaults::ControlParams;
     use nalgebra::Vector3;
-    use pingpong_bot::Point3;
-    use pingpong_bot::constants::table;
-    use pingpong_bot::defaults::ControlParams;
 
     /// 미드코트를 넘은 (= 커밋 게이트를 통과하는) 공 y.
     fn past_midcourt_y() -> f64 {
@@ -203,7 +206,7 @@ mod tests {
     /// 수치 하한(0에 수렴하는 tti)만은 여전히 막는다 — quintic이 0으로 나눈다.
     #[test]
     fn rejects_only_a_numerically_degenerate_time_to_go() {
-        let degenerate = pingpong_bot::defaults::MIN_TIME_TO_GO_SECS * 0.5;
+        let degenerate = crate::defaults::MIN_TIME_TO_GO_SECS * 0.5;
         assert!(!Planner::in_commit_window(degenerate));
 
         let decision = decide(

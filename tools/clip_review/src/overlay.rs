@@ -1,10 +1,16 @@
-//! 카메라 프레임 위에 궤적 두 개를 재투영해 겹친다.
+//! 카메라 프레임 위에 궤적들을 재투영해 겹친다.
 //!
-//! 여기가 이 툴의 본론이다 — 흰 선(실제)과 하늘색 선(예측)이 **픽셀 단위로** 얼마나
-//! 벌어지는지가 보인다. 3D 그림보다 정확한데, 검출이 실제로 본 좌표계 위에서 재기 때문이다.
+//! 여기가 이 툴의 본론이다 — 실제와 예측이 **픽셀 단위로** 얼마나 벌어지는지가 보인다.
+//! 3D 그림보다 정확한데, 검출이 실제로 본 좌표계 위에서 재기 때문이다.
 //!
 //! 카메라 뒤로 넘어간 점은 투영이 없다 (`project_world_unclipped` → `None`). 그 자리에서
 //! 선을 **끊는다** — 이어 버리면 화면을 가로지르는 가짜 선이 생긴다.
+//!
+//! # 색
+//!
+//! 흰색·하늘색은 밝은 실내 영상 위에서 죽는다 (벽·천장·테이블이 이미 밝다). 채도가 높고
+//! 서로 보색인 **초록 ↔ 자홍**을 쓰고, 공(주황)과도 겹치지 않게 둔다. 모든 선은 검은
+//! 밑선을 한 겹 깔고 그 위에 그린다 — 배경이 무엇이든 경계가 선다.
 
 use anyhow::Result;
 use opencv::core::{Mat, Point, Scalar};
@@ -16,17 +22,42 @@ use pingpong_bot::camera::{self, Preview};
 /// 좌표 폭주 방지 — OpenCV에 넘기기 전 자른다.
 const DRAW_CLAMP_PX: f64 = 20_000.0;
 
-const WHITE: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
-const CYAN: Scalar = Scalar::new(255.0, 255.0, 0.0, 0.0);
-const GREEN: Scalar = Scalar::new(0.0, 255.0, 0.0, 0.0);
-const MAGENTA: Scalar = Scalar::new(255.0, 0.0, 255.0, 0.0);
+/// 밑선 — 배경이 밝든 어둡든 경계가 서게.
+const OUTLINE: Scalar = Scalar::new(0.0, 0.0, 0.0, 0.0);
+const OUTLINE_EXTRA_PX: i32 = 2;
+
+/// 실제 궤적, 지금까지 — 초록, 굵게.
+const ACTUAL_PAST: Scalar = Scalar::new(60.0, 255.0, 60.0, 0.0);
+/// 실제 궤적, 아직 안 온 구간 — 같은 색을 죽여서. 오프라인 재생이라 미래를 이미 알지만,
+/// 과거와 같은 굵기로 그리면 "지금 아는 것"과 구분이 안 된다.
+const ACTUAL_FUTURE: Scalar = Scalar::new(30.0, 110.0, 30.0, 0.0);
+/// 매 프레임 다시 굴린 예측 — 회색, 얇게. 언제나 현재 공에서 출발하므로 실제에 붙어
+/// 보이는 게 정상이다. "예측이 맞았나"의 대상이 아니라 눈에 덜 띄어야 한다.
+const LIVE: Scalar = Scalar::new(170.0, 170.0, 170.0, 0.0);
+/// 커밋 순간에 얼린 예측 — 자홍, 굵게. 초록과 보색이라 겹쳐도 갈린다.
+const COMMITTED: Scalar = Scalar::new(255.0, 0.0, 255.0, 0.0);
+/// 검출 픽셀 — 노랑. 선들과 다른 채널이라 안 묻힌다.
+const DETECTED: Scalar = Scalar::new(0.0, 255.0, 255.0, 0.0);
+/// EKF 추정 위치 재투영 — 흰 테두리 작은 원.
+const EKF: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
+
+/// 창에 그릴 궤적 넷.
+pub struct Tracks<'a> {
+    /// 실제, 현재 프레임까지.
+    pub actual_past: &'a [Point3],
+    /// 실제, 현재 프레임 이후 (pass 1이 이미 알고 있다).
+    pub actual_future: &'a [Point3],
+    /// 매 프레임 다시 굴린 예측.
+    pub live: &'a [Point3],
+    /// 커밋 순간에 얼린 예측. 커밋 전이면 비어 있다.
+    pub committed: &'a [Point3],
+}
 
 /// 프레임 사본에 오버레이를 그려 돌려준다.
 pub fn draw(
     frame: &Mat,
     params: &camera::Params,
-    observed: &[Point3],
-    predicted: &[Point3],
+    tracks: &Tracks<'_>,
     detected: Option<camera::Pixel>,
     ekf: Option<Point3>,
     label: &str,
@@ -34,23 +65,28 @@ pub fn draw(
 ) -> Result<Mat> {
     let mut img = frame.try_clone()?;
 
-    track(&mut img, params, observed, WHITE, 2)?;
-    track(&mut img, params, predicted, CYAN, 1)?;
+    // 덜 중요한 것부터 — 겹치면 나중에 그린 게 위로 온다.
+    track(&mut img, params, tracks.actual_future, ACTUAL_FUTURE, 1)?;
+    track(&mut img, params, tracks.live, LIVE, 1)?;
+    track(&mut img, params, tracks.actual_past, ACTUAL_PAST, 3)?;
+    track(&mut img, params, tracks.committed, COMMITTED, 3)?;
 
     if let Some(point) = ekf
         && let Some(pixel) = params.project_world_unclipped(point)
     {
-        Preview::draw_circle_px(&mut img, pixel, 7, MAGENTA, 1)?;
+        Preview::draw_circle_px(&mut img, pixel, 7, EKF, 1)?;
     }
     if let Some(pixel) = detected {
-        Preview::draw_circle_px(&mut img, pixel, 10, GREEN, 2)?;
+        Preview::draw_circle_px(&mut img, pixel, 11, OUTLINE, 4)?;
+        Preview::draw_circle_px(&mut img, pixel, 11, DETECTED, 2)?;
     }
 
-    Preview::draw_debug_lines(&mut img, hud, WHITE)?;
-    Preview::draw_cam_label(&mut img, label, WHITE)?;
+    Preview::draw_debug_lines(&mut img, hud, EKF)?;
+    Preview::draw_cam_label(&mut img, label, EKF)?;
     return Ok(img);
 }
 
+/// 검은 밑선을 깔고 그 위에 색을 얹는다 — 배경 밝기와 무관하게 읽힌다.
 fn track(
     img: &mut Mat,
     params: &camera::Params,
@@ -58,20 +94,40 @@ fn track(
     color: Scalar,
     thickness: i32,
 ) -> Result<()> {
+    let projected = project_all(params, points);
+    for (from, to) in &projected {
+        imgproc::line(
+            img,
+            *from,
+            *to,
+            OUTLINE,
+            thickness + OUTLINE_EXTRA_PX,
+            imgproc::LINE_AA,
+            0,
+        )?;
+    }
+    for (from, to) in &projected {
+        imgproc::line(img, *from, *to, color, thickness, imgproc::LINE_AA, 0)?;
+    }
+    return Ok(());
+}
+
+/// 이어 그릴 선분 목록. 카메라 뒤로 넘어간 점에서 끊는다.
+fn project_all(params: &camera::Params, points: &[Point3]) -> Vec<(Point, Point)> {
+    let mut segments = Vec::new();
     let mut previous: Option<Point> = None;
     for point in points {
         let Some(pixel) = params.project_world_unclipped(*point) else {
-            // 카메라 뒤 — 여기서 끊는다.
             previous = None;
             continue;
         };
         let current = pt(pixel.x, pixel.y);
         if let Some(prev) = previous {
-            imgproc::line(img, prev, current, color, thickness, imgproc::LINE_AA, 0)?;
+            segments.push((prev, current));
         }
         previous = Some(current);
     }
-    return Ok(());
+    return segments;
 }
 
 fn pt(x: f64, y: f64) -> Point {

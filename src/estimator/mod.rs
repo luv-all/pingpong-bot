@@ -2,6 +2,7 @@
 
 mod ballistics;
 mod bounce;
+mod decision;
 mod ekf;
 mod estimator;
 mod hit_plane;
@@ -14,6 +15,7 @@ mod tri;
 mod triangulate;
 
 pub use ballistics::semi_implicit_euler;
+pub use decision::{Decision, WaitReason, decide};
 pub use ekf::{Ekf, GateOutcome};
 pub use estimator::Estimator;
 pub use hit_plane::HitPlane;

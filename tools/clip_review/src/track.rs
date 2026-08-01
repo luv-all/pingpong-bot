@@ -16,7 +16,10 @@ use pingpong_bot::Point3;
 use pingpong_bot::camera::{self, Calibration, FrameSource, OpenCvCapture};
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults::{self, PhysicsParams};
-use pingpong_bot::estimator::{Ekf, GateOutcome, Kinematics, Triangulate};
+use pingpong_bot::estimator::{
+    Decision, Ekf, Estimator, GateOutcome, Kinematics, Prediction, Triangulate, decide,
+};
+use pingpong_bot::robot::motion::{InterceptWindow, Planner};
 
 /// 재투영 오차가 이보다 크면 두 캠이 서로 다른 걸 잡은 것 — 런타임과 같은 상한.
 const MAX_REPROJECTION_PX: f64 = 14.0;
@@ -59,7 +62,14 @@ pub struct FrameState {
     /// 이 프레임의 삼각측량 (둘 다 잡고 재투영 게이트를 통과했을 때만).
     pub observed: Option<Observed>,
     /// 이 시점 EKF 상태에서 앞으로 굴린 궤적. 추적 중이 아니면 비어 있다.
+    ///
+    /// 매 프레임 현재 위치에서 다시 굴린 것이라 **실제 궤적에 붙어 보인다** — 당연하다.
+    /// "예측이 맞았나"는 이걸로 판정하는 게 아니라 [`Commit`]으로 판정한다.
     pub predicted: Vec<State7>,
+    /// 실기와 **같은 게이트**([`decide`])의 이번 프레임 판정.
+    pub decision: Option<Decision>,
+    /// `hypot(σ_p, σ_v × 리드)` — 커밋 게이트의 마지막 관문.
+    pub impact_sigma: Option<f64>,
     pub ekf_position: Option<Point3>,
     pub ekf_speed: Option<f64>,
     pub tracking: bool,
@@ -70,11 +80,36 @@ pub struct FrameState {
     pub velocity_sigma: Option<f64>,
 }
 
+/// 실기가 하드웨어에 예측을 넘겼을 순간 — 그리고 그때 넘긴 것.
+///
+/// 실기 파이프라인은 [`decide`]가 `Attempt`를 낸 프레임에 `CommitRequest`를 보내고,
+/// 제어 워커가 그걸로 궤적을 짜고 나면 스윙이 끝날 때까지 `Recovering`이라 새 요청을
+/// 받지 않는다. 즉 **한 샷에 실질적으로 한 번**이다. 그 한 번을 여기 얼려 둔다.
+///
+/// 이게 얼려 있어야 "예측이 맞았나"를 볼 수 있다. 매 프레임 다시 굴린 예측은 언제나
+/// 현재 공 위치에서 출발하니 실제와 겹쳐 보일 수밖에 없다 — 볼 게 없다.
+#[derive(Debug, Clone)]
+pub struct Commit {
+    pub frame: usize,
+    pub t: f64,
+    /// 커밋 순간의 예측 궤적 — 이후 프레임에서도 **바뀌지 않는다**.
+    pub predicted: Vec<State7>,
+    /// 표시용 대표 후보 (커밋 창 안의 첫 후보, 없으면 tti가 가장 이른 것).
+    ///
+    /// 실기 플래너(`plan_best`)가 실제로 고르는 후보와 반드시 같지는 않다 — 그건 IK
+    /// 점수로 고르는데 여기엔 팔이 없다. 어디를 칠 셈이었는지 가늠하는 표시다.
+    pub impact: Point3,
+    pub time_to_impact: f64,
+    pub impact_sigma: f64,
+}
+
 /// 클립 전체 — 창이 필요로 하는 모든 것.
 pub struct Reviewed {
     pub frames: Vec<FrameState>,
     /// 클립 전체의 실제 궤적 (재생 위치와 무관하게 이미 다 안다).
     pub observed: Vec<Observed>,
+    /// 첫 `Attempt` — 실기라면 여기서 하드웨어로 넘어갔다.
+    pub commit: Option<Commit>,
     pub fps: f64,
 }
 
@@ -88,14 +123,35 @@ impl Reviewed {
         return frame as f64 / self.fps;
     }
 
-    /// `frame`까지의 실제 궤적 — 카메라에 "지금까지 지나온 길"로 그린다.
-    pub fn observed_upto(&self, frame: usize) -> Vec<Point3> {
-        return self
-            .observed
+    /// 실제 궤적을 현재 프레임 기준 (지금까지, 이후)로 나눈다.
+    ///
+    /// 오프라인 재생이라 미래를 **이미 안다** — 커밋 예측이 이후로 어디로 갔는지와 나란히
+    /// 보려면 있어야 한다. 다만 과거와 같은 굵기로 그리면 "지금 아는 것"과 구분이 안 되므로
+    /// 나눠서 넘긴다. 경계 한 점은 양쪽에 다 들어간다 (선이 끊겨 보이지 않게).
+    pub fn observed_split(&self, frame: usize) -> (Vec<Point3>, Vec<Point3>) {
+        let cut = self.observed.partition_point(|o| o.frame <= frame);
+        let past: Vec<Point3> = self.observed[..cut].iter().map(|o| o.point).collect();
+        let future: Vec<Point3> = self.observed[cut.saturating_sub(1)..]
             .iter()
-            .filter(|o| o.frame <= frame)
             .map(|o| o.point)
             .collect();
+        return (past, future);
+    }
+
+    /// 실제 궤적이 `y` 평면을 로봇 쪽으로 지난 지점 (표본 사이 선형 보간).
+    ///
+    /// 커밋 예측의 타점과 비교할 **정답**이다.
+    pub fn observed_crossing_y(&self, y: f64) -> Option<Point3> {
+        let pair = self
+            .observed
+            .windows(2)
+            .find(|w| w[0].point.y >= y && w[1].point.y < y)?;
+        let (a, b) = (pair[0].point, pair[1].point);
+        let span = a.y - b.y;
+        if span <= f64::EPSILON {
+            return Some(b);
+        }
+        return Some(a.lerp(&b, (a.y - y) / span));
     }
 }
 
@@ -109,10 +165,12 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
     let count = left_pixels.len().min(right_pixels.len());
 
     let physics = PhysicsParams::default();
+    let planes = InterceptWindow::default().hit_planes();
     let epoch = Instant::now();
     let mut ekf = Ekf::default();
     let mut frames: Vec<FrameState> = Vec::with_capacity(count);
     let mut observed: Vec<Observed> = Vec::new();
+    let mut commit: Option<Commit> = None;
 
     for frame in 0..count {
         let t = frame as f64 / fps;
@@ -144,14 +202,64 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
         if let (Some(position), Some(velocity)) = (ekf.position(), ekf.velocity()) {
             state.predicted = rollout(position, velocity, t, &physics);
         }
+
+        // 실기와 같은 게이트를 그대로 태운다 — 커밋 시점이 실기와 달라지면 진단이 거짓말한다.
+        let predictions: Vec<Prediction> = if state.tracking {
+            planes
+                .iter()
+                .filter_map(|plane| ekf.predict_to(*plane))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let shown = display_candidate(&predictions);
+        state.impact_sigma = shown.and_then(|prediction| {
+            let (sp, sv) = (ekf.position_sigma()?, ekf.velocity_sigma()?);
+            Some(sp.hypot(sv * prediction.time_to_impact_secs))
+        });
+        let ball_y = state.ekf_position.map(|p| p.y);
+        let decision = decide(state.tracking, ball_y, &predictions, state.impact_sigma);
+        state.decision = Some(decision);
+
+        // 첫 Attempt만 잡는다. 실기도 커밋 뒤에는 Recovering이라 한 샷에 한 번이다.
+        if commit.is_none()
+            && decision == Decision::Attempt
+            && let (Some(prediction), Some(sigma)) = (shown, state.impact_sigma)
+        {
+            commit = Some(Commit {
+                frame,
+                t,
+                predicted: state.predicted.clone(),
+                impact: prediction.impact_position,
+                time_to_impact: prediction.time_to_impact_secs,
+                impact_sigma: sigma,
+            });
+        }
         frames.push(state);
     }
 
     return Ok(Reviewed {
         frames,
         observed,
+        commit,
         fps,
     });
+}
+
+/// 화면에 대표로 보여줄 후보 — 커밋 창 안의 첫 후보, 없으면 tti가 가장 이른 것.
+/// (`src/real/estimator_worker.rs`의 같은 이름 함수와 동일한 규칙.)
+fn display_candidate(predictions: &[Prediction]) -> Option<Prediction> {
+    return predictions
+        .iter()
+        .find(|prediction| Planner::in_commit_window(prediction.time_to_impact_secs))
+        .or_else(|| {
+            predictions.iter().min_by(|a, b| {
+                a.time_to_impact_secs
+                    .partial_cmp(&b.time_to_impact_secs)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        })
+        .copied();
 }
 
 fn secs(t: f64) -> Duration {

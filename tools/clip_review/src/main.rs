@@ -1,10 +1,12 @@
 //! 클립 리뷰어 — 카메라 2창(OpenCV) + sim 창(kiss3d)을 0.1x로 돌려 **예측 궤적이
 //! 실제 궤적으로 수렴하는지**를 눈으로 본다.
 //!
-//! 흰 선 = 검출·삼각측량이 말하는 실제 궤적. 하늘색 선 = 그 시점 EKF의 예측 궤적.
-//! 세 창 모두 같은 색 규칙을 쓴다. 둘이 벌어졌을 때 **왜** 벌어졌는지는 카메라 창에서
-//! 갈린다 — 초록 동그라미(검출 픽셀)가 공 위에 있으면 물리·필터가 틀린 것이고,
-//! 바닥에 떨어진 공이나 팔에 가 있으면 검출이 틀린 것이다.
+//! 세 창 모두 같은 색 규칙을 쓴다 — **초록** 실제 궤적(죽인 초록 = 아직 안 온 구간),
+//! **회색** 매 프레임 예측, **자홍** 커밋 순간에 얼린 예측, **노랑** 검출 픽셀.
+//!
+//! 실제와 커밋 예측이 벌어졌을 때 **왜** 벌어졌는지는 카메라 창에서 갈린다 — 노란
+//! 동그라미가 공 위에 있으면 물리·필터가 틀린 것이고, 바닥에 떨어진 공이나 팔에 가 있으면
+//! 검출이 틀린 것이다.
 //!
 //! 검출은 시작할 때 **한 번만** 돈다. 되감아도 값이 다시 계산되지 않으므로 앞뒤로 오가며
 //! 같은 프레임을 몇 번이든 다시 봐도 숫자가 흔들리지 않는다.
@@ -36,6 +38,7 @@ use pingpong_bot::camera::{
 };
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
+use pingpong_bot::estimator::Decision;
 
 use msg::SceneMsg;
 use track::{FrameState, Reviewed};
@@ -149,14 +152,33 @@ fn run(args: &Args) -> Result<()> {
     let live_wait_ms = ((1000.0 / fps).round() as i32).max(1);
     let mut index = args.start.min(reviewed.len() - 1);
     let mut paused = false;
+    // 실제 궤적은 pass 1이 클립을 통째로 훑어 **이미 다 안다**. 커밋 예측이 이후로 어디로
+    // 갔는지와 나란히 보려면 미래도 있어야 하므로 잘라 주지 않는다 — 대신 현재 프레임을
+    // 기준으로 과거·미래를 나눠 그려서 "지금 아는 것"과 구분되게 한다.
 
     loop {
+        // 끝(또는 디코드 실패)에서 **종료하지 않는다** — 멈춰 서서 되감을 수 있어야 한다.
         let Some((left, right)) = player.at(index) else {
-            break;
+            paused = true;
+            let last = index.saturating_sub(1);
+            match Step::of(highgui::wait_key_ex(0)?, &mut paused) {
+                Step::Quit => break,
+                Step::Delta(delta) => index = shift(last, delta, reviewed.len()),
+                Step::Home => index = 0,
+                _ => index = last,
+            }
+            continue;
         };
         let state = &reviewed.frames[index];
-        let observed = reviewed.observed_upto(index);
+        let (actual_past, actual_future) = reviewed.observed_split(index);
         let predicted: Vec<_> = state.predicted.iter().map(|s| s.position).collect();
+        // 커밋 예측은 얼려 둔 것 — 프레임이 지나도 안 바뀐다. 아직 커밋 전이면 비어 있다.
+        let committed: Vec<_> = reviewed
+            .commit
+            .as_ref()
+            .filter(|commit| index >= commit.frame)
+            .map(|commit| commit.predicted.iter().map(|s| s.position).collect())
+            .unwrap_or_default();
         let fast = first_ball.is_some_and(|first| index < first);
 
         let shared = shared_hud(&reviewed, state, index, speed, paused, fast);
@@ -166,8 +188,12 @@ fn run(args: &Args) -> Result<()> {
             let panel = overlay::draw(
                 &frame.image,
                 &params[slot],
-                &observed,
-                &predicted,
+                &overlay::Tracks {
+                    actual_past: &actual_past,
+                    actual_future: &actual_future,
+                    live: &predicted,
+                    committed: &committed,
+                },
                 state.pixels[slot],
                 state.ekf_position,
                 &format!("cam{slot}"),
@@ -188,8 +214,10 @@ fn run(args: &Args) -> Result<()> {
             let message = SceneMsg {
                 ekf: state.ekf_position.map(Into::into),
                 raw: state.observed.map(|o| o.point.into()),
-                observed: observed.iter().copied().map(Into::into).collect(),
+                observed: actual_past.iter().copied().map(Into::into).collect(),
+                observed_future: actual_future.iter().copied().map(Into::into).collect(),
                 predicted: predicted.iter().copied().map(Into::into).collect(),
+                committed: committed.iter().copied().map(Into::into).collect(),
             };
             if writeln!(stdin, "{}", message.to_line()).is_err() || stdin.flush().is_err() {
                 // 사용자가 sim 창을 닫았다 — 조용히 그만 보낸다.
@@ -210,6 +238,7 @@ fn run(args: &Args) -> Result<()> {
             Step::Home => index = 0,
             Step::Stay => {}
             Step::Advance => {
+                // 끝에 닿으면 **멈춰 선다**. 자동 종료는 `q`/ESC로만.
                 if index + 1 >= reviewed.len() {
                     paused = true;
                 } else {
@@ -347,7 +376,18 @@ fn shared_hud(
         });
     }
 
-    // 본론 — 그때 한 예측이 실제와 얼마나 벌어졌나.
+    // 실기와 같은 게이트 — 왜 아직 안 넘겼는지가 여기 그대로 나온다.
+    if let Some(decision) = state.decision {
+        let sigma = state
+            .impact_sigma
+            .map_or("--".to_owned(), |s| format!("{:.0}cm", s * 100.0));
+        lines.push(match decision {
+            Decision::Attempt => format!("gate  ATTEMPT  sigma {sigma}"),
+            Decision::Wait(reason) => format!("gate  {}  sigma {sigma}", reason.label()),
+        });
+    }
+
+    // 매 프레임 다시 굴린 예측이 얼마나 앞을 맞히나 — 수렴 여부.
     let errors: Vec<String> = LEADS_SECS
         .iter()
         .map(|lead| {
@@ -363,19 +403,11 @@ fn shared_hud(
             }
         })
         .collect();
-    lines.push(format!("converge  {}", errors.join("  ")));
+    lines.push(format!("live      {}", errors.join("  ")));
 
-    // 제어측이 실제로 받을 값 — 접수 평면 통과 상태 (위치 + 속도).
-    if let Some(crossing) = track::crossing_y(&state.predicted, table::DEFAULT_HIT_PLANE_Y) {
-        lines.push(format!(
-            "hit y={:.2}  x{:+.2} z{:+.2}  |v|{:.1}  in {:.2}s",
-            table::DEFAULT_HIT_PLANE_Y,
-            crossing.position.x,
-            crossing.position.z,
-            crossing.velocity.norm(),
-            crossing.t - now
-        ));
-    }
+    // 본론 — 실기가 하드웨어에 넘겼을 그 예측이 실제와 얼마나 어긋났나.
+    lines.extend(commit_lines(reviewed, index));
+
     if let (Some(sp), Some(sv)) = (state.position_sigma, state.velocity_sigma) {
         lines.push(format!(
             "sigma  p {:.1}cm  v {:.0}cm/s",
@@ -383,5 +415,59 @@ fn shared_hud(
             sv * 100.0
         ));
     }
+    return lines;
+}
+
+/// 커밋 순간과 그 결과. 아직 커밋 전이면 그렇다고 말한다 — 빈 줄로 두면 "커밋이 없었다"와
+/// "아직 안 왔다"가 구분이 안 된다.
+fn commit_lines(reviewed: &Reviewed, index: usize) -> Vec<String> {
+    let Some(commit) = &reviewed.commit else {
+        return vec!["COMMIT  never (게이트를 끝내 못 넘음)".to_owned()];
+    };
+    if index < commit.frame {
+        return vec![format!("COMMIT  at frame {} (아직 전)", commit.frame)];
+    }
+
+    let plane = table::DEFAULT_HIT_PLANE_Y;
+    let mut lines = vec![
+        format!(
+            "COMMIT  frame {} t={:.3}s  tti {:.2}s  sigma {:.0}cm",
+            commit.frame,
+            commit.t,
+            commit.time_to_impact,
+            commit.impact_sigma * 100.0
+        ),
+        // 실기가 "여기를 치겠다"고 넘겼을 대표 후보.
+        format!(
+            "  target x{:+.2} y{:+.2} z{:+.2}",
+            commit.impact.x, commit.impact.y, commit.impact.z
+        ),
+    ];
+
+    // 얼린 예측의 평면 통과점 vs 실제 통과점 — 이 한 줄이 "예측이 맞았나"의 답이다.
+    let guess = track::crossing_y(&commit.predicted, plane);
+    let truth = reviewed.observed_crossing_y(plane);
+    lines.push(match (guess, truth) {
+        (Some(g), Some(t)) => format!(
+            "  at y={plane:.2}  pred x{:+.2} z{:+.2} |v|{:.1}  real x{:+.2} z{:+.2}  MISS {:.1}cm",
+            g.position.x,
+            g.position.z,
+            g.velocity.norm(),
+            t.x,
+            t.z,
+            (g.position - t).norm() * 100.0
+        ),
+        (Some(g), None) => format!(
+            "  at y={plane:.2}  pred x{:+.2} z{:+.2} |v|{:.1}  real -- (실제가 평면을 안 지남)",
+            g.position.x,
+            g.position.z,
+            g.velocity.norm()
+        ),
+        (None, Some(t)) => format!(
+            "  at y={plane:.2}  pred -- (예측이 평면을 안 지남)  real x{:+.2} z{:+.2}",
+            t.x, t.z
+        ),
+        (None, None) => format!("  at y={plane:.2}  둘 다 평면을 안 지남"),
+    });
     return lines;
 }
