@@ -166,15 +166,7 @@ impl RoiTrack {
     }
 
     fn note_hit(&mut self, p: camera::Pixel) {
-        let delta = self
-            .last
-            .map(|prev| {
-                let dx = p.x - prev.x;
-                let dy = p.y - prev.y;
-                (dx * dx + dy * dy).sqrt()
-            })
-            .unwrap_or(0.0);
-        self.last_delta_px = delta;
+        self.last_delta_px = self.last.map(|prev| (p - prev).norm()).unwrap_or(0.0);
         self.last = Some(p);
         self.half_px = self.params.compute_half(self.last_area, self.last_delta_px);
     }

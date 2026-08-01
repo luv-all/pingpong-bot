@@ -39,7 +39,7 @@ pub fn sample_at(
                 return Some(earlier.pixel);
             }
             let weight = (sync_time - earlier.timestamp).as_secs_f64() / dt;
-            return Some(earlier.pixel.lerp(later.pixel, weight));
+            return Some(earlier.pixel.lerp(&later.pixel, weight));
         }
     }
 

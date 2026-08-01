@@ -14,13 +14,18 @@ pub mod io;
 
 mod id;
 mod params;
-mod pixel;
 mod role;
 mod view;
 
+/// 이미지 픽셀 좌표.
+///
+/// [`crate::Point3`]와 같은 방식의 별칭이다 — 뺄셈이 `Vector2`가 되고 `norm`·`lerp`가
+/// 딸려온다. 자체 구조체를 두면 외부 타입이 아니라서 편할 것 같지만, 실제로는
+/// `dx.hypot(dy)`를 손으로 다시 쓰게 된다.
+pub type Pixel = nalgebra::Point2<f64>;
+
 pub use id::Id;
 pub use params::Params;
-pub use pixel::Pixel;
 pub use role::Role;
 pub use view::View;
 

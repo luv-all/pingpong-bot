@@ -150,7 +150,7 @@ pub fn nearest_click(
 ) -> Option<usize> {
     let mut best: Option<(usize, f64)> = None;
     for (i, p) in clicks.iter().enumerate() {
-        let d = dist(*p, target);
+        let d = (*p - target).norm();
         if d > snap_px {
             continue;
         }
@@ -252,7 +252,7 @@ pub fn refine_clicks(
                     break;
                 }
                 let moved = moved_point(cur[i], dx, dy, bounds);
-                if dist(moved, anchor[i]) > radius || moved == cur[i] {
+                if (moved - anchor[i]).norm() > radius || moved == cur[i] {
                     continue;
                 }
                 let mut cand = cur.clone();
@@ -281,23 +281,13 @@ pub fn refine_clicks(
     });
 }
 
-fn dist(a: camera::Pixel, b: camera::Pixel) -> f64 {
-    let dx = a.x - b.x;
-    let dy = a.y - b.y;
-    return (dx * dx + dy * dy).sqrt();
-}
-
 /// `p`를 `center` 중심 반경 `radius` 원 안으로 당긴다.
 fn clamp_to_ball(p: camera::Pixel, center: camera::Pixel, radius: f64) -> camera::Pixel {
-    let d = dist(p, center);
+    let d = (p - center).norm();
     if d <= radius || d <= f64::EPSILON {
         return p;
     }
-    let t = radius / d;
-    return camera::Pixel::new(
-        center.x + (p.x - center.x) * t,
-        center.y + (p.y - center.y) * t,
-    );
+    return center + (p - center) * (radius / d);
 }
 
 #[cfg(test)]
@@ -453,7 +443,7 @@ mod tests {
             out.rmse_after
         );
         for (i, p) in out.clicks.iter().enumerate() {
-            let d = dist(*p, anchor[i]);
+            let d = (*p - anchor[i]).norm();
             assert!(
                 d <= radius + 1e-6,
                 "point {i} escaped radius: {d} > {radius}"

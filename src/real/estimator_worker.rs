@@ -489,9 +489,7 @@ fn reprojection_error_px(
         ) else {
             continue;
         };
-        let dx = projected.x - measured.x;
-        let dy = projected.y - measured.y;
-        worst = worst.max(dx.hypot(dy));
+        worst = worst.max((projected - measured).norm());
     }
     return worst;
 }
