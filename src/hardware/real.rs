@@ -49,7 +49,10 @@ impl RealHardware {
         // 검사하지 않는다. 단순 2단계 제어에는 필요 없고, 일부 MX-28(ID 4)의
         // EEPROM 응답 체크섬 오류가 토크 락 이전에 전체 초기화를 막았다.
         // 벤치 기본 설정은 유지하고 RAM Goal/토크만 초기화한다.
-        bus.lock_current_position()?;
+        // 단순 제어 시험은 시작 즉시 기본 자세로 이동한다. 불안정한 Present Position
+        // Status Packet을 먼저 읽지 않고, 기본 Goal을 기록한 뒤 Torque ON 한다.
+        // 첫 실행과 이전 실행에서 토크가 남은 재실행이 동일한 경로를 탄다.
+        bus.lock_at_joints(&arm.default_joints)?;
         // 실포트: is_dry_run = false → AXL 실개방
         return Self::from_bus(bus, stream_hz, rail, false, arm);
     }

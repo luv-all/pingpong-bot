@@ -182,6 +182,10 @@ impl DynamixelBus {
             let present = self.read_raw_ticks()?;
             self.write_raw_goal_ticks(&present, 0.0)?;
         }
+        return self.set_torque_enabled(enabled);
+    }
+
+    fn set_torque_enabled(&mut self, enabled: bool) -> Result<(), HwError> {
         match &mut self.backend {
             BusBackend::DryRun { .. } => {}
             #[cfg(feature = "real")]
@@ -201,6 +205,22 @@ impl DynamixelBus {
         }
         self.torque_enabled = enabled;
         Ok(())
+    }
+
+    /// 지정한 자세를 Goal로 먼저 기록한 뒤 전체 모터 토크를 켠다.
+    ///
+    /// 현재 위치 Status Packet을 읽지 않으므로 USB-시리얼 CRC 상태와 무관하게
+    /// 재실행할 수 있다. 내부 Motion Profile이 적용된 상태에서 기본 자세로 이동한다.
+    pub fn lock_at_joints(&mut self, joints: &Joints) -> Result<(), HwError> {
+        self.apply_motion_profile()?;
+        self.write_joints(joints)?;
+        self.set_torque_enabled(true)?;
+        info!(
+            ids = ?self.mapping.config.bus_ids(),
+            goal = ?joints.values,
+            "지정 기본 자세 Goal로 Dynamixel 토크 락 완료"
+        );
+        return Ok(());
     }
 
     /// 현재 자세를 Goal Position으로 먼저 기록한 뒤 전체 모터의 토크를 잠근다.

@@ -92,6 +92,20 @@ fn dry_run_lock_current_position_enables_torque_without_moving() {
 }
 
 #[test]
+fn dry_run_lock_at_joints_sets_goal_and_enables_torque_without_readback() {
+    let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
+    let goal = Joints::from_slice(&[0.2, -0.1, 0.3, -0.4]);
+
+    bus.lock_at_joints(&goal).expect("goal torque lock");
+
+    assert!(bus.torque_is_locked());
+    let cached = bus.cached_joints().expect("cached goal");
+    for (expected, actual) in goal.values.iter().zip(cached.values) {
+        assert!((expected - actual).abs() < 0.002);
+    }
+}
+
+#[test]
 fn dry_run_mirrors_slave_goal_around_zero_tick() {
     let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
     // joint0 sign=-1 → URDF +angle decreases ticks from 2048.
