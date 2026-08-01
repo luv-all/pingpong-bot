@@ -23,6 +23,14 @@ use super::{CommitRequest, ControlStatus, PoseMsg, ShotEvent, Shutdown, SimUpdat
 const MAX_REQUEST_AGE_SECS: f64 = 0.050;
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
+/// 1차 뒤 이 시간 이상 지난 최신 예측은 안정성 게이트가 늦더라도 시험용 2차로 쓴다.
+const SECOND_PREDICTION_DELAY: Duration = Duration::from_millis(30);
+/// 요청이 이만큼 끊기면 다음 추적은 새 공으로 본다.
+const NEW_BALL_REQUEST_GAP: Duration = Duration::from_millis(500);
+/// 로봇 쪽으로 오던 공의 y가 다시 이만큼 증가하면 새 투구로 본다.
+const NEW_BALL_Y_RISE_M: f64 = 0.25;
+/// 예측 충돌 직후 라켓 시험 동작이 보인 다음 중앙 복귀를 시작하는 여유.
+const RETURN_AFTER_IMPACT_MARGIN: Duration = Duration::from_millis(150);
 
 /// 실제 타격용이 아닌, 응답 확인용 손목 이동량.
 const TEST_STROKE_RAD: f64 = 15.0_f64.to_radians();
@@ -33,18 +41,48 @@ const MAX_RAIL_COMMAND_SECS: f64 = 0.30;
 struct TwoStageLatch {
     provisional_sent: bool,
     refined_sent: bool,
+    last_sent_at: Option<Instant>,
+    last_request_at: Option<Instant>,
+    min_ball_y: Option<f64>,
 }
 
 impl TwoStageLatch {
-    fn should_send(&mut self, stage: PredictionStage) -> bool {
-        // 2차까지 끝난 뒤 다시 1차가 오면 새 공이다.
-        if self.refined_sent && stage == PredictionStage::Provisional {
-            *self = Self::default();
+    fn stage_to_send(
+        &mut self,
+        requested: PredictionStage,
+        ball_y: f64,
+        at: Instant,
+    ) -> Option<PredictionStage> {
+        let request_gap = self
+            .last_request_at
+            .is_some_and(|last| at.saturating_duration_since(last) >= NEW_BALL_REQUEST_GAP);
+        let y_rose = ball_y.is_finite()
+            && self
+                .min_ball_y
+                .is_some_and(|min| min.is_finite() && ball_y - min >= NEW_BALL_Y_RISE_M);
+        if request_gap || y_rose {
+            self.provisional_sent = false;
+            self.refined_sent = false;
+            self.last_sent_at = None;
+            self.min_ball_y = ball_y.is_finite().then_some(ball_y);
+        } else if ball_y.is_finite() {
+            self.min_ball_y = Some(self.min_ball_y.map_or(ball_y, |min| min.min(ball_y)));
         }
-        return match stage {
-            PredictionStage::Provisional => !self.provisional_sent,
-            PredictionStage::Refined => !self.refined_sent,
-        };
+        self.last_request_at = Some(at);
+
+        if !self.provisional_sent {
+            return Some(PredictionStage::Provisional);
+        }
+        if self.refined_sent {
+            return None;
+        }
+        let fallback_ready = self
+            .last_sent_at
+            .is_some_and(|sent| sent.elapsed() >= SECOND_PREDICTION_DELAY);
+        if requested == PredictionStage::Refined || fallback_ready {
+            return Some(PredictionStage::Refined);
+        }
+        return None;
     }
 
     fn mark_sent(&mut self, stage: PredictionStage) {
@@ -52,6 +90,7 @@ impl TwoStageLatch {
             PredictionStage::Provisional => self.provisional_sent = true,
             PredictionStage::Refined => self.refined_sent = true,
         }
+        self.last_sent_at = Some(Instant::now());
     }
 }
 
@@ -125,8 +164,10 @@ pub fn spawn(
                 Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => continue,
             };
-            if !latch.should_send(request.stage)
-                || request.age_secs() > MAX_REQUEST_AGE_SECS
+            let Some(stage) = latch.stage_to_send(request.stage, request.ball_y, request.at) else {
+                continue;
+            };
+            if request.age_secs() > MAX_REQUEST_AGE_SECS
                 || last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
             {
                 continue;
@@ -146,7 +187,7 @@ pub fn spawn(
             let rail_x = arm
                 .rail
                 .map_or(target.position.x, |rail| rail.clamp_x(target.position.x));
-            let wrist = test_wrist_goal(ready_wrist, request.stage);
+            let wrist = test_wrist_goal(ready_wrist, stage);
             let duration = remaining.clamp(MIN_RAIL_COMMAND_SECS, MAX_RAIL_COMMAND_SECS);
             if let Err(error) = hardware.command_rail_and_racket(rail_x, wrist, duration) {
                 let _ = event_tx.send(ShotEvent::Failed {
@@ -155,11 +196,11 @@ pub fn spawn(
                 });
                 break;
             }
-            latch.mark_sent(request.stage);
+            latch.mark_sent(stage);
             last_command = Some(Instant::now());
 
             info!(
-                stage = ?request.stage,
+                stage = ?stage,
                 prediction_x = f2(target.position.x),
                 prediction_y = f2(target.position.y),
                 prediction_z = f2(target.position.z),
@@ -168,6 +209,27 @@ pub fn spawn(
                 remaining_secs = f2(remaining),
                 "2단계 단순 제어 명령"
             );
+
+            if stage == PredictionStage::Refined {
+                // 2차 명령을 즉시 기본 자세로 덮어쓰지 않는다. 예측 충돌 시각까지
+                // 기다렸다가 팔 기본 자세와 리니어 중앙을 다시 맞춘 후 새 공을 받는다.
+                let _ = status_tx.send(ControlStatus::Recovering { shot_seq: 1 });
+                thread::sleep(
+                    Duration::from_secs_f64(remaining.max(0.0)) + RETURN_AFTER_IMPACT_MARGIN,
+                );
+                if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
+                    warn!(%error, "2차 동작 후 중앙 복귀 실패 — 제어 중단");
+                    let _ = event_tx.send(ShotEvent::Failed {
+                        shot_seq: 1,
+                        reason: format!("2차 동작 후 중앙 복귀 실패: {error}"),
+                    });
+                    break;
+                }
+                latch = TwoStageLatch::default();
+                last_command = None;
+                let _ = status_tx.send(ControlStatus::Ready { shot_seq: 1 });
+                info!("2차 동작 완료 — 리니어 중앙 + 로봇 기본 자세 재정렬 완료");
+            }
         }
 
         let _ = event_tx.send(ShotEvent::Done);
@@ -215,14 +277,58 @@ mod tests {
     #[test]
     fn each_prediction_stage_is_sent_only_once_per_ball() {
         let mut latch = TwoStageLatch::default();
-        assert!(latch.should_send(PredictionStage::Provisional));
+        let now = Instant::now();
+        assert_eq!(
+            latch.stage_to_send(PredictionStage::Provisional, 2.0, now),
+            Some(PredictionStage::Provisional)
+        );
         latch.mark_sent(PredictionStage::Provisional);
-        assert!(!latch.should_send(PredictionStage::Provisional));
-        assert!(latch.should_send(PredictionStage::Refined));
+        assert_eq!(
+            latch.stage_to_send(PredictionStage::Provisional, 1.9, now),
+            None
+        );
+        assert_eq!(
+            latch.stage_to_send(PredictionStage::Refined, 1.8, now),
+            Some(PredictionStage::Refined)
+        );
         latch.mark_sent(PredictionStage::Refined);
-        assert!(!latch.should_send(PredictionStage::Refined));
+        assert_eq!(
+            latch.stage_to_send(PredictionStage::Refined, 1.7, now),
+            None
+        );
+    }
 
-        assert!(latch.should_send(PredictionStage::Provisional));
+    #[test]
+    fn new_ball_y_rise_rearms_even_when_previous_refined_was_missing() {
+        let mut latch = TwoStageLatch::default();
+        let now = Instant::now();
+        assert_eq!(
+            latch.stage_to_send(PredictionStage::Provisional, 1.2, now),
+            Some(PredictionStage::Provisional)
+        );
+        latch.mark_sent(PredictionStage::Provisional);
+
+        assert_eq!(
+            latch.stage_to_send(PredictionStage::Provisional, 2.0, now),
+            Some(PredictionStage::Provisional)
+        );
+    }
+
+    #[test]
+    fn second_updated_provisional_is_promoted_after_delay() {
+        let mut latch = TwoStageLatch::default();
+        let now = Instant::now();
+        assert_eq!(
+            latch.stage_to_send(PredictionStage::Provisional, 1.5, now),
+            Some(PredictionStage::Provisional)
+        );
+        latch.mark_sent(PredictionStage::Provisional);
+        latch.last_sent_at = Some(Instant::now() - SECOND_PREDICTION_DELAY);
+
+        assert_eq!(
+            latch.stage_to_send(PredictionStage::Provisional, 1.4, now),
+            Some(PredictionStage::Refined)
+        );
     }
 
     #[test]
