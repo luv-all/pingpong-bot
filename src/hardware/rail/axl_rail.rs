@@ -90,11 +90,11 @@ impl AxlRail {
         let board_current_m = normalize_m(self.config.domain_to_board_abs(current_m));
         let board_target_m = normalize_m(self.config.domain_to_board_abs(domain_m));
         let board_delta_m = board_target_m - board_current_m;
-        // 레일 +는 로봇 시점 오른쪽, 발사기에서 볼 때는 왼쪽이다.
+        // AXL 보드 +는 발사기에서 볼 때 오른쪽이다.
         let launcher_view_direction = if board_delta_m > 1e-6 {
-            "왼쪽"
-        } else if board_delta_m < -1e-6 {
             "오른쪽"
+        } else if board_delta_m < -1e-6 {
+            "왼쪽"
         } else {
             "정지"
         };

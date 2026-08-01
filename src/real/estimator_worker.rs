@@ -325,7 +325,12 @@ pub fn spawn(
                         let request = CommitRequest {
                             trajectory,
                             stage,
+                            ball_x: ekf.position().map_or(f64::NAN, |point| point.x),
                             ball_y: ball_y.unwrap_or(f64::NAN),
+                            ball_vx: ekf.velocity().map_or(f64::NAN, |velocity| velocity.x),
+                            raw_ball_x: last_raw
+                                .filter(|(_, at)| at.elapsed() <= RAW_MARKER_TTL)
+                                .map(|(point, _)| point.x),
                             at: Instant::now(),
                         };
                         send_latest_commit(&commit_tx, &commit_evict_rx, request, &mut stats);
@@ -441,7 +446,10 @@ mod tests {
         return CommitRequest {
             trajectory: BallTrajectory::new(Vec::new(), Vec::new(), Instant::now()).unwrap(),
             stage: PredictionStage::Provisional,
+            ball_x: 0.5,
             ball_y,
+            ball_vx: 0.0,
+            raw_ball_x: Some(0.5),
             at: Instant::now(),
         };
     }

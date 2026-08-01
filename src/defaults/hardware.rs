@@ -87,10 +87,10 @@ impl Default for RailConfig {
             axis: 0,
             irq_no: 7,
             pulses_per_meter: 250_000,
-            // 앱 +X(로봇 기준 오른쪽)는 발사기 시점에서 왼쪽이다.
-            // 실물에서 reverse=true인 때 발사기 시점 목표와 반대로 움직였으므로
-            // 추가 min↔max 반전을 제거하고 보드 절대좌표를 그대로 쓴다.
-            reverse: false,
+            // 앱 +X(로봇 기준 오른쪽)는 발사기 시점에서 왼쪽이고,
+            // AXL 보드 +방향은 발사기 시점에서 오른쪽이다. min↔max를
+            // 반전해야 실물과 sim이 같은 방향으로 움직인다.
+            reverse: true,
             x_min_m: RAIL_X_MIN_M,
             x_max_m: RAIL_X_MAX_M,
             vel: 5.0,

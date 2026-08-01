@@ -143,6 +143,11 @@ pub fn spawn(
         let window = motion::InterceptWindow::default();
         let selector =
             HitTargetSelector::new(window.y_min, window.y_max).expect("기본 목표 선택 구간");
+        let rail_center = arm
+            .rail
+            .as_ref()
+            .map(|rail| rail.default_x())
+            .unwrap_or(pose.rail_x);
 
         let mut sim_pose = pose.clone();
         if let Some(sim_tx) = &sim_tx {
@@ -164,6 +169,7 @@ pub fn spawn(
 
         let mut latch = TwoStageLatch::default();
         let mut last_command: Option<Instant> = None;
+        let mut command_seq: u64 = 0;
 
         while !shutdown.is_down() {
             let request = match rx.recv_timeout(RECV_TIMEOUT) {
@@ -171,7 +177,9 @@ pub fn spawn(
                 Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => continue,
             };
-            let Some(stage) = latch.stage_to_send(request.stage, request.ball_y, request.at) else {
+            let requested_stage = request.stage;
+            let Some(stage) = latch.stage_to_send(requested_stage, request.ball_y, request.at)
+            else {
                 continue;
             };
             if request.age_secs() > MAX_REQUEST_AGE_SECS
@@ -194,6 +202,7 @@ pub fn spawn(
             let rail_x = arm
                 .rail
                 .map_or(target.position.x, |rail| rail.clamp_x(target.position.x));
+            let previous_target_x = sim_pose.rail_x;
             let wrist = test_wrist_goal(ready_wrist, stage);
             let duration = remaining.clamp(MIN_RAIL_COMMAND_SECS, MAX_RAIL_COMMAND_SECS);
             if let Err(error) = hardware.command_rail_and_racket(rail_x, wrist, duration) {
@@ -237,16 +246,35 @@ pub fn spawn(
             sim_pose = pingpong_bot::robot::Pose::new(rail_x, sim_target_joints);
             latch.mark_sent(stage);
             last_command = Some(Instant::now());
+            command_seq = command_seq.saturating_add(1);
 
             info!(
-                stage = ?stage,
+                command = command_seq,
+                requested_stage = ?requested_stage,
+                sent_stage = ?stage,
+                stage_source = if requested_stage == stage {
+                    "추정기"
+                } else {
+                    "30ms 대체 2차"
+                },
+                raw_ball_x = request
+                    .raw_ball_x
+                    .map(f2)
+                    .unwrap_or_else(|| "없음".to_owned()),
+                ekf_ball_x = f2(request.ball_x),
+                ekf_ball_y = f2(request.ball_y),
+                ekf_ball_vx = f2(request.ball_vx),
                 prediction_x = f2(target.position.x),
                 prediction_y = f2(target.position.y),
                 prediction_z = f2(target.position.z),
+                ball_to_prediction_dx = f2(target.position.x - request.ball_x),
                 rail_x = f2(rail_x),
+                target_side_launcher = launcher_side(rail_x - rail_center),
+                command_delta_x = f2(rail_x - previous_target_x),
+                command_direction_launcher = launcher_side(rail_x - previous_target_x),
                 wrist_deg = f2(wrist.to_degrees()),
                 remaining_secs = f2(remaining),
-                "2단계 단순 제어 명령"
+                "2단계 X 좌표 추적 명령"
             );
 
             if stage == PredictionStage::Refined {
@@ -298,6 +326,17 @@ fn send_sim_control(sim_tx: &Sender<SimUpdate>, update: SimUpdate, kind: &'stati
     if let Err(error) = sim_tx.send_timeout(update, SIM_CONTROL_SEND_TIMEOUT) {
         warn!(%error, kind, "실물 제어의 sim 반영 실패");
     }
+}
+
+/// 도메인 +X는 로봇 시점 오른쪽이므로, 발사기에서 보면 왼쪽이다.
+fn launcher_side(domain_delta_x: f64) -> &'static str {
+    if domain_delta_x > 1e-6 {
+        return "왼쪽";
+    }
+    if domain_delta_x < -1e-6 {
+        return "오른쪽";
+    }
+    return "중앙/정지";
 }
 
 /// 1차에는 기본각을 유지하고, 2차에만 손목을 15° 전진시킨다.
@@ -403,5 +442,12 @@ mod tests {
             (test_wrist_goal(ready, PredictionStage::Refined) - (ready + TEST_STROKE_RAD)).abs()
                 < 1e-12
         );
+    }
+
+    #[test]
+    fn domain_x_direction_is_reported_from_launcher_view() {
+        assert_eq!(launcher_side(0.1), "왼쪽");
+        assert_eq!(launcher_side(-0.1), "오른쪽");
+        assert_eq!(launcher_side(0.0), "중앙/정지");
     }
 }

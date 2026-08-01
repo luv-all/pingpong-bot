@@ -13,8 +13,14 @@ pub struct CommitRequest {
     pub trajectory: BallTrajectory,
     /// 초기 목표인지, 0.25 s 관측·10 cm 수렴을 통과한 정밀 목표인지.
     pub stage: PredictionStage,
+    /// 요청 시점 EKF 공 x [m].
+    pub ball_x: f64,
     /// 요청 시점의 공 y [m] — 로그용.
     pub ball_y: f64,
+    /// 요청 시점 EKF x 속도 [m/s].
+    pub ball_vx: f64,
+    /// 필터 전 최신 삼각측량 x [m]. 최근 150 ms 안의 값만 담는다.
+    pub raw_ball_x: Option<f64>,
     /// 예측을 만든 시각.
     pub at: Instant,
 }
