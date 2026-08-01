@@ -97,7 +97,8 @@ impl Default for RailConfig {
             accel: 12.0,
             decel: 12.0,
             min_vel: 0.001,
-            max_vel: 5.0,
+            // 통상 5 m/s를 쓰되, 실시간 1·2차 보정은 7 m/s까지 허용한다.
+            max_vel: 7.0,
             pulse_out_method: 4,
             enc_input_method: 3,
             abs_rel_mode: 0,

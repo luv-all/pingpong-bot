@@ -145,7 +145,7 @@ impl RealHardware {
         });
     }
 
-    fn read_rail_x_m(&mut self) -> Result<f64, HwError> {
+    fn read_rail_position_m(&mut self) -> Result<f64, HwError> {
         let mut guard = self.rail.lock().map_err(|_| HwError::ReadFailed {
             reason: "레일 mutex poisoned".into(),
         })?;
@@ -168,6 +168,10 @@ impl RealHardware {
 }
 
 impl Hardware for RealHardware {
+    fn read_rail_x_m(&mut self) -> Result<f64, HwError> {
+        return self.read_rail_position_m();
+    }
+
     fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
         self.reap_executor();
         if self.busy.swap(true, Ordering::AcqRel) {
@@ -259,7 +263,7 @@ impl Hardware for RealHardware {
                 reason: "Dynamixel bus mutex poisoned".into(),
             })?
             .cached_joints()?;
-        return Ok(robot::Pose::new(self.read_rail_x_m()?, joints));
+        return Ok(robot::Pose::new(self.read_rail_position_m()?, joints));
     }
 
     fn command_initial_pose(&mut self, rail_x: f64, joints: &robot::Joints) -> Result<(), HwError> {

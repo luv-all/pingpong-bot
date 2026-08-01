@@ -7,6 +7,11 @@ pub trait Hardware: Send {
     fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError>;
     fn read_pose(&mut self) -> Result<robot::Pose, HwError>;
 
+    /// Dynamixel 상태 읽기와 분리한 리니어 레일 실제 위치 진단.
+    fn read_rail_x_m(&mut self) -> Result<f64, HwError> {
+        return self.read_pose().map(|pose| pose.rail_x);
+    }
+
     /// 실기 시작 전 레일 중앙 정렬과 전체 관절 기본 자세 설정.
     /// 공 예측 제어와 분리해 초기화가 실제로 끝난 뒤에만 Ready가 되게 한다.
     fn command_initial_pose(

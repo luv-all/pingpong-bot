@@ -110,20 +110,6 @@ impl AxlLive {
         commanded_m: f64,
         vel: f64,
     ) -> Result<(), HwError> {
-        // 1차 목표로 이동 중 정밀 목표가 오면 기존 명령을 부드럽게 감속
-        // 정지한 뒤 새 목표를 건다. 예전처럼 InMotion을 무시하면 관절만
-        // 정밀 위치로 가고 레일은 1차 위치로 가는 실기 불일치가 생긴다.
-        let mut in_motion = 0;
-        check_axl("AxmStatusReadInMotion", unsafe {
-            (self.ffi.axm_status_read_in_motion)(config.axis, &mut in_motion)
-        })?;
-        if in_motion != 0 {
-            check_axl("AxmMoveSStop", unsafe {
-                (self.ffi.axm_move_s_stop)(config.axis)
-            })?;
-            self.wait_idle(config.axis)?;
-        }
-
         check_axl("AxmMotSetAbsRelMode", unsafe {
             (self.ffi.axm_mot_set_abs_rel_mode)(config.axis, 0)
         })?;
@@ -131,6 +117,21 @@ impl AxlLive {
             (self.ffi.axm_move_start_pos)(config.axis, commanded_m, vel, config.accel, config.decel)
         })?;
         return Ok(());
+    }
+
+    /// 진행 중인 1차 명령을 감속 정지한다.
+    /// 호출자는 정지 후 실제 위치를 다시 읽어 2차 속도를 계산한다.
+    pub(super) fn stop_for_retarget(&mut self, axis: i32) -> Result<bool, HwError> {
+        let mut in_motion = 0;
+        check_axl("AxmStatusReadInMotion", unsafe {
+            (self.ffi.axm_status_read_in_motion)(axis, &mut in_motion)
+        })?;
+        if in_motion == 0 {
+            return Ok(false);
+        }
+        check_axl("AxmMoveSStop", unsafe { (self.ffi.axm_move_s_stop)(axis) })?;
+        self.wait_idle(axis)?;
+        return Ok(true);
     }
 
     pub(super) fn move_abs_m_blocking(

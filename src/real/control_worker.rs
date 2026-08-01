@@ -10,6 +10,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
+use pingpong_bot::Point3;
 use pingpong_bot::error::HwError;
 use pingpong_bot::hardware::Hardware;
 use pingpong_bot::robot::Arm;
@@ -43,6 +44,16 @@ struct TwoStageLatch {
     refined_sent: bool,
     last_request_at: Option<Instant>,
     min_ball_y: Option<f64>,
+}
+
+struct PendingImpactDiagnostic {
+    command: u64,
+    stage: PredictionStage,
+    predicted_ball: Point3,
+    rail_target_x: f64,
+    wrist_target_rad: f64,
+    issued_at: Instant,
+    expected_at: Instant,
 }
 
 impl TwoStageLatch {
@@ -161,10 +172,46 @@ pub fn spawn(
 
         let mut latch = TwoStageLatch::default();
         let mut last_command: Option<Instant> = None;
+        let mut impact_diagnostic: Option<PendingImpactDiagnostic> = None;
         let mut recovery_deadline: Option<Instant> = None;
         let mut command_seq: u64 = 0;
 
         while !shutdown.is_down() {
+            if impact_diagnostic
+                .as_ref()
+                .is_some_and(|diagnostic| Instant::now() >= diagnostic.expected_at)
+                && let Some(diagnostic) = impact_diagnostic.take()
+            {
+                let sampled_at = Instant::now();
+                match hardware.read_rail_x_m() {
+                    Ok(actual_rail_x) => info!(
+                        command = diagnostic.command,
+                        stage = ?diagnostic.stage,
+                        predicted_ball_x = f2(diagnostic.predicted_ball.x),
+                        predicted_ball_y = f2(diagnostic.predicted_ball.y),
+                        predicted_ball_z = f2(diagnostic.predicted_ball.z),
+                        rail_target_x = f2(diagnostic.rail_target_x),
+                        actual_rail_x = f2(actual_rail_x),
+                        rail_error_m = f2(actual_rail_x - diagnostic.rail_target_x),
+                        wrist_target_deg = f2(diagnostic.wrist_target_rad.to_degrees()),
+                        elapsed_secs = f2(sampled_at.duration_since(diagnostic.issued_at).as_secs_f64()),
+                        deadline_late_ms = f2(
+                            sampled_at
+                                .saturating_duration_since(diagnostic.expected_at)
+                                .as_secs_f64()
+                                * 1e3,
+                        ),
+                        "공 로봇 라인 도달 예정 시각의 실제 레일 위치"
+                    ),
+                    Err(error) => warn!(
+                        %error,
+                        command = diagnostic.command,
+                        rail_target_x = f2(diagnostic.rail_target_x),
+                        "공 로봇 라인 도달 예정 시각의 실제 레일 위치 읽기 실패"
+                    ),
+                }
+            }
+
             if recovery_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 let return_reason = if latch.refined_sent {
                     "2차 동작 완료"
@@ -193,17 +240,20 @@ pub fn spawn(
                 }
                 latch = TwoStageLatch::default();
                 last_command = None;
+                impact_diagnostic = None;
                 recovery_deadline = None;
                 let _ = status_tx.send(ControlStatus::Ready { shot_seq: 1 });
                 info!(return_reason, "리니어 중앙 + 로봇 기본 자세 재정렬 완료");
                 continue;
             }
 
-            let wait = recovery_deadline.map_or(RECV_TIMEOUT, |deadline| {
-                deadline
-                    .saturating_duration_since(Instant::now())
-                    .min(RECV_TIMEOUT)
+            let now = Instant::now();
+            let mut wait = recovery_deadline.map_or(RECV_TIMEOUT, |deadline| {
+                deadline.saturating_duration_since(now).min(RECV_TIMEOUT)
             });
+            if let Some(diagnostic) = &impact_diagnostic {
+                wait = wait.min(diagnostic.expected_at.saturating_duration_since(now));
+            }
             let request = match rx.recv_timeout(wait) {
                 Ok(request) => request,
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -277,13 +327,20 @@ pub fn spawn(
             }
             sim_pose = pingpong_bot::robot::Pose::new(rail_x, sim_target_joints);
             latch.mark_sent(stage);
-            last_command = Some(Instant::now());
-            recovery_deadline = Some(
-                Instant::now()
-                    + Duration::from_secs_f64(remaining.max(0.0))
-                    + RETURN_AFTER_IMPACT_MARGIN,
-            );
+            let issued_at = Instant::now();
+            last_command = Some(issued_at);
             command_seq = command_seq.saturating_add(1);
+            let expected_at = issued_at + Duration::from_secs_f64(remaining.max(0.0));
+            impact_diagnostic = Some(PendingImpactDiagnostic {
+                command: command_seq,
+                stage,
+                predicted_ball: target.position,
+                rail_target_x: rail_x,
+                wrist_target_rad: wrist,
+                issued_at,
+                expected_at,
+            });
+            recovery_deadline = Some(expected_at + RETURN_AFTER_IMPACT_MARGIN);
 
             info!(
                 command = command_seq,

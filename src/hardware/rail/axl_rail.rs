@@ -1,10 +1,16 @@
 //! AXL 리니어 레일 dry-run 및 Windows 실물 어댑터.
 
+use std::time::Instant;
+
 use crate::error::HwError;
 use tracing::info;
 
 use super::rail_config::RailConfig;
 use super::rail_kind::RailKind;
+
+/// 짧은 거리도 느린 등속 명령으로 늘어지지 않게 한다.
+/// 실제 도달 속도는 AXL의 가감속 프로파일과 이동 거리가 제한한다.
+const DIRECT_MIN_PEAK_VEL_M_S: f64 = 2.0;
 
 pub struct AxlRail {
     config: RailConfig,
@@ -77,16 +83,37 @@ impl AxlRail {
         return Ok(normalize_m(self.config.board_to_domain_abs(board_m)));
     }
 
-    /// 궤적 시작 시 한 번만 레일을 이동한다. 속도는 `|Δx|/duration` (램프 무시).
+    /// 궤적 시작 시 한 번만 레일을 이동한다.
+    /// 재목표 감속 정지 후 실제 위치·남은 시간과 가감속 램프를 반영한다.
     pub fn command_abs_in_secs(&mut self, x: f64, duration_secs: f64) -> Result<f64, HwError> {
+        let started_at = Instant::now();
         let domain_m = normalize_m(self.config.clamp_m(x));
+        let retargeted = match &mut self.kind {
+            RailKind::DryRun { .. } => false,
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => live.stop_for_retarget(self.config.axis)?,
+        };
         let current_m = self.read_x_m()?;
         let distance_m = (domain_m - current_m).abs();
         if distance_m <= 1e-9 || duration_secs <= f64::EPSILON {
             return self.set_domain_position(domain_m);
         }
 
-        let vel = (distance_m / duration_secs).clamp(self.config.min_vel, self.config.max_vel);
+        let stop_elapsed_secs = started_at.elapsed().as_secs_f64();
+        let usable_duration_secs = (duration_secs - stop_elapsed_secs).max(f64::EPSILON);
+        let direct_min_vel = self
+            .config
+            .min_vel
+            .max(DIRECT_MIN_PEAK_VEL_M_S)
+            .min(self.config.max_vel);
+        let vel = ramp_compensated_velocity(
+            distance_m,
+            usable_duration_secs,
+            self.config.accel,
+            self.config.decel,
+            direct_min_vel,
+            self.config.max_vel,
+        );
         let board_current_m = normalize_m(self.config.domain_to_board_abs(current_m));
         let board_target_m = normalize_m(self.config.domain_to_board_abs(domain_m));
         let board_delta_m = board_target_m - board_current_m;
@@ -106,8 +133,11 @@ impl AxlRail {
             board_delta_m,
             launcher_view_direction,
             reverse = self.config.reverse,
+            retargeted,
+            stop_elapsed_secs,
             velocity_m_s = vel,
-            duration_secs,
+            requested_duration_secs = duration_secs,
+            usable_duration_secs,
             "AXL 레일 이동 명령"
         );
         match &mut self.kind {
@@ -172,6 +202,27 @@ impl AxlRail {
     }
 }
 
+/// 유한한 가속·감속으로 잃는 거리를 보상한 피크 속도.
+/// 주어진 시간이 물리적으로 너무 짧으면 허용 최대 속도를 쓴다.
+fn ramp_compensated_velocity(
+    distance_m: f64,
+    duration_secs: f64,
+    accel_m_s2: f64,
+    decel_m_s2: f64,
+    min_vel_m_s: f64,
+    max_vel_m_s: f64,
+) -> f64 {
+    let base = distance_m / duration_secs.max(f64::EPSILON);
+    let ramp = 0.5 / accel_m_s2.max(f64::EPSILON) + 0.5 / decel_m_s2.max(f64::EPSILON);
+    let discriminant = duration_secs * duration_secs - 4.0 * ramp * distance_m;
+    let compensated = if discriminant >= 0.0 {
+        (duration_secs - discriminant.sqrt()) / (2.0 * ramp)
+    } else {
+        max_vel_m_s
+    };
+    return compensated.max(base).clamp(min_vel_m_s, max_vel_m_s);
+}
+
 fn normalize_m(x: f64) -> f64 {
     return (x * 1_000_000_000_000.0).round() / 1_000_000_000_000.0;
 }
@@ -186,7 +237,7 @@ fn validate_config(config: &RailConfig) -> Result<(), HwError> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::AxlRail;
+    use super::{AxlRail, ramp_compensated_velocity};
     use crate::hardware::rail::RailConfig;
 
     #[test]
@@ -205,6 +256,27 @@ mod tests {
         let commanded = rail.command_abs_in_secs(0.2, 0.4).unwrap();
         assert_eq!(commanded, 0.2);
         assert_eq!(rail.read_x_m().unwrap(), 0.2);
+    }
+
+    #[test]
+    fn short_move_uses_fast_minimum_peak_velocity() {
+        let vel = ramp_compensated_velocity(0.05, 0.30, 12.0, 12.0, 2.0, 7.0);
+        assert_eq!(vel, 2.0);
+    }
+
+    #[test]
+    fn impossible_deadline_uses_allowed_maximum_velocity() {
+        let vel = ramp_compensated_velocity(0.70, 0.12, 12.0, 12.0, 2.0, 7.0);
+        assert_eq!(vel, 7.0);
+    }
+
+    #[test]
+    fn ramp_compensation_is_faster_than_distance_over_time() {
+        let distance = 0.15;
+        let duration = 0.26;
+        let vel = ramp_compensated_velocity(distance, duration, 12.0, 12.0, 0.001, 7.0);
+        assert!(vel > distance / duration);
+        assert!(vel <= 7.0);
     }
 
     #[test]

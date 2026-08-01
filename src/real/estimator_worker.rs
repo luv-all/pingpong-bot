@@ -14,7 +14,7 @@ use pingpong_bot::detector;
 use pingpong_bot::estimator::{Ekf, Estimator, GateOutcome, Prediction, Triangulate};
 use pingpong_bot::robot::control::{HitTargetSelector, PredictionStability};
 use pingpong_bot::robot::motion::{InterceptWindow, Planner};
-use tracing::{debug, info_span};
+use tracing::{debug, info, info_span};
 
 use super::ball_receding::{BallReceding, MIN_DELTA_Y, MIN_SAMPLES};
 use super::fmt::f2;
@@ -139,12 +139,15 @@ pub fn spawn(
         let planes = intercept.hit_planes();
         let selector =
             HitTargetSelector::new(intercept.y_min, intercept.y_max).expect("기본 목표 선택 구간");
+        let robot_line_y = (intercept.y_min + intercept.y_max) * 0.5;
         let mut prediction_stability = PredictionStability::default();
         let mut accepting = false;
         let mut shot_seq: u64 = 0;
         let mut receding = BallReceding::new(MIN_DELTA_Y, MIN_SAMPLES);
         let mut announced_track = false;
         let mut last_decision: Option<Decision> = None;
+        let mut previous_ball_y: Option<f64> = None;
+        let mut robot_line_logged = false;
         let mut progress = Throttle::new(PROGRESS_PERIOD);
 
         while !shutdown.is_down() {
@@ -158,6 +161,8 @@ pub fn spawn(
                         receding.reset();
                         ekf.reset();
                         prediction_stability.reset();
+                        previous_ball_y = None;
+                        robot_line_logged = false;
                     }
                     ControlStatus::Recovering { .. } => {
                         accepting = false;
@@ -240,6 +245,30 @@ pub fn spawn(
 
             let mut ball_y = ekf.position().map(|position| position.coords.y);
 
+            if let Some(position) = ekf.position() {
+                if !robot_line_logged
+                    && previous_ball_y.is_some_and(|previous| previous > robot_line_y)
+                    && position.y <= robot_line_y
+                {
+                    let raw = last_raw
+                        .filter(|(_, at)| at.elapsed() <= RAW_MARKER_TTL)
+                        .map(|(point, _)| point);
+                    info!(
+                        shot = shot_seq,
+                        robot_line_y = f2(robot_line_y),
+                        ekf_ball_x = f2(position.x),
+                        ekf_ball_y = f2(position.y),
+                        ekf_ball_z = f2(position.z),
+                        raw_ball_x = raw.map(|point| f2(point.x)),
+                        raw_ball_y = raw.map(|point| f2(point.y)),
+                        raw_ball_z = raw.map(|point| f2(point.z)),
+                        "공이 로봇 라인을 통과할 때의 EKF·생 삼각측량 위치"
+                    );
+                    robot_line_logged = true;
+                }
+                previous_ball_y = Some(position.y);
+            }
+
             // 공 y가 로봇에서 멀어지면(증가) 새 급구 루프 — EKF를 새로 시드한다.
             if accepting
                 && let Some(y) = ball_y
@@ -250,6 +279,8 @@ pub fn spawn(
                 announced_track = false;
                 last_decision = None;
                 receding.reset();
+                previous_ball_y = None;
+                robot_line_logged = false;
                 ball_y = None;
                 debug!(shot = shot_seq, y = f2(y), "공 y 증가 — EKF 리셋 (새 루프)");
             }
