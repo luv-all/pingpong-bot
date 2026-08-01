@@ -37,6 +37,9 @@ const SIM_CONTROL_SEND_TIMEOUT: Duration = Duration::from_millis(20);
 const TEST_STROKE_RAD: f64 = 15.0_f64.to_radians();
 const MIN_RAIL_COMMAND_SECS: f64 = 0.05;
 const MAX_RAIL_COMMAND_SECS: f64 = 0.30;
+/// 실기 로그의 발사기 오른쪽 정상 표본에서 예측이 공보다 평균적으로
+/// 도메인 +X 쪽에 치우쳤다. 라켓 반폭 안에 들어오도록 -4 cm만 보정한다.
+const LAUNCHER_RIGHT_RAIL_BIAS_M: f64 = 0.04;
 
 #[derive(Default)]
 struct TwoStageLatch {
@@ -318,7 +321,21 @@ pub fn spawn(
                 );
                 continue;
             }
-            let rail_x = target.position.x;
+            let rail_x = corrected_rail_x(target.position.x, rail_center);
+            if let Some(rail) = arm.rail.as_ref()
+                && (rail_x < rail.x_min || rail_x > rail.x_max)
+            {
+                warn!(
+                    requested_stage = ?requested_stage,
+                    sent_stage = ?stage,
+                    prediction_x = f2(target.position.x),
+                    corrected_rail_x = f2(rail_x),
+                    rail_x_min = f2(rail.x_min),
+                    rail_x_max = f2(rail.x_max),
+                    "오른쪽 보정 후 레일 범위 밖 예측 제외"
+                );
+                continue;
+            }
             let previous_target_x = sim_pose.rail_x;
             let wrist = test_wrist_goal(ready_wrist, stage);
             let duration = remaining.clamp(MIN_RAIL_COMMAND_SECS, MAX_RAIL_COMMAND_SECS);
@@ -400,6 +417,7 @@ pub fn spawn(
                 prediction_z = f2(target.position.z),
                 ball_to_prediction_dx = f2(target.position.x - request.ball_x),
                 rail_x = f2(rail_x),
+                launcher_right_bias_m = f2(rail_x - target.position.x),
                 target_side_launcher = launcher_side(rail_x - rail_center),
                 command_delta_x = f2(rail_x - previous_target_x),
                 command_direction_launcher = launcher_side(rail_x - previous_target_x),
@@ -436,6 +454,14 @@ fn launcher_side(domain_delta_x: f64) -> &'static str {
         return "오른쪽";
     }
     return "중앙/정지";
+}
+
+/// 발사기 오른쪽(도메인 X가 중앙보다 작은 쪽)만 실측 보정한다.
+fn corrected_rail_x(prediction_x: f64, rail_center: f64) -> f64 {
+    if prediction_x < rail_center {
+        return prediction_x - LAUNCHER_RIGHT_RAIL_BIAS_M;
+    }
+    return prediction_x;
 }
 
 /// 1차에는 기본각을 유지하고, 2차에만 손목을 15° 전진시킨다.
@@ -551,5 +577,11 @@ mod tests {
         assert_eq!(launcher_side(0.1), "왼쪽");
         assert_eq!(launcher_side(-0.1), "오른쪽");
         assert_eq!(launcher_side(0.0), "중앙/정지");
+    }
+
+    #[test]
+    fn launcher_right_prediction_gets_four_centimeter_bias() {
+        assert!((corrected_rail_x(0.50, 0.705) - 0.46).abs() < 1e-12);
+        assert_eq!(corrected_rail_x(0.90, 0.705), 0.90);
     }
 }

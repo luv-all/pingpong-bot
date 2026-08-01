@@ -15,6 +15,9 @@ const DIRECT_MIN_PEAK_VEL_M_S: f64 = 2.0;
 pub struct AxlRail {
     config: RailConfig,
     kind: RailKind,
+    /// 직전에 보드에 건 도메인 절대 목표. 진행 방향을 유지하는
+    /// 1차→2차 재목표에서 불필요한 감속 정지를 피하는 데 쓴다.
+    active_target_m: Option<f64>,
 }
 
 impl AxlRail {
@@ -24,6 +27,7 @@ impl AxlRail {
         return Ok(Self {
             config,
             kind: RailKind::DryRun { position_m: 0.0 },
+            active_target_m: None,
         });
     }
 
@@ -55,6 +59,7 @@ impl AxlRail {
         return Ok(Self {
             config,
             kind: RailKind::Live(live),
+            active_target_m: None,
         });
     }
 
@@ -88,12 +93,24 @@ impl AxlRail {
     pub fn command_abs_in_secs(&mut self, x: f64, duration_secs: f64) -> Result<f64, HwError> {
         let started_at = Instant::now();
         let domain_m = normalize_m(self.config.clamp_m(x));
-        let retargeted = match &mut self.kind {
-            RailKind::DryRun { .. } => false,
-            #[cfg(all(windows, feature = "real"))]
-            RailKind::Live(live) => live.stop_for_retarget(self.config.axis)?,
+        let mut current_m = self.read_x_m()?;
+        let direction_reversed = self.active_target_m.is_some_and(|active_target| {
+            retarget_requires_stop(current_m, active_target, domain_m)
+        });
+        // 직전 목표와 새 목표가 현재 위치의 같은 쪽이면 이동을
+        // 끊지 않고 새 절대 목표만 건다. 진짜 반전일 때만 정지한다.
+        let retargeted = if direction_reversed {
+            match &mut self.kind {
+                RailKind::DryRun { .. } => false,
+                #[cfg(all(windows, feature = "real"))]
+                RailKind::Live(live) => live.stop_for_retarget(self.config.axis)?,
+            }
+        } else {
+            false
         };
-        let current_m = self.read_x_m()?;
+        if retargeted {
+            current_m = self.read_x_m()?;
+        }
         let distance_m = (domain_m - current_m).abs();
         if distance_m <= 1e-9 || duration_secs <= f64::EPSILON {
             return self.set_domain_position(domain_m);
@@ -134,6 +151,7 @@ impl AxlRail {
             launcher_view_direction,
             reverse = self.config.reverse,
             retargeted,
+            direction_reversed,
             stop_elapsed_secs,
             velocity_m_s = vel,
             requested_duration_secs = duration_secs,
@@ -150,6 +168,7 @@ impl AxlRail {
                 live.start_move_abs_m(&self.config, board_target_m, vel)?;
             }
         }
+        self.active_target_m = Some(domain_m);
         return Ok(domain_m);
     }
 
@@ -159,6 +178,7 @@ impl AxlRail {
             #[cfg(all(windows, feature = "real"))]
             RailKind::Live(_) => {}
         }
+        self.active_target_m = Some(domain_m);
         return Ok(domain_m);
     }
 
@@ -173,6 +193,7 @@ impl AxlRail {
                 live.move_abs_m_blocking(&self.config, board_m)?;
             }
         }
+        self.active_target_m = Some(domain_m);
         return Ok(domain_m);
     }
 
@@ -225,6 +246,16 @@ fn ramp_compensated_velocity(
 
 fn normalize_m(x: f64) -> f64 {
     return (x * 1_000_000_000_000.0).round() / 1_000_000_000_000.0;
+}
+
+/// 직전 목표와 새 목표가 현재 위치의 반대쪽일 때만 감속 정지한다.
+fn retarget_requires_stop(current_m: f64, active_target_m: f64, new_target_m: f64) -> bool {
+    const DIRECTION_EPSILON_M: f64 = 1e-4;
+    let active_delta = active_target_m - current_m;
+    let new_delta = new_target_m - current_m;
+    return active_delta.abs() > DIRECTION_EPSILON_M
+        && new_delta.abs() > DIRECTION_EPSILON_M
+        && active_delta.signum() != new_delta.signum();
 }
 
 fn validate_config(config: &RailConfig) -> Result<(), HwError> {
@@ -293,6 +324,18 @@ mod tests {
         rail.command_abs_in_secs(0.0, 0.5).unwrap();
         let commanded = rail.command_abs_in_secs(0.0, 0.5).unwrap();
         assert_eq!(commanded, 0.0);
+    }
+
+    #[test]
+    fn same_direction_retarget_does_not_request_stop() {
+        assert!(!super::retarget_requires_stop(0.77, 1.22, 1.13));
+        assert!(!super::retarget_requires_stop(0.58, 0.51, 0.45));
+    }
+
+    #[test]
+    fn physical_direction_reversal_requests_stop() {
+        assert!(super::retarget_requires_stop(0.53, 0.48, 0.74));
+        assert!(super::retarget_requires_stop(0.79, 0.96, 0.73));
     }
 
     #[test]
