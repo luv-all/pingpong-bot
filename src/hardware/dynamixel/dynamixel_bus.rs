@@ -566,31 +566,51 @@ impl DynamixelBus {
             #[cfg(feature = "real")]
             BusBackend::Real(real) => {
                 let ids = self.mapping.config.motor_ids.clone();
-                real.read_many_with_retry(
+                // 예전 실기 코드에서 정상 사용하던 Sync Read를 먼저 그대로 시도한다.
+                // USB 변환기/배선 상태에 따라 연속 Status Packet이 깨지는 경우에만
+                // C++ SDK와 같은 모터별 개별 읽기로 한 번 더 복구한다.
+                let raw = match real.sync_read_with_retry(
                     &ids,
                     self.mapping.config.addr_present_position,
                     4,
                     self.mapping.config.comm_retries,
                     self.mapping.config.comm_retry_delay_ms,
-                )
-                .map_err(|error| {
-                    read_transport_error(format!(
-                        "Present Position 순차 read 실패 (addr={}, ids={ids:?}): {error}",
-                        self.mapping.config.addr_present_position
-                    ))
-                })?
-                .into_iter()
-                .map(|bytes| {
-                    let raw: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
-                        read_transport_error(format!(
-                            "Present Position 응답 길이 오류: got {} bytes, want 4",
-                            bytes.len()
-                        ))
-                    })?;
-                    // Python SDK getData(4) → unsigned 해석 후 int. joint mode 0..=4095.
-                    Ok(u32::from_le_bytes(raw) as i32)
-                })
-                .collect::<Result<Vec<_>, HwError>>()?
+                ) {
+                    Ok(raw) => raw,
+                    Err(sync_error) => {
+                        warn!(
+                            error = %sync_error,
+                            ids = ?ids,
+                            "Present Position Sync Read 실패 — 모터별 순차 읽기로 복구 시도"
+                        );
+                        real.read_many_with_retry(
+                            &ids,
+                            self.mapping.config.addr_present_position,
+                            4,
+                            self.mapping.config.comm_retries,
+                            self.mapping.config.comm_retry_delay_ms,
+                        )
+                        .map_err(|sequential_error| {
+                            read_transport_error(format!(
+                                "Present Position 읽기 실패 (addr={}, ids={ids:?}); \
+                                 이전 Sync Read: {sync_error}; 순차 read: {sequential_error}",
+                                self.mapping.config.addr_present_position
+                            ))
+                        })?
+                    }
+                };
+                raw.into_iter()
+                    .map(|bytes| {
+                        let raw: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
+                            read_transport_error(format!(
+                                "Present Position 응답 길이 오류: got {} bytes, want 4",
+                                bytes.len()
+                            ))
+                        })?;
+                        // Python SDK getData(4) → unsigned 해석 후 int. joint mode 0..=4095.
+                        Ok(u32::from_le_bytes(raw) as i32)
+                    })
+                    .collect::<Result<Vec<_>, HwError>>()?
             }
         };
         if ticks.len() != joint_count {

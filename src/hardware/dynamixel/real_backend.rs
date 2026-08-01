@@ -26,6 +26,23 @@ impl RealBackend {
         })
     }
 
+    /// 예전 실기 코드가 사용하던 Group Sync Read 경로.
+    ///
+    /// 벤치에서 검증됐던 초기화 동작을 보존하기 위해 Present Position은 이 경로를
+    /// 우선 사용하고, 실패할 때만 모터별 순차 읽기로 내려간다.
+    pub(super) fn sync_read_with_retry(
+        &mut self,
+        ids: &[u8],
+        address: u8,
+        length: u8,
+        retries: u32,
+        retry_delay_ms: u64,
+    ) -> Result<Vec<Vec<u8>>, String> {
+        self.run_with_retry(retries, retry_delay_ms, "sync_read", |protocol, port| {
+            protocol.sync_read(port, ids, address, length)
+        })
+    }
+
     /// 한 모터만 읽는다. 여러 모터의 Status Packet이 연달아 들어오는
     /// `sync_read`에서 체크섬 오류가 나는 저속(57,600 baud) 버스용 경로다.
     pub(super) fn read_with_retry(
