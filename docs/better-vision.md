@@ -142,8 +142,8 @@ src/vision/
     color.rs       ColorGate  : Layer — 포함·제외로 피팅한 판별면
     shape.rs       ShapeGate         — 종단, 마스크 → Candidate
   track/
-    mod.rs         Tracker — 생애주기 (Idle → Tracking → Declared)
-    filter.rs      Filter  — 픽셀 공간 EKF
+    mod.rs         Tracker — 정책: 생애주기 (Idle → Tracking → Declared) · 트랙 폐기
+    filter.rs      Filter  — 수학: 픽셀 공간 EKF. 카메라도 페이즈도 모른다
     associate.rs   연관 · 시드
   trace.rs         Trace — 툴 전용 단계별 산출물
 ```
@@ -365,18 +365,93 @@ pub fn seed(views: &[(&camera::Params, &[Candidate])]) -> Option<Seed>;
 것을 잡아야만 한 번 갱신됐고, 그래서 캠이 늘어도 "짝 맞추기"만 더 어려워졌다. 픽셀 공간에서는
 카메라가 서로를 기다리지 않으므로 **한 대 추가 = 측정 소스 하나 추가**, 그게 전부다.
 
-#### 생애주기 — 추적과 선언을 분리
+#### `Tracker` — 정책. `Filter`는 수학만 한다
 
 ```rust
 pub enum Phase {
-    /// 트랙 없음. 매 프레임 시드를 시도한다.
+    /// 트랙 없음. 시드를 시도한다.
     Idle,
     /// 추적 중, 아직 안 보낸다.
     Tracking,
     /// 네트를 넘었다 — 이제부터 매 프레임 [`Trajectory`]를 낸다.
-    Declared { seq: u64 },
+    Declared,
+}
+
+/// 공 하나의 트랙 — 필터의 **생애주기와 정책**을 든다.
+///
+/// [`Filter`]는 순수 수학이다. 예측하고, 갱신하고, 야코비안을 만든다 — 카메라도 후보도
+/// 페이즈도 모른다. 그래서 합성 상태만으로 테스트된다.
+///
+/// 언제 시드할지, 언제 선언할지, 언제 버릴지, 무엇을 쌓을지는 전부 여기다.
+/// **지금 `ekf.rs`가 601줄인 건 그 둘을 한 파일에 섞었기 때문이다.**
+pub struct Tracker {
+    filter: Filter,
+    phase: Phase,
+    seq: u64,
+    /// 관측이 있던 시각의 필터 상태 — 계약의 `measured`가 된다.
+    measured: Vec<State>,
+    /// 연속 거부 수. 한도를 넘으면 트랙을 버린다.
+    rejects: u32,
+    last_seen: Option<f64>,
+}
+
+impl Tracker {
+    /// 카메라 하나의 후보를 먹인다 — 프레임마다 그 카메라 것만. **다른 캠을 안 기다린다.**
+    ///
+    /// 연관에 성공하면 픽셀로 필터를 갱신하고 `measured`에 한 점을 쌓는다.
+    /// 실패하면 그 프레임은 예측으로 넘어간다 (트랙은 안 끊는다).
+    pub fn observe(&mut self, cam: &Camera, candidates: &[Candidate], t: f64) -> Gate;
+
+    /// [`Phase::Idle`]일 때만. 카메라 전체 후보에서 물리적으로 말 되는 시드를 찾는다.
+    pub fn try_seed(&mut self, views: &[(&Camera, &[Candidate])], t: f64) -> bool;
+
+    /// 지금 계약. 선언 전이면 `None`.
+    pub fn trajectory(&self, now: f64) -> Option<Trajectory>;
+
+    pub fn phase(&self) -> Phase;
 }
 ```
+
+**트랙을 버리는 조건** — 전부 `Tracker`가 판정한다. 하나라도 걸리면 `Idle`로 돌아가고
+`seq`가 하나 오른다.
+
+| 조건 | 뜻 |
+|---|---|
+| 연속 거부 한도 초과 | 필터가 틀렸다 — 예측이 관측과 계속 안 맞는다 |
+| 관측 공백 (stale) | 공을 잃었다 |
+| `y`가 다시 증가 | 공이 멀어진다 — 다음 샷이다 |
+| 플레이 부피 이탈 | 끝났다 |
+
+#### 시드만 다른 캠을 기다린다
+
+**갱신은 안 기다린다** — 관측 하나가 픽셀 하나라 프레임이 오는 대로 필터에 들어간다.
+그런데 **시드는 최소 두 시선이 필요하다.** 프레임은 한 대씩 오므로 [`Vision`]이 카메라별
+최근 후보를 짧은 TTL로 들고 있다가 [`Tracker::try_seed`]에 넘긴다.
+
+```rust
+impl Vision {
+    pub fn feed(&mut self, frame: &Frame) -> Option<Trajectory> {
+        let t = self.elapsed(frame.timestamp);
+        let cam = self.camera_mut(frame.camera_id)?;
+        let candidates = cam.detector.detect(frame);
+
+        match self.tracker.phase() {
+            // 시드 전에만 캠별 최근 후보를 모은다. 트랙이 서면 이 버퍼는 안 쓴다.
+            Phase::Idle => {
+                self.pending.put(cam.id, &candidates, t);
+                self.tracker.try_seed(&self.pending.views(t), t);
+            }
+            _ => {
+                self.tracker.observe(cam, &candidates, t);
+            }
+        }
+        return self.tracker.trajectory(t);
+    }
+}
+```
+
+이게 지금 구조의 `MAX_SYNC_LAG`·보간과 다른 점: **한 번만, 그것도 트랙이 없을 때만**
+기다린다. 지금은 매 프레임 짝을 맞추느라 `stale_skipped`가 220~610이었다.
 
 | | 언제 | 왜 |
 |---|---|---|
