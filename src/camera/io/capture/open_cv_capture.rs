@@ -142,6 +142,18 @@ impl OpenCvCapture {
         return self.timeline.map(|(_, f)| f);
     }
 
+    /// 파일 재생 랜덤 액세스 — 다음 [`FrameSource::next_frame`]이 `index`를 낸다.
+    ///
+    /// 클립은 MJPG(전 프레임 intra)라 seek가 정확하다. 되감아 보는 뷰어용이고,
+    /// 라이브 캡처에서는 의미가 없다.
+    pub fn seek_frame(&mut self, index: u64) -> Result<(), String> {
+        self.cap
+            .set(videoio::CAP_PROP_POS_FRAMES, index as f64)
+            .map_err(|e| format!("seek {index}: {e}"))?;
+        self.frame_index = index;
+        return Ok(());
+    }
+
     /// 드라이버가 보고하는 프레임 크기. 미지원이면 `None`.
     pub fn reported_size(&self) -> Option<(i32, i32)> {
         let w = self.cap.get(videoio::CAP_PROP_FRAME_WIDTH).ok()?;
