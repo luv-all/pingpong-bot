@@ -26,7 +26,24 @@ impl RealBackend {
         })
     }
 
-    pub(super) fn sync_read_with_retry(
+    /// 한 모터만 읽는다. 여러 모터의 Status Packet이 연달아 들어오는
+    /// `sync_read`에서 체크섬 오류가 나는 저속(57,600 baud) 버스용 경로다.
+    pub(super) fn read_with_retry(
+        &mut self,
+        id: u8,
+        address: u8,
+        length: u8,
+        retries: u32,
+        retry_delay_ms: u64,
+    ) -> Result<Vec<u8>, String> {
+        self.run_with_retry(retries, retry_delay_ms, "read", |protocol, port| {
+            protocol.read(port, id, address, length)
+        })
+        .map_err(|error| format!("id={id}: {error}"))
+    }
+
+    /// 각 모터를 순서대로 개별 읽기한다.
+    pub(super) fn read_many_with_retry(
         &mut self,
         ids: &[u8],
         address: u8,
@@ -34,9 +51,10 @@ impl RealBackend {
         retries: u32,
         retry_delay_ms: u64,
     ) -> Result<Vec<Vec<u8>>, String> {
-        self.run_with_retry(retries, retry_delay_ms, "sync_read", |protocol, port| {
-            protocol.sync_read(port, ids, address, length)
-        })
+        return ids
+            .iter()
+            .map(|&id| self.read_with_retry(id, address, length, retries, retry_delay_ms))
+            .collect();
     }
 
     fn run_with_retry<T>(

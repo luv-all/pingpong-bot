@@ -46,7 +46,7 @@ impl RealHardware {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::open(config)?;
         bus.configure_position_mode_max_effort()?;
-        bus.enable_torque(true)?;
+        bus.lock_current_position()?;
         // 실포트: is_dry_run = false → AXL 실개방
         return Self::from_bus(bus, stream_hz, rail, false, arm);
     }
@@ -78,7 +78,7 @@ impl RealHardware {
             reason: e.to_string(),
         })?;
         bus.configure_position_mode_max_effort()?;
-        bus.enable_torque(true)?;
+        bus.lock_current_position()?;
         return Self::from_bus(bus, stream_hz, rail, true, arm);
     }
 

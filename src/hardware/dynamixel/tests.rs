@@ -81,6 +81,17 @@ fn dry_run_bus_round_trips_last_written_joints() {
 }
 
 #[test]
+fn dry_run_lock_current_position_enables_torque_without_moving() {
+    let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
+    let before = bus.read_joints().expect("before");
+
+    bus.lock_current_position().expect("torque lock");
+
+    assert!(bus.torque_is_locked());
+    assert_eq!(bus.read_joints().expect("after"), before);
+}
+
+#[test]
 fn dry_run_mirrors_slave_goal_around_zero_tick() {
     let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
     // joint0 sign=-1 → URDF +angle decreases ticks from 2048.
