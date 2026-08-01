@@ -15,10 +15,22 @@
 /// 한 시점의 공 상태 — 7차원 `[x y z vx vy vz t]`.
 #[derive(Clone, Copy, Debug)]
 pub struct State {
-    /// [`Trajectory::origin`] 기준 경과 [s].
-    pub t: f64,
+    /// [`Trajectory::origin`] 기준 경과. 벽시계는 `origin + t`.
+    ///
+    /// `f64` 초가 아니라 [`Duration`]인 이유:
+    ///
+    /// 1. **음수가 구조상 불가능하다.** `t`는 궤적 시작 기준이라 0 이상이다.
+    /// 2. **순서 뒤집힌 프레임을 타입이 잡는다.** 두 캠이 스레드로 들어오니 늦게 도착한
+    ///    과거 프레임이 있다. `a.checked_sub(b)`가 `None`을 내므로 처리를 안 하면
+    ///    컴파일이 안 된다 — 지금 `ekf.rs`의 `if dt < 0.0 { Ignored }` 런타임 분기가
+    ///    타입 레벨로 올라간다.
+    /// 3. **`Instant`와 그냥 붙는다.** 단위 환산을 손으로 안 쓴다.
+    ///
+    /// 대가는 물리 적분 경계에서 `.as_secs_f64()` 한 번인데, 거기가 있어야 할 자리다 —
+    /// `Kinematics`는 무차원 f64 수학이고 시간 의미를 몰라야 한다.
+    pub t: Duration,
     pub position: Point3,
-    pub velocity: Vector3<f64>,
+    pub velocity: Vector3,
 }
 
 /// 공 하나의 궤적 — 지금을 기준으로 지나온 길과 앞으로 갈 길.
@@ -38,7 +50,33 @@ pub struct Trajectory {
     /// 앞으로 갈 길 — 지금 상태에서 굴린 것. 공이 플레이 부피를 벗어날 때까지.
     pub predicted: Vec<State>,
 }
+
+impl Trajectory {
+    /// `t` 시점의 상태 (표본 사이는 선형 보간). 궤적 밖이면 `None`.
+    ///
+    /// `measured`와 `predicted`를 하나로 이어 본다 — 소비자가 "지금부터 0.3 초 뒤"를
+    /// 물을 때 그게 과거인지 미래인지 신경 쓸 이유가 없다.
+    ///
+    /// 이 메서드가 없으면 기구학 쪽이 이 보간을 자기 코드에 다시 쓴다. 계약에 한 번 두면
+    /// 한 번만 존재한다.
+    pub fn sample(&self, t: Duration) -> Option<State>;
+
+    /// 지금(`origin.elapsed()`)으로부터 `lead` 뒤. [`Self::sample`]의 편의 래퍼.
+    pub fn ahead(&self, lead: Duration) -> Option<State>;
+}
 ```
+
+`Point3`·`Vector3`에 `<f64>`가 없는 건 **별칭이기 때문**이다 ([`lib.rs`](../src/lib.rs)).
+위치·속도는 항상 f64 월드 값이라 제네릭일 이유가 없고, 이 저장소엔 rapier(f32)·kiss3d(f32)
+벡터가 같이 돌아다녀서 f64 세계를 이름으로 못 박아 두는 편이 안전하다.
+
+```rust
+pub type Point3  = nalgebra::Point3<f64>;   // 이미 있음
+pub type Vector3 = nalgebra::Vector3<f64>;  // 추가 — 지금은 160군데가 <f64>를 손으로 쓴다
+pub type Pixel   = nalgebra::Point2<f64>;   // 8c2b1b1에서 추가됨
+```
+
+같은 타입이라 기존 `Vector3<f64>` 표기와 공존한다 — 강제 마이그레이션 없이 새 코드부터 쓴다.
 
 **이 계약에서 나머지가 전부 따라 나온다.**
 
@@ -167,7 +205,7 @@ Vision                          단일 진입점. feed(frame) -> Option<Trajecto
 
 | 타입 | 층 | 한 줄 |
 |---|---|---|
-| `State` | 계약 | `[x y z vx vy vz t]` 한 점 |
+| `State` | 계약 | `[x y z vx vy vz t]` 한 점. `t`는 `Duration` |
 | `Trajectory` | 계약 | `measured` + `predicted`. **밖으로 나가는 유일한 타입** |
 | `Vision` | 조립 | 진입점. 프레임 넣으면 계약이 나온다 |
 | `Camera` | 조립 | id + params + detector |
@@ -369,16 +407,17 @@ impl Filter {
     /// 노이즈보다 5배 부풀려져 있는데, 주석이 정직하게 인정한다 — "R은 관측 노이즈가
     /// 아니라 필터가 모르는 전부다". 픽셀 공간에서는 R이 진짜 R이 되고 모델 오차는
     /// 있어야 할 곳인 Q로 간다.
-    pub fn update_pixel(&mut self, cam: &camera::Params, pixel: Pixel, t: f64) -> Gate;
+    pub fn update_pixel(&mut self, cam: &camera::Params, pixel: Pixel, t: Duration) -> Gate;
 
-    pub fn state(&self, t: f64) -> State;
+    pub fn state(&self, t: Duration) -> State;
 
     /// 축별 σ. **스칼라 하나로 뭉치지 않는다** — §2.2에서 x축만 쓰레기인 걸
     /// 스칼라 `impact_sigma`가 가려서 15 cm를 빗나갔다.
     pub fn sigma(&self) -> [f64; 6];
 
-    /// 공이 플레이 부피를 벗어날 때까지 굴린다. 물리는 `estimator::Kinematics` SSOT.
-    pub fn rollout(&self, from: f64, step: f64) -> Vec<State>;
+    /// 공이 플레이 부피를 벗어날 때까지 굴린다. 물리는 `estimator::Kinematics` SSOT
+    /// (거기서만 `.as_secs_f64()`로 내려간다).
+    pub fn rollout(&self, from: Duration, step: Duration) -> Vec<State>;
 }
 ```
 
@@ -387,7 +426,7 @@ impl Filter {
 ```rust
 /// 트랙이 있을 때 — 예측을 그 카메라로 투영해 픽셀 공간 마할라노비스로 하나 고른다.
 /// 게이트 밖이면 `None`, 그 프레임은 예측으로 넘어간다.
-pub fn associate(f: &Filter, cam: &camera::Params, cs: &[Candidate], t: f64) -> Option<Candidate>;
+pub fn associate(f: &Filter, cam: &camera::Params, cs: &[Candidate], t: Duration) -> Option<Candidate>;
 
 /// 트랙이 없을 때 — 카메라 조합에서 물리적으로 말 되는 것 하나를 찾는다.
 ///
@@ -446,7 +485,7 @@ pub struct Tracker {
     measured: Vec<State>,
     /// 연속 거부 수. 한도를 넘으면 트랙을 버린다.
     rejects: u32,
-    last_seen: Option<f64>,
+    last_seen: Option<Duration>,
 }
 
 impl Tracker {
@@ -454,13 +493,13 @@ impl Tracker {
     ///
     /// 연관에 성공하면 픽셀로 필터를 갱신하고 `measured`에 한 점을 쌓는다.
     /// 실패하면 그 프레임은 예측으로 넘어간다 (트랙은 안 끊는다).
-    pub fn observe(&mut self, cam: &Camera, candidates: &[Candidate], t: f64) -> Gate;
+    pub fn observe(&mut self, cam: &Camera, candidates: &[Candidate], t: Duration) -> Gate;
 
     /// [`Phase::Idle`]일 때만. 카메라 전체 후보에서 물리적으로 말 되는 시드를 찾는다.
-    pub fn try_seed(&mut self, views: &[(&Camera, &[Candidate])], t: f64) -> bool;
+    pub fn try_seed(&mut self, views: &[(&Camera, &[Candidate])], t: Duration) -> bool;
 
     /// 지금 계약. 선언 전이면 `None`.
-    pub fn trajectory(&self, now: f64) -> Option<Trajectory>;
+    pub fn trajectory(&self, now: Duration) -> Option<Trajectory>;
 
     pub fn phase(&self) -> Phase;
 }
