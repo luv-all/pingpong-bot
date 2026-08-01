@@ -31,6 +31,9 @@ pub struct RealHardware {
     cancel: Arc<AtomicBool>,
     executor: Option<JoinHandle<()>>,
     stream_hz: f64,
+    /// 2단계 제어 중 마지막으로 보낸 레일 목표. 손목만 갱신할 때 진행 중인
+    /// 레일을 매번 정지·재시작하지 않기 위한 중복 억제값이다.
+    direct_rail_target: Option<f64>,
 }
 
 impl RealHardware {
@@ -132,6 +135,7 @@ impl RealHardware {
             cancel: Arc::new(AtomicBool::new(false)),
             executor: None,
             stream_hz,
+            direct_rail_target: None,
         });
     }
 
@@ -248,6 +252,48 @@ impl Hardware for RealHardware {
             })?
             .read_joints()?;
         return Ok(robot::Pose::new(self.read_rail_x_m()?, joints));
+    }
+
+    fn command_rail_and_racket(
+        &mut self,
+        rail_x: f64,
+        racket_joint_rad: f64,
+        duration_secs: f64,
+    ) -> Result<(), HwError> {
+        self.reap_executor();
+        if self.busy.load(Ordering::Acquire) {
+            return Err(HwError::CommandFailed {
+                duration_secs,
+                joint_count: 1,
+                reason: "중앙 이동 궤적이 아직 실행 중입니다".into(),
+            });
+        }
+
+        if self
+            .direct_rail_target
+            .is_none_or(|last| (last - rail_x).abs() >= 0.01)
+        {
+            let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
+                duration_secs,
+                joint_count: 1,
+                reason: "레일 mutex poisoned".into(),
+            })?;
+            if let Some(rail) = rail.as_mut() {
+                rail.command_abs_in_secs(rail_x, duration_secs)?;
+            }
+            self.direct_rail_target = Some(rail_x);
+        }
+        // 4-DOF 배선의 마지막 논리 관절은 라켓 손목(ID 5)이다. 이 호출은
+        // ID 1/2/3/4에 Goal Position을 보내지 않는다.
+        self.bus
+            .lock()
+            .map_err(|_| HwError::CommandFailed {
+                duration_secs,
+                joint_count: 1,
+                reason: "Dynamixel bus mutex poisoned".into(),
+            })?
+            .write_joint(3, racket_joint_rad)?;
+        return Ok(());
     }
 
     fn is_busy(&mut self) -> bool {
@@ -374,6 +420,28 @@ mod tests {
         for angle in pose.joints.values {
             assert!((angle - 0.05).abs() < 0.002);
         }
+    }
+
+    #[test]
+    fn direct_tracking_changes_only_rail_and_racket_joint() {
+        let config = DynamixelConfig {
+            stream_hz: 500.0,
+            ..DynamixelConfig::default()
+        };
+        let mut hardware =
+            RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
+        let before = hardware.read_pose().expect("before");
+
+        hardware
+            .command_rail_and_racket(0.35, -0.25, 0.1)
+            .expect("tracking command");
+
+        let after = hardware.read_pose().expect("after");
+        assert!((after.rail_x - 0.35).abs() < 1e-9);
+        for index in 0..3 {
+            assert!((after.joints.values[index] - before.joints.values[index]).abs() < 0.002);
+        }
+        assert!((after.joints.values[3] - -0.25).abs() < 0.002);
     }
 
     #[test]

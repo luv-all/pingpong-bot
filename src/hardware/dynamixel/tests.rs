@@ -109,6 +109,23 @@ fn dry_run_mirrors_slave_goal_around_zero_tick() {
 }
 
 #[test]
+fn dry_run_single_joint_write_does_not_command_other_motors() {
+    let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
+    let before = bus.read_joints().expect("before");
+
+    bus.write_joint(3, -0.25).expect("wrist write");
+
+    let goals = bus.last_bus_goals().expect("dry-run goals");
+    assert_eq!(goals.len(), 1);
+    assert_eq!(goals[0].0, 5, "라켓 손목축 ID 5만 명령해야 함");
+    let after = bus.read_joints().expect("after");
+    for index in 0..3 {
+        assert!((after.values[index] - before.values[index]).abs() < 0.002);
+    }
+    assert!((after.values[3] - -0.25).abs() < 0.002);
+}
+
+#[test]
 fn dry_run_configures_position_mode_with_max_effort() {
     let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
     bus.configure_position_mode_max_effort().expect("configure");

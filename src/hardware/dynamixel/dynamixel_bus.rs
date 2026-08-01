@@ -226,6 +226,76 @@ impl DynamixelBus {
         return self.write_joints_inner(joints);
     }
 
+    /// 한 관절의 Goal Position만 보낸다.
+    ///
+    /// 2단계 제어 시험에서는 팔 전체를 다시 명령하지 않고 라켓을 잡은 마지막
+    /// 관절만 움직여야 한다. 전체 SyncWrite를 재사용하면 나머지 관절도 매 프레임
+    /// 제어 대상이 되므로 별도 단일축 경로를 둔다.
+    pub fn write_joint(&mut self, joint_index: usize, angle_rad: f64) -> Result<(), HwError> {
+        let joint_count = self.mapping.config.motor_ids.len();
+        let Some(&motor_id) = self.mapping.config.motor_ids.get(joint_index) else {
+            return Err(command_transport_error(
+                0.0,
+                1,
+                format!("관절 인덱스 범위 초과: got {joint_index} want < {joint_count}"),
+            ));
+        };
+        if self.mapping.clamped_by_motor_limit(joint_index, angle_rad)
+            && self
+                .last_clamp_warn
+                .is_none_or(|at| at.elapsed() >= CLAMP_WARN_PERIOD)
+        {
+            self.last_clamp_warn = Some(std::time::Instant::now());
+            warn!(
+                joint = joint_index,
+                commanded = angle_rad,
+                "단일 관절 각도 한계로 잘림"
+            );
+        }
+
+        let tick = self.mapping.radians_to_ticks(joint_index, angle_rad);
+        let mut bus_goals = vec![(motor_id, tick)];
+        for pair in &self.mapping.config.mirror_slaves {
+            if pair.master_id == motor_id {
+                bus_goals.push((pair.slave_id, self.mapping.config.mirror_tick(tick)));
+            }
+        }
+        match &mut self.backend {
+            BusBackend::DryRun {
+                ticks,
+                last_bus_goals,
+                ..
+            } => {
+                ticks[joint_index] = tick;
+                *last_bus_goals = bus_goals;
+            }
+            #[cfg(feature = "real")]
+            BusBackend::Real(real) => {
+                let ids: Vec<u8> = bus_goals.iter().map(|(id, _)| *id).collect();
+                let data: Vec<Vec<u8>> = bus_goals
+                    .iter()
+                    .map(|(_, tick)| pack_u32(*tick as u32))
+                    .collect();
+                let address = self.mapping.config.addr_goal_position;
+                real.sync_write_with_retry(
+                    &ids,
+                    address,
+                    &data,
+                    self.mapping.config.comm_retries,
+                    self.mapping.config.comm_retry_delay_ms,
+                )
+                .map_err(|error| {
+                    command_transport_error(
+                        0.0,
+                        1,
+                        format!("단일축 Goal Position sync_write 실패 (addr={address}): {error}"),
+                    )
+                })?;
+            }
+        }
+        return Ok(());
+    }
+
     fn write_joints_inner(&mut self, joints: &Joints) -> Result<(), HwError> {
         let joint_count = self.mapping.config.motor_ids.len();
         if joints.values.len() != joint_count {
