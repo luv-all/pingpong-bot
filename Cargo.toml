@@ -40,6 +40,7 @@ opencv = { version = "0.98.2", default-features = false, features = [
     "imgproc",
     "imgcodecs",
     "objdetect",
+    "video",
     "videoio",
 ] }
 pollster = { version = "0.4", optional = true }
