@@ -12,7 +12,6 @@ pub mod detector;
 pub mod error;
 pub mod estimator;
 pub mod hardware;
-pub mod pipeline;
 pub mod robot;
 pub mod sim;
 pub mod telemetry;
