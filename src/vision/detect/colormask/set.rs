@@ -86,7 +86,7 @@ pub fn save_colormask_set(path: &std::path::Path, set: &ColormaskSet) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detector::appearance::colormask::{ColorSpace, ColormaskParams};
+    use crate::vision::detect::colormask::{ColorSpace, ColormaskParams};
 
     #[test]
     fn colormask_json_roundtrip_keeps_samples() {

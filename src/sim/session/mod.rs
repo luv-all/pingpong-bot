@@ -8,7 +8,6 @@ mod session;
 
 pub use config::SimSessionConfig;
 pub use controls::SimRuntimeControls;
-pub use estimator::SimBallEstimator;
 pub(crate) use estimator::predict_impact;
 pub use session::SimSession;
 

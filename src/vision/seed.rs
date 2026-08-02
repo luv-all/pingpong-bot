@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use crate::Point3;
 use crate::camera;
+use crate::camera::Triangulate;
 use crate::constants::table;
-use crate::estimator::Triangulate;
 
 use super::detect::Candidate;
 

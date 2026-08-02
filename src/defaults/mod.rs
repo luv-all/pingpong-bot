@@ -15,7 +15,7 @@
 //! | [`impact`] | `ImpactParams` |
 //! | [`estimator`] | `EstimatorParams` |
 //! | [`robot`] | URDF·primitive (`Result`) |
-//! | [`vision`] | Scorer/Roi + [`detector_for`] |
+//! | [`vision`] | colormask/calib 로드 + [`detector_for`] |
 //! | [`calib`] | Cam* / Charuco / Rig |
 //! | [`hardware`] | DynamixelConfig / RailConfig |
 //! | [`dxl_limits`] | derate·속도·토크 배열 |
@@ -84,8 +84,7 @@ pub use sim_motor::{
     JOINT_EFFECTIVE_INERTIA_4DOF, SIM_MOTOR_BANDWIDTH_RAD_S, SIM_MOTOR_JOINTS, SimMotorParams,
 };
 pub use vision::{
-    MOTION_DIFF_THRESH, MOTION_WEIGHT, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, camera_params_for,
-    colormask_for, detector_for,
+    PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, camera_params_for, colormask_for, detector_for,
 };
 
 #[cfg(test)]
@@ -93,7 +92,6 @@ mod tests {
     use super::*;
     use crate::camera;
     use crate::defaults::colormask_for;
-    use crate::detector::{RoiParams, ScorerParams};
     use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
     use crate::robot::motion::InterceptWindow;
@@ -105,10 +103,8 @@ mod tests {
         ImpactParams::default().validate().unwrap();
         EstimatorParams::default().validate().unwrap();
         InterceptWindow::default().validate().unwrap();
-        ScorerParams::default().validate().unwrap();
         colormask_for(camera::Id(0)).unwrap().validate().unwrap();
         colormask_for(camera::Id(1)).unwrap().validate().unwrap();
-        RoiParams::default().validate().unwrap();
         DynamixelConfig::default().validate().unwrap();
         RailConfig::default().validate().unwrap();
         let c = ControlParams::default();
@@ -124,13 +120,13 @@ mod tests {
         assert_eq!(shared_robot().arm.joint_count(), 4);
     }
 
-    /// 커밋된 캘리브 SSOT로 만든 바닥 마스크가 테이블을 살려두는지 — 리그를
+    /// 커밋된 캘리브 SSOT로 만든 부피 마스크가 테이블을 살려두는지 — 리그를
     /// 다시 캘리브했을 때 마스크가 테이블을 지워버리는 배치를 여기서 잡는다.
     #[test]
     fn committed_calibration_keeps_the_whole_table() {
         use crate::Point3;
         use crate::constants::table;
-        use crate::detector::FloorEdgeMask;
+        use crate::vision::detect::Volume;
         use opencv::prelude::*;
 
         let z = table::SURFACE_Z;
@@ -144,12 +140,12 @@ mod tests {
 
         for id in [camera::Id(0), camera::Id(1)] {
             let cam = camera_params_for(id).unwrap();
-            let mask = FloorEdgeMask::from_params(&cam).unwrap();
+            let volume = Volume::from_calib(&cam).unwrap();
             for (name, x, y) in probes {
                 let Some(px) = cam.project_world(Point3::new(x, y, z)) else {
                     panic!("cam{}: table {name} not in frame", id.0);
                 };
-                let keep: u8 = *mask
+                let keep: u8 = *volume
                     .keep
                     .at_2d(px.y.round() as i32, px.x.round() as i32)
                     .unwrap();

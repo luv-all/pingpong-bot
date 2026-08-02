@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use crate::{Point3, Vector3};
 
 /// 한 시점의 공 상태 — `[x y z vx vy vz t]`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct State {
     /// [`Trajectory::origin`] 기준 경과. 벽시계는 `origin + t`.
     pub t: Duration,

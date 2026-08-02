@@ -81,7 +81,7 @@ fn vision_pipeline_on_a_clip() {
                 Some(pingpong_bot::vision::Outcome::Idle) => idle += 1,
                 _ => {}
             }
-            if vision.last_detected() {
+            if vision.last_found().is_some() {
                 detected[slot] += 1;
                 if flight.contains(&frames) {
                     in_flight[slot] += 1;

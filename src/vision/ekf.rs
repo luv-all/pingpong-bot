@@ -11,12 +11,12 @@ use std::time::Duration;
 
 use nalgebra::{Matrix2, Matrix2x3, Matrix2x6, Matrix6, Vector2, Vector6};
 
+use crate::camera::{self, Calibration};
 use crate::constants::table;
 use crate::defaults::PhysicsParams;
 use crate::estimator::Kinematics;
 use crate::{Point3, Vector3};
 
-use super::Camera;
 use super::contract::{State, Track, Trajectory};
 use super::detect::Candidate;
 use super::seed;
@@ -45,6 +45,8 @@ pub const SAMPLE_DT: Duration = Duration::from_millis(5);
 pub const HORIZON: Duration = Duration::from_secs(2);
 /// 플레이 부피 여유 [m].
 const VOLUME_MARGIN: f64 = 1.0;
+/// 시드 버퍼에 검출을 들고 있을 시간. 시드는 두 시선이 필요한데 프레임은 한 대씩 온다.
+pub const PENDING_TTL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Outcome {
@@ -58,38 +60,47 @@ pub enum Outcome {
     Idle,
 }
 
-/// 공 하나의 추정. 트리거 판정과 예측 궤적 만들기는 안에서 한다.
+/// 공 하나의 추정. 시드, 트리거 판정, 예측 궤적 만들기를 전부 안에서 한다.
+///
+/// 카메라 파라미터를 직접 들고 있어 검출기와 분리된다. 실기 경로는 카메라마다 스레드를
+/// 띄워 검출하고 그 결과만 여기로 보낸다.
 pub struct Ekf {
     x: Vector6<f64>,
     p: Matrix6<f64>,
     seq: u64,
     physics: PhysicsParams,
     trigger: Box<dyn Trigger>,
+    /// 개수는 캘리브레이션 파일이 정한다.
+    cameras: Vec<camera::Params>,
     measured: Track,
     /// 비어 있으면 아직 안 만든 것이다. 별도 플래그를 두지 않는다.
     predicted: Track,
+    /// 시드 전에만 쓴다.
+    pending: Vec<(camera::Id, Candidate, Duration)>,
     rejects: u32,
     recedes: u32,
     last_seen: Option<Duration>,
 }
 
 impl Ekf {
-    pub fn new(trigger: Box<dyn Trigger>) -> Self {
+    pub fn new(calibration: &Calibration, trigger: Box<dyn Trigger>) -> Self {
         return Self {
             x: Vector6::zeros(),
             p: Matrix6::identity(),
             seq: 0,
             physics: PhysicsParams::default(),
             trigger,
+            cameras: calibration.cameras.clone(),
             measured: Track::default(),
             predicted: Track::default(),
+            pending: Vec::new(),
             rejects: 0,
             recedes: 0,
             last_seen: None,
         };
     }
 
-    /// `false`면 [`Self::seed`]부터.
+    /// `false`면 아직 시드 전이다.
     pub fn has_track(&self) -> bool {
         return !self.measured.is_empty();
     }
@@ -98,20 +109,52 @@ impl Ekf {
         return self.seq;
     }
 
+    /// 검출 하나를 먹인다. 트랙이 없으면 시드로, 있으면 보정으로 간다.
+    pub fn observe(
+        &mut self,
+        camera_id: camera::Id,
+        found: Option<Candidate>,
+        t: Duration,
+    ) -> Outcome {
+        let Some(candidate) = found else {
+            return Outcome::Idle;
+        };
+        if self.has_track() {
+            return self.correct(camera_id, candidate, t);
+        }
+        // 같은 카메라의 이전 검출은 버린다 — 시드엔 서로 다른 시선이 필요하다.
+        self.pending
+            .retain(|(id, _, at)| *id != camera_id && t.saturating_sub(*at) <= PENDING_TTL);
+        self.pending.push((camera_id, candidate, t));
+        if self.pending.len() < 2 || !self.seed() {
+            return Outcome::Idle;
+        }
+        self.pending.clear();
+        return Outcome::Seeded;
+    }
+
     /// 첫 상태를 세운다. 삼각측량 1회이고, 여기서만 다른 카메라를 기다린다.
     ///
     /// 시드 시각은 두 시각의 중간으로 잡고, 어긋난 `skew × 속도`만큼 위치 공분산을 부풀린다.
     /// 속도는 측정되지 않으므로 0으로 두고 σ를 [`SEED_SPEED_SIGMA`]로 크게 잡는다.
-    pub fn seed(&mut self, views: &[(&Camera, Candidate, Duration)]) -> bool {
-        let pairs: Vec<_> = views
+    fn seed(&mut self) -> bool {
+        let views: Vec<_> = self
+            .pending
             .iter()
-            .map(|(cam, c, t)| (&cam.params, *c, *t))
+            .filter_map(|(id, candidate, at)| {
+                let params = self.cameras.iter().find(|p| p.camera_id == *id)?;
+                return Some((params, *candidate, *at));
+            })
             .collect();
-        let Some(point) = seed::seed_state(&pairs) else {
+        if views.len() < 2 {
+            return false;
+        }
+        let Some(point) = seed::seed_state(&views) else {
             return false;
         };
-        let skew = seed::skew(&pairs).as_secs_f64();
-        let mid = seed::midpoint(&pairs);
+        let skew = seed::skew(&views).as_secs_f64();
+        let mid = seed::midpoint(&views);
+        drop(views);
 
         self.x = Vector6::new(point.x, point.y, point.z, 0.0, 0.0, 0.0);
         self.p = Matrix6::zeros();
@@ -132,10 +175,10 @@ impl Ekf {
     ///
     /// 야코비안은 핀홀 투영의 미분(2×6), `R = σ_px² · I₂`. 잔차가 게이트 밖이면 무시하고
     /// 트랙은 유지한다.
-    pub fn observe(&mut self, cam: &Camera, found: Candidate, t: Duration) -> Outcome {
-        if !self.has_track() {
+    fn correct(&mut self, camera_id: camera::Id, found: Candidate, t: Duration) -> Outcome {
+        let Some(index) = self.cameras.iter().position(|p| p.camera_id == camera_id) else {
             return Outcome::Idle;
-        }
+        };
         let Some(last) = self.last_seen else {
             return Outcome::Idle;
         };
@@ -149,7 +192,7 @@ impl Ekf {
         }
         self.predict(dt.as_secs_f64());
 
-        let Some((residual, h, s_inv, d2)) = self.innovation(cam, found) else {
+        let Some((residual, h, s_inv, d2)) = self.innovation(index, found) else {
             self.last_seen = Some(t);
             return Outcome::Idle;
         };
@@ -251,10 +294,10 @@ impl Ekf {
     /// 잔차, 야코비안, `S⁻¹`, 마할라노비스 `d²`. 카메라 뒤면 `None`.
     fn innovation(
         &self,
-        cam: &Camera,
+        camera: usize,
         found: Candidate,
     ) -> Option<(Vector2<f64>, Matrix2x6<f64>, Matrix2<f64>, f64)> {
-        let params = &cam.params;
+        let params = &self.cameras[camera];
         let local = params.rotation * self.position().coords + params.translation;
         if local.z <= 0.05 {
             return None;
@@ -328,11 +371,12 @@ impl Ekf {
     }
 
     /// 버리는 조건: 연속 거부 한도, 관측 공백, `y` 재증가(다음 샷), 부피 이탈.
-    fn drop_track(&mut self) {
+    pub fn drop_track(&mut self) {
         self.x = Vector6::zeros();
         self.p = Matrix6::identity();
         self.measured.0.clear();
         self.predicted.0.clear();
+        self.pending.clear();
         self.rejects = 0;
         self.recedes = 0;
         self.last_seen = None;

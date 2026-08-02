@@ -30,7 +30,7 @@ pub const FLIGHT_BAND: f64 = 1.0;
 /// 값은 싸지만 효과도 작다 — 실측 keep 이 cam0 85 %, cam1 74 %다. 카메라가 3 m 거리인데
 /// 부피가 2.1×3.7×1.1 m 라 투영하면 화면을 거의 채운다.
 pub struct Volume {
-    keep: Mask,
+    pub keep: Mask,
     /// 프레임마다 재할당하지 않는다.
     scratch: Mat,
 }

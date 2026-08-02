@@ -1,9 +1,11 @@
 //! 프레임 하나에서 공 하나를 찾는다. 색은 판별자가 아니라 후보 생성기다.
 
+pub mod colormask;
 mod layer;
 pub mod layers;
 mod pick;
 
+pub use colormask::{ColorSpace, ColormaskParams};
 pub use layer::Layer;
 pub use layers::{Background, ColorBox, ColorPlane, Volume, background};
 pub use pick::{MIN_CIRCULARITY, Picker};
@@ -12,7 +14,7 @@ use anyhow::Result;
 use opencv::core::{Mat, Scalar};
 use opencv::prelude::*;
 
-use crate::camera::{Frame, Pixel};
+use crate::camera::{self, Frame, Pixel};
 
 /// 아직 공일 수 있는 픽셀 (`CV_8UC1`, 255 = 살아있음). 프레임 크기와 같다.
 pub type Mask = Mat;
@@ -42,6 +44,27 @@ impl Detector {
             picker,
             mask: Mat::default(),
         };
+    }
+
+    /// 본선 캐스케이드. 싼 것부터 — 부피는 정적 AND 라 가장 싸다.
+    ///
+    /// 이 조립이 SSOT 다. 실기 워커도 툴도 여기를 부른다. 레이어를 갈아끼울 땐 여기만
+    /// 고치면 되고, 개수가 변해도 `detect-full` 은 그대로 돈다.
+    pub fn for_camera(params: &camera::Params) -> Result<Self> {
+        let layers: Vec<Box<dyn Layer>> = vec![
+            Box::new(Volume::from_calib(params)?),
+            Box::new(Background::new(
+                background::HISTORY,
+                background::VAR_THRESHOLD,
+                background::SCALE,
+                background::LEARNING_RATE,
+            )?),
+            Box::new(ColorBox::load(params.camera_id)?),
+        ];
+        return Ok(Self::new(
+            layers,
+            Picker::from_calib(params, MIN_CIRCULARITY)?,
+        ));
     }
 
     /// `expect`: 트랙이 있으면 그 깊이의 기대 반지름 [px].

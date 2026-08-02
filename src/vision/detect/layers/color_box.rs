@@ -5,9 +5,9 @@ use opencv::core::{Mat, Point, Scalar, Vec3b};
 use opencv::prelude::*;
 use opencv::{core, imgproc};
 
+use super::super::colormask::{ColorSpace, ColormaskParams};
 use crate::camera::{self, Frame};
 use crate::defaults::colormask_for;
-use crate::detector::{ColorSpace, ColormaskParams};
 
 use super::super::{Layer, Mask};
 

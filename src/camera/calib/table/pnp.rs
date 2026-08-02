@@ -283,7 +283,6 @@ fn pose_score(rmse: f64, rotation: &Matrix3<f64>, translation: &Vector3<f64>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::estimator;
     use nalgebra::Vector3;
 
     fn overhead_cam() -> camera::Params {
@@ -406,7 +405,7 @@ mod tests {
         assert_eq!(back.camera_count(), 2);
 
         let center = marks[4].world;
-        let recovered = estimator::Triangulate::projections(
+        let recovered = camera::Triangulate::projections(
             &back,
             &[camera::Id::new(0), camera::Id::new(1)],
             center,

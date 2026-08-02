@@ -8,7 +8,6 @@
 pub mod camera;
 pub mod constants;
 pub mod defaults;
-pub mod detector;
 pub mod error;
 pub mod estimator;
 pub mod hardware;

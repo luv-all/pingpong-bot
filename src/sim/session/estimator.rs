@@ -1,91 +1,43 @@
-//! sim 궤적 추정 — Rapier 진실 상태를 domain ballistics / EKF에 넣는다.
+//! sim 접수 평면 예측 — Rapier 진실 상태를 물리 커널에 넣는다.
 //!
-//! 자동 스윙(`predict_impact`)은 진실 탄도(+스핀 Magnus)를 쓰고, 파이프라인
-//! Estimator는 같은 상태를 EKF에 주입해 hit-plane 예측을 검증한다.
+//! 카메라가 없으므로 필터를 거치지 않는다. 진실 상태에 EKF를 씌우면 지연만 는다.
 
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
-
-use crate::Point3;
-use crate::estimator;
-use crate::estimator::{Estimator, HitPlane, Prediction};
+use crate::estimator::{HitPlane, Prediction};
 use crate::sim::physics;
 use crate::sim::physics::world::SimWorld;
 use nalgebra::Vector3;
 
+/// 공 상태 한 벌 [m], [m/s], [rad/s].
+struct Ball {
+    position: Vector3<f64>,
+    velocity: Vector3<f64>,
+    omega: Vector3<f64>,
+}
+
 /// Rapier 월드 스냅샷으로 접수 평면 교차를 예측한다 (물리 스텝·자동 스윙 공용).
 pub(crate) fn predict_impact(world: &SimWorld, plane: HitPlane) -> Option<Prediction> {
-    let snap = snapshot_from_world(world)?;
-    return estimator::Kinematics::predict_to(
-        snap.position,
-        snap.velocity,
-        snap.omega,
-        plane,
-        &world.physics,
-    );
-}
-
-/// Rapier 월드에서 공 상태를 읽어 EKF에 주입한 뒤 `predict_to`한다.
-pub struct SimBallEstimator {
-    world: Arc<Mutex<SimWorld>>,
-    ekf: estimator::Ekf,
-}
-
-impl SimBallEstimator {
-    pub fn new(world: Arc<Mutex<SimWorld>>) -> Self {
-        return Self {
-            world,
-            ekf: estimator::Ekf::new(0.0),
-        };
-    }
-
-    fn publish_debug_prediction(&self, prediction: Option<Prediction>) {
-        if let Ok(mut world) = self.world.lock() {
-            world.set_debug_prediction(prediction);
-        }
-    }
-}
-
-fn snapshot_from_world(world: &SimWorld) -> Option<estimator::Snapshot> {
     if world.ball_state != physics::BallState::InFlight {
         return None;
     }
-    let pos = world.ball_position();
-    let vel = world.ball_velocity();
-    let omega = world.ball_angular_velocity();
-    return Some(estimator::Snapshot {
-        position: Vector3::new(f64::from(pos.x), f64::from(pos.y), f64::from(pos.z)),
-        velocity: Vector3::new(f64::from(vel.x), f64::from(vel.y), f64::from(vel.z)),
-        omega: Vector3::new(f64::from(omega.x), f64::from(omega.y), f64::from(omega.z)),
-    });
+    let ball = Ball {
+        position: to_f64(world.ball_position()),
+        velocity: to_f64(world.ball_velocity()),
+        omega: to_f64(world.ball_angular_velocity()),
+    };
+    let prediction = crate::estimator::Kinematics::predict_to(
+        ball.position,
+        ball.velocity,
+        ball.omega,
+        plane,
+        &world.physics,
+    );
+    return prediction;
 }
 
-impl Estimator for SimBallEstimator {
-    fn update(&mut self, _position: Point3, timestamp: Instant) {
-        let snapshot = self
-            .world
-            .lock()
-            .ok()
-            .and_then(|world| snapshot_from_world(&world));
-        let Some(snap) = snapshot else {
-            self.publish_debug_prediction(None);
-            return;
-        };
-        // 진실 위치·속도로 EKF를 리셋해 파이프라인 예측이 스윙과 맞게 유지
-        self.ekf.set_state(snap.position, snap.velocity, timestamp);
-    }
-
-    fn predict_to(&self, plane: HitPlane) -> Option<Prediction> {
-        // sim 진실 경로: ω 포함 ballistics를 우선 (EKF는 아직 스핀 상태 없음).
-        let prediction = self
-            .world
-            .lock()
-            .ok()
-            .and_then(|world| predict_impact(&world, plane))
-            .or_else(|| self.ekf.predict_to(plane))?;
-        self.publish_debug_prediction(Some(prediction.clone()));
-        return Some(prediction);
-    }
+/// rapier 는 자기 nalgebra 를 들고 있어 워크스페이스 `Vector3` 와 다른 타입이다.
+/// 성분으로만 건너온다.
+fn to_f64(v: impl std::ops::Index<usize, Output = f32>) -> Vector3<f64> {
+    return Vector3::new(f64::from(v[0]), f64::from(v[1]), f64::from(v[2]));
 }
 
 #[cfg(test)]
@@ -98,12 +50,12 @@ mod tests {
     use crate::sim::launch;
     use crate::sim::physics;
 
-    fn launch_snapshot() -> estimator::Snapshot {
+    fn launch_snapshot() -> Ball {
         let settings = launch::Settings::default();
         let muzzle = settings.muzzle_position();
         let vel = settings.launch_velocity();
         let omega = settings.launch_angular_velocity();
-        return estimator::Snapshot {
+        return Ball {
             position: Vector3::new(
                 f64::from(muzzle.x),
                 f64::from(muzzle.y),
@@ -120,7 +72,7 @@ mod tests {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        let pred = estimator::Kinematics::predict_to(
+        let pred = crate::estimator::Kinematics::predict_to(
             snap.position,
             snap.velocity,
             snap.omega,
@@ -198,7 +150,7 @@ mod tests {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
         let snap = launch_snapshot();
-        let at_launch = estimator::Kinematics::predict_to(
+        let at_launch = crate::estimator::Kinematics::predict_to(
             snap.position,
             snap.velocity,
             snap.omega,
@@ -217,7 +169,7 @@ mod tests {
         while t < est.max_lead {
             let prev_vz = vel.z;
             let (np, nv, nw) =
-                estimator::Kinematics::step(pos, vel, omega, est.integrate_dt, &physics);
+                crate::estimator::Kinematics::step(pos, vel, omega, est.integrate_dt, &physics);
             pos = np;
             vel = nv;
             omega = nw;
@@ -228,7 +180,7 @@ mod tests {
             }
         }
         assert!(bounced, "ballistics가 테이블 바운스에 도달해야 함");
-        let after_bal = estimator::Kinematics::predict_to(pos, vel, omega, plane, &physics)
+        let after_bal = crate::estimator::Kinematics::predict_to(pos, vel, omega, plane, &physics)
             .expect("바운스 후 ballistics 예측");
         let dz_bal =
             (after_bal.impact_position.coords.z - at_launch.impact_position.coords.z).abs();
@@ -282,7 +234,7 @@ mod tests {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
         assert!(
-            estimator::Kinematics::predict_to(
+            crate::estimator::Kinematics::predict_to(
                 position,
                 velocity,
                 Vector3::zeros(),
