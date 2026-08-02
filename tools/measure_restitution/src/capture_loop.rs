@@ -9,8 +9,8 @@ use opencv::prelude::*;
 use pingpong_bot::camera;
 use pingpong_bot::camera::{Calibration, FrameSource, Preview, PreviewAction, StereoOfflineArgs};
 use pingpong_bot::defaults::detector_for;
-use pingpong_bot::detector::Detector;
 use pingpong_bot::estimator;
+use pingpong_bot::vision::Detector;
 
 pub struct CaptureResult {
     pub traj: Vec<estimator::TrajPoint>,
@@ -87,7 +87,9 @@ pub fn run_capture(
                 frame0_ts = Some(frame.timestamp);
             }
             let cam_id = camera::Id(i as u8);
-            let pixel = detectors[i].detect(&frame);
+            let pixel = detectors[i]
+                .detect(&frame, None)?
+                .map(|candidate| candidate.pixel);
             let mut panel = frame
                 .image
                 .try_clone()
@@ -116,7 +118,7 @@ pub fn run_capture(
                 0.0
             }
         };
-        if let Some(pos) = estimator::Triangulate::pixels(&hits, &calibration) {
+        if let Some(pos) = camera::Triangulate::pixels(&hits, &calibration) {
             traj.push(estimator::TrajPoint {
                 t: sync_t,
                 pos,

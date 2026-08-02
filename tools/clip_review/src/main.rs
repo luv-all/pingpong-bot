@@ -38,9 +38,9 @@ use pingpong_bot::camera::{
 };
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
-use pingpong_bot::estimator::Decision;
 
 use msg::SceneMsg;
+use pingpong_bot::vision::Outcome;
 use track::{FrameState, Reviewed};
 
 /// 수렴 오차를 보여줄 리드타임 [s].
@@ -180,14 +180,8 @@ fn run(args: &Args) -> Result<()> {
         let (past, future) = reviewed.observed_split(index);
         let actual_past = track::clip_to_mount(&past);
         let actual_future = track::clip_to_mount(&future);
-        let predicted = track::clip_to_mount(
-            &state
-                .predicted
-                .iter()
-                .map(|s| s.position)
-                .collect::<Vec<_>>(),
-        );
-        // 커밋 예측은 얼려 둔 것 — 프레임이 지나도 안 바뀐다. 아직 커밋 전이면 비어 있다.
+        // 예측은 트리거 순간에 한 번 얼린다 — 프레임이 지나도 안 바뀐다.
+        // 매 프레임 다시 굴리면 언제나 현재 위치에서 출발하니 실제와 겹쳐 보여 볼 게 없다.
         let committed = reviewed
             .commit
             .as_ref()
@@ -218,11 +212,10 @@ fn run(args: &Args) -> Result<()> {
                 &overlay::Tracks {
                     actual_past: &actual_past,
                     actual_future: &actual_future,
-                    live: &predicted,
                     committed: &committed,
                 },
                 state.pixels[slot],
-                state.ekf_position,
+                state.filtered.map(|s| s.position),
                 &format!("cam{slot}"),
                 &hud,
             )?;
@@ -239,11 +232,10 @@ fn run(args: &Args) -> Result<()> {
 
         if let Some((_, stdin)) = &mut sim {
             let message = SceneMsg {
-                ekf: state.ekf_position.map(Into::into),
+                ekf: state.filtered.map(|s| s.position.into()),
                 raw: state.observed.map(|o| o.point.into()),
                 observed: actual_past.iter().copied().map(Into::into).collect(),
                 observed_future: actual_future.iter().copied().map(Into::into).collect(),
-                predicted: predicted.iter().copied().map(Into::into).collect(),
                 committed: committed.iter().copied().map(Into::into).collect(),
             };
             if writeln!(stdin, "{}", message.to_line()).is_err() || stdin.flush().is_err() {
@@ -395,42 +387,58 @@ fn console_line(reviewed: &Reviewed, state: &FrameState, index: usize) -> String
         ),
         None => "3d ----".to_owned(),
     };
-    let ekf = match (state.ekf_position, state.ekf_speed) {
-        (Some(p), Some(v)) => format!("ekf {:+.2} {:+.2} {:+.2} |v|{v:.1}", p.x, p.y, p.z),
-        _ => "ekf ----".to_owned(),
+    let ekf = match state.filtered {
+        Some(s) => format!(
+            "ekf {:+.2} {:+.2} {:+.2} |v|{:.1}",
+            s.position.x,
+            s.position.y,
+            s.position.z,
+            s.velocity.norm()
+        ),
+        None => "ekf ----".to_owned(),
     };
-    let sigma = match (state.position_sigma, state.velocity_sigma) {
-        (Some(sp), Some(sv)) => format!("sp{:.1} sv{:.0}", sp * 100.0, sv * 100.0),
-        _ => "sp-- sv--".to_owned(),
+    // 축별로 찍는다. 하나로 합치면 잘 관측되는 축이 나쁜 축을 가린다.
+    let sigma = match state.filtered {
+        Some(s) => format!(
+            "sp{:.0}/{:.0}/{:.0} sv{:.0}/{:.0}/{:.0}",
+            s.sigma_position.x * 100.0,
+            s.sigma_position.y * 100.0,
+            s.sigma_position.z * 100.0,
+            s.sigma_velocity.x * 100.0,
+            s.sigma_velocity.y * 100.0,
+            s.sigma_velocity.z * 100.0
+        ),
+        None => "sp-- sv--".to_owned(),
     };
-    let gate = match state.decision {
-        Some(Decision::Attempt) => "ATTEMPT".to_owned(),
-        Some(Decision::Wait(reason)) => reason.label().replace("WAIT ", ""),
-        None => "--".to_owned(),
+    let gate = |slot: usize| match state.outcomes[slot] {
+        Some(Outcome::Accepted) => "ok".to_owned(),
+        Some(Outcome::Rejected { d2 }) => format!("rej{d2:.0}"),
+        Some(Outcome::Seeded) => "seed".to_owned(),
+        Some(Outcome::Idle) | None => "--".to_owned(),
     };
-    let impact_sigma = state
-        .impact_sigma
-        .map_or("--".to_owned(), |v| format!("{:.0}", v * 100.0));
-    let live: Vec<String> = LEADS_SECS
+    // 얼린 예측이 리드타임마다 얼마나 빗나갔나. 커밋 전이면 잴 게 없다.
+    let error: Vec<String> = LEADS_SECS
         .iter()
         .map(|lead| {
-            match track::convergence_error(
-                &state.predicted,
-                &reviewed.observed,
-                now,
-                *lead,
-                reviewed.fps,
-            ) {
-                Some(error) => format!("{:.0}", error * 100.0),
-                None => "--".to_owned(),
-            }
+            let measured = reviewed.commit.as_ref().and_then(|commit| {
+                track::convergence_error(
+                    &commit.predicted,
+                    &reviewed.observed,
+                    now,
+                    *lead,
+                    reviewed.fps,
+                )
+            });
+            return measured.map_or("--".to_owned(), |e| format!("{:.0}", e * 100.0));
         })
         .collect();
     return format!(
-        "f{index:<4} t={now:6.3} | {} {} | {three_d} | {ekf} {sigma} | {gate} si{impact_sigma} | live {}",
+        "f{index:<4} t={now:6.3} | {} {} | {three_d} | {ekf} {sigma} | {} {} | err {}",
         px(0),
         px(1),
-        live.join("/")
+        gate(0),
+        gate(1),
+        error.join("/")
     );
 }
 
@@ -440,24 +448,22 @@ fn console_line(reviewed: &Reviewed, state: &FrameState, index: usize) -> String
 fn print_commit_summary(reviewed: &Reviewed) {
     let plane = table::DEFAULT_HIT_PLANE_Y;
     let Some(commit) = &reviewed.commit else {
-        println!("COMMIT  never — 게이트를 끝내 못 넘었다");
-        if let Some(last) = reviewed.frames.iter().rev().find_map(|f| f.decision) {
-            println!("  마지막 판정: {last:?}");
-        }
+        let tracked = reviewed.frames.iter().filter(|f| f.tracking).count();
+        println!("COMMIT  never — 트리거를 끝내 못 넘었다 (추적 프레임 {tracked}개)");
         return;
     };
     println!(
-        "COMMIT  frame {} t={:.3}s  tti {:.2}s  sigma {:.0}cm",
+        "COMMIT  frame {} t={:.3}s  sigma p {:.0}/{:.0}/{:.0}cm  v {:.1}/{:.1}/{:.1}m/s",
         commit.frame,
         commit.t,
-        commit.time_to_impact,
-        commit.impact_sigma * 100.0
+        commit.sigma_position.x * 100.0,
+        commit.sigma_position.y * 100.0,
+        commit.sigma_position.z * 100.0,
+        commit.sigma_velocity.x,
+        commit.sigma_velocity.y,
+        commit.sigma_velocity.z
     );
-    println!(
-        "  target  x{:+.2} y{:+.2} z{:+.2}",
-        commit.impact.x, commit.impact.y, commit.impact.z
-    );
-    let guess = track::crossing_y(&commit.predicted, plane);
+    let guess = commit.predicted.at_plane(plane);
     let truth = reviewed.observed_crossing_y(plane);
     match (guess, truth) {
         (Some(g), Some(t)) => println!(

@@ -33,7 +33,6 @@ const ACTUAL_PAST: Scalar = Scalar::new(60.0, 255.0, 60.0, 0.0);
 const ACTUAL_FUTURE: Scalar = Scalar::new(30.0, 110.0, 30.0, 0.0);
 /// 매 프레임 다시 굴린 예측 — 회색, 얇게. 언제나 현재 공에서 출발하므로 실제에 붙어
 /// 보이는 게 정상이다. "예측이 맞았나"의 대상이 아니라 눈에 덜 띄어야 한다.
-const LIVE: Scalar = Scalar::new(170.0, 170.0, 170.0, 0.0);
 /// 커밋 순간에 얼린 예측 — 자홍, 굵게. 초록과 보색이라 겹쳐도 갈린다.
 const COMMITTED: Scalar = Scalar::new(255.0, 0.0, 255.0, 0.0);
 /// 검출 픽셀 — 노랑. 선들과 다른 채널이라 안 묻힌다.
@@ -47,8 +46,6 @@ pub struct Tracks<'a> {
     pub actual_past: &'a [Point3],
     /// 실제, 현재 프레임 이후 (pass 1이 이미 알고 있다).
     pub actual_future: &'a [Point3],
-    /// 매 프레임 다시 굴린 예측.
-    pub live: &'a [Point3],
     /// 커밋 순간에 얼린 예측. 커밋 전이면 비어 있다.
     pub committed: &'a [Point3],
 }
@@ -67,7 +64,6 @@ pub fn draw(
 
     // 덜 중요한 것부터 — 겹치면 나중에 그린 게 위로 온다.
     track(&mut img, params, tracks.actual_future, ACTUAL_FUTURE, 1)?;
-    track(&mut img, params, tracks.live, LIVE, 1)?;
     track(&mut img, params, tracks.actual_past, ACTUAL_PAST, 3)?;
     track(&mut img, params, tracks.committed, COMMITTED, 3)?;
 

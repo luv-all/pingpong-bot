@@ -44,9 +44,6 @@ pub struct SceneMsg {
     /// 실제 궤적, 현재 프레임 이후 — 죽인 초록. pass 1이 클립을 통째로 훑어 이미 안다.
     #[serde(default)]
     pub observed_future: Vec<Xyz>,
-    /// 매 프레임 다시 굴린 예측 — 회색, 얇게.
-    #[serde(default)]
-    pub predicted: Vec<Xyz>,
     /// 커밋 순간에 얼린 예측 — 자홍, 굵게. 이게 "예측이 맞았나"의 대상이다.
     #[serde(default)]
     pub committed: Vec<Xyz>,
@@ -84,16 +81,14 @@ mod tests {
                 Point3::new(0.1, 2.0, 1.0).into(),
             ],
             observed_future: vec![Point3::new(0.2, 1.0, 0.9).into()],
-            predicted: vec![
+            committed: vec![
                 Point3::new(0.1, 2.0, 1.0).into(),
                 Point3::new(0.2, 1.5, 0.9).into(),
             ],
-            committed: vec![Point3::new(0.3, 0.1, 0.85).into()],
         };
         let back = SceneMsg::parse_line(&msg.to_line()).expect("parse");
         assert_eq!(back.observed.len(), 2);
-        assert_eq!(back.predicted.len(), 2);
-        assert_eq!(back.committed.len(), 1);
+        assert_eq!(back.committed.len(), 2);
         assert_eq!(back.observed_future.len(), 1);
         assert!((Point3::from(back.ekf.expect("ekf")).y - 2.0).abs() < 1e-9);
     }
@@ -114,7 +109,7 @@ mod tests {
     fn hide_clears_everything() {
         let back = SceneMsg::parse_line("hide").expect("parse");
         assert!(back.ekf.is_none() && back.raw.is_none());
-        assert!(back.observed.is_empty() && back.predicted.is_empty());
-        assert!(back.observed_future.is_empty() && back.committed.is_empty());
+        assert!(back.observed.is_empty() && back.committed.is_empty());
+        assert!(back.observed_future.is_empty());
     }
 }

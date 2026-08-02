@@ -40,7 +40,6 @@ pub fn run() -> Result<()> {
     let shutdown = SimRuntimeControls::new_shutdown();
     let observed = trail::Handle::new(OBSERVED_RGBA, OBSERVED_WIDTH);
     let future = trail::Handle::new(FUTURE_RGBA, FUTURE_WIDTH);
-    let predicted = trail::Handle::new(PREDICTED_RGBA, PREDICTED_WIDTH);
     let committed = trail::Handle::new(COMMITTED_RGBA, COMMITTED_WIDTH);
 
     let scene = SimScene::builder()
@@ -49,7 +48,6 @@ pub fn run() -> Result<()> {
         .with_ghost_ball()
         .with_trail(future.clone())
         .with_trail(observed.clone())
-        .with_trail(predicted.clone())
         .with_trail(committed.clone())
         .build();
     let ball = scene.ball().expect("with_ball").clone();
@@ -57,7 +55,7 @@ pub fn run() -> Result<()> {
 
     let stop = Arc::clone(&shutdown);
     thread::spawn(move || {
-        stdin_loop(ball, ghost, observed, future, predicted, committed, stop);
+        stdin_loop(ball, ghost, observed, future, committed, stop);
     });
 
     scene
@@ -72,7 +70,6 @@ fn stdin_loop(
     ghost: ball::Handle,
     observed: trail::Handle,
     future: trail::Handle,
-    predicted: trail::Handle,
     committed: trail::Handle,
     stop: Arc<AtomicBool>,
 ) {
@@ -92,7 +89,6 @@ fn stdin_loop(
                 ghost.set_position(msg.raw.map(Into::into));
                 observed.set_points(SceneMsg::points(&msg.observed));
                 future.set_points(SceneMsg::points(&msg.observed_future));
-                predicted.set_points(SceneMsg::points(&msg.predicted));
                 committed.set_points(SceneMsg::points(&msg.committed));
             }
             Err(error) => eprintln!("sim stdin parse: {error} ({text})"),
