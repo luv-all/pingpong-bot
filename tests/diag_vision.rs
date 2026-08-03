@@ -175,3 +175,142 @@ fn vision_pipeline_on_a_clip() {
         ),
     }
 }
+
+/// 필터 상태가 생 삼각측량에서 얼마나 떨어져 있나 — 프레임마다.
+///
+/// [`vision_pipeline_on_a_clip`]의 MISS 는 예측을 **필터 자신의** measured 와 견주므로
+/// 필터가 통째로 밀려 있으면 그걸 못 본다. 여기서는 필터 밖의 값과 견준다.
+#[test]
+#[ignore = "클립 필요: cargo test --release --test diag_vision -- --ignored --nocapture"]
+fn filtered_state_against_raw_triangulation() {
+    use pingpong_bot::camera::Triangulate;
+
+    let name = clip();
+    let dir = Path::new("data/clips").join(&name);
+    let fps = meas_fps(&dir);
+    let calibration = Calibration::load_json(&defaults::calibration_path()).expect("calibration");
+    let mut vision = Vision::load(
+        &calibration,
+        Box::new(PlaneCrossing {
+            y: table::LENGTH_Y * 0.5,
+        }),
+    )
+    .expect("vision");
+
+    let mut left = OpenCvCapture::from_path(camera::Id(0), &dir.join("left.avi")).expect("left");
+    let mut right = OpenCvCapture::from_path(camera::Id(1), &dir.join("right.avi")).expect("right");
+    let epoch = Instant::now();
+    let mut index = 0usize;
+    let mut rows: Vec<Row> = Vec::new();
+
+    loop {
+        let (Some(l), Some(r)) = (left.next_frame(), right.next_frame()) else {
+            break;
+        };
+        let at = epoch + Duration::from_secs_f64(index as f64 / fps);
+        let l = Frame::new(camera::Id(0), l.image, at);
+        let r = Frame::new(camera::Id(1), r.image, at);
+
+        let mut pixels = [None, None];
+        let mut marks = [' ', ' '];
+        for (slot, frame) in [(0usize, &l), (1usize, &r)] {
+            vision.feed(frame).expect("feed");
+            pixels[slot] = vision.last_found().map(|c| c.pixel);
+            marks[slot] = match vision.last_outcome() {
+                Some(pingpong_bot::vision::Outcome::Accepted) => 'o',
+                Some(pingpong_bot::vision::Outcome::Rejected { .. }) => 'x',
+                Some(pingpong_bot::vision::Outcome::Seeded) => 'S',
+                _ => '-',
+            };
+        }
+
+        if let (Some(a), Some(b)) = (pixels[0], pixels[1])
+            && let Some(raw) =
+                Triangulate::pixels(&[(camera::Id(0), a), (camera::Id(1), b)], &calibration)
+            && let Some(state) = vision.ekf().measured().last()
+        {
+            let d = state.position - raw;
+            rows.push(Row {
+                frame: index,
+                seq: vision.ekf().seq(),
+                marks,
+                raw,
+                gap: d,
+                sigma_position: state.sigma_position,
+                sigma_velocity: state.sigma_velocity,
+                speed: state.velocity.norm(),
+            });
+        }
+        index += 1;
+    }
+
+    if rows.is_empty() {
+        println!("두 캠이 같이 잡은 프레임이 없다");
+        return;
+    }
+    println!("clip={name}  두 캠 동시 검출 {}프레임", rows.len());
+    println!("o=보정 x=거부 S=시드 -=없음");
+    println!(
+        "frame seq c0c1 | raw x    y    z  | 필터-raw dx dy dz [cm] | sigma_p [cm] | sigma_v |v|"
+    );
+    for r in &rows {
+        println!(
+            "{:<5} {:<3} {}{}   | {:+5.2} {:+5.2} {:+5.2} | {:+6.1} {:+6.1} {:+6.1} = {:5.1} | \
+             {:4.0}{:4.0}{:4.0} | {:4.1}{:4.1}{:4.1} {:4.1}",
+            r.frame,
+            r.seq,
+            r.marks[0],
+            r.marks[1],
+            r.raw.x,
+            r.raw.y,
+            r.raw.z,
+            r.gap.x * 100.0,
+            r.gap.y * 100.0,
+            r.gap.z * 100.0,
+            r.gap.norm() * 100.0,
+            r.sigma_position.x * 100.0,
+            r.sigma_position.y * 100.0,
+            r.sigma_position.z * 100.0,
+            r.sigma_velocity.x,
+            r.sigma_velocity.y,
+            r.sigma_velocity.z,
+            r.speed,
+        );
+    }
+
+    // raw 자체가 얼마나 튀는지 — 필터를 탓하기 전에 입력의 잡음을 먼저 안다.
+    // 2계 차분은 매끄러운 성분(중력·항력)을 지우고 프레임 단위 흔들림만 남긴다.
+    let jitter: Vec<f64> = rows
+        .windows(3)
+        .filter(|w| w[2].frame - w[0].frame == 2)
+        .map(|w| (w[0].raw.coords - 2.0 * w[1].raw.coords + w[2].raw.coords).norm() / 4.0)
+        .collect();
+    if !jitter.is_empty() {
+        let mut sorted = jitter.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).expect("유한"));
+        println!(
+            "raw 잡음 (2계 차분/4) p50 {:.1} cm  p95 {:.1} cm",
+            sorted[sorted.len() / 2] * 100.0,
+            sorted[sorted.len() * 95 / 100] * 100.0
+        );
+    }
+    let mean = |f: fn(&Row) -> f64| rows.iter().map(f).sum::<f64>() / rows.len() as f64;
+    println!(
+        "평균 편차 dx{:+.1} dy{:+.1} dz{:+.1} cm — 부호가 한쪽으로 쏠리면 계통 오차다",
+        mean(|r| r.gap.x) * 100.0,
+        mean(|r| r.gap.y) * 100.0,
+        mean(|r| r.gap.z) * 100.0
+    );
+    println!("트랙 교체 {}회 (seq 증가)", rows.last().expect("비지 않음").seq);
+}
+
+struct Row {
+    frame: usize,
+    seq: u64,
+    marks: [char; 2],
+    raw: pingpong_bot::Point3,
+    gap: pingpong_bot::Vector3,
+    sigma_position: pingpong_bot::Vector3,
+    sigma_velocity: pingpong_bot::Vector3,
+    speed: f64,
+}

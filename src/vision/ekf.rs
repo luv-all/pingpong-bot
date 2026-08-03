@@ -22,7 +22,10 @@ use super::detect::Candidate;
 use super::seed;
 use super::trigger::Trigger;
 
-/// 검출 픽셀 노이즈 σ [px]. 실측 가능한 값이라 모델 오차는 R이 아니라 Q로 간다.
+/// 검출 자체의 픽셀 노이즈 σ [px].
+///
+/// 이것만으로 R을 정하면 안 된다 — 캘리브가 틀어진 만큼도 그 카메라의 픽셀은 못 믿는다.
+/// [`sigma_px`]가 둘을 합친다.
 pub const SIGMA_PX: f64 = 1.5;
 /// 프로세스 노이즈 — 위치 [m²/s], 속도 [m²/s³].
 pub const Q_POSITION: f64 = 1.0e-4;
@@ -328,7 +331,7 @@ impl Ekf {
         let mut h = Matrix2x6::zeros();
         h.fixed_view_mut::<2, 3>(0, 0).copy_from(&d_pixel);
 
-        let s = h * self.p * h.transpose() + Matrix2::identity() * SIGMA_PX.powi(2);
+        let s = h * self.p * h.transpose() + Matrix2::identity() * sigma_px(params).powi(2);
         let s_inv = s.try_inverse()?;
         let d2 = (residual.transpose() * s_inv * residual)[(0, 0)];
         return Some((residual, h, s_inv, d2));
@@ -453,6 +456,19 @@ fn bounce_jacobian(v: Vector3, physics: &PhysicsParams) -> Matrix3<f64> {
         j.set_column(axis, &((up - down) / (2.0 * H)));
     }
     return j;
+}
+
+/// 이 카메라의 픽셀을 얼마나 믿을 것인가 [px].
+///
+/// 검출 노이즈와 캘리브 재투영 오차를 독립으로 보고 합친다. 캘리브 오차는 사실 계통
+/// 편향이라 진짜 노이즈는 아니지만, 필터에 편향을 넣을 자리가 없으므로 R이 문다.
+///
+/// 이걸 안 하면 캘리브가 나쁜 카메라가 통째로 거부된다. 실측 (fly_04, cam0 rmse 4.15 px /
+/// cam1 1.35 px): σ 를 1.5 px 로 고정하면 매 프레임 cam0 만 거부되고(`xo` 가 9프레임 연속)
+/// 필터가 cam1 시선 위로 끌려가 생 삼각측량에서 25 cm 까지 벌어진다. 트랙도 3번 갈아엎는다.
+fn sigma_px(params: &camera::Params) -> f64 {
+    let calibration = params.reprojection_rmse_px.unwrap_or(0.0).max(0.0);
+    return SIGMA_PX.hypot(calibration);
 }
 
 fn outside_volume(p: Point3) -> bool {

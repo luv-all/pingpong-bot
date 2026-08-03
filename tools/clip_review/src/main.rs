@@ -138,7 +138,7 @@ fn run(args: &Args) -> Result<()> {
     print_commit_summary(&reviewed);
     println!("keys: Space 일시정지 | ←/→ or ,/. 한 프레임 | [/] 10프레임 | 0 처음 | q 종료");
     println!(
-        "frame  t     | cam0 cam1 | 3d x y z reproj | ekf x y z |v| sigma_p sigma_v | gate si | live +.1/+.2/+.3s [cm]"
+        "frame  t     | cam0 cam1 | 3d x y z reproj | ekf x y z |v| sigma_p sigma_v | gate0 gate1 | err +.1/+.2/+.3s [cm]"
     );
 
     let mut player = Player {
@@ -180,23 +180,29 @@ fn run(args: &Args) -> Result<()> {
         let (past, future) = reviewed.observed_split(index);
         let actual_past = track::clip_to_mount(&past);
         let actual_future = track::clip_to_mount(&future);
-        let filtered = track::clip_to_mount(&reviewed.filtered_track(index));
-        // 예측은 트리거 순간에 한 번 얼린다 — 프레임이 지나도 안 바뀐다.
-        // 매 프레임 다시 굴리면 언제나 현재 위치에서 출발하니 실제와 겹쳐 보여 볼 게 없다.
-        let committed = reviewed
-            .commit
+        // 아래 둘은 제어로 나가는 Trajectory 그 자체에서 뽑는다. 툴이 따로 모은 상태로
+        // 그리면 계약이 무엇을 담고 있는지가 아니라 툴이 무엇을 봤는지를 보게 된다.
+        // 트리거 전에는 계약이 없어 둘 다 비어 있다 — 그때는 제어도 아무것도 못 받는다.
+        let started = reviewed
+            .contract
             .as_ref()
-            .filter(|commit| index >= commit.frame)
-            .map(|commit| {
-                track::clip_to_mount(
-                    &commit
-                        .predicted
-                        .iter()
-                        .map(|s| s.position)
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .unwrap_or_default();
+            .is_some_and(|contract| index >= contract.frame);
+        let filtered = if started {
+            track::clip_to_mount(&reviewed.measured_to(index))
+        } else {
+            Vec::new()
+        };
+        let committed = if started {
+            track::clip_to_mount(
+                &reviewed
+                    .predicted()
+                    .iter()
+                    .map(|state| state.position)
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            Vec::new()
+        };
         let fast = first_ball.is_some_and(|first| index < first);
 
         // 추적 중인 프레임만, 그리고 같은 프레임을 두 번 찍지 않는다.
@@ -423,9 +429,9 @@ fn console_line(reviewed: &Reviewed, state: &FrameState, index: usize) -> String
     let error: Vec<String> = LEADS_SECS
         .iter()
         .map(|lead| {
-            let measured = reviewed.commit.as_ref().and_then(|commit| {
+            let measured = reviewed.contract.as_ref().and_then(|contract| {
                 track::convergence_error(
-                    &commit.predicted,
+                    &contract.trajectory.predicted,
                     &reviewed.observed,
                     now,
                     *lead,
@@ -450,23 +456,35 @@ fn console_line(reviewed: &Reviewed, state: &FrameState, index: usize) -> String
 /// 실기가 하드웨어에 넘겼을 그 예측이 실제와 얼마나 어긋났는가. `MISS`가 그 숫자다.
 fn print_commit_summary(reviewed: &Reviewed) {
     let plane = table::DEFAULT_HIT_PLANE_Y;
-    let Some(commit) = &reviewed.commit else {
+    let Some(contract) = &reviewed.contract else {
         let tracked = reviewed.frames.iter().filter(|f| f.tracking).count();
         println!("COMMIT  never — 트리거를 끝내 못 넘었다 (추적 프레임 {tracked}개)");
         return;
     };
+    // 트리거 순간의 상태. 계약이 제어에게 "이만큼은 못 믿는다"고 말한 값이다.
+    let at_trigger = contract
+        .trajectory
+        .predicted
+        .first()
+        .copied()
+        .unwrap_or_default();
     println!(
-        "COMMIT  frame {} t={:.3}s  sigma p {:.0}/{:.0}/{:.0}cm  v {:.1}/{:.1}/{:.1}m/s",
-        commit.frame,
-        commit.t,
-        commit.sigma_position.x * 100.0,
-        commit.sigma_position.y * 100.0,
-        commit.sigma_position.z * 100.0,
-        commit.sigma_velocity.x,
-        commit.sigma_velocity.y,
-        commit.sigma_velocity.z
+        "COMMIT  frame {} t={:.3}s  measured {}개  predicted {}개",
+        contract.frame,
+        contract.t,
+        contract.trajectory.measured.len(),
+        contract.trajectory.predicted.len()
     );
-    let guess = commit.predicted.at_plane(plane);
+    println!(
+        "  sigma   p {:.0}/{:.0}/{:.0} cm   v {:.1}/{:.1}/{:.1} m/s",
+        at_trigger.sigma_position.x * 100.0,
+        at_trigger.sigma_position.y * 100.0,
+        at_trigger.sigma_position.z * 100.0,
+        at_trigger.sigma_velocity.x,
+        at_trigger.sigma_velocity.y,
+        at_trigger.sigma_velocity.z
+    );
+    let guess = contract.trajectory.predicted.at_plane(plane);
     let truth = reviewed.observed_crossing_y(plane);
     match (guess, truth) {
         (Some(g), Some(t)) => println!(

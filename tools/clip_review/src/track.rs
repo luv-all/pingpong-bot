@@ -76,28 +76,28 @@ pub struct FrameState {
     pub pixels: [Option<camera::Pixel>; 2],
     /// 이 프레임의 삼각측량 (둘 다 잡고 재투영 게이트를 통과했을 때만).
     pub observed: Option<Observed>,
-    /// 이 프레임까지 필터가 낸 상태. 시드 전이면 `None`.
+    /// 이 프레임까지 필터가 낸 상태 — HUD·콘솔의 숫자용.
+    ///
+    /// 그리는 선은 여기서 뽑지 않는다. 트리거 전에는 계약이 없어 제어가 아무것도 못 받는데
+    /// 화면에만 선이 있으면 거짓말이 된다. 선은 [`Contract`]에서만 나온다.
     pub filtered: Option<State>,
     /// 캠별 필터 판정. 어느 쪽 검출이 거부됐는지 봐야 진단이 된다.
     pub outcomes: [Option<Outcome>; 2],
-    /// "같은 공인가"의 근거. 트랙을 버리면 올라간다.
-    pub seq: u64,
     pub tracking: bool,
 }
 
-/// 트리거가 걸린 순간 — 실기라면 여기서 하드웨어로 넘어갔다.
+/// 제어 쪽으로 나가는 그 객체.
 ///
-/// 이게 얼려 있어야 "예측이 맞았나"를 볼 수 있다. 매 프레임 다시 굴린 예측은 언제나
-/// 현재 공 위치에서 출발하니 실제와 겹쳐 보일 수밖에 없다 — 볼 게 없다.
+/// 화면의 선은 **전부 여기서** 나온다. 툴이 따로 모은 상태로 그리면 계약이 실제로 무엇을
+/// 담고 있는지가 아니라 툴이 무엇을 봤는지를 보게 된다.
 #[derive(Debug, Clone)]
-pub struct Commit {
+pub struct Contract {
+    /// 트리거가 걸린 프레임 — 실기라면 여기서 제어로 넘어갔다.
     pub frame: usize,
     pub t: f64,
-    /// 트리거 순간의 예측 궤적 — 이후 프레임에서도 **바뀌지 않는다**.
-    pub predicted: Track,
-    /// 그때 필터가 말한 축별 불확실성.
-    pub sigma_position: pingpong_bot::Vector3,
-    pub sigma_velocity: pingpong_bot::Vector3,
+    /// `measured`는 클립 끝까지 자라고 `predicted`는 트리거 순간에 얼어 있다.
+    /// 재생 중에는 [`Reviewed::measured_to`]가 `measured`를 현재 시각까지 자른다.
+    pub trajectory: Trajectory,
 }
 
 /// 클립 전체 — 창이 필요로 하는 모든 것.
@@ -105,8 +105,8 @@ pub struct Reviewed {
     pub frames: Vec<FrameState>,
     /// 클립 전체의 생 궤적 (재생 위치와 무관하게 이미 다 안다).
     pub observed: Vec<Observed>,
-    /// 트리거가 걸린 순간의 예측.
-    pub commit: Option<Commit>,
+    /// 제어로 나간 계약. 트리거를 못 넘었으면 `None`.
+    pub contract: Option<Contract>,
     pub fps: f64,
 }
 
@@ -135,20 +135,30 @@ impl Reviewed {
         return (past, future);
     }
 
-    /// `frame` 시점까지 EKF 가 보정한 궤적 (`Trajectory::measured`).
+    /// 계약의 `measured`를 `frame` 시각까지 자른 것.
     ///
-    /// 같은 `seq` 구간만 모은다 — 트랙을 버리고 다시 세우면 다른 공이라 이어 그리면 안 된다.
-    /// 검출이 거부된 프레임은 직전 상태가 그대로 남아 같은 점이 반복되는데, 선으로는
-    /// 보이지 않으니 따로 걸러내지 않는다.
-    pub fn filtered_track(&self, frame: usize) -> Vec<Point3> {
-        let Some(current) = self.frames.get(frame) else {
+    /// 자르는 이유는 재생 때문이다. `measured`는 클립 끝까지 자란 상태로 들고 있는데 그걸
+    /// 통째로 그리면 아직 안 온 구간까지 보인다.
+    pub fn measured_to(&self, frame: usize) -> Vec<Point3> {
+        let Some(contract) = &self.contract else {
             return Vec::new();
         };
-        return self.frames[..=frame]
+        let now = Duration::from_secs_f64(self.time_of(frame).max(0.0));
+        return contract
+            .trajectory
+            .measured
             .iter()
-            .filter(|f| f.seq == current.seq)
-            .filter_map(|f| f.filtered.map(|state| state.position))
+            .take_while(|state| state.t <= now)
+            .map(|state| state.position)
             .collect();
+    }
+
+    /// 계약의 `predicted`. 트리거 순간에 얼었으므로 재생 위치와 무관하다.
+    pub fn predicted(&self) -> &[State] {
+        return self
+            .contract
+            .as_ref()
+            .map_or(&[], |contract| &contract.trajectory.predicted);
     }
 
     /// 생 궤적이 `y` 평면을 로봇 쪽으로 지난 지점 (표본 사이 선형 보간).
@@ -188,7 +198,7 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
     let epoch = Instant::now();
     let mut frames: Vec<FrameState> = Vec::with_capacity(count);
     let mut observed: Vec<Observed> = Vec::new();
-    let mut commit: Option<Commit> = None;
+    let mut contract: Option<Contract> = None;
 
     for index in 0..count {
         let t = index as f64 / fps;
@@ -221,14 +231,22 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
         }
 
         state.filtered = vision.ekf().measured().last().copied();
-        state.seq = vision.ekf().seq();
         state.tracking = state.filtered.is_some();
 
-        // 트리거가 처음 걸린 프레임의 예측만 얼린다.
-        if commit.is_none()
-            && let Some(trajectory) = vision.trajectory()
-        {
-            commit = Some(freeze(index, t, &trajectory));
+        // 계약이 생기면 잡고, 같은 공인 동안 갱신한다 — measured 가 계속 자란다.
+        // 다른 공이 다시 트리거를 넘겨도 첫 계약만 본다 (실기도 샷당 한 번이다).
+        if let Some(trajectory) = vision.trajectory() {
+            match &mut contract {
+                None => {
+                    contract = Some(Contract {
+                        frame: index,
+                        t,
+                        trajectory,
+                    });
+                }
+                Some(held) if held.trajectory.seq == trajectory.seq => held.trajectory = trajectory,
+                Some(_) => {}
+            }
         }
         frames.push(state);
     }
@@ -236,20 +254,9 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
     return Ok(Reviewed {
         frames,
         observed,
-        commit,
+        contract,
         fps,
     });
-}
-
-fn freeze(frame: usize, t: f64, trajectory: &Trajectory) -> Commit {
-    let at_trigger = trajectory.predicted.first().copied().unwrap_or_default();
-    return Commit {
-        frame,
-        t,
-        predicted: trajectory.predicted.clone(),
-        sigma_position: at_trigger.sigma_position,
-        sigma_velocity: at_trigger.sigma_velocity,
-    };
 }
 
 /// 클립을 통째로 메모리에 올린다. 되감기가 있어 두 번 훑을 수 없다.

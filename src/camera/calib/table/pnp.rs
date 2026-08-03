@@ -133,6 +133,7 @@ pub fn calibrate_table_pnp(
         dist: Vec::new(),
         rotation,
         translation,
+        reprojection_rmse_px: Some(reproj_rmse),
     };
 
     return Ok(PnpResult {

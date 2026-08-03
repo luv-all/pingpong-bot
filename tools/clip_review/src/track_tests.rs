@@ -81,3 +81,48 @@ fn the_track_reports_where_it_crosses_a_plane() {
     assert!((hit.velocity.y + 1.0).abs() < 1e-9);
     assert!(track.at_plane(-5.0).is_none(), "안 지나는 평면");
 }
+
+fn reviewed_with(predicted: Track, measured: Track, fps: f64) -> Reviewed {
+    return Reviewed {
+        frames: vec![FrameState::default(); 11],
+        observed: Vec::new(),
+        contract: Some(Contract {
+            frame: 0,
+            t: 0.0,
+            trajectory: Trajectory {
+                seq: 0,
+                origin: Instant::now(),
+                measured,
+                predicted,
+            },
+        }),
+        fps,
+    };
+}
+
+/// 재생 위치까지만 잘라야 한다. measured 는 클립 끝까지 자란 상태로 들고 있으므로
+/// 안 자르면 아직 안 온 구간이 화면에 미리 보인다.
+#[test]
+fn the_measured_track_is_cut_at_the_playback_frame() {
+    // 0.1 s 간격 11개, fps 10 이면 프레임 i 의 시각이 곧 i 번째 표본의 t 다.
+    let reviewed = reviewed_with(Track::default(), straight(), 10.0);
+    assert_eq!(reviewed.measured_to(0).len(), 1);
+    assert_eq!(reviewed.measured_to(4).len(), 5);
+    assert_eq!(reviewed.measured_to(10).len(), 11);
+}
+
+/// 예측은 트리거에 얼렸으므로 재생 위치와 무관하다.
+#[test]
+fn the_predicted_track_does_not_move_with_playback() {
+    let reviewed = reviewed_with(straight(), Track::default(), 10.0);
+    assert_eq!(reviewed.predicted().len(), 11);
+}
+
+/// 계약이 없으면 그릴 것도 없다 — 빈 것과 "0 이라고 말하는 것"은 다르다.
+#[test]
+fn without_a_contract_there_is_nothing_to_draw() {
+    let mut reviewed = reviewed_with(straight(), straight(), 10.0);
+    reviewed.contract = None;
+    assert!(reviewed.measured_to(5).is_empty());
+    assert!(reviewed.predicted().is_empty());
+}
