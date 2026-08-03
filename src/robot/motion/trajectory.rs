@@ -29,6 +29,14 @@ pub struct Trajectory {
     pub rail: Rail,
     pub follow_through_rail_x: f64,
     pub follow_through_rail_velocity: f64,
+    /// 관절별 `(로컬 시작 오프셋 [s], 로컬 구간 길이 [s])` — pre-impact 구간에만
+    /// 적용된다. `None`이면 모든 관절이 `impact_time_secs`를 그대로 공유한다
+    /// (기존 동작, 이 필드가 없던 시절과 동일). `Some`이면 관절 i는 전역 시간
+    /// `[offset, offset+duration]` 구간에서만 움직이고, 그 밖에서는 시작/끝
+    /// 값에 정지한다 — 근위→원위 순서로 어긋난 채찍형 스윙
+    /// ([`crate::robot::motion::fixed_swing`])에 쓰인다. 팔로스루 구간은
+    /// 영향받지 않는다.
+    pub joint_phase_offsets: Option<Vec<(f64, f64)>>,
 }
 
 impl Trajectory {
@@ -55,6 +63,7 @@ impl Trajectory {
             follow_through_rail_x: rail.end,
             follow_through_rail_velocity: rail.end_velocity,
             rail,
+            joint_phase_offsets: None,
         };
     }
 
@@ -86,6 +95,7 @@ impl Trajectory {
             rail,
             follow_through_rail_x,
             follow_through_rail_velocity,
+            joint_phase_offsets: None,
         };
     }
 
@@ -102,6 +112,28 @@ impl Trajectory {
         return &self.follow_through;
     }
 
+    /// 관절별 위상 오프셋을 부여한 사본을 돌려준다 — 채찍형 스윙 전용
+    /// (`crate::robot::motion::fixed_swing`). `offsets.len()`은 관절 수와
+    /// 같아야 한다(호출부 책임 — 검증은 하지 않는다, 내부 전용 빌더이므로).
+    pub fn with_phase_offsets(mut self, offsets: Vec<(f64, f64)>) -> Self {
+        self.joint_phase_offsets = Some(offsets);
+        return self;
+    }
+
+    /// 관절 `joint_index`의 전역 시간 `global_t`를 로컬(자기 구간 기준) 시간으로
+    /// 변환한다. `joint_phase_offsets`가 없으면 전역 시간을 그대로 쓴다(기존
+    /// 동작). 있으면 자기 구간 밖에서는 경계값으로 클램프한다 — 그 결과
+    /// `QuinticSegment::sample`이 구간 시작/끝의 경계 조건(위치·속도·가속도)을
+    /// 그대로 반환하므로, 관절이 자기 구간 전/후에는 정지해 있는 것처럼
+    /// 보인다(양끝 속도가 0인 한).
+    fn pre_impact_local_time(&self, joint_index: usize, global_t: f64) -> f64 {
+        let Some(offsets) = &self.joint_phase_offsets else {
+            return global_t;
+        };
+        let (offset, duration) = offsets[joint_index];
+        return (global_t - offset).clamp(0.0, duration);
+    }
+
     fn pre_impact_segments(&self) -> Vec<QuinticSegment> {
         let n = self.start.values.len();
         assert_eq!(self.end.values.len(), n, "impact joint count");
@@ -110,6 +142,10 @@ impl Trajectory {
         let mut segments = Vec::with_capacity(n);
         for i in 0..n {
             let impact_accel = self.impact_acceleration.get(i).copied().unwrap_or(0.0);
+            let duration = self
+                .joint_phase_offsets
+                .as_ref()
+                .map_or(self.impact_time_secs, |offsets| offsets[i].1);
             segments.push(QuinticSegment::new(
                 self.start.values[i],
                 self.end.values[i],
@@ -117,7 +153,7 @@ impl Trajectory {
                 self.end_velocity[i],
                 0.0,
                 impact_accel,
-                self.impact_time_secs,
+                duration,
             ));
         }
         return segments;
@@ -206,7 +242,8 @@ impl Trajectory {
         let values = if t <= self.impact_time_secs || self.duration_secs <= self.impact_time_secs {
             self.pre_impact_segments()
                 .into_iter()
-                .map(|segment| segment.sample(t).0)
+                .enumerate()
+                .map(|(i, segment)| segment.sample(self.pre_impact_local_time(i, t)).0)
                 .collect()
         } else {
             self.follow_through_segments()
@@ -223,7 +260,8 @@ impl Trajectory {
             return self
                 .pre_impact_segments()
                 .into_iter()
-                .map(|segment| segment.sample(t).1)
+                .enumerate()
+                .map(|(i, segment)| segment.sample(self.pre_impact_local_time(i, t)).1)
                 .collect();
         }
         return self
@@ -239,7 +277,8 @@ impl Trajectory {
             return self
                 .pre_impact_segments()
                 .into_iter()
-                .map(|segment| segment.sample(t).2)
+                .enumerate()
+                .map(|(i, segment)| segment.sample(self.pre_impact_local_time(i, t)).2)
                 .collect();
         }
         return self
@@ -390,5 +429,83 @@ mod tests {
         let just_after = trajectory.sample_acceleration_at(trajectory.impact_time_secs + 1e-9)[0];
         assert!((just_before - 3.5).abs() < 1e-3, "before={just_before}");
         assert!((just_after - 3.5).abs() < 1e-3, "after={just_after}");
+    }
+
+    #[test]
+    fn joint_phase_offsets_default_none_preserves_existing_sampling() {
+        let trajectory = Trajectory::new(
+            Joints::from_slice(&[0.0, 0.0]),
+            Joints::from_slice(&[1.0, 2.0]),
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+            0.5,
+            Rail::fixed(0.0),
+        );
+        assert!(trajectory.joint_phase_offsets.is_none());
+        let mid = trajectory.sample_at(0.25);
+        assert!(mid.values[0] > 0.0 && mid.values[0] < 1.0);
+        assert!(mid.values[1] > 0.0 && mid.values[1] < 2.0);
+        // 오프셋이 없으면 두 관절이 같은 진행률로 움직여야 한다(회귀 확인).
+        let ratio0 = mid.values[0] / 1.0;
+        let ratio1 = mid.values[1] / 2.0;
+        assert!(
+            (ratio0 - ratio1).abs() < 1e-9,
+            "오프셋 없으면 두 관절이 같은 진행률로 움직여야 함: {ratio0} vs {ratio1}"
+        );
+    }
+
+    #[test]
+    fn joint_phase_offsets_some_holds_before_and_after_its_own_window() {
+        // 관절0은 [0.0, 0.2]에서만, 관절1은 [0.3, 0.5]에서만 움직인다.
+        let trajectory = Trajectory::new(
+            Joints::from_slice(&[0.0, 0.0]),
+            Joints::from_slice(&[1.0, 1.0]),
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+            0.5,
+            Rail::fixed(0.0),
+        )
+        .with_phase_offsets(vec![(0.0, 0.2), (0.3, 0.2)]);
+
+        let at0 = trajectory.sample_at(0.0);
+        assert!((at0.values[0] - 0.0).abs() < 1e-9);
+        assert!((at0.values[1] - 0.0).abs() < 1e-9);
+
+        // t=0.2: 관절0은 이미 자기 구간이 끝나 끝값(1.0)에서 정지, 관절1은
+        // 아직 자기 구간(0.3~0.5) 전이라 시작값(0.0) 그대로.
+        let mid = trajectory.sample_at(0.2);
+        assert!((mid.values[0] - 1.0).abs() < 1e-6, "관절0={}", mid.values[0]);
+        assert!((mid.values[1] - 0.0).abs() < 1e-6, "관절1={}", mid.values[1]);
+
+        // t=0.5: 관절0은 계속 끝값 유지, 관절1도 자기 구간이 끝나 끝값(1.0).
+        let end = trajectory.sample_at(0.5);
+        assert!((end.values[0] - 1.0).abs() < 1e-6);
+        assert!((end.values[1] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn joint_phase_offsets_velocity_is_zero_outside_its_own_window() {
+        let trajectory = Trajectory::new(
+            Joints::from_slice(&[0.0]),
+            Joints::from_slice(&[1.0]),
+            vec![0.0],
+            vec![0.0],
+            0.5,
+            Rail::fixed(0.0),
+        )
+        .with_phase_offsets(vec![(0.1, 0.2)]);
+        assert!((trajectory.sample_velocity_at(0.05)[0]).abs() < 1e-9, "자기 구간 전");
+        assert!((trajectory.sample_velocity_at(0.4)[0]).abs() < 1e-9, "자기 구간 후");
+    }
+
+    #[test]
+    fn other_swing_modes_never_set_joint_phase_offsets() {
+        // 회귀 가드: 다른 모든 스윙 플래너는 이 필드를 건드리지 않아야 한다.
+        let robot = crate::defaults::robot().expect("robot");
+        let rail_x = robot.arm.rail.expect("rail").default_x();
+        let start = crate::robot::Pose::new(rail_x, robot.arm.default_joints.clone());
+        let trajectory = crate::robot::motion::Planner::return_to_center(&robot.arm, &start)
+            .expect("return_to_center");
+        assert!(trajectory.joint_phase_offsets.is_none());
     }
 }
