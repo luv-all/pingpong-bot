@@ -364,3 +364,57 @@ fn fit_physics_from_the_clips() {
          잡히므로 다른 둘보다 훨씬 약하다 — 흩어지면 그게 이유다."
     );
 }
+
+/// 공이 실제로 테이블 중앙에서 출발하나, 그리고 옆으로 얼마나 흐르나.
+///
+/// 슈터가 `x = W/2` 에 있고 똑바로 쏜다면 궤적의 x 가 거의 안 변해야 한다. 사실이면 그건
+/// 적합에 넣을 수 있는 **공짜 정보**다 — x 는 두 카메라가 다 +X 옆면이라 가장 안 보이는
+/// 축이라서, 아는 것을 넣어 주는 값이 크다.
+#[test]
+#[ignore = "클립 필요"]
+fn does_the_ball_start_from_the_middle() {
+    let middle = table::WIDTH_X * 0.5;
+    println!("테이블 중앙 x = {middle:.3} m");
+    println!(
+        "{:<8} {:>8} {:>8} {:>9} {:>9}",
+        "clip", "첫 x", "끝 x", "중앙 대비", "v_x"
+    );
+    let mut starts = Vec::new();
+    let mut lateral = Vec::new();
+    for clip in CLIPS {
+        let Some(flight) = flight(clip, true) else {
+            continue;
+        };
+        let (first, last) = (flight[0], flight[flight.len() - 1]);
+        let dt = last.0 - first.0;
+        let vx = if dt > 1e-6 {
+            (last.1.x - first.1.x) / dt
+        } else {
+            0.0
+        };
+        starts.push(first.1.x - middle);
+        lateral.push(vx);
+        println!(
+            "{clip:<8} {:>8.3} {:>8.3} {:>+9.3} {:>+9.2}",
+            first.1.x,
+            last.1.x,
+            first.1.x - middle,
+            vx
+        );
+    }
+    let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len().max(1) as f64;
+    let sd = |v: &[f64]| {
+        let m = mean(v);
+        return (v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / v.len().max(1) as f64).sqrt();
+    };
+    println!(
+        "\n첫 x - 중앙  평균 {:+.3} m  표준편차 {:.3} m",
+        mean(&starts),
+        sd(&starts)
+    );
+    println!(
+        "v_x          평균 {:+.2} m/s  표준편차 {:.2} m/s",
+        mean(&lateral),
+        sd(&lateral)
+    );
+}

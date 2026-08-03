@@ -95,6 +95,24 @@ pub const DRAG: f64 = 0.0;
 /// `(v_x - Rω_y, v_y + Rω_x, 0)` 에 아예 안 들어가 관측되지 않는다.
 pub const ASSUMED_SPIN: Vector3 = Vector3::new(210.0, 0.0, 0.0);
 
+/// 슈터가 공을 내보내는 가로 위치 [m]. 궤적 시작 x 의 사전값이다.
+///
+/// x 는 두 카메라가 다 테이블 +X 옆면이라 **가장 안 보이는 축**이다 (`diag_layout`:
+/// σ_x 6 mm vs σ_y·σ_z 3~4 mm). 리그가 이미 아는 것을 넣어 주면 그만큼 관측을 아낀다.
+///
+/// 기하로는 `WIDTH_X / 2 = 0.763` 인데 실측은 클립 9개에서 평균 0.820, 표준편차 0.040 이다
+/// (`diag_physics::does_the_ball_start_from_the_middle`). 5.7 cm 차이가 슈터가 실제로
+/// 그만큼 옆에 있어서인지 캘리브가 x 로 밀려서인지는 아직 못 가른다 — 3 m 거리에서
+/// 5.7 cm 는 17 px 이라 cam0 rmse 4.15 px 보다 크므로 슈터 쪽이 유력하다.
+///
+/// TODO(측정): 줄자로 슈터 사출구의 x 를 재면 바로 갈린다. 기하값과 맞으면 캘리브가
+/// 밀린 것이고, 실측과 맞으면 그냥 슈터가 옆에 있는 것이다.
+pub const SHOOTER_X: f64 = 0.820;
+/// 그 사전값을 얼마나 믿나 [m]. 클립 9개의 표준편차다.
+///
+/// 하드 제약이 아니라 소프트다 — 관측이 충분하면 데이터가 이겨야 한다.
+pub const SHOOTER_X_SIGMA: f64 = 0.040;
+
 /// 트랙을 유지할 부피 여유 [m].
 const VOLUME_MARGIN: f64 = 1.0;
 /// 예측을 끊을 로봇 쪽 y [m]. 그 뒤는 이미 지나친 자리다.
@@ -420,9 +438,12 @@ impl Fit {
     }
 
     /// 관측마다 재투영 오차 2행 (x, y), σ 로 정규화 [px 단위].
+    ///
+    /// 마지막 한 행은 슈터 위치 사전값이다. 같은 σ 정규화를 쓰므로 관측 하나와 같은
+    /// 무게를 갖는다 — 관측이 몇 개 없을 때만 실질적으로 작용하고, 많아지면 묻힌다.
     fn residuals(&self, start: &Ballistic) -> Option<Vec<f64>> {
         let path = self.walk(start)?;
-        let mut out = Vec::with_capacity(self.sightings.len() * 2);
+        let mut out = Vec::with_capacity(self.sightings.len() * 2 + 1);
         for (sighting, point) in self.sightings.iter().zip(&path) {
             let params = &self.cameras[sighting.camera];
             let projected = params.project_world_unclipped(*point)?;
@@ -430,6 +451,7 @@ impl Fit {
             out.push((projected.x - sighting.pixel.x) * scale);
             out.push((projected.y - sighting.pixel.y) * scale);
         }
+        out.push((start.position.x - SHOOTER_X) / SHOOTER_X_SIGMA * SIGMA_PX);
         return Some(out);
     }
 
