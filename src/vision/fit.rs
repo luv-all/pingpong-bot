@@ -57,6 +57,44 @@ pub const INTEGRATE_DT: Duration = Duration::from_millis(1);
 pub const SAMPLE_DT: Duration = Duration::from_millis(5);
 /// 예측 궤적 상한.
 pub const HORIZON: Duration = Duration::from_secs(2);
+/// 항력계수 `k` [1/m] — `a = -k·|v|·v`. 지금은 **끈다**.
+///
+/// 교과서 값(`½ρC_dA/m` 에 `C_d = 0.45` → 0.126)을 넣으면 예측이 **2배 나빠진다**.
+/// 클립 9개, 리드타임별 타점 오차 [cm]:
+///
+/// | drag | spin | 0.4s | 0.3s | 0.2s | 0.1s |
+/// |---|---|---|---|---|---|
+/// | 0 | 0 | 8.4 | 7.4 | 6.9 | 5.6 |
+/// | **0.126** | 0 | 15.7 | 12.9 | 13.4 | 12.4 |
+/// | 0 | **210** | **7.6** | **5.0** | **5.3** | **4.1** |
+/// | 0.126 | 210 | 9.2 | 7.2 | 7.4 | 6.2 |
+///
+/// 데이터도 같은 말을 한다 — `diag_physics` 에서 ω 를 같이 풀면 항력이 0.013 으로
+/// 주저앉는다. 이 속도·거리대에서는 항력이 잴 만큼 안 실린다는 뜻이다. 없는 힘을 넣고
+/// 초기 속도로 벌충하면 적합 구간 안에서만 맞고 그 너머로 갈수록 벌어진다.
+///
+/// TODO(측정): 이론과 데이터가 어긋나므로 전용 측정이 필요하다. **바운스 없는 긴 비행**을
+/// ω 를 아는 상태로 찍어야 한다 — 바운스가 끼면 반발계수 오차가 항력으로 새고
+/// (바운스 전만 보면 0.150 이 나온다), ω 를 모르면 Magnus 가 항력 자리로 샌다.
+pub const DRAG: f64 = 0.0;
+
+/// 슈터가 먹이는 스핀 [rad/s]. `+x` 축 회전이 진행 방향(`-y`) 기준 톱스핀이다.
+///
+/// 클립 9개에서 잰 값이다 (`diag_physics`): ω_x 137~251, 중앙값 210, 부호는 전부 같다.
+/// 넣으면 리드 0.3 s 타점 오차가 7.4 -> 5.0 cm 로, 0.1 s 는 5.6 -> 4.1 cm 로 준다.
+///
+/// 효과는 거의 **바운스**에서 온다. `MAGNUS_OMEGA_MAX` 가 80 rad/s 라 비행 중 Magnus 에는
+/// 이 값의 38 % 만 실리는데, 바운스 접선 임펄스는 클립을 안 쓰고 210 을 그대로 쓴다.
+/// 같은 ω 를 두 곳에서 다르게 쓰는 셈이라 그 상한도 재검토 대상이다 (sim 거동도 바뀐다).
+///
+/// TODO(측정): 슈터 눈금이 바뀌면 이 값도 바뀐다. 지금은 클립을 찍을 때의 한 설정에서만
+/// 맞다. 눈금-스핀 대응표를 만들거나(계획 문서 Stage 5), 관측이 충분할 때 ω 를 미지수로
+/// 풀어 이 상수를 사전값으로만 쓰는 게 다음이다.
+///
+/// ω_y·ω_z 는 0 으로 둔다. 클립에서 흩어졌고, 특히 ω_z 는 바운스 접촉점 속도
+/// `(v_x - Rω_y, v_y + Rω_x, 0)` 에 아예 안 들어가 관측되지 않는다.
+pub const ASSUMED_SPIN: Vector3 = Vector3::new(210.0, 0.0, 0.0);
+
 /// 트랙을 유지할 부피 여유 [m].
 const VOLUME_MARGIN: f64 = 1.0;
 /// 예측을 끊을 로봇 쪽 y [m]. 그 뒤는 이미 지나친 자리다.
@@ -117,7 +155,13 @@ impl Fit {
     pub fn new(calibration: &Calibration, trigger: Box<dyn Trigger>) -> Self {
         return Self {
             cameras: calibration.cameras.clone(),
-            physics: PhysicsParams::default(),
+            // TODO(합의): 이 둘을 `PhysicsParams::default()` 로 올리면 sim 도 같이 쓴다.
+            // 지금 올리면 jog 테스트 4개가 깨진다 — 기본 슈터 설정이 항력을 못 견뎌 접수
+            // 창에 도달을 못 한다. 슈터 속도를 같이 올려야 하고 그건 sim 담당 결정이다.
+            physics: PhysicsParams {
+                drag: DRAG,
+                ..PhysicsParams::default()
+            },
             trigger,
             sightings: Vec::new(),
             solution: None,
@@ -390,10 +434,13 @@ impl Fit {
     }
 
     /// 초기 조건에서 굴리며 관측 시각마다 위치를 뽑는다.
+    ///
+    /// ω 는 바운스에서 바뀌므로 들고 다녀야 한다 — 버리면 반발 뒤가 통째로 틀린다.
     fn walk(&self, start: &Ballistic) -> Option<Vec<Point3>> {
         let last = self.sightings.last()?.t;
         let step = INTEGRATE_DT.as_secs_f64();
         let (mut position, mut velocity) = (start.position.coords, start.velocity);
+        let mut spin = ASSUMED_SPIN;
         let (mut elapsed, mut next) = (Duration::ZERO, 0usize);
         let mut out = Vec::with_capacity(self.sightings.len());
         let horizon = last.saturating_sub(start.t0);
@@ -408,10 +455,10 @@ impl Fit {
             if next >= self.sightings.len() || elapsed > horizon + INTEGRATE_DT {
                 break;
             }
-            let (p, v, _) =
-                Kinematics::step(position, velocity, Vector3::zeros(), step, &self.physics);
+            let (p, v, w) = Kinematics::step(position, velocity, spin, step, &self.physics);
             position = p;
             velocity = v;
+            spin = w;
             elapsed += INTEGRATE_DT;
         }
         // 시각이 창 끝을 넘는 관측이 남으면 마지막 위치로 채운다 (적합이 못 미치는 구간).
@@ -428,12 +475,12 @@ impl Fit {
         };
         let step = INTEGRATE_DT.as_secs_f64();
         let (mut position, mut velocity) = (ballistic.position.coords, ballistic.velocity);
-        let mut elapsed = Duration::ZERO;
+        let (mut spin, mut elapsed) = (ASSUMED_SPIN, Duration::ZERO);
         while elapsed < dt {
-            let (p, v, _) =
-                Kinematics::step(position, velocity, Vector3::zeros(), step, &self.physics);
+            let (p, v, w) = Kinematics::step(position, velocity, spin, step, &self.physics);
             position = p;
             velocity = v;
+            spin = w;
             elapsed += INTEGRATE_DT;
         }
         return Ballistic {
@@ -469,13 +516,15 @@ impl Fit {
                 .zip(&path)
                 .map(|(sighting, position)| {
                     let lead = sighting.t.saturating_sub(start.t0).as_secs_f64();
+                    let (velocity, spin) = self.state_after(&start, lead);
                     return State {
                         t: sighting.t,
                         position: *position,
-                        velocity: self.velocity_at(&start, lead),
+                        velocity,
                         sigma_position: sigma.0 + sigma.1 * lead,
                         sigma_velocity: sigma.1,
-                        spin: None,
+                        // 추정한 게 아니라 상수를 굴린 값이다. 소비자가 그걸 알아야 한다.
+                        spin: Some(spin),
                     };
                 })
                 .collect(),
@@ -497,18 +546,20 @@ impl Fit {
         }
     }
 
-    fn velocity_at(&self, start: &Ballistic, lead: f64) -> Vector3 {
+    /// `lead` 초 뒤의 속도와 스핀. 바운스를 지나면 둘 다 바뀐다.
+    fn state_after(&self, start: &Ballistic, lead: f64) -> (Vector3, Vector3) {
         let step = INTEGRATE_DT.as_secs_f64();
-        let (mut position, mut velocity) = (start.position.coords, start.velocity);
+        let (mut position, mut velocity, mut spin) =
+            (start.position.coords, start.velocity, ASSUMED_SPIN);
         let mut elapsed = 0.0;
         while elapsed < lead {
-            let (p, v, _) =
-                Kinematics::step(position, velocity, Vector3::zeros(), step, &self.physics);
+            let (p, v, w) = Kinematics::step(position, velocity, spin, step, &self.physics);
             position = p;
             velocity = v;
+            spin = w;
             elapsed += step;
         }
-        return velocity;
+        return (velocity, spin);
     }
 
     /// 초기 조건의 축별 σ — `(위치, 속도)`.
@@ -561,14 +612,15 @@ impl Fit {
     fn integrate_to_robot(&self, from: &State) -> Track {
         let step = INTEGRATE_DT.as_secs_f64();
         let (mut position, mut velocity) = (from.position.coords, from.velocity);
+        let mut spin = from.spin.unwrap_or(ASSUMED_SPIN);
         let (mut elapsed, mut since_sample) = (Duration::ZERO, Duration::ZERO);
         let mut out = vec![*from];
 
         while elapsed < HORIZON {
-            let (p, v, _) =
-                Kinematics::step(position, velocity, Vector3::zeros(), step, &self.physics);
+            let (p, v, w) = Kinematics::step(position, velocity, spin, step, &self.physics);
             position = p;
             velocity = v;
+            spin = w;
             elapsed += INTEGRATE_DT;
             since_sample += INTEGRATE_DT;
 

@@ -12,17 +12,24 @@ fn sightings(
     frames: usize,
     fps: f64,
 ) -> Vec<(camera::Id, camera::Pixel, Duration)> {
-    let physics = PhysicsParams::default();
+    // 적합과 **같은 물리**로 합성해야 한다. 다른 모델로 만든 데이터를 못 맞힌다고
+    // 적합을 탓하면 안 된다.
+    let physics = PhysicsParams {
+        drag: DRAG,
+        ..PhysicsParams::default()
+    };
     let step = INTEGRATE_DT.as_secs_f64();
-    let (mut position, mut velocity) = (truth.position.coords, truth.velocity);
+    let (mut position, mut velocity, mut spin) =
+        (truth.position.coords, truth.velocity, ASSUMED_SPIN);
     let mut elapsed = 0.0;
     let mut out = Vec::new();
     for frame in 0..frames {
         let target = frame as f64 / fps;
         while elapsed < target {
-            let (p, v, _) = Kinematics::step(position, velocity, Vector3::zeros(), step, &physics);
+            let (p, v, w) = Kinematics::step(position, velocity, spin, step, &physics);
             position = p;
             velocity = v;
+            spin = w;
             elapsed += step;
         }
         for params in &calibration.cameras[..2] {
