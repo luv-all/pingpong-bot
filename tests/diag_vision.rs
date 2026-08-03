@@ -301,7 +301,10 @@ fn filtered_state_against_raw_triangulation() {
         mean(|r| r.gap.y) * 100.0,
         mean(|r| r.gap.z) * 100.0
     );
-    println!("트랙 교체 {}회 (seq 증가)", rows.last().expect("비지 않음").seq);
+    println!(
+        "트랙 교체 {}회 (seq 증가)",
+        rows.last().expect("비지 않음").seq
+    );
 }
 
 struct Row {

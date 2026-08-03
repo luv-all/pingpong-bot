@@ -95,9 +95,14 @@ pub struct Contract {
     /// 트리거가 걸린 프레임 — 실기라면 여기서 제어로 넘어갔다.
     pub frame: usize,
     pub t: f64,
-    /// `measured`는 클립 끝까지 자라고 `predicted`는 트리거 순간에 얼어 있다.
-    /// 재생 중에는 [`Reviewed::measured_to`]가 `measured`를 현재 시각까지 자른다.
-    pub trajectory: Trajectory,
+    /// 트리거가 걸린 그 순간의 계약 사본.
+    ///
+    /// 필터는 이제 매 보정마다 예측을 다시 적분하므로 계약의 `predicted`는 계속 바뀐다.
+    /// 그건 제어에게 맞는 동작이지만("지금 아는 최선"), 그것만 보면 예측이 실제에 붙어
+    /// 보여 "예측이 맞았나"를 못 본다. 그래서 툴이 첫 순간을 따로 잡는다.
+    pub at_trigger: Trajectory,
+    /// 마지막으로 본 계약. `measured`가 여기까지 자라 있다.
+    pub latest: Trajectory,
 }
 
 /// 클립 전체 — 창이 필요로 하는 모든 것.
@@ -145,7 +150,7 @@ impl Reviewed {
         };
         let now = Duration::from_secs_f64(self.time_of(frame).max(0.0));
         return contract
-            .trajectory
+            .latest
             .measured
             .iter()
             .take_while(|state| state.t <= now)
@@ -158,7 +163,7 @@ impl Reviewed {
         return self
             .contract
             .as_ref()
-            .map_or(&[], |contract| &contract.trajectory.predicted);
+            .map_or(&[], |contract| &contract.at_trigger.predicted);
     }
 
     /// 생 궤적이 `y` 평면을 로봇 쪽으로 지난 지점 (표본 사이 선형 보간).
@@ -241,10 +246,11 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
                     contract = Some(Contract {
                         frame: index,
                         t,
-                        trajectory,
+                        at_trigger: trajectory.clone(),
+                        latest: trajectory,
                     });
                 }
-                Some(held) if held.trajectory.seq == trajectory.seq => held.trajectory = trajectory,
+                Some(held) if held.latest.seq == trajectory.seq => held.latest = trajectory,
                 Some(_) => {}
             }
         }

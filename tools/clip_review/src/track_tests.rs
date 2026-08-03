@@ -89,7 +89,13 @@ fn reviewed_with(predicted: Track, measured: Track, fps: f64) -> Reviewed {
         contract: Some(Contract {
             frame: 0,
             t: 0.0,
-            trajectory: Trajectory {
+            at_trigger: Trajectory {
+                seq: 0,
+                origin: Instant::now(),
+                measured: measured.clone(),
+                predicted: predicted.clone(),
+            },
+            latest: Trajectory {
                 seq: 0,
                 origin: Instant::now(),
                 measured,

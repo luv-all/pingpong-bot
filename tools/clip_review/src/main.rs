@@ -431,7 +431,7 @@ fn console_line(reviewed: &Reviewed, state: &FrameState, index: usize) -> String
         .map(|lead| {
             let measured = reviewed.contract.as_ref().and_then(|contract| {
                 track::convergence_error(
-                    &contract.trajectory.predicted,
+                    &contract.at_trigger.predicted,
                     &reviewed.observed,
                     now,
                     *lead,
@@ -463,7 +463,7 @@ fn print_commit_summary(reviewed: &Reviewed) {
     };
     // 트리거 순간의 상태. 계약이 제어에게 "이만큼은 못 믿는다"고 말한 값이다.
     let at_trigger = contract
-        .trajectory
+        .at_trigger
         .predicted
         .first()
         .copied()
@@ -472,8 +472,8 @@ fn print_commit_summary(reviewed: &Reviewed) {
         "COMMIT  frame {} t={:.3}s  measured {}개  predicted {}개",
         contract.frame,
         contract.t,
-        contract.trajectory.measured.len(),
-        contract.trajectory.predicted.len()
+        contract.latest.measured.len(),
+        contract.at_trigger.predicted.len()
     );
     println!(
         "  sigma   p {:.0}/{:.0}/{:.0} cm   v {:.1}/{:.1}/{:.1} m/s",
@@ -484,7 +484,7 @@ fn print_commit_summary(reviewed: &Reviewed) {
         at_trigger.sigma_velocity.y,
         at_trigger.sigma_velocity.z
     );
-    let guess = contract.trajectory.predicted.at_plane(plane);
+    let guess = contract.at_trigger.predicted.at_plane(plane);
     let truth = reviewed.observed_crossing_y(plane);
     match (guess, truth) {
         (Some(g), Some(t)) => println!(

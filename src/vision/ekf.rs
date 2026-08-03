@@ -76,8 +76,13 @@ pub struct Ekf {
     /// 개수는 캘리브레이션 파일이 정한다.
     cameras: Vec<camera::Params>,
     measured: Track,
-    /// 비어 있으면 아직 안 만든 것이다. 별도 플래그를 두지 않는다.
+    /// 트리거가 걸린 뒤 **매 보정마다** 다시 적분한다.
     predicted: Track,
+    /// 트리거는 걸쇠다 — 한 번 걸리면 트랙이 끝날 때까지 안 풀린다.
+    ///
+    /// 레벨 조건이라 σ 가 잠깐 커지면 다시 거짓이 될 수 있는데, 그때 예측을 끊으면 제어가
+    /// 받던 궤적이 사라진다. 시작 조건이지 유지 조건이 아니다.
+    predicting: bool,
     /// 시드 전에만 쓴다.
     pending: Vec<(camera::Id, Candidate, Duration)>,
     rejects: u32,
@@ -96,6 +101,7 @@ impl Ekf {
             cameras: calibration.cameras.clone(),
             measured: Track::default(),
             predicted: Track::default(),
+            predicting: false,
             pending: Vec::new(),
             rejects: 0,
             recedes: 0,
@@ -219,7 +225,11 @@ impl Ekf {
         self.note_recede(&state);
         self.measured.0.push(state);
 
-        if self.predicted.is_empty() && self.trigger.ready(&self.measured) {
+        // 트리거는 "언제부터 예측을 줄까"이지 "언제 한 번 예측할까"가 아니다. 얼려 두면
+        // 이후 관측이 아무리 좋아져도 제어는 트리거 순간의 추정으로 계속 친다 — 실측
+        // (`diag_trigger`)에서 그 차이가 타점 오차의 지배 항이었다.
+        self.predicting |= self.trigger.ready(&self.measured);
+        if self.predicting {
             self.predicted = self.integrate_to_robot(t);
         }
         if self.recedes >= RECEDE_LIMIT || outside_volume(self.position()) {
@@ -228,11 +238,12 @@ impl Ekf {
         return Outcome::Accepted;
     }
 
-    /// 트리거 전이면 `None`. `predicted`는 고정이고 `measured`만 자란다.
+    /// 트리거 전이면 `None`. 둘 다 매 프레임 갱신된다 — `measured`는 자라고
+    /// `predicted`는 지금 상태에서 다시 적분한 것이다.
     ///
     /// `origin`은 밖에서 준다. 필터는 벽시계를 모르고 [`State::t`]만 다룬다.
     pub fn trajectory(&self, origin: std::time::Instant) -> Option<Trajectory> {
-        if self.predicted.is_empty() {
+        if !self.predicting || self.predicted.is_empty() {
             return None;
         }
         return Some(Trajectory {
@@ -385,6 +396,7 @@ impl Ekf {
         self.p = Matrix6::identity();
         self.measured.0.clear();
         self.predicted.0.clear();
+        self.predicting = false;
         self.pending.clear();
         self.rejects = 0;
         self.recedes = 0;
