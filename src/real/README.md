@@ -231,7 +231,7 @@ flowchart TD
 | 상수 | 값 | 위치 | 왜 |
 |------|-----|------|-----|
 | `SERIES_CAPACITY` | 8 | `estimator_worker` | `Triangulate::synced`가 보간에 쓸 캠별 관측 수 |
-| `MAX_REQUEST_AGE_SECS` | 50 ms | `control_worker` | Windows 스케줄링 20 ms 실측을 수용하되, 최신 1건 외의 낡은 예측은 거부한다 |
+| `MAX_REQUEST_AGE_SECS` | 250 ms | `control_worker` | 큐의 최신 예측은 Windows 스케줄링이 밀려도 받아 안전 이동하고, 250 ms보다 낡은 공만 거부한다 |
 | `PLAN_THROTTLE_SECS` | 20 ms | `control_worker` | sim `SWING_RETRY_THROTTLE_SECS`와 같은 값. 57600 baud `read_pose`는 sync_read 왕복이다 |
 | `FINISH_GRACE` | 15 s | `run` | 커밋 후 제어 워커가 스윙 완주 + 센터 복귀할 여유 |
 | 게이트 임계 | — | `defaults::ControlParams` | `min_swing_secs` 0.20 · `swing_commit_max_secs` 0.60 · `swing_commit_max_ball_y_frac` 0.55 |

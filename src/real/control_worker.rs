@@ -22,7 +22,9 @@ use tracing::{info, info_span, warn};
 use super::fmt::f2;
 use super::{CommitRequest, ControlStatus, PoseMsg, ShotEvent, Shutdown, SimUpdate, SwingMsg};
 
-const MAX_REQUEST_AGE_SECS: f64 = 0.050;
+/// 카메라/Windows 스케줄링이 잠깐 밀려도 최신 예측으로 최소한 안전 이동은 한다.
+/// 큐에는 항상 최신 요청 한 건만 남으므로, 250 ms보다 오래된 공만 폐기한다.
+const MAX_REQUEST_AGE_SECS: f64 = 0.250;
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 /// 요청이 이만큼 끊기면 다음 추적은 새 공으로 본다.
@@ -308,28 +310,37 @@ pub fn spawn(
                     break;
                 }
             };
-            let planned =
-                match PositionController::plan_best(&arm, &start, &request.trajectory, &selector) {
-                    Ok(planned) => planned,
-                    Err(error) => {
-                        let reason = error.to_string();
-                        match error {
-                            PositionControlError::Unreachable(_) => {
-                                let _ = event_tx.send(ShotEvent::Infeasible { shot_seq, reason });
-                            }
-                            _ => {
-                                let _ = event_tx.send(ShotEvent::PlanFailed { shot_seq, reason });
-                            }
+            let planned = match PositionController::plan_best_or_reachable(
+                &arm,
+                &start,
+                &request.trajectory,
+                &selector,
+            ) {
+                Ok(planned) => planned,
+                Err(error) => {
+                    let reason = error.to_string();
+                    match error {
+                        PositionControlError::Unreachable(_) => {
+                            let _ = event_tx.send(ShotEvent::Infeasible { shot_seq, reason });
                         }
-                        continue;
+                        _ => {
+                            let _ = event_tx.send(ShotEvent::PlanFailed { shot_seq, reason });
+                        }
                     }
-                };
-            let remaining = planned.target.time_secs
+                    continue;
+                }
+            };
+            let predicted_remaining = planned.target.time_secs
                 - request.trajectory.reference_time.elapsed().as_secs_f64();
-            if !remaining.is_finite() || remaining <= 0.0 {
+            if !predicted_remaining.is_finite() {
                 continue;
             }
             let trajectory = planned.trajectory;
+            // 정시 계획이더라도 계산·통신에 걸린 시간만큼 실제 명령 시작은 늦다.
+            // 진단/복귀 시각은 과거의 공 도착시각이 아니라 실제 안전 궤적 완주
+            // 시각을 기준으로 잡는다. best-effort는 공을 놓치더라도 궤적을 끝까지 수행한다.
+            let arrives_on_time = planned.arrives_on_time && predicted_remaining > 0.0;
+            let command_duration = trajectory.duration_secs.max(0.001);
             let rail_x = trajectory.rail.end;
             if let Err(error) = hardware.command(&trajectory) {
                 let _ = event_tx.send(ShotEvent::Failed {
@@ -353,7 +364,7 @@ pub fn spawn(
             let issued_at = Instant::now();
             last_command = Some(issued_at);
             command_seq = command_seq.saturating_add(1);
-            let expected_at = issued_at + Duration::from_secs_f64(remaining.max(0.0));
+            let expected_at = issued_at + Duration::from_secs_f64(command_duration);
             impact_diagnostic = Some(PendingImpactDiagnostic {
                 shot: shot_seq,
                 command: command_seq,
@@ -367,7 +378,7 @@ pub fn spawn(
 
             let _ = event_tx.send(ShotEvent::Committed {
                 shot_seq,
-                time_to_impact_secs: remaining,
+                time_to_impact_secs: predicted_remaining.max(0.0),
                 duration_secs: trajectory.duration_secs,
                 impact: planned.target.position,
                 rail_start: trajectory.rail.start,
@@ -401,9 +412,20 @@ pub fn spawn(
                 joint_goal = ?trajectory.end.values,
                 peak_joint_speed = f2(trajectory.peak_joint_speed()),
                 peak_rail_speed = f2(trajectory.peak_rail_speed()),
-                remaining_secs = f2(remaining),
+                predicted_remaining_secs = f2(predicted_remaining),
+                arrives_on_time,
                 "2단계 레일 + 4관절 IK 궤적 명령"
             );
+
+            if !arrives_on_time {
+                warn!(
+                    shot = shot_seq,
+                    command = command_seq,
+                    predicted_remaining_secs = f2(predicted_remaining),
+                    duration_secs = f2(trajectory.duration_secs),
+                    "정시 타격 불가 — 충돌·속도·토크 한계 안에서 늦게라도 이동"
+                );
+            }
 
             if stage == PredictionStage::Refined {
                 // 진짜 2차가 들어오면 추정을 멈추고, 위에서 예상 도달

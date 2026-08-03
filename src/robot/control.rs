@@ -326,9 +326,8 @@ impl PositionController {
 
     /// 정시 도달 계획이 없으면 점수순 첫 도달 가능 후보로 안전하게 이동한다.
     ///
-    /// sim에서 "계획 실패 = 완전 정지"로 보이는 문제를 진단하기 위한 경로다.
-    /// 실기 [`crate::pipeline`]는 계속 [`Self::plan_best`]만 사용하므로 늦은 명령을
-    /// 하드웨어에 보내지 않는다.
+    /// sim과 real 공통 경로다. 늦은 명령도 무리한 정시 속도를 요구하지 않고
+    /// [`Planner::move_to`]가 허용하는 속도·가속도·토크·충돌 한계 안에서만 움직인다.
     pub fn plan_best_or_reachable(
         arm: &Arm,
         start: &Pose,
