@@ -83,6 +83,20 @@ pub struct FrameState {
     pub filtered: Option<State>,
     /// 캠별 필터 판정. 어느 쪽 검출이 거부됐는지 봐야 진단이 된다.
     pub outcomes: [Option<Outcome>; 2],
+    /// 적합 상태를 이 카메라로 되쏘았을 때 검출 픽셀과 벌어진 거리 [px].
+    ///
+    /// 모델이 데이터를 설명하는가의 직접 지표다. 크면 물리 모델이 틀렸거나 캘리브가
+    /// 틀렸거나 다른 것을 잡은 것이고, 셋 다 σ 로는 안 보인다.
+    pub residual_px: [Option<f64>; 2],
+    /// 이 프레임에 적합이 쓰고 있던 관측 수. 오차의 지배 항이다.
+    pub sightings: usize,
+    /// 이 프레임의 **살아 있는** 예측이 접수 평면에서 찍은 점.
+    ///
+    /// 얼린 예측은 한 점밖에 안 주므로 "리드가 줄면 나아지나"를 못 본다. 계약이 매
+    /// 관측마다 갱신되니 프레임마다 이 한 점만 남겨 두면 그 곡선이 나온다.
+    pub predicted_impact: Option<Point3>,
+    /// "같은 공인가"의 근거. 트랙을 버리면 올라간다.
+    pub seq: u64,
     pub tracking: bool,
 }
 
@@ -236,7 +250,36 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
         }
 
         state.filtered = vision.fit().measured().last().copied();
+        state.sightings = vision.fit().sightings();
+        state.seq = vision.fit().seq();
         state.tracking = state.filtered.is_some();
+        // 적합이 이번 관측을 실제로 받아들였을 때만 잔차를 센다. 거부된 프레임의 상태는
+        // 이전 시각의 것이라 지금 픽셀과 견주면 시간차가 잔차로 둔갑한다.
+        if let Some(fitted) = state.filtered {
+            for slot in 0..2 {
+                let fresh = matches!(
+                    state.outcomes[slot],
+                    Some(Outcome::Accepted | Outcome::Seeded)
+                );
+                state.residual_px[slot] = fresh
+                    .then(|| {
+                        calibration
+                            .params(camera::Id(slot as u8))
+                            .zip(state.pixels[slot])
+                            .and_then(|(params, pixel)| {
+                                Some(
+                                    (params.project_world_unclipped(fitted.position)? - pixel)
+                                        .norm(),
+                                )
+                            })
+                    })
+                    .flatten();
+            }
+        }
+        state.predicted_impact = vision
+            .trajectory()
+            .and_then(|t| t.predicted.at_plane(table::DEFAULT_HIT_PLANE_Y))
+            .map(|s| s.position);
 
         // 계약이 생기면 잡고, 같은 공인 동안 갱신한다 — measured 가 계속 자란다.
         // 다른 공이 다시 트리거를 넘겨도 첫 계약만 본다 (실기도 샷당 한 번이다).

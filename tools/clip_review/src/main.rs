@@ -23,6 +23,7 @@
 
 mod msg;
 mod overlay;
+mod score;
 mod sim_child;
 mod track;
 
@@ -41,10 +42,10 @@ use pingpong_bot::defaults;
 
 use msg::SceneMsg;
 use pingpong_bot::vision::Outcome;
+use score::{LEADS_SECS, Score};
 use track::{FrameState, Reviewed};
 
 /// 수렴 오차를 보여줄 리드타임 [s].
-const LEADS_SECS: [f64; 3] = [0.1, 0.2, 0.3];
 
 const WINDOW_CAM0: &str = "clip-review cam0";
 const WINDOW_CAM1: &str = "clip-review cam1";
@@ -135,6 +136,13 @@ fn run(args: &Args) -> Result<()> {
         100.0 * reviewed.observed.len() as f64 / reviewed.len() as f64,
         first_ball.map_or("없음".to_owned(), |f| f.to_string())
     );
+    let score = Score::of(&reviewed);
+    score.print(
+        clip.dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("clip"),
+    );
     print_commit_summary(&reviewed);
     println!("keys: Space 일시정지 | ←/→ or ,/. 한 프레임 | [/] 10프레임 | 0 처음 | q 종료");
     println!(
@@ -212,7 +220,7 @@ fn run(args: &Args) -> Result<()> {
         }
 
         for (slot, frame) in [(0usize, &left), (1usize, &right)] {
-            let hud = overlay_hud(&reviewed, state, index, slot, speed, paused, fast);
+            let hud = overlay_hud(&reviewed, &score, state, index, slot, speed, paused, fast);
             let panel = overlay::draw(
                 &frame.image,
                 &params[slot],
@@ -354,8 +362,10 @@ fn shift(index: usize, delta: i64, len: usize) -> usize {
 ///
 /// 숫자를 화면에 다 쌓으면 정작 봐야 할 궤적을 가린다. 나머지는 [`console_line`]으로
 /// 콘솔에 흘린다 — 거기서는 스크롤해서 앞뒤 프레임을 비교할 수도 있다.
+#[allow(clippy::too_many_arguments)]
 fn overlay_hud(
     reviewed: &Reviewed,
+    score: &Score,
     state: &FrameState,
     index: usize,
     slot: usize,
@@ -375,10 +385,12 @@ fn overlay_hud(
             reviewed.time_of(index),
             if paused { "  PAUSED" } else { "" }
         ),
-        match state.pixels[slot] {
-            Some(p) => format!("detect ({:.0}, {:.0})", p.x, p.y),
-            None => "detect MISS".to_owned(),
+        match (state.pixels[slot], state.residual_px[slot]) {
+            (Some(p), Some(px)) => format!("detect ({:.0}, {:.0})  resid {px:.1}px", p.x, p.y),
+            (Some(p), None) => format!("detect ({:.0}, {:.0})", p.x, p.y),
+            (None, _) => "detect MISS".to_owned(),
         },
+        score.hud_line(),
     ];
 }
 
