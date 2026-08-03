@@ -113,6 +113,7 @@ impl SimSession {
                         shooter,
                         use_bang_bang_swing,
                         use_fixed_swing_dictionary,
+                        fixed_swing_impact_strategy,
                         rail_frame,
                         intercept,
                     ) = {
@@ -127,6 +128,7 @@ impl SimSession {
                             ctrl.shooter.clone(),
                             ctrl.use_bang_bang_swing,
                             ctrl.use_fixed_swing_dictionary,
+                            ctrl.fixed_swing_impact_strategy,
                             ctrl.rail_frame,
                             ctrl.intercept,
                         )
@@ -134,6 +136,7 @@ impl SimSession {
                     let mut w = physics_world.lock().expect("sim 월드");
                     w.set_use_bang_bang_swing(use_bang_bang_swing);
                     w.set_use_fixed_swing_dictionary(use_fixed_swing_dictionary);
+                    w.set_fixed_swing_impact_strategy(fixed_swing_impact_strategy);
                     w.step(
                         physics_dt,
                         Some(SimStepInput {

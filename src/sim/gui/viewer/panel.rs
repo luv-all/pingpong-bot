@@ -237,6 +237,7 @@ pub fn draw(
         ctrl.time_scale = ui_state.time_scale;
         ctrl.use_bang_bang_swing = ui_state.use_bang_bang_swing;
         ctrl.use_fixed_swing_dictionary = ui_state.use_fixed_swing_dictionary;
+        ctrl.fixed_swing_impact_strategy = ui_state.fixed_swing_impact_strategy;
         if shoot {
             ctrl.request_shoot();
             // Motor Test가 켰을 수 있는 키네마틱 미리보기·꺼둔 자동 복귀를 정식
@@ -550,6 +551,19 @@ fn draw_view_panel(ui: &mut egui::Ui, ui_state: &mut PanelUiState) {
             "Fixed swing dictionary (debug, no IK)",
         );
         ui.small("commit을 IK 없는 고정 스윙 딕셔너리로 — 육안 비교용");
+        ui.horizontal(|ui| {
+            ui.label("임팩트 시각:");
+            ui.radio_value(
+                &mut ui_state.fixed_swing_impact_strategy,
+                crate::robot::motion::ImpactTimeStrategy::Midpoint,
+                "중간 시점",
+            );
+            ui.radio_value(
+                &mut ui_state.fixed_swing_impact_strategy,
+                crate::robot::motion::ImpactTimeStrategy::PeakRacketSpeed,
+                "최대 속도 시점",
+            );
+        });
     });
     egui::CollapsingHeader::new("Debug overlays")
         .default_open(false)

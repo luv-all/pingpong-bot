@@ -122,6 +122,16 @@ impl Planner {
         return super::fixed_swing::plan_fixed_swing(arm, rail_x);
     }
 
+    /// [`super::fixed_swing::fixed_swing_impact_time_secs`].
+    pub fn fixed_swing_impact_time_secs(
+        arm: &Arm,
+        rail_x: f64,
+        trajectory: &Trajectory,
+        strategy: super::fixed_swing::ImpactTimeStrategy,
+    ) -> f64 {
+        return super::fixed_swing::fixed_swing_impact_time_secs(arm, rail_x, trajectory, strategy);
+    }
+
     pub fn plan_bang_bang(
         arm: &Arm,
         predictions: &[Prediction],

@@ -95,6 +95,9 @@ pub struct SimWorld {
     /// true면 commit 시 quintic 대신 IK 없는 고정 스윙 딕셔너리로 계획한다
     /// - GUI 디버그 토글 전용.
     use_fixed_swing_dictionary: bool,
+    /// 고정 스윙 내부 임팩트 시각을 고르는 전략 — GUI에서 두 전략을 실시간
+    /// 비교할 수 있게 노출한다.
+    fixed_swing_impact_strategy: motion::ImpactTimeStrategy,
     /// 이번 비행에서 스윙을 이미 commit했는지 (재계획·팔 떨림 방지)
     swing_committed: bool,
     /// 1차 이동 후 0.25 s 시점의 정밀 목표로 재계획했는지.
@@ -408,6 +411,7 @@ impl SimWorld {
             kinematic_robot: false,
             use_bang_bang_swing: false,
             use_fixed_swing_dictionary: false,
+            fixed_swing_impact_strategy: motion::DEFAULT_IMPACT_TIME_STRATEGY,
             swing_committed: false,
             position_refined: false,
             swing_abandoned: false,
@@ -519,6 +523,14 @@ impl SimWorld {
     /// 고정 스윙 딕셔너리 모드 여부.
     pub fn use_fixed_swing_dictionary(&self) -> bool {
         return self.use_fixed_swing_dictionary;
+    }
+
+    pub fn set_fixed_swing_impact_strategy(&mut self, strategy: motion::ImpactTimeStrategy) {
+        self.fixed_swing_impact_strategy = strategy;
+    }
+
+    pub fn fixed_swing_impact_strategy(&self) -> motion::ImpactTimeStrategy {
+        return self.fixed_swing_impact_strategy;
     }
 
     /// 이번 공에 스윙을 이미 commit했는지.
@@ -968,10 +980,12 @@ impl SimWorld {
     /// IK 없이 고정 스윙 딕셔너리로 커밋한다. 레일 x는 가장 임박한 예측의
     /// 임팩트 x를 그대로 클램프하고([`motion::fixed_swing_rail_target`]),
     /// 스윙은 [`motion::FIXED_SWING_START_DEG`]→[`motion::FIXED_SWING_END_DEG`]를
-    /// 그대로 재생한다. 남은 시간이 그 고정 스윙의 소요 시간 이하가 되는
-    /// 순간 커밋한다([`motion::should_start_fixed_swing`]) — quintic 재적합으로
-    /// duration을 남은 시간에 맞추는 일반 경로와 달리, 이 경로는 duration이
-    /// 고정이라 "지금이 그 타이밍인가"만 판정한다.
+    /// 그대로 재생한다. 남은 시간이 스윙 **내부의 가정 임팩트 시각**
+    /// ([`motion::Planner::fixed_swing_impact_time_secs`], `self.fixed_swing_impact_strategy`가
+    /// 전략을 고른다) 이하가 되는 순간 커밋한다([`motion::should_start_fixed_swing`]) —
+    /// 스윙 전체 소요 시간이 아니다. quintic 재적합으로 duration을 남은
+    /// 시간에 맞추는 일반 경로와 달리, 이 경로는 duration이 고정이라 "지금이
+    /// 그 임팩트 타이밍인가"만 판정한다.
     fn try_fixed_swing_dictionary(&mut self, predictions: &[Prediction]) {
         if self.swing_committed || self.robot.is_swinging() {
             return;
@@ -992,10 +1006,13 @@ impl SimWorld {
         let Ok(trajectory) = motion::Planner::plan_fixed_swing(&self.arm, target_rail_x) else {
             return;
         };
-        if !motion::should_start_fixed_swing(
-            prediction.time_to_impact_secs,
-            trajectory.duration_secs,
-        ) {
+        let impact_time = motion::Planner::fixed_swing_impact_time_secs(
+            &self.arm,
+            target_rail_x,
+            &trajectory,
+            self.fixed_swing_impact_strategy,
+        );
+        if !motion::should_start_fixed_swing(prediction.time_to_impact_secs, impact_time) {
             return;
         }
         let return_pose = robot::Pose::new(target_rail_x, motion::fixed_swing_start_joints());
@@ -2327,6 +2344,39 @@ mod tests {
         {
             assert!((actual - expected).abs() < 1e-9);
         }
+    }
+
+    /// 회귀 방지: 스윙은 남은 비행시간이 스윙 **전체 소요 시간**만큼 남았을 때가
+    /// 아니라, 스윙 내부 임팩트 시각(절반)만큼 남았을 때 시작해야 한다 — 즉
+    /// 발사 직후 곧바로 커밋하면 안 되고, 공이 접근해 tti가 그 절반 수준으로
+    /// 줄어들 때까지 실제로 기다려야 한다.
+    #[test]
+    fn fixed_swing_dictionary_waits_for_the_midpoint_not_the_full_duration() {
+        let robot = crate::defaults::robot().expect("robot");
+        let mut world = SimWorld::new(robot);
+        world.set_use_ground_truth(true);
+        world.set_use_fixed_swing_dictionary(true);
+        world.set_fixed_swing_impact_strategy(crate::robot::motion::ImpactTimeStrategy::Midpoint);
+
+        world.shoot_ball(&launch::Settings::default());
+        // 발사 바로 다음 스텝에서는 아직 커밋되지 않아야 한다 — 예전(전체
+        // 소요 시간 기준) 로직이었다면 이 시점에 이미 커밋했을 것이다.
+        world.step(1.0 / 1000.0, None);
+        assert!(
+            world.robot.active_trajectory().is_none(),
+            "발사 즉시 커밋되면 안 된다 — 스윙 절반 시각만큼 남기고 시작해야 한다"
+        );
+
+        let dt = 1.0 / 1000.0;
+        let mut committed = false;
+        for _ in 0..4000 {
+            world.step(dt, None);
+            if world.robot.active_trajectory().is_some() {
+                committed = true;
+                break;
+            }
+        }
+        assert!(committed, "결국은 커밋돼야 한다");
     }
 
     #[test]
