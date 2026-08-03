@@ -248,6 +248,10 @@ pub fn one(clip: &camera::ResolvedStereoOffline, name: &str, out: &Path) -> Resu
         return Ok(());
     };
 
+    let card = out.join(format!("{name}_score.txt"));
+    std::fs::write(&card, score.render(name) + "\n")
+        .with_context(|| format!("write {}", card.display()))?;
+
     let top = view(&Plan::top(), &reviewed)?;
     let side = view(&Plan::side(), &reviewed)?;
     write("sim", &Preview::hstack_bgr(&[top, side])?)?;

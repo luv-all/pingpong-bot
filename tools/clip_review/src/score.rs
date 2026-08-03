@@ -203,10 +203,16 @@ impl Score {
         );
     }
 
-    /// 성적표. pass 1이 끝나자마자 한 번 찍는다.
+    /// 성적표를 찍는다.
     pub fn print(&self, clip: &str) {
-        println!("── {clip} 성적표 ──────────────────────────────");
-        println!(
+        println!("{}", self.render(clip));
+    }
+
+    /// 성적표 한 덩이. `--all` 은 이걸 파일로도 남긴다.
+    pub fn render(&self, clip: &str) -> String {
+        let mut out = Vec::new();
+        out.push(format!("── {clip} 성적표 ──────────────────────────────"));
+        out.push(format!(
             "  검출        cam0 {}/{} ({:.0}%)   cam1 {}/{} ({:.0}%)   동시 {} ({:.0}%)",
             self.detected[0],
             self.frames,
@@ -216,53 +222,58 @@ impl Score {
             rate(self.detected[1], self.frames),
             self.both,
             rate(self.both, self.frames)
-        );
+        ));
         for (slot, stats) in self.residual.iter().enumerate() {
-            match stats {
+            out.push(match stats {
                 Some((p50, p95)) => {
-                    println!("  적합 잔차   cam{slot} p50 {p50:.1} px  p95 {p95:.1} px")
+                    format!("  적합 잔차   cam{slot} p50 {p50:.1} px  p95 {p95:.1} px")
                 }
-                None => println!("  적합 잔차   cam{slot} --"),
-            }
+                None => format!("  적합 잔차   cam{slot} --"),
+            });
         }
-        match self.trigger {
+        out.push(match self.trigger {
             Some((frame, t, sightings)) => {
-                println!("  트리거      f{frame} t={t:.3}s   그때 관측 {sightings}개")
+                format!("  트리거      f{frame} t={t:.3}s   그때 관측 {sightings}개")
             }
-            None => println!("  트리거      끝내 안 걸림"),
-        }
+            None => "  트리거      끝내 안 걸림".to_owned(),
+        });
         // 공 하나가 지나가면 트랙 하나가 서고 화면을 떠나면 죽는다. 클립에 공이 하나면
         // 1개가 정상이고, 그보다 많으면 비행 중에 놓쳐 다시 세운 것이다.
-        println!(
+        out.push(format!(
             "  트랙        {}개 (공 하나면 1개가 정상)",
             self.track_switches + 1
-        );
-        print!("  예측 오차  ");
-        for (lead, error) in LEADS_SECS.iter().zip(&self.lead_error) {
-            print!(
-                " {lead:.1}s {:>7}",
-                error.map_or("--".to_owned(), |e| format!("{:.1}cm", e * 100.0))
-            );
-        }
-        println!();
-        match self.predicted_rmse {
-            Some((all, axes, count)) => println!(
+        ));
+
+        let leads: Vec<String> = LEADS_SECS
+            .iter()
+            .zip(&self.lead_error)
+            .map(|(lead, error)| {
+                format!(
+                    "{lead:.1}s {:>7}",
+                    error.map_or("--".to_owned(), |e| format!("{:.1}cm", e * 100.0))
+                )
+            })
+            .collect();
+        out.push(format!("  예측 오차   {}", leads.join(" ")));
+
+        out.push(match self.predicted_rmse {
+            Some((all, axes, count)) => format!(
                 "  궤적 RMSE   {:.1} cm   (x {:.1}  y {:.1}  z {:.1}) — 겹치는 {count}점",
                 all * 100.0,
                 axes.x * 100.0,
                 axes.y * 100.0,
                 axes.z * 100.0
             ),
-            None => println!("  궤적 RMSE   -- (예측과 실제가 겹치는 구간이 없다)"),
-        }
+            None => "  궤적 RMSE   -- (예측과 실제가 겹치는 구간이 없다)".to_owned(),
+        });
         if let (Some((shift, best)), Some((now, _, _))) = (self.best_shift, self.predicted_rmse)
             && best < now * 0.8
         {
-            println!(
+            out.push(format!(
                 "              예측을 {:+.0} ms 밀면 {:.1} cm — 공간이 아니라 시간이 밀려 있다",
                 shift * 1000.0,
                 best * 100.0
-            );
+            ));
         }
         if let Some((early, late)) = self.raw_speed {
             let decay = if early > 1e-6 {
@@ -270,29 +281,30 @@ impl Score {
             } else {
                 0.0
             };
-            println!(
+            out.push(format!(
                 "  생 속력     앞 {early:.2} -> 뒤 {late:.2} m/s ({decay:+.0}%) — 예측은 drag=0 이라 안 준다"
-            );
+            ));
         }
-        println!(
+        out.push(format!(
             "  타점 오차   {}   (y={:.2} 평면 — 평면 위치에 흔들리므로 참고용)",
             self.impact_error
                 .map_or("--".to_owned(), |e| format!("{:.1} cm", e * 100.0)),
             table::DEFAULT_HIT_PLANE_Y
-        );
-        println!("  접수 창에서 라켓이 빗나가는 거리 (면내 x·z):");
+        ));
+        out.push("  접수 창에서 라켓이 빗나가는 거리 (면내 x·z):".to_owned());
         for (y, gap) in &self.plane_error {
-            match gap {
-                Some((all, dx, dz)) => println!(
+            out.push(match gap {
+                Some((all, dx, dz)) => format!(
                     "    y={y:.2}  {:>5.1} cm   (dx {:+5.1}  dz {:+5.1})",
                     all * 100.0,
                     dx * 100.0,
                     dz * 100.0
                 ),
-                None => println!("    y={y:.2}     --   (예측이나 실제가 이 평면을 안 지남)"),
-            }
+                None => format!("    y={y:.2}     --   (예측이나 실제가 이 평면을 안 지남)"),
+            });
         }
-        println!("────────────────────────────────────────────");
+        out.push("────────────────────────────────────────────".to_owned());
+        return out.join("\n");
     }
 }
 
