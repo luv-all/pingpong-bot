@@ -23,6 +23,7 @@
 
 mod msg;
 mod overlay;
+mod report;
 mod score;
 mod sim_child;
 mod track;
@@ -71,6 +72,57 @@ struct Args {
     /// sim 창 자식 프로세스 (내부용).
     #[arg(long, hide = true)]
     sim_child: bool,
+
+    /// 창을 안 띄우고 `data/clips` 아래 클립을 전부 훑어 성적표와 그림을 남긴다.
+    #[arg(long)]
+    all: bool,
+
+    /// `--all` 결과를 넣을 폴더.
+    #[arg(long, default_value = "data/review")]
+    out: std::path::PathBuf,
+}
+
+/// 클립 전부를 훑어 그림과 표를 남긴다. 창은 안 띄운다.
+fn run_all(out: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(out).with_context(|| format!("mkdir {}", out.display()))?;
+    let root = std::path::Path::new("data/clips");
+    let mut names: Vec<String> = std::fs::read_dir(root)
+        .with_context(|| format!("read_dir {}", root.display()))?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            // 두 avi 가 다 있어야 클립이다.
+            entry.path().join("left.avi").is_file().then_some(())?;
+            entry.path().join("right.avi").is_file().then_some(())?;
+            return entry.file_name().into_string().ok();
+        })
+        .collect();
+    names.sort();
+
+    let mut lines = vec![report::summary_header()];
+    println!("{}", lines[0]);
+    for name in &names {
+        let clip = camera::StereoOfflineArgs {
+            clip: Some(root.join(name)),
+        }
+        .resolve()
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("클립 {name}"))?
+        .with_context(|| format!("클립 {name} 해석 실패"))?;
+        let score = report::one(&clip, name, out)?;
+        let row = report::summary_row(name, &score);
+        println!("{row}");
+        lines.push(row);
+    }
+    lines.push(String::new());
+    lines.push(
+        "동시=두 캠 동시 검출 프레임, 잔차=적합 재투영 p50 [px], 관측=트리거 시점 관측 수".into(),
+    );
+    lines.push("RMSE·리드타임 오차는 cm, 전부 생 삼각측량 기준".into());
+    let summary = out.join("summary.txt");
+    std::fs::write(&summary, lines.join("\n") + "\n")
+        .with_context(|| format!("write {}", summary.display()))?;
+    println!("\n{} 개 클립 → {}", names.len(), out.display());
+    return Ok(());
 }
 
 /// 표시용 프레임 공급 — 순차 재생이면 그냥 읽고, 되감으면 seek한다.
@@ -96,6 +148,9 @@ impl Player {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.all {
+        return run_all(&args.out);
+    }
     if args.sim_child {
         return sim_child::run();
     }

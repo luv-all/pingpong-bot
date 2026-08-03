@@ -10,11 +10,10 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use pingpong_bot::camera::Calibration;
-use pingpong_bot::constants::table;
 use pingpong_bot::defaults::EstimatorParams;
 use pingpong_bot::estimator::{HitPlane, Prediction};
 use pingpong_bot::robot::motion::{InterceptWindow, Planner};
-use pingpong_bot::vision::{Fit, Outcome, State, Trajectory, Trigger, triggers};
+use pingpong_bot::vision::{Fit, Outcome, State, Trajectory, triggers};
 use tracing::{debug, info_span};
 
 use super::fmt::f2;
@@ -49,24 +48,6 @@ impl EstimatorStats {
     }
 }
 
-/// 실기 트리거 — 필터가 좁혀졌거나, 늦어도 네트를 넘으면.
-///
-/// [`triggers::Any`]인 이유는 둘 중 하나만 쓰면 하나를 포기해야 해서다. σ만 보면 검출이
-/// 나쁜 샷에서 영영 안 걸리고, 평면만 보면 이미 확신이 선 샷도 네트까지 기다린다.
-fn default_trigger(params: &EstimatorParams) -> Box<dyn Trigger> {
-    let sigma = params.max_impact_sigma;
-    return Box::new(triggers::Any(vec![
-        Box::new(triggers::SigmaThreshold {
-            position: pingpong_bot::Vector3::repeat(sigma),
-            // 속도 σ는 리드타임을 곱해 도달점 오차가 되므로 같은 예산을 최대 리드로 나눈다.
-            velocity: pingpong_bot::Vector3::repeat(sigma / params.max_lead),
-        }),
-        Box::new(triggers::PlaneCrossing {
-            y: table::LENGTH_Y * 0.5,
-        }),
-    ]));
-}
-
 /// 추정 워커를 띄운다.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
@@ -84,8 +65,7 @@ pub fn spawn(
     return thread::spawn(move || {
         let _span = info_span!("estimator").entered();
         let mut stats = EstimatorStats::default();
-        let estimator_params = EstimatorParams::default();
-        let mut ekf = Fit::new(&calibration, default_trigger(&estimator_params));
+        let mut ekf = Fit::new(&calibration, triggers::primary());
         // 프레임 시각은 벽시계지만 필터는 경과만 안다. 첫 프레임이 t=0 이다.
         let mut origin: Option<Instant> = None;
         let planes = intercept.hit_planes();

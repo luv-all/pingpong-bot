@@ -201,14 +201,9 @@ impl Reviewed {
 pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
     let calibration = Calibration::load_json(&defaults::calibration_path())
         .map_err(|e| format!("calibration 로드: {e}"))?;
-    let mut vision = Vision::load(
-        &calibration,
-        // 네트 통과 — 실기와 달리 σ 조건을 안 건다. 클립마다 같은 자리에서 얼려야 비교된다.
-        Box::new(triggers::PlaneCrossing {
-            y: table::LENGTH_Y * 0.5,
-        }),
-    )
-    .map_err(|e| format!("vision 조립: {e}"))?;
+    // 실기와 **같은** 트리거다. 도구가 더 늦게 걸면 실기에서 쓸 수 있는 구간을 못 본다.
+    let mut vision =
+        Vision::load(&calibration, triggers::primary()).map_err(|e| format!("vision 조립: {e}"))?;
 
     let mut left_frames = load_all(left, camera::Id(0))?;
     let mut right_frames = load_all(right, camera::Id(1))?;
