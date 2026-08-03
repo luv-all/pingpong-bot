@@ -399,7 +399,7 @@ pub fn spawn(
             if let Some(preview_tx) = &preview_tx {
                 // 예측 도달점을 **이 카메라로 재투영**한다. 자르지 않고 프레임 밖인지만
                 // 따로 알려 준다 — 안 보이는 이유가 "예측 없음"인지 "화각 밖"인지 구분해야
-                // 벤치에서 진단이 된다 (접수 평면 y 0.08~0.35는 로봇 코앞이라 화각을
+                // 벤치에서 진단이 된다 (기본 접수 평면 y 0.00~0.55는 로봇 쪽이라 화각을
                 // 벗어나기 쉽다).
                 let params = calibration.params(event.frame.camera_id);
                 let raw_pixel = last_raw

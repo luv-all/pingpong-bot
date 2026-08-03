@@ -76,6 +76,9 @@ fn builder_rejects_missing_serial_chain() {
 fn default_arm_produces_racket_pose() {
     let arm = sample_arm();
     let state = arm.initial_state();
+    if let Some(rail) = arm.rail {
+        assert_eq!(state.rail_x(), rail.default_x());
+    }
     let pose = state.racket_pose(&arm).expect("FK");
     assert!(pose.position.coords.y > arm.base.coords.y);
     assert!(pose.position.coords.z >= arm.base.coords.z);

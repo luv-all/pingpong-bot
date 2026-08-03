@@ -15,7 +15,7 @@ use pingpong_bot::error::HwError;
 use pingpong_bot::hardware::Hardware;
 use pingpong_bot::robot::Arm;
 use pingpong_bot::robot::control::{HitTargetSelector, PredictionStage};
-use pingpong_bot::robot::motion;
+use pingpong_bot::robot::motion::{self, InterceptWindow};
 use tracing::{info, info_span, warn};
 
 use super::fmt::f2;
@@ -107,6 +107,7 @@ impl TwoStageLatch {
 pub fn spawn(
     mut hardware: Box<dyn Hardware>,
     arm: Arc<Arm>,
+    intercept: InterceptWindow,
     home: bool,
     rx: Receiver<CommitRequest>,
     status_tx: Sender<ControlStatus>,
@@ -147,9 +148,8 @@ pub fn spawn(
             .last()
             .copied()
             .unwrap_or_else(|| pose.joints.values.last().copied().unwrap_or(0.0));
-        let window = motion::InterceptWindow::default();
-        let selector =
-            HitTargetSelector::new(window.y_min, window.y_max).expect("기본 목표 선택 구간");
+        let selector = HitTargetSelector::new(intercept.y_min, intercept.y_max)
+            .expect("검증된 목표 선택 구간");
         let rail_center = arm
             .rail
             .as_ref()

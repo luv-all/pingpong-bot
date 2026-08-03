@@ -7,6 +7,7 @@ use super::super::debug::overlays::DebugOverlays;
 use super::eval_live_run::EvalLiveRun;
 use crate::constants::viewer::CAMERA_DIST_DEFAULT;
 use crate::robot::RailFrame;
+use crate::robot::motion::InterceptWindow;
 use crate::sim::eval;
 use crate::sim::launch;
 use crate::sim::session::controls::SimRuntimeControls;
@@ -17,6 +18,8 @@ pub struct PanelUiState {
     pub shooter: launch::Settings,
     /// 레일 마운트 설치 위치 ("Rig" 창). 공이 주차된 동안만 월드에 반영된다.
     pub rail_frame: RailFrame,
+    /// 타격 후보 Y 창 ("Rig" 창). 주차 중에만 반영.
+    pub intercept: InterceptWindow,
     pub time_scale: f64,
     /// OrbitCamera3d 거리 [m]
     pub camera_dist: f32,
@@ -40,6 +43,7 @@ impl PanelUiState {
         return Self {
             shooter: controls.shooter.clone(),
             rail_frame: controls.rail_frame,
+            intercept: controls.intercept,
             time_scale: controls.time_scale,
             camera_dist: CAMERA_DIST_DEFAULT,
             use_bang_bang_swing: controls.use_bang_bang_swing,

@@ -23,6 +23,25 @@ pub struct RailFrame {
 }
 
 impl RailFrame {
+    /// 현장에서 재는 치수로 레일 프레임을 만든다.
+    pub fn from_table_distance(table_distance_m: f64, rail_bottom_z: f64) -> Self {
+        return Self {
+            mount_y: -table_distance_m,
+            rail_bottom_z,
+        };
+    }
+
+    /// 탁구대 로봇 쪽 끝선에서 레일까지의 거리 [m].
+    /// 레일이 테이블 밖(-Y)에 있으면 양수다.
+    pub fn table_distance_m(self) -> f64 {
+        return -self.mount_y;
+    }
+
+    /// 줄자로 재는 양수 거리를 월드 Y 좌표로 변환한다.
+    pub fn set_table_distance_m(&mut self, distance_m: f64) {
+        self.mount_y = -distance_m;
+    }
+
     /// base_link / 레일 마운트 y [m].
     pub fn mount_y(self) -> f64 {
         return self.mount_y;
@@ -65,5 +84,13 @@ mod tests {
             ..low
         };
         assert!((high.mount_z() - low.mount_z() - 0.07).abs() < 1e-12);
+    }
+
+    #[test]
+    fn table_distance_uses_positive_distance_outside_the_end_line() {
+        let mut frame = RailFrame::from_table_distance(0.10, 0.88);
+        assert!((frame.table_distance_m() - 0.10).abs() < 1e-12);
+        frame.set_table_distance_m(0.24);
+        assert!((frame.mount_y() + 0.24).abs() < 1e-12);
     }
 }

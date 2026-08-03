@@ -2,6 +2,7 @@
 
 use kiss3d::egui;
 
+use crate::constants::table;
 use crate::sim::launch;
 
 /// 위젯 안 버튼 클릭 결과.
@@ -40,7 +41,28 @@ impl ButtonSet {
 pub fn draw(ui: &mut egui::Ui, settings: &mut launch::Settings, show: ButtonSet) -> Buttons {
     let mut buttons = Buttons::default();
 
-    ui.collapsing("Position", |ui| {
+    egui::CollapsingHeader::new("공 발사 위치")
+        .default_open(true)
+        .show(ui, |ui| {
+            let muzzle = settings.muzzle_position();
+            let mut x = f64::from(muzzle.x);
+            let mut y = f64::from(muzzle.y);
+            let mut z = f64::from(muzzle.z);
+            let changed_x = ui
+                .add(egui::Slider::new(&mut x, -0.50..=table::WIDTH_X + 0.50).text("X [m]"))
+                .changed();
+            let changed_y = ui
+                .add(egui::Slider::new(&mut y, -0.50..=table::LENGTH_Y + 1.00).text("Y [m]"))
+                .changed();
+            let changed_z = ui
+                .add(egui::Slider::new(&mut z, 0.05..=2.00).text("Z [m]"))
+                .changed();
+            if changed_x || changed_y || changed_z {
+                settings.set_muzzle_xyz(x, y, z);
+            }
+            ui.small("탁구대 로봇 쪽 끝선=(0,0), Z=바닥 기준");
+        });
+    ui.collapsing("고급: 마운트 오프셋", |ui| {
         ui.add(egui::Slider::new(&mut settings.pos_offset_x_m, -0.8..=0.8).text("x [m]"));
         ui.add(egui::Slider::new(&mut settings.pos_offset_y_m, -0.6..=0.8).text("y [m]"));
         ui.add(egui::Slider::new(&mut settings.pos_offset_z_m, -0.3..=0.5).text("z [m]"));
@@ -48,9 +70,17 @@ pub fn draw(ui: &mut egui::Ui, settings: &mut launch::Settings, show: ButtonSet)
         ui.monospace(format!("mount {:.2} {:.2} {:.2}", m.x, m.y, m.z));
     });
     ui.collapsing("Aim", |ui| {
-        ui.add(egui::Slider::new(&mut settings.yaw_deg, -25.0..=25.0).text("yaw [deg]"));
-        ui.add(egui::Slider::new(&mut settings.pitch_deg, -25.0..=25.0).text("pitch [deg]"));
-        ui.add(egui::Slider::new(&mut settings.roll_deg, -45.0..=45.0).text("roll [deg]"));
+        let muzzle = settings.muzzle_position();
+        let changed = ui
+            .add(egui::Slider::new(&mut settings.yaw_deg, -25.0..=25.0).text("yaw [deg]"))
+            .changed()
+            | ui.add(egui::Slider::new(&mut settings.pitch_deg, -25.0..=25.0).text("pitch [deg]"))
+                .changed()
+            | ui.add(egui::Slider::new(&mut settings.roll_deg, -45.0..=45.0).text("roll [deg]"))
+                .changed();
+        if changed {
+            settings.set_muzzle_position(muzzle);
+        }
     });
     ui.collapsing("Muzzle", |ui| {
         ui.add(egui::Slider::new(&mut settings.lateral_offset_m, -0.5..=0.5).text("lateral [m]"));

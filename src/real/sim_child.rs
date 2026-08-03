@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{Context, Result};
-use pingpong_bot::defaults::robot;
+use pingpong_bot::defaults::robot_with_rail_frame;
+use pingpong_bot::robot::RailFrame;
 use pingpong_bot::sim::gui::{SimScene, ball, robot as gui_robot};
 use pingpong_bot::sim::physics::world::SimWorld;
 use pingpong_bot::sim::session::SimRuntimeControls;
@@ -32,7 +33,8 @@ const PROGRESS_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
 /// kiss3d 블로킹 실행. 부모가 죽으면 stdin EOF로 같이 내려간다.
 pub fn run() -> Result<()> {
     let shutdown = SimRuntimeControls::new_shutdown();
-    let robot = robot().context("defaults::robot")?;
+    let rail_frame = rail_frame_from_internal_args()?;
+    let robot = robot_with_rail_frame(rail_frame).context("실기와 같은 레일 위치로 로봇 조립")?;
 
     // 물리를 돌리지 않는 관전용 월드 — jog와 같은 kinematic 설정.
     let world = Arc::new(Mutex::new(SimWorld::new(robot.clone())));
@@ -70,6 +72,28 @@ pub fn run() -> Result<()> {
         .map_err(anyhow::Error::msg)?;
     shutdown.store(true, Ordering::SeqCst);
     return Ok(());
+}
+
+/// 부모가 `--sim-child <탁구대거리> <레일하단z>` 순으로 넘긴 내부 인자.
+fn rail_frame_from_internal_args() -> Result<RailFrame> {
+    let mut args = std::env::args();
+    let _exe = args.next();
+    let flag = args.next().context("sim-child 내부 플래그 없음")?;
+    anyhow::ensure!(
+        flag == super::SIM_CHILD_FLAG,
+        "sim-child 내부 플래그 불일치"
+    );
+    let distance: f64 = args
+        .next()
+        .context("sim-child 탁구대-레일 거리 없음")?
+        .parse()
+        .context("sim-child 탁구대-레일 거리 파싱")?;
+    let bottom_z: f64 = args
+        .next()
+        .context("sim-child 레일 하단 z 없음")?
+        .parse()
+        .context("sim-child 레일 하단 z 파싱")?;
+    return Ok(RailFrame::from_table_distance(distance, bottom_z));
 }
 
 fn stdin_loop(

@@ -66,7 +66,7 @@ pub use motion::{
 pub use physics::PhysicsParams;
 pub use robot::{
     RAIL_MAX_SPEED, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount, rail_frame,
-    robot, shared_robot, urdf_4dof, urdf_test,
+    robot, robot_with_rail_frame, shared_robot, urdf_4dof, urdf_4dof_with_rail_frame, urdf_test,
 };
 pub use sim::{
     EVAL_MAX_SCORE, EVAL_NET_PASSTHROUGH_RETRIES, EVAL_PASS_SCORE_EXCLUSIVE, EVAL_PITCH_JITTER_DEG,

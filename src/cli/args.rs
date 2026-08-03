@@ -39,4 +39,47 @@ pub struct Args {
     /// real: 공을 기다리는 최대 시간 [s].
     #[arg(long, default_value_t = 60.0)]
     pub timeout_secs: f64,
+    /// 탁구대 로봇 쪽 끝선에서 레일까지의 양수 거리 [m] (sim/real 공통).
+    #[arg(long, default_value_t = 0.10)]
+    pub table_distance_m: f64,
+    /// 바닥에서 레일 프로파일 하단까지의 높이 [m] (sim/real 공통).
+    #[arg(long, default_value_t = 0.88)]
+    pub rail_bottom_z_m: f64,
+    /// 타격 후보 탐색 시작 Y [m]. 0.00은 로봇 쪽 탁구대 끝선.
+    #[arg(long, default_value_t = 0.00)]
+    pub hit_y_min_m: f64,
+    /// 타격 후보 탐색 끝 Y [m].
+    #[arg(long, default_value_t = 0.55)]
+    pub hit_y_max_m: f64,
+    /// 타격 후보 Y 간격 [m]. 전체 스윙 플래너에서는 레일+팔 IK로 다시 걸러진다.
+    #[arg(long, default_value_t = 0.025)]
+    pub hit_y_step_m: f64,
+    /// sim 공 발사 중심 X [m]. 생략하면 기본 슈터 위치.
+    #[arg(long)]
+    pub ball_launch_x_m: Option<f64>,
+    /// sim 공 발사 중심 Y [m]. 생략하면 기본 슈터 위치.
+    #[arg(long)]
+    pub ball_launch_y_m: Option<f64>,
+    /// sim 공 발사 중심 Z [m]. 생략하면 기본 슈터 위치.
+    #[arg(long)]
+    pub ball_launch_z_m: Option<f64>,
+}
+
+impl Args {
+    /// CLI의 현장 치수를 로봇 내부 월드 좌표로 변환한다.
+    pub fn rail_frame(&self) -> pingpong_bot::robot::RailFrame {
+        return pingpong_bot::robot::RailFrame::from_table_distance(
+            self.table_distance_m,
+            self.rail_bottom_z_m,
+        );
+    }
+
+    /// sim/real이 공유할 타격 후보 탐색 창.
+    pub fn intercept_window(&self) -> pingpong_bot::robot::motion::InterceptWindow {
+        return pingpong_bot::robot::motion::InterceptWindow {
+            y_min: self.hit_y_min_m,
+            y_max: self.hit_y_max_m,
+            sample_step: self.hit_y_step_m,
+        };
+    }
 }

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::robot::RailFrame;
+use crate::robot::motion::InterceptWindow;
 use crate::sim::launch;
 
 /// GUI에서 바꾸고 물리 스레드가 읽는 sim 런타임 상태.
@@ -19,6 +20,9 @@ pub struct SimRuntimeControls {
     /// (`SimWorld::apply_rail_frame`) — 비행 중 베이스가 움직이면 이미 계획된
     /// 궤적이 옛 베이스를 기준으로 남는다.
     pub rail_frame: RailFrame,
+    /// 예측 공 궤적에서 IK를 시도할 타격 Y 범위.
+    /// 공이 주차된 동안만 시뮬 월드에 반영한다.
+    pub intercept: InterceptWindow,
     /// sim 시간 배율 (1.0 = 실시간)
     pub time_scale: f64,
     /// true면 commit 시 quintic 대신 순수 토크 bang-bang을 계획한다 - GUI
@@ -35,6 +39,7 @@ impl Default for SimRuntimeControls {
         return Self {
             shooter: launch::Settings::default(),
             rail_frame: crate::defaults::rail_frame(),
+            intercept: InterceptWindow::default(),
             time_scale: 1.0,
             use_bang_bang_swing: false,
             shoot_requested: false,

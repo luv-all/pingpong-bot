@@ -113,6 +113,23 @@ impl Settings {
         return self.mount_position() + local;
     }
 
+    /// 발사구(공 시작점)의 월드 절대 XYZ를 설정한다.
+    ///
+    /// 내부적으로는 마운트 오프셋을 쓰지만 GUI·시나리오에서는
+    /// 직접 측정할 수 있는 공 중심 좌표를 입력하는 편이 안전하다.
+    /// yaw/pitch/roll·발사구 로컬 오프셋은 그대로 유지한다.
+    pub fn set_muzzle_position(&mut self, target: Vector) {
+        let current = self.muzzle_position();
+        self.pos_offset_x_m += f64::from(target.x - current.x);
+        self.pos_offset_y_m += f64::from(target.y - current.y);
+        self.pos_offset_z_m += f64::from(target.z - current.z);
+    }
+
+    /// [`Self::set_muzzle_position`]의 설정 파일/CLI 친화형 버전.
+    pub fn set_muzzle_xyz(&mut self, x_m: f64, y_m: f64, z_m: f64) {
+        self.set_muzzle_position(Vector::new(x_m as f32, y_m as f32, z_m as f32));
+    }
+
     /// 뷰어 직육면체 중심 — 발사구가 전면에 오도록 조준축 뒤로 반 길이.
     pub fn visual_position(&self) -> Vector {
         let (forward, _, _) = self.local_basis();
@@ -275,6 +292,24 @@ impl Settings {
         shot.topspin_rad_s = defaults.topspin_rad_s;
         shot.sidespin_rad_s = defaults.sidespin_rad_s;
         shot.speed_mps = defaults.speed_mps;
+        return shot;
+    }
+
+    /// 현재 GUI에서 정한 공 발사 절대 위치는 유지하고 나머지 샷을 랜덤화한다.
+    pub fn randomized_at_current_muzzle(&self, rng: &mut impl Rng) -> Self {
+        let muzzle = self.muzzle_position();
+        for _ in 0..RANDOM_SHOT_NET_GATE_MAX_TRIES {
+            let mut shot = self.sample_randomized_params(rng);
+            shot.set_muzzle_position(muzzle);
+            if shot.clears_incoming_net_gate() && shot.clears_incoming_rapier_net() {
+                return shot;
+            }
+        }
+
+        // 사용자가 네트보다 낮은 등 불가능한 위치를 골라도 위치 설정 자체를
+        // 몰래 되돌리지 않는다. 발사 후 결과를 그대로 시뮬에서 확인하게 한다.
+        let mut shot = self.randomized(rng);
+        shot.set_muzzle_position(muzzle);
         return shot;
     }
 }
@@ -499,6 +534,16 @@ mod tests {
     }
 
     #[test]
+    fn absolute_muzzle_position_moves_ball_start_without_changing_aim() {
+        let mut settings = Settings::default();
+        let before_aim = settings.aim_direction();
+        let target = Vector::new(0.31, 2.42, 1.18);
+        settings.set_muzzle_position(target);
+        assert!((settings.muzzle_position() - target).length() < 1e-5);
+        assert!((settings.aim_direction() - before_aim).length() < 1e-7);
+    }
+
+    #[test]
     fn topspin_is_around_local_right() {
         let s = Settings {
             topspin_rad_s: 30.0,
@@ -643,5 +688,17 @@ mod tests {
         let shot = Settings::default();
         assert!(shot.clears_incoming_net_gate(), "default ballistics");
         assert!(shot.clears_incoming_rapier_net(), "default rapier net");
+    }
+
+    #[test]
+    fn gui_random_keeps_user_configured_launch_position() {
+        let mut base = Settings::default();
+        base.set_muzzle_xyz(0.41, 2.38, 1.22);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(73);
+        let shot = base.randomized_at_current_muzzle(&mut rng);
+        let muzzle = shot.muzzle_position();
+        assert!((f64::from(muzzle.x) - 0.41).abs() < 1e-5);
+        assert!((f64::from(muzzle.y) - 2.38).abs() < 1e-5);
+        assert!((f64::from(muzzle.z) - 1.22).abs() < 1e-5);
     }
 }

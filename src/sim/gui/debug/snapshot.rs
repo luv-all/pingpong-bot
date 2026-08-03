@@ -35,6 +35,9 @@ pub struct SimDebugSnapshot {
     pub accel_over: bool,
     pub net_gate_ok: Option<bool>,
     pub commit_phase: CommitPhase,
+    /// 선택한 타격점에 공 도착 전 도달할 수 있는지.
+    /// `Some(false)`는 포기가 아니라 안전 한계 내 best-effort 선행 이동을 뜻한다.
+    pub arrives_on_time: Option<bool>,
     pub omega: [f64; 3],
     /// 관절별 `|commit 시점 자세 → 임팩트 자세|` (WP12, 타격 전 이동량).
     pub pre_impact_travel: Vec<f64>,
@@ -72,6 +75,7 @@ impl SimDebugSnapshot {
         self.accel_over = false;
         self.net_gate_ok = None;
         self.commit_phase = CommitPhase::Idle;
+        self.arrives_on_time = None;
         self.omega = [0.0; 3];
         self.pre_impact_travel.clear();
         self.follow_through_travel.clear();

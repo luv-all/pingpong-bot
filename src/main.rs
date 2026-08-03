@@ -17,10 +17,9 @@ mod real;
 
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use clap::Parser;
-use pingpong_bot::defaults::{PhysicsParams, robot};
-use pingpong_bot::robot::motion::InterceptWindow;
+use pingpong_bot::defaults::{PhysicsParams, robot_with_rail_frame};
 #[cfg(feature = "gui")]
 use pingpong_bot::sim::gui::{SimViewer, SimViewerOptions};
 use pingpong_bot::sim::session::{SimRuntimeControls, SimSession, SimSessionConfig};
@@ -41,27 +40,44 @@ fn main() -> Result<()> {
     }
 
     let args = Args::parse();
+    validate_setup_args(&args)?;
     init_tracing(args.debug, &["pingpong_bot"]);
     if args.debug {
         info!("debug 로그 활성");
     }
 
     match args.mode {
-        ModeArg::Sim => run_sim_entry()?,
+        ModeArg::Sim => run_sim_entry(&args)?,
         ModeArg::Real => run_real_entry(&args)?,
     }
     return Ok(());
 }
 
-fn run_sim_entry() -> Result<()> {
+fn run_sim_entry(args: &Args) -> Result<()> {
     let physics = PhysicsParams::default();
-    let robot = robot().context("defaults::robot")?;
+    let rail_frame = args.rail_frame();
+    let intercept = args.intercept_window();
+    let robot = robot_with_rail_frame(rail_frame).context("설정한 레일 위치로 로봇 조립")?;
     info!(
         mode = "sim",
         restitution = physics.restitution,
         "defaults SSOT"
     );
-    let controls = Arc::new(Mutex::new(SimRuntimeControls::default()));
+    let mut initial_controls = SimRuntimeControls::default();
+    initial_controls.rail_frame = rail_frame;
+    initial_controls.intercept = intercept;
+    if args.ball_launch_x_m.is_some()
+        || args.ball_launch_y_m.is_some()
+        || args.ball_launch_z_m.is_some()
+    {
+        let muzzle = initial_controls.shooter.muzzle_position();
+        initial_controls.shooter.set_muzzle_xyz(
+            args.ball_launch_x_m.unwrap_or(f64::from(muzzle.x)),
+            args.ball_launch_y_m.unwrap_or(f64::from(muzzle.y)),
+            args.ball_launch_z_m.unwrap_or(f64::from(muzzle.z)),
+        );
+    }
+    let controls = Arc::new(Mutex::new(initial_controls));
     let shutdown = SimRuntimeControls::new_shutdown();
     let session = SimSession::with_physics(
         SimSessionConfig {
@@ -78,7 +94,7 @@ fn run_sim_entry() -> Result<()> {
     {
         let world_arc = session.world();
         let mut world = world_arc.lock().expect("sim 월드");
-        world.set_intercept_window(InterceptWindow::default());
+        world.set_intercept_window(intercept);
         world.set_use_ground_truth(true);
     }
     info!("sim kiss3d");
@@ -96,6 +112,29 @@ fn run_sim_entry() -> Result<()> {
     {
         let _ = (session, controls, shutdown, robot);
         warn!("gui feature 없음 — headless sim은 세션만 생성");
+    }
+    return Ok(());
+}
+
+fn validate_setup_args(args: &Args) -> Result<()> {
+    ensure!(
+        args.table_distance_m.is_finite() && args.table_distance_m >= 0.0,
+        "--table-distance-m은 0 이상의 유한한 값이어야 합니다"
+    );
+    ensure!(
+        args.rail_bottom_z_m.is_finite() && args.rail_bottom_z_m >= 0.0,
+        "--rail-bottom-z-m은 0 이상의 유한한 값이어야 합니다"
+    );
+    args.intercept_window().validate()?;
+    for (name, value) in [
+        ("--ball-launch-x-m", args.ball_launch_x_m),
+        ("--ball-launch-y-m", args.ball_launch_y_m),
+        ("--ball-launch-z-m", args.ball_launch_z_m),
+    ] {
+        ensure!(
+            value.is_none_or(f64::is_finite),
+            "{name}은 유한한 값이어야 합니다"
+        );
     }
     return Ok(());
 }

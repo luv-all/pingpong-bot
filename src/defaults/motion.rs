@@ -26,11 +26,16 @@ pub const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
 
 impl Default for InterceptWindow {
     fn default() -> Self {
-        // rail_frame behind≈0.10 기준 접수 창.
+        // 공 궤적에서 먼저 넓은 후보를 만들고, 각 후보의 레일+팔 IK·
+        // 속도·가속·토크 실현 가능성으로 걸러낸다. 이 창은 "다 친다"가
+        // 아니라 "IK를 시도할 공 후보 공간"이다. 예전 [0.08, 0.35]m는
+        // 로봇 코앞의 27cm만 보아 타격 기회를 너무 일찍 버렸다. 테이블
+        // 충돌·도달 불가는 하류 플래너가 판정하므로 로봇 끝선 0cm부터
+        // 테이블 안쪽 55cm까지를 검색한다.
         return Self {
-            y_min: 0.08,
-            y_max: 0.35,
-            sample_step: 0.03,
+            y_min: 0.00,
+            y_max: 0.55,
+            sample_step: 0.025,
         };
     }
 }

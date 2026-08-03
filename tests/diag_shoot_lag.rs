@@ -376,6 +376,7 @@ fn run_judder_probe(mode: Acquire, batch_lock: bool) -> (RenderSample, RenderSam
                                 shoot,
                                 park: false,
                                 rail_frame: pingpong_bot::defaults::rail_frame(),
+                                intercept: pingpong_bot::robot::motion::InterceptWindow::default(),
                             }),
                         );
                     }
@@ -392,6 +393,7 @@ fn run_judder_probe(mode: Acquire, batch_lock: bool) -> (RenderSample, RenderSam
                                 shoot,
                                 park: false,
                                 rail_frame: pingpong_bot::defaults::rail_frame(),
+                                intercept: pingpong_bot::robot::motion::InterceptWindow::default(),
                             }),
                         );
                         drop(w);

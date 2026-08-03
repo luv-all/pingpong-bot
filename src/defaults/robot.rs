@@ -23,12 +23,10 @@ use crate::robot::{
 
 /// 리니어 레일 최대 속도 [m/s].
 ///
-/// 이전 `12.0`은 근거 없는 리터럴이었다 — 테이블 전폭(1.525 m)을 0.127초에
-/// 주파해, rough-to-fine 추종이 예측 방향으로 레일을 미리 옮길 때 렌더 프레임
-/// 상 순간이동처럼 보였다(육안 확인, 2026-07-23). 실기
-/// `config/real-hardware.toml`의 `[hardware.rail]` `vel`/`max_vel` = 5.0 m/s에
-/// 맞춰 재보정 — 전폭 주파 0.305초로, 연속적인 움직임으로 보인다.
-pub const RAIL_MAX_SPEED: f64 = 5.0;
+/// 시뮬·역기구학·궤적 검사에서 공통으로 쓰는 상한이다.
+/// 실기 AXL 명령의 `max_vel`도 같은 값을 사용한다.
+/// 단, 짧은 레일에서는 가감속 한계 때문에 이 상한까지 도달하지 못할 수 있다.
+pub const RAIL_MAX_SPEED: f64 = 7.5;
 
 /// 4-DOF 휴지(ready) 자세 [rad] — yaw, 어깨, 팔꿈치, 손목 순.
 ///
@@ -108,10 +106,7 @@ pub const READY_JOINTS_4DOF: [f64; 4] = [0.5067, 0.0, -0.2054, -0.6925];
 /// `mount_search`/`--rest-pose-search`를 그 위치에서 다시 돌려 여기와
 /// [`READY_JOINTS_4DOF`]를 확정하는 것이 순서다.
 pub fn rail_frame() -> RailFrame {
-    return RailFrame {
-        mount_y: -0.10,
-        rail_bottom_z: 0.88,
-    };
+    return RailFrame::from_table_distance(0.10, 0.88);
 }
 
 /// 경연용 단순 4-dof (URDF 없음) → [`Robot`].
@@ -450,12 +445,20 @@ pub fn shared_robot() -> Arc<Robot> {
 
 /// `assets/robots/4-dof` URDF 프리셋 (진단·비교용).
 pub fn urdf_4dof() -> Result<Robot, RobotBuildError> {
+    return urdf_4dof_with_rail_frame(rail_frame());
+}
+
+/// [`urdf_4dof`]와 같은 실제 로봇 모델을 지정한 레일 설치 치수에 배치한다.
+///
+/// 이 함수가 sim/real의 공통 진입점이다. 화면 메시만 옮기는 것이 아니라
+/// `UrdfModel::to_arm`이 만드는 레일·FK·IK 기준점까지 함께 바뀐다.
+pub fn urdf_4dof_with_rail_frame(frame: RailFrame) -> Result<Robot, RobotBuildError> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("assets/robots/4-dof/urdf/all-4-export.urdf");
     return RobotBuilder::new()
         .urdf(&path)
         .ee_link_opt(Some("pingpong_paddle_v5_1"))
-        .mount_preset(MountPreset::Rep103AtTableEnd)
+        .mount(crate::robot::urdf::SimRobotMount::on_rail_frame(frame))
         .max_joint_speed(DYNAMIXEL_MAX_JOINT_SPEED_RAD_S)
         .build();
 }
@@ -475,6 +478,11 @@ pub fn urdf_test() -> Result<Robot, RobotBuildError> {
 /// **지금 쓰는 로봇.** 바꾸려면 이 함수 본문만 고친다 (`urdf_4dof` 등).
 pub fn robot() -> Result<Robot, RobotBuildError> {
     return urdf_4dof();
+}
+
+/// 활성 로봇을 지정한 실측 레일 위치로 조립한다.
+pub fn robot_with_rail_frame(frame: RailFrame) -> Result<Robot, RobotBuildError> {
+    return urdf_4dof_with_rail_frame(frame);
 }
 
 #[cfg(test)]
@@ -502,6 +510,17 @@ mod tests {
         assert!((arm.base.coords.y - frame.mount_y()).abs() < 1e-12);
         assert!((arm.base.coords.z - frame.mount_z()).abs() < 1e-12);
         let rail = arm.rail.expect("rail");
+        assert!((rail.mount_y - frame.mount_y()).abs() < 1e-12);
+        assert!((rail.mount_z - frame.mount_z()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn configurable_urdf_mount_reaches_fk_and_ik_model() {
+        let frame = RailFrame::from_table_distance(0.22, 0.91);
+        let robot = robot_with_rail_frame(frame).expect("custom mounted URDF");
+        let rail = robot.arm.rail.expect("linear rail");
+        assert!((robot.arm.base.coords.y - frame.mount_y()).abs() < 1e-12);
+        assert!((robot.arm.base.coords.z - frame.mount_z()).abs() < 1e-12);
         assert!((rail.mount_y - frame.mount_y()).abs() < 1e-12);
         assert!((rail.mount_z - frame.mount_z()).abs() < 1e-12);
     }

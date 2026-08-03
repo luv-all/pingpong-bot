@@ -187,11 +187,14 @@ pub fn draw(
         // Random은 슬라이더(`ui_state.shooter`)에도 반영한다 — 안 그러면 다음
         // 프레임에 원본으로 덮여 슈터 위치가 한 프레임만 깜빡인다.
         if random_shoot {
-            ui_state.shooter = ui_state.shooter.randomized(&mut rand::thread_rng());
+            ui_state.shooter = ui_state
+                .shooter
+                .randomized_at_current_muzzle(&mut rand::thread_rng());
             ctrl.request_shoot();
         }
         ctrl.shooter = ui_state.shooter.clone();
         ctrl.rail_frame = ui_state.rail_frame;
+        ctrl.intercept = ui_state.intercept;
         ctrl.time_scale = ui_state.time_scale;
         ctrl.use_bang_bang_swing = ui_state.use_bang_bang_swing;
         if shoot {
@@ -217,27 +220,45 @@ pub fn draw(
 /// 고정이라 슬라이더로 내놓지 않는다. 실물에서 못 바꾸는 값을 시뮬에서만
 /// 만질 수 있게 하면 시뮬이 도달 못 하는 자세를 낼 수 있다고 착각하게 된다.
 ///
-/// 두 슬라이더 모두 월드 좌표(원점 = 탁구대 로봇쪽 꼭짓점 바닥)를 그대로
-/// 보여준다 — 파생 좌표를 따로 표시할 필요가 없다. "면 위"만 예외로 남긴다:
-/// 도달 범위를 감각적으로 판단할 때 쓰는 값은 바닥이 아니라 탁구대 면 대비
-/// 높이다.
+/// Y는 현장에서 줄자로 재는 "탁구대 끝선-레일 거리"를 양수로 보여주고,
+/// Z는 월드 바닥 기준 레일 하단 높이를 보여준다. 내부 기구학 좌표에서는
+/// 테이블 밖이 -Y이므로
+/// [`RailFrame::set_table_distance_m`](crate::robot::RailFrame::set_table_distance_m)가
+/// 부호를 한 곳에서 변환한다.
 fn draw_rig_panel(
     ui: &mut egui::Ui,
     ui_state: &mut PanelUiState,
     ball_state: Option<physics::BallState>,
 ) {
     let parked = ball_state == Some(physics::BallState::Parked);
-    let frame = &mut ui_state.rail_frame;
+    let PanelUiState {
+        rail_frame: frame,
+        intercept,
+        ..
+    } = ui_state;
 
     ui.add_enabled_ui(parked, |ui| {
-        ui.add(egui::Slider::new(&mut frame.mount_y, -0.30..=0.05).text("y [m]"));
+        let mut table_distance = frame.table_distance_m();
+        if ui
+            .add(egui::Slider::new(&mut table_distance, 0.00..=0.50).text("탁구대-레일 거리 [m]"))
+            .changed()
+        {
+            frame.set_table_distance_m(table_distance);
+        }
         ui.add(egui::Slider::new(&mut frame.rail_bottom_z, 0.70..=1.10).text("레일 하단 z [m]"));
+        ui.separator();
+        ui.strong("타격 후보 범위");
+        ui.add(egui::Slider::new(&mut intercept.y_min, 0.00..=0.80).text("시작 Y [m]"));
+        ui.add(egui::Slider::new(&mut intercept.y_max, intercept.y_min..=1.00).text("끝 Y [m]"));
+        ui.add(egui::Slider::new(&mut intercept.sample_step, 0.01..=0.10).text("간격 [m]"));
     });
 
     ui.add_space(4.0);
     ui.monospace(format!(
-        "면 위  {:+.3} m",
-        frame.mount_z() - crate::constants::table::SURFACE_Z
+        "거리 {:.3} m  면 위 {:+.3} m  후보 {}개",
+        frame.table_distance_m(),
+        frame.mount_z() - crate::constants::table::SURFACE_Z,
+        intercept.hit_planes().len(),
     ));
 
     if !parked {
@@ -249,9 +270,12 @@ fn draw_rig_panel(
 
     ui.add_space(4.0);
     let default_frame = defaults::rail_frame();
-    ui.add_enabled_ui(parked && *frame != default_frame, |ui| {
+    let default_intercept = crate::robot::motion::InterceptWindow::default();
+    let changed = *frame != default_frame || *intercept != default_intercept;
+    ui.add_enabled_ui(parked && changed, |ui| {
         if ui.button("실측 기본값으로").clicked() {
             *frame = default_frame;
+            *intercept = default_intercept;
         }
     });
 }
@@ -625,8 +649,10 @@ fn draw_status_panel(ui: &mut egui::Ui, status: &StatusSnapshot, debug: &DebugOv
         physics::BallState::Parked => "주차 (슈터에 대기)",
         physics::BallState::InFlight => "비행 중",
     };
-    let swing_ko = if status.swing_committed {
-        "확정 — 치는 중"
+    let swing_ko = if status.swing_committed && status.arrives_on_time == Some(false) {
+        "선행 이동 중 — 현재 한계로는 정시 도착 어려움"
+    } else if status.swing_committed {
+        "확정 — 예측 타격점으로 이동 중"
     } else if status.swing_abandoned {
         "포기 — 이번 공은 안 침"
     } else {

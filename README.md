@@ -97,14 +97,24 @@ cargo run -p pingpong-bot -- --debug
 # 기본 GUI sim
 cargo run -p pingpong-bot
 
+# macOS에서 Homebrew opencv@4를 확실히 선택해 실행
+./run-sim-macos.sh
+
 # 스윙 계획·포기 사유까지 자세한 로그
 cargo run -p pingpong-bot -- --mode sim --debug
+
+# 시작 치수를 명령행에서 고정 (GUI에서도 다시 조절 가능)
+cargo run -p pingpong-bot -- --mode sim \
+  --table-distance-m 0.15 --rail-bottom-z-m 0.88 \
+  --hit-y-min-m 0.00 --hit-y-max-m 0.70 --hit-y-step-m 0.025 \
+  --ball-launch-x-m 0.76 --ball-launch-y-m 2.55 --ball-launch-z-m 1.05
 ```
 
-1. 좌측 **Shooter** 패널에서 위치·조준·속도·스핀을 조정한다.
-2. **Shoot**로 현재 조건을 발사하거나 **Random**으로 무작위 조건을 만든다.
-3. 우측 **Status**에서 스윙 커밋·포기 사유를 확인한다. **View → Debug overlays**에서 예측 탄도, 타점, 관절 한계, 토크 HUD를 켤 수 있다.
-4. **Park**는 공을 회수한다. 마우스 드래그/스크롤은 시점 회전/줌이다.
+1. 좌측 **Shooter → 공 발사 위치**에서 공 중심의 절대 X/Y/Z와 조준·속도·스핀을 조정한다.
+2. 좌측 **Rig**에서 탁구대 끝선–레일 거리, 레일 하단 높이, 타격 후보 Y 범위를 조정한다. 공이 **Parked**일 때만 적용된다.
+3. **Shoot**로 현재 조건을 발사하거나 **Random**으로 무작위 조건을 만든다. Random도 설정한 공 발사 위치는 유지한다.
+4. 우측 **Status**에서 스윙 커밋·포기 사유를 확인한다. **View → Debug overlays**에서 예측 탄도, 타점, 관절 한계, 토크 HUD를 켤 수 있다.
+5. **Park**는 공을 회수한다. 마우스 드래그/스크롤은 시점 회전/줌이다.
 
 자동 회귀 평가는 **Eval**에서 `Block` 또는 `Alternating`을 고른 뒤 **Run 30**으로 실행한다. 기본 sim은 카메라 추정값이 아닌 월드 ground-truth로 스윙을 커밋한다.
 
@@ -131,6 +141,11 @@ jog 창에서 **Sync → Preview → Apply** 순서를 지킨다. 다음으로 �
 ```bash
 # 실캠·검출·삼각측량·EKF·플래너, 모터/레일만 정지
 cargo run -p pingpong-bot -- --mode real --dry-run --debug
+
+# 현장에서 잰 설치 치수와 타격 탐색 범위를 실기 FK/IK 모델에 적용
+cargo run -p pingpong-bot -- --mode real --dry-run --debug \
+  --table-distance-m 0.15 --rail-bottom-z-m 0.88 \
+  --hit-y-min-m 0.00 --hit-y-max-m 0.70 --hit-y-step-m 0.025
 
 # 녹화 클립으로 재현
 cargo run -p pingpong-bot -- --mode real --dry-run --clip fly_02 --debug

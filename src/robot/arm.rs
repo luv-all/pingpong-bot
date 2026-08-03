@@ -188,12 +188,16 @@ impl Arm {
         return None;
     }
 
-    /// `default_joints`로 초기화된 런타임 상태.
+    /// 탁구대 중앙 대기 자세로 초기화된 런타임 상태.
+    ///
+    /// `home_x()`는 전원 투입 후 홈 센서를 찾는 기계 원점이고,
+    /// 공을 받는 기본 대기 위치가 아니다. 시뮬·실기 계획·복귀가
+    /// 모두 같은 `default_x()`(레일 중앙)을 사용한다.
     pub fn initial_state(&self) -> State {
         let rail_x = self
             .rail
             .as_ref()
-            .map(|rail| rail.home_x())
+            .map(|rail| rail.default_x())
             .unwrap_or(self.base.coords.x);
         return State::new(self.default_joints.clone(), rail_x);
     }

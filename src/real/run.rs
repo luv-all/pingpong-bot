@@ -8,12 +8,11 @@ use anyhow::{Context, Result, ensure};
 use crossbeam_channel::{Receiver, bounded, unbounded};
 use pingpong_bot::camera::{Calibration, CamCliArgs, CamStreamArgs, StereoOfflineArgs};
 use pingpong_bot::defaults::{
-    self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, detector_for, robot,
+    self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, detector_for, robot_with_rail_frame,
 };
 use pingpong_bot::hardware::RealHardware;
 use pingpong_bot::hardware::dynamixel::DynamixelConfig;
 use pingpong_bot::hardware::rail::RailConfig;
-use pingpong_bot::robot::motion::InterceptWindow;
 use tracing::{info, warn};
 
 use crate::cli::Args;
@@ -39,7 +38,7 @@ const IDLE_TICK: Duration = Duration::from_millis(5);
 /// `Committed` / `Infeasible`로 프로세스를 끝내지 않는다.
 pub fn run(args: &Args) -> Result<()> {
     let options = Options::from_args(args);
-    let robot = robot().context("defaults::robot")?;
+    let robot = robot_with_rail_frame(args.rail_frame()).context("설정한 레일 위치로 로봇 조립")?;
     let arm = Arc::clone(&robot.arm);
 
     let hardware = open_hardware(&options, &arm)?;
@@ -68,7 +67,7 @@ pub fn run(args: &Args) -> Result<()> {
     };
     let (sim_tx, sim_handle) = if options.sim {
         let (tx, rx) = bounded(SIM_CAPACITY);
-        match sim_host::spawn(rx) {
+        match sim_host::spawn(rx, args.rail_frame()) {
             Some(handle) => (Some(tx), Some(handle)),
             None => (None, None),
         }
@@ -98,7 +97,7 @@ pub fn run(args: &Args) -> Result<()> {
     let estimator_handle = estimator_worker::spawn(
         vision_rx,
         calibration,
-        InterceptWindow::default(),
+        args.intercept_window(),
         commit_tx,
         commit_evict_rx,
         status_rx,
@@ -110,6 +109,7 @@ pub fn run(args: &Args) -> Result<()> {
     let control_handle = control_worker::spawn(
         Box::new(hardware),
         Arc::clone(&arm),
+        args.intercept_window(),
         options.home,
         commit_rx,
         status_tx,

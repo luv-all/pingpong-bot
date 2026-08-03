@@ -79,6 +79,9 @@ pub struct SimWorld {
     pub last_shooter_settings: launch::Settings,
     /// 디버그 — 마지막 hit plane 예측 (뷰어 마커용)
     debug_prediction: Option<Prediction>,
+    /// IK/동역학으로 선택된 타격 평면. 선행 이동 중 상태창이
+    /// 스캔 목록의 첫 평면으로 다시 바뀌지 않고 이 평면의 남은 시간을 추적한다.
+    selected_impact_y: Option<f64>,
     /// 동적으로 탐색할 접수 y 구간.
     intercept: InterceptWindow,
     /// true면 Rapier ground truth로 자동 스윙 (sim 기본).
@@ -169,7 +172,7 @@ pub struct SimWorld {
 /// (iters=12)에서 `RobotState::advance_rail`의 `RAIL_ACCEL_M_S2`만 끄면
 /// 99%(66/67), 켜면 76%(51/67)로, 관절 슬루·`clamp_above_table`은 각각 0 %p다
 /// — 이 분해도 12 기준이다(위 주의 참고). 실기 AXL
-/// 레일은 `v²/2a = 5.0²/24 = 1.04 m`를 써야 `RAIL_MAX_SPEED`에 닿는데 레일
+/// 레일은 `v²/2a = 7.5²/24 = 2.34 m`를 써야 `RAIL_MAX_SPEED`에 닿는데 레일
 /// 전장이 `table::WIDTH_X = 1.525 m`라, 실제 프로파일은 순항 없는 삼각형이고
 /// 예전 sim의 "한 틱에 최고속" 레일보다 훨씬 느리다. 이 23 %p는 sim이
 /// 실기에 맞게 정직해진 결과지 이 상수로 되살릴 수 있는 게 아니다 —
@@ -396,6 +399,7 @@ impl SimWorld {
             ball_state: crate::sim::physics::BallState::Parked,
             last_shooter_settings: default_shooter.clone(),
             debug_prediction: None,
+            selected_impact_y: None,
             intercept: InterceptWindow::default(),
             use_ground_truth: true,
             kinematic_robot: false,
@@ -556,6 +560,11 @@ impl SimWorld {
             // 주차 처리 뒤, 발사 전에 반영한다 — 같은 스텝에 Park→마운트 이동이
             // 들어오면 먹히고, 마운트 이동→Shoot이 들어오면 새 마운트로 쏜다.
             self.apply_rail_frame(input.rail_frame);
+            if self.ball_state == crate::sim::physics::BallState::Parked
+                && input.intercept.validate().is_ok()
+            {
+                self.set_intercept_window(input.intercept);
+            }
             if input.shoot {
                 self.shoot_ball(input.shooter);
             }
@@ -732,10 +741,14 @@ impl SimWorld {
         // 비행 중에는 항상 디버그 마커를 최신 탄도로 갱신 (커밋 후에도 스윙 재계획 없음).
         let t0 = std::time::Instant::now();
         let marker = self
-            .intercept
-            .hit_planes()
-            .into_iter()
-            .find_map(|plane| self.predict_impact(plane));
+            .selected_impact_y
+            .and_then(|y| self.predict_impact(crate::estimator::HitPlane { y }))
+            .or_else(|| {
+                self.intercept
+                    .hit_planes()
+                    .into_iter()
+                    .find_map(|plane| self.predict_impact(plane))
+            });
         self.diag_marker_secs = t0.elapsed().as_secs_f64();
         self.diag_predictions_secs = 0.0;
 
@@ -752,6 +765,20 @@ impl SimWorld {
         if self.swing_abandoned
             || (self.swing_committed && !refine_due)
             || (self.robot.is_swinging() && !refine_due)
+        {
+            if let Some(prediction) = marker {
+                self.set_debug_prediction(Some(prediction));
+            }
+            return;
+        }
+
+        // 일반 위치 제어는 전체 후보 탄도 생성과 IK 계획을 같은 20ms 주기로 묶는다.
+        // 예전에는 IK만 아래에서 스로틀하고 23개 hit-plane 탄도는 물리 1,000Hz마다
+        // 전부 다시 적분했다. 확장 접수 창 기준 초당 최대 23,000회 예측이라 GUI와
+        // 물리 시간이 함께 처졌다. 디버그 마커 한 점은 위에서 매 틱 갱신했으므로
+        // 화면 연속성은 유지된다. bang-bang은 워커 응답을 매 틱 확인해야 해 제외한다.
+        if !self.use_bang_bang_swing
+            && self.sim_time - self.last_swing_attempt_at < SWING_RETRY_THROTTLE_SECS
         {
             if let Some(prediction) = marker {
                 self.set_debug_prediction(Some(prediction));
@@ -822,12 +849,6 @@ impl SimWorld {
         }
         self.debug_snap.commit_phase = CommitPhase::InWindow;
 
-        if self.sim_time - self.last_swing_attempt_at < SWING_RETRY_THROTTLE_SECS {
-            if let Some(prediction) = predictions.first() {
-                self.set_debug_prediction(Some(prediction.clone()));
-            }
-            return;
-        }
         self.last_swing_attempt_at = self.sim_time;
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
         let position = self.ball_position();
@@ -848,20 +869,35 @@ impl SimWorld {
         else {
             return;
         };
-        let planned =
-            match PositionController::plan_best(&self.arm, &start, &ball_trajectory, &selector) {
-                Ok(planned) => planned,
-                Err(error) => {
-                    self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
-                    self.debug_snap.last_fail_text = Some(error.to_string());
-                    if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
-                        warn!(shot = self.shot_seq, %error, "shot: 최적 목표 위치 계획 실패");
-                    }
-                    return;
+        let planned = match PositionController::plan_best_or_reachable(
+            &self.arm,
+            &start,
+            &ball_trajectory,
+            &selector,
+        ) {
+            Ok(planned) => planned,
+            Err(error) => {
+                self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
+                self.debug_snap.last_fail_text = Some(error.to_string());
+                if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
+                    warn!(shot = self.shot_seq, %error, "shot: 최적 목표 위치 계획 실패");
                 }
-            };
+                return;
+            }
+        };
         self.hard_fail_streak = 0;
         self.debug_snap.clear_fail_on_success();
+        self.debug_snap.arrives_on_time = Some(planned.arrives_on_time);
+        // 상태창의 `남은 시간`은 단순히 스캔 목록의 첫 평면이 아니라,
+        // IK/동역학 후 실제로 선택된 타격점의 시간을 보여줘야 한다.
+        if let Some(selected_prediction) = predictions.iter().min_by(|left, right| {
+            (left.impact_position - planned.target.position)
+                .norm_squared()
+                .total_cmp(&(right.impact_position - planned.target.position).norm_squared())
+        }) {
+            self.selected_impact_y = Some(selected_prediction.impact_position.y);
+            self.set_debug_prediction(Some(*selected_prediction));
+        }
         let trajectory = planned.trajectory;
         self.debug_snap.set_committed_path(&self.arm, &trajectory);
         let refined = self.sim_time - self.flight_started_at >= REFINED_MIN_OBSERVATION_SECS;
@@ -872,9 +908,18 @@ impl SimWorld {
             rail_end = trajectory.rail.end,
             target = ?planned.target.position.coords,
             arrival_secs = planned.target.time_secs,
+            arrives_on_time = planned.arrives_on_time,
             peak_joint_speed = trajectory.peak_joint_speed(),
             "shot: 최적 목표 위치 이동 commit"
         );
+        if !planned.arrives_on_time {
+            warn!(
+                shot = self.shot_seq,
+                target = ?planned.target.position.coords,
+                duration_secs = trajectory.duration_secs,
+                "shot: 정시 타격 불가 — 도달 가능한 후보로 best-effort 이동"
+            );
+        }
         self.robot.set_auto_return_to_center(false);
         self.robot.replace_motion_and_return(trajectory, start);
         self.swing_committed = true;
@@ -1049,6 +1094,7 @@ impl SimWorld {
         self.swing_committed = false;
         self.position_refined = false;
         self.swing_abandoned = false;
+        self.selected_impact_y = None;
         self.hard_fail_streak = 0;
         self.last_swing_attempt_at = f64::NEG_INFINITY;
         self.flight_started_at = self.sim_time;
@@ -1063,6 +1109,7 @@ impl SimWorld {
     /// 새 발사(`launch_ball_at`)만 진행 중 스윙을 취소한다.
     pub fn park_ball(&mut self, settings: &launch::Settings) {
         self.debug_prediction = None;
+        self.selected_impact_y = None;
         self.last_shooter_settings = settings.clone();
         self.sync_shooter_pose(settings);
         let muzzle = settings.muzzle_position();
@@ -1389,12 +1436,17 @@ mod tests {
 
     /// 마운트 이동은 `step`을 통해서도 들어온다 (GUI 경로 회귀).
     #[test]
-    fn step_input_carries_the_rail_frame_while_parked() {
+    fn step_input_carries_rig_and_hit_window_while_parked() {
         let mut world = SimWorld::new(fourdof_robot());
         let base = crate::defaults::rail_frame();
         let moved = crate::robot::RailFrame {
             rail_bottom_z: base.rail_bottom_z + 0.05,
             ..base
+        };
+        let intercept = InterceptWindow {
+            y_min: 0.0,
+            y_max: 0.70,
+            sample_step: 0.05,
         };
         let shooter = launch::Settings::default();
         world.step(
@@ -1404,9 +1456,11 @@ mod tests {
                 shoot: false,
                 park: false,
                 rail_frame: moved,
+                intercept,
             }),
         );
         assert!((world.arm().rail.expect("rail").mount_z - moved.mount_z()).abs() < 1e-12);
+        assert_eq!(world.intercept, intercept);
     }
 
     #[test]
@@ -1422,6 +1476,18 @@ mod tests {
         }
         assert_eq!(world.ball_state, crate::sim::physics::BallState::InFlight);
         assert!(world.ball_position().y < y0);
+    }
+
+    #[test]
+    fn configured_muzzle_position_is_the_actual_launch_position() {
+        let mut world = SimWorld::new(fourdof_robot());
+        let mut shooter = launch::Settings::default();
+        shooter.set_muzzle_xyz(0.42, 2.31, 1.17);
+        world.shoot_ball(&shooter);
+        let actual = world.ball_position();
+        assert!((f64::from(actual.x) - 0.42).abs() < 1e-5);
+        assert!((f64::from(actual.y) - 2.31).abs() < 1e-5);
+        assert!((f64::from(actual.z) - 1.17).abs() < 1e-5);
     }
 
     #[test]
@@ -1898,14 +1964,31 @@ mod tests {
             world.robot().is_swinging(),
             "위치 제어는 발사 직후 미리 이동을 시작해야 함"
         );
-        let mut farthest = origin.rail_x;
+        let selected = *world
+            .debug_prediction()
+            .expect("선행 이동이 선택한 타격점 예측");
+        for _ in 0..10 {
+            world.step(1.0 / 1000.0, None);
+        }
+        let tracked = *world
+            .debug_prediction()
+            .expect("이동 중에도 선택 타격점을 추적해야 함");
+        assert!(
+            (tracked.impact_position.y - selected.impact_position.y).abs() < 1e-6,
+            "남은 시간 표시가 선택한 타격 평면을 유지해야 함"
+        );
+        assert!(
+            tracked.time_to_impact_secs < selected.time_to_impact_secs,
+            "선택 타격점의 남은 시간은 비행에 맞춰 줄어야 함"
+        );
+        let mut max_travel = 0.0_f64;
         for _ in 0..1_500 {
             world.step(1.0 / 1000.0, None);
-            farthest = farthest.max(world.robot().rail_x());
+            max_travel = max_travel.max((world.robot().rail_x() - origin.rail_x).abs());
         }
         assert!(
-            farthest > origin.rail_x + 0.2,
-            "레일이 공 위치 방향으로 이동해야 함 (max={farthest})"
+            max_travel > 0.02,
+            "중앙 대기 위치에서 예측 타격점 방향으로 레일이 이동해야 함 (travel={max_travel})"
         );
     }
 

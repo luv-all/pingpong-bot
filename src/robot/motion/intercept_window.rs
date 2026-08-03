@@ -81,4 +81,16 @@ mod tests {
         };
         assert!(window.hit_planes().is_empty());
     }
+
+    #[test]
+    fn default_window_covers_wide_robot_side_workspace() {
+        let window = InterceptWindow::default();
+        let planes = window.hit_planes();
+        assert!(window.y_min.abs() < 1e-12);
+        assert!((window.y_max - 0.55).abs() < 1e-12);
+        assert!((window.sample_step - 0.025).abs() < 1e-12);
+        assert_eq!(planes.len(), 23);
+        assert!(planes.first().expect("first").y.abs() < 1e-12);
+        assert!((planes.last().expect("last").y - 0.55).abs() < 1e-12);
+    }
 }

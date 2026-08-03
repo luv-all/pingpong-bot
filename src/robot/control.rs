@@ -1,6 +1,7 @@
 //! 공 궤적에서 목표를 고르고 라켓을 그 위치까지 옮기는 공통 제어 경계.
 
 use nalgebra::Vector3;
+use rayon::prelude::*;
 use thiserror::Error;
 
 use crate::Point3;
@@ -41,6 +42,12 @@ pub struct HitTargetSelector {
     pub y_min: f64,
     pub y_max: f64,
 }
+
+/// 위치 제어용 타격 후보 Y 간격. 예측 적분의 5ms 표본을
+/// 전부 IK로 풀면 실시간 제어가 느려지므로, 공간적으로 다른 점만
+/// 남긴다. 각 점은 [`PositionController::plan_best`]에서 레일 포함
+/// 역기구학과 전체 궤적 제약을 실제로 통과해야 채택된다.
+const TARGET_CANDIDATE_SPACING_M: f64 = 0.025;
 
 impl HitTargetSelector {
     pub fn new(y_min: f64, y_max: f64) -> Result<Self, TargetSelectionError> {
@@ -87,11 +94,15 @@ impl HitTargetSelector {
             return Err(TargetSelectionError::EmptyPrediction);
         }
         // 5 ms 예측 행을 전부 IK로 풀 필요는 없다. 접수 구간을
-        // 균등 표본하여 공간적으로 다른 후보만 남긴다.
-        const LEVELS: usize = 9;
-        let mut candidates: Vec<HitTarget> = Vec::with_capacity(LEVELS);
-        for level in 0..LEVELS {
-            let fraction = level as f64 / (LEVELS - 1) as f64;
+        // 균등 표본하여 공간적으로 다른 후보만 남긴다. 고정 9개를
+        // 쓰면 창을 넓혔을 때 간격도 함께 벌어지므로 2.5cm 간격을 유지한다.
+        let intervals = ((self.y_max - self.y_min) / TARGET_CANDIDATE_SPACING_M)
+            .ceil()
+            .max(1.0) as usize;
+        let levels = intervals + 1;
+        let mut candidates: Vec<HitTarget> = Vec::with_capacity(levels);
+        for level in 0..levels {
+            let fraction = level as f64 / intervals as f64;
             let y = self.y_min + (self.y_max - self.y_min) * fraction;
             if let Some(candidate) = interpolate_at_y(&trajectory.predicted, y)
                 && candidates
@@ -240,6 +251,9 @@ impl PredictionStability {
 pub struct PositionPlan {
     pub target: HitTarget,
     pub trajectory: Trajectory,
+    /// 공 도착 시각 안에 완료되는 정식 계획인지. false면 시뮬 가시성용
+    /// best-effort 이동이라 공을 놓칠 수 있지만 로봇은 안전 한계 안에서 움직인다.
+    pub arrives_on_time: bool,
 }
 
 impl PositionController {
@@ -262,25 +276,109 @@ impl PositionController {
             .ranked_candidates(ball_trajectory, current)
             .map_err(|error| PositionControlError::Unreachable(error.to_string()))?;
         let elapsed = ball_trajectory.reference_time.elapsed().as_secs_f64();
-        let mut last_error = None;
-        for hit_target in candidates {
-            match Self::plan(arm, start, hit_target.target(), elapsed) {
-                Ok(trajectory) => {
-                    // `ranked_candidates`는 준비 시간·이동 거리·높이 순으로 이미
-                    // 정렬되어 있다. 실행 가능한 첫 후보가 곧 최적 후보이므로
-                    // 즉시 반환한다. 예측 샘플 수십 개에 대해 전체 IK·충돌
-                    // 계획을 모두 돌리면 실기 반응이 수백 ms~수 초 늦어진다.
-                    return Ok(PositionPlan {
-                        target: hit_target,
-                        trajectory,
-                    });
-                }
-                Err(error) => last_error = Some(error),
+        // 후보 순서는 점수순으로 보존하면서 계산만 Rayon으로 병렬화한다.
+        // `collect`가 IndexedParallelIterator의 원래 순서를 유지하므로 가장 앞의
+        // 성공 후보를 고르는 기존 의미는 바뀌지 않는다. Rayon 기본 풀은 머신의
+        // 가용 논리 CPU 수를 사용한다.
+        let attempts: Vec<_> = candidates
+            .par_iter()
+            .copied()
+            .map(|hit_target| {
+                (
+                    hit_target,
+                    Self::plan(arm, start, hit_target.target(), elapsed),
+                )
+            })
+            .collect();
+        for (hit_target, result) in &attempts {
+            if let Ok(trajectory) = result {
+                return Ok(PositionPlan {
+                    target: *hit_target,
+                    trajectory: trajectory.clone(),
+                    arrives_on_time: true,
+                });
             }
         }
-        return Err(last_error.unwrap_or_else(|| {
-            PositionControlError::Unreachable("실행 가능한 궤적 후보가 없음".into())
+        // 마지막 후보의 실패를 그대로 보여주면, 공이 이미 거의 지나간
+        // 어떤 평면의 `0.005 s`가 전체 계획의 남은 시간처럼 보인다. 시간 부족
+        // 후보 중에서 실제 성공 가능성(남은/필요 시간)이 가장 높았던 것을
+        // 보고해야 진단값이 선택 문제를 대표한다.
+        let best_timing_error = attempts
+            .iter()
+            .filter_map(|(_, result)| match result {
+                Err(PositionControlError::InsufficientTime {
+                    remaining_secs,
+                    required_secs,
+                }) => Some((remaining_secs / required_secs.max(f64::EPSILON), result)),
+                _ => None,
+            })
+            .max_by(|(left, _), (right, _)| left.total_cmp(right))
+            .and_then(|(_, result)| result.clone().err());
+        return Err(best_timing_error.unwrap_or_else(|| {
+            attempts
+                .into_iter()
+                .find_map(|(_, result)| result.err())
+                .unwrap_or_else(|| {
+                    PositionControlError::Unreachable("실행 가능한 궤적 후보가 없음".into())
+                })
         }));
+    }
+
+    /// 정시 도달 계획이 없으면 점수순 첫 도달 가능 후보로 안전하게 이동한다.
+    ///
+    /// sim에서 "계획 실패 = 완전 정지"로 보이는 문제를 진단하기 위한 경로다.
+    /// 실기 [`crate::pipeline`]는 계속 [`Self::plan_best`]만 사용하므로 늦은 명령을
+    /// 하드웨어에 보내지 않는다.
+    pub fn plan_best_or_reachable(
+        arm: &Arm,
+        start: &Pose,
+        ball_trajectory: &BallTrajectory,
+        selector: &HitTargetSelector,
+    ) -> Result<PositionPlan, PositionControlError> {
+        match Self::plan_best(arm, start, ball_trajectory, selector) {
+            Ok(planned) => return Ok(planned),
+            Err(PositionControlError::InvalidTarget) => {
+                return Err(PositionControlError::InvalidTarget);
+            }
+            Err(_) => {}
+        }
+
+        let current = if arm.rail.is_some() {
+            arm.forward_kinematics_with_rail(start.rail_x, &start.joints)
+        } else {
+            arm.forward_kinematics(&start.joints)
+        }
+        .ok_or_else(|| PositionControlError::Unreachable("현재 라켓 FK 실패".into()))?
+        .position;
+        let candidates = selector
+            .ranked_candidates(ball_trajectory, current)
+            .map_err(|error| PositionControlError::Unreachable(error.to_string()))?;
+        let attempts: Vec<_> = candidates
+            .par_iter()
+            .copied()
+            .map(|hit_target| {
+                (
+                    hit_target,
+                    Self::plan_reachable(arm, start, hit_target.position),
+                )
+            })
+            .collect();
+        for (hit_target, result) in &attempts {
+            if let Ok(trajectory) = result {
+                return Ok(PositionPlan {
+                    target: *hit_target,
+                    trajectory: trajectory.clone(),
+                    arrives_on_time: false,
+                });
+            }
+        }
+        return Err(attempts
+            .into_iter()
+            .rev()
+            .find_map(|(_, result)| result.err())
+            .unwrap_or_else(|| {
+                PositionControlError::Unreachable("도달 가능한 IK 후보 없음".into())
+            }));
     }
 
     /// 현재 포즈에서 목표 위치까지 정지→정지 궤적을 만든다.
@@ -323,6 +421,20 @@ impl PositionController {
         // 자세(속도 0)를 유지한다. 이 hold가 끝나야 복귀 궤적이 시작된다.
         trajectory.duration_secs = remaining_secs;
         return Ok(trajectory);
+    }
+
+    /// 도착 시각은 무시하되 IK·관절/레일 속도·가속도·토크 한계는 지키는 이동.
+    fn plan_reachable(
+        arm: &Arm,
+        start: &Pose,
+        target: Point3,
+    ) -> Result<Trajectory, PositionControlError> {
+        if !target.coords.iter().all(|value| value.is_finite()) {
+            return Err(PositionControlError::InvalidTarget);
+        }
+        let goal = position_only_goal(arm, start, target)?;
+        return Planner::move_to(arm, start, goal.joints, goal.rail_x)
+            .map_err(|error| PositionControlError::Unreachable(error.to_string()));
     }
 }
 
@@ -572,9 +684,13 @@ mod tests {
         let candidates = selector
             .ranked_candidates(&trajectory, launch_position)
             .unwrap();
-        assert!(candidates.len() <= 9, "IK 후보는 균등 표본 9개 이하");
+        assert!(
+            candidates.len() <= 23,
+            "확장 접수 창의 IK 시도 후보는 2.5cm 균등 표본 23개 이하"
+        );
         let planned = PositionController::plan_best(&robot.arm, &start, &trajectory, &selector)
             .expect("기본 sim 샷의 위치 목표는 실행 가능해야 함");
+        assert!(planned.arrives_on_time);
         let reached = robot
             .arm
             .forward_kinematics_with_rail(
@@ -586,5 +702,34 @@ mod tests {
             (reached.position - planned.target.position).norm()
                 <= crate::robot::Arm::POSE_IK_POSITION_TOLERANCE
         );
+    }
+
+    #[test]
+    fn sim_best_effort_moves_to_reachable_target_even_when_arrival_is_impossible() {
+        let robot = crate::defaults::robot().unwrap();
+        let rail_x = robot.arm.rail.as_ref().unwrap().default_x();
+        let start = Pose::new(rail_x, robot.arm.default_joints.clone());
+        let settings = crate::sim::launch::Settings::default();
+        let position = settings.muzzle_position();
+        let velocity = settings.launch_velocity();
+        let omega = settings.launch_angular_velocity();
+        let predicted = crate::estimator::Kinematics::sample_trajectory(
+            Vector3::new(position.x.into(), position.y.into(), position.z.into()),
+            Vector3::new(velocity.x.into(), velocity.y.into(), velocity.z.into()),
+            Vector3::new(omega.x.into(), omega.y.into(), omega.z.into()),
+            &crate::defaults::PhysicsParams::default(),
+        )
+        .into_iter()
+        .map(|sample| TrajectorySample::new(sample.position, sample.velocity, 1e-6))
+        .collect();
+        let trajectory = BallTrajectory::new(vec![], predicted, Instant::now()).unwrap();
+        let window = crate::robot::motion::InterceptWindow::default();
+        let selector = HitTargetSelector::new(window.y_min, window.y_max).unwrap();
+
+        let planned =
+            PositionController::plan_best_or_reachable(&robot.arm, &start, &trajectory, &selector)
+                .expect("시간은 놓쳐도 도달 가능한 후보로 움직여야 함");
+        assert!(!planned.arrives_on_time);
+        assert!(planned.trajectory.duration_secs > 0.0);
     }
 }

@@ -235,9 +235,15 @@ flowchart TD
 | `PLAN_THROTTLE_SECS` | 20 ms | `control_worker` | sim `SWING_RETRY_THROTTLE_SECS`와 같은 값. 57600 baud `read_pose`는 sync_read 왕복이다 |
 | `FINISH_GRACE` | 15 s | `run` | 커밋 후 제어 워커가 스윙 완주 + 센터 복귀할 여유 |
 | 게이트 임계 | — | `defaults::ControlParams` | `min_swing_secs` 0.20 · `swing_commit_max_secs` 0.60 · `swing_commit_max_ball_y_frac` 0.55 |
-| 접수 창 | — | `InterceptWindow::default()` | y 0.08 ~ 0.35, step 0.03 (10 평면) |
+| 접수 창 | — | CLI 또는 `InterceptWindow::default()` | 기본 y 0.00 ~ 0.55, step 0.025 (23 예측 평면) |
 
 real 전용 튜닝 값을 새로 만들지 않는다 — sim과 갈리면 sim에서 튜닝한 결과가 실기에 안 옮겨진다.
+
+설치 치수는 `--table-distance-m`, `--rail-bottom-z-m`, 접수 창은
+`--hit-y-min-m`, `--hit-y-max-m`, `--hit-y-step-m`으로 덮어쓸 수 있다. 치수는
+URDF 화면 배치뿐 아니라 레일·FK·IK 모델에도 들어간다. 다만 현재 real 제어 워커는
+안전한 2단계 레일+손목 시험 제어라 전체 팔 IK 스윙을 아직 실행하지 않는다. 전체
+후보별 IK·궤적 필터는 sim의 `PositionController::plan_best` 경로에 연결되어 있다.
 
 ---
 
