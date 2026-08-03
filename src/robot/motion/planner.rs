@@ -95,6 +95,18 @@ impl Planner {
         return physics::plan_move_to(arm, start, end_joints, end_rail_x);
     }
 
+    /// [`Planner::move_to`]와 같지만 부드러운 재추종용 시간 하한(0.3 s)을
+    /// 두지 않는다 — 관절 속도·가속·토크 한계만으로 실현 가능한 가장 빠른
+    /// 궤적 ("Motor Test" 같은 모터 한계 실측 벤치용).
+    pub fn move_to_fastest(
+        arm: &Arm,
+        start: &robot::Pose,
+        end_joints: crate::robot::Joints,
+        end_rail_x: f64,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_move_to_fastest(arm, start, end_joints, end_rail_x);
+    }
+
     pub fn plan_bang_bang(
         arm: &Arm,
         predictions: &[Prediction],

@@ -12,7 +12,8 @@ use super::super::debug::overlays::DebugOverlays;
 use super::eval_live_run::EvalLiveRun;
 use crate::constants::viewer::{CAMERA_DIST_MAX, CAMERA_DIST_MIN};
 use crate::defaults;
-use crate::robot::Robot;
+use crate::robot::motion;
+use crate::robot::{self, Joints, Robot};
 use crate::sim::eval;
 use crate::sim::physics;
 use crate::sim::physics::world::SimWorld;
@@ -71,6 +72,9 @@ pub fn draw(
     let mut start_eval = false;
     let mut start_eval_mode = eval::Mode::Block;
     let mut start_live_shot: Option<usize> = None;
+    let mut joint_test_requested = false;
+    let mut joint_test_copy_start = false;
+    let mut joint_test_copy_end = false;
 
     // 레이아웃: 좌측 Shooter→Rig→Eval, 우측 Status→View.
     //
@@ -113,7 +117,7 @@ pub fn draw(
         .as_ref()
         .map(|r| r.response.rect.bottom() + GUI_GAP)
         .unwrap_or(rig_y + 160.0);
-    egui::Window::new("Eval")
+    let eval_win = egui::Window::new("Eval")
         .default_width(260.0)
         .default_pos(egui::pos2(screen.left() + 12.0, eval_y))
         .resizable(true)
@@ -153,6 +157,41 @@ pub fn draw(
                 }
             });
             draw_eval_status(ui, ui_state, &mut start_live_shot);
+        });
+
+    let motor_test_y = eval_win
+        .as_ref()
+        .map(|r| r.response.rect.bottom() + GUI_GAP)
+        .unwrap_or(eval_y + 160.0);
+    // 관절 한계[deg] — 입력을 이 범위로 직접 잘라서, 범위 밖 값을 넣고 조용히
+    // "InfeasibleSwing"으로 실패하는(로봇은 안 움직이는데 이유를 모르는) 경우를
+    // 애초에 막는다. yaw(관절0)는 continuous라 한계가 없다.
+    let joint_test_limits_deg: [Option<(f64, f64)>; 4] = {
+        let mut limits = [None; 4];
+        if let Ok(w) = world.try_lock() {
+            for (i, limit) in limits.iter_mut().enumerate() {
+                *limit = w
+                    .arm
+                    .joint_limit(i)
+                    .map(|l| (l.min.to_degrees(), l.max.to_degrees()));
+            }
+        }
+        limits
+    };
+    egui::Window::new("Motor Test")
+        .default_width(280.0)
+        .default_pos(egui::pos2(screen.left() + 12.0, motor_test_y))
+        .resizable(true)
+        .collapsible(true)
+        .show(ctx, |ui| {
+            draw_motor_test_panel(
+                ui,
+                ui_state,
+                &joint_test_limits_deg,
+                &mut joint_test_requested,
+                &mut joint_test_copy_start,
+                &mut joint_test_copy_end,
+            );
         });
 
     let status_win = egui::Window::new("Status")
@@ -199,6 +238,14 @@ pub fn draw(
         ctrl.use_bang_bang_swing = ui_state.use_bang_bang_swing;
         if shoot {
             ctrl.request_shoot();
+            // Motor Test가 켰을 수 있는 키네마틱 미리보기·꺼둔 자동 복귀를 정식
+            // 랠리 전에 되살린다 — 안 그러면 물리 기반 PD 추종(진짜 랠리 경로)이
+            // 아니라 키네마틱 텔레포트로 실제 공을 받으려 들거나, 스윙 뒤 팔이
+            // 중앙으로 안 돌아와 다음 공을 못 받는다.
+            if let Ok(mut w) = world.lock() {
+                w.set_kinematic_robot(false);
+                w.robot_mut().set_auto_return_to_center(true);
+            }
         }
         if park {
             ctrl.request_park();
@@ -211,6 +258,143 @@ pub fn draw(
     }
     if let Some(shot_number) = start_live_shot {
         begin_eval_live_shot(ui_state, world, controls, shot_number);
+    }
+
+    if (joint_test_copy_start || joint_test_copy_end)
+        && let Some(status) = status
+    {
+        for (i, q) in status.joint_q.iter().enumerate().take(4) {
+            if joint_test_copy_start {
+                ui_state.joint_test_start_deg[i] = q.to_degrees();
+            }
+            if joint_test_copy_end {
+                ui_state.joint_test_end_deg[i] = q.to_degrees();
+            }
+        }
+    }
+    if joint_test_requested {
+        run_joint_motor_test(ui_state, world);
+    }
+}
+
+/// "Motor Test" 창 내용 — IK 없이 4관절 시작/끝 각[deg]을 직접 입력해
+/// [`motion::Planner::move_to_fastest`](정지→정지, 부드러운 재추종용 시간
+/// 하한 없이 모터 한계로만 정한 최단 실행가능 quintic)로 재생한다.
+fn draw_motor_test_panel(
+    ui: &mut egui::Ui,
+    ui_state: &mut PanelUiState,
+    joint_limits_deg: &[Option<(f64, f64)>; 4],
+    joint_test_requested: &mut bool,
+    joint_test_copy_start: &mut bool,
+    joint_test_copy_end: &mut bool,
+) {
+    ui.small("IK 없이 4관절 각[deg]을 직접 지정 — start로 스냅 후 end까지 모터 한계(속도·가속·토크) 100%로 최단 시간 이동");
+    ui.small("end 도달 후 자동 중앙 복귀를 끔 — 결과 자세 확인용. Shoot을 누르면 다시 켜짐");
+    egui::Grid::new("motor_test_grid")
+        .num_columns(5)
+        .spacing([6.0, 4.0])
+        .show(ui, |ui| {
+            ui.label("");
+            for label in ["j0 yaw", "j1 shoulder", "j2 elbow", "j3 wrist"] {
+                ui.weak(label);
+            }
+            ui.end_row();
+
+            ui.label("start");
+            for (v, limit) in ui_state
+                .joint_test_start_deg
+                .iter_mut()
+                .zip(joint_limits_deg)
+            {
+                add_bounded_drag_value(ui, v, *limit);
+            }
+            ui.end_row();
+
+            ui.label("end");
+            for (v, limit) in ui_state.joint_test_end_deg.iter_mut().zip(joint_limits_deg) {
+                add_bounded_drag_value(ui, v, *limit);
+            }
+            ui.end_row();
+
+            ui.label("");
+            for limit in joint_limits_deg {
+                match limit {
+                    Some((lo, hi)) => ui.weak(format!("{lo:.0}°…{hi:.0}°")),
+                    None => ui.weak("한계 없음"),
+                };
+            }
+            ui.end_row();
+        });
+    ui.horizontal(|ui| {
+        if ui.small_button("현재 포즈 → start").clicked() {
+            *joint_test_copy_start = true;
+        }
+        if ui.small_button("현재 포즈 → end").clicked() {
+            *joint_test_copy_end = true;
+        }
+    });
+    ui.add_space(4.0);
+    let test_button =
+        egui::Button::new("Test — 모터 100% 속도").min_size(egui::vec2(ui.available_width(), 22.0));
+    if ui.add(test_button).clicked() {
+        *joint_test_requested = true;
+    }
+    if let Some(duration) = ui_state.joint_test_last_duration_secs {
+        ui.weak(format!("계획된 소요 시간: {duration:.3} s"));
+    }
+    if let Some(err) = &ui_state.joint_test_error {
+        ui.colored_label(egui::Color32::from_rgb(220, 90, 80), err);
+    }
+}
+
+/// start 포즈로 즉시 스냅한 뒤, end까지 [`motion::Planner::move_to_fastest`]로
+/// 계획한 궤적을 커밋한다 — 레일은 현재 위치에 고정(4관절 모터만 대상).
+fn run_joint_motor_test(ui_state: &mut PanelUiState, world: &Arc<Mutex<SimWorld>>) {
+    let Ok(mut w) = world.lock() else {
+        return;
+    };
+    let rail_x = w.robot.rail_x();
+    let arm = Arc::clone(&w.arm);
+    let start_rad: Vec<f64> = ui_state
+        .joint_test_start_deg
+        .iter()
+        .map(|d| d.to_radians())
+        .collect();
+    let end_rad: Vec<f64> = ui_state
+        .joint_test_end_deg
+        .iter()
+        .map(|d| d.to_radians())
+        .collect();
+    let start_pose = robot::Pose::new(rail_x, Joints::from_slice(&start_rad));
+    // 메인 sim은 기본적으로 물리(Rapier PD 모터) 경로다 — 토크·속도 한계를
+    // 그대로 받는 진짜 랠리 재생에는 맞지만, 모터 순수 성능만 보고 싶은 이
+    // 테스트에는 PD 추종 지연·정합성 문제가 낀다. `tools/jog`가 수동 미리보기에
+    // 쓰는 것과 같은 키네마틱 모드로 돌린다 — 매 틱 `state.angles`를 궤적
+    // 샘플로 직접 덮어쓰고 다물체를 그 값으로 텔레포트하므로(`step_kinematic_robot`),
+    // 화면에 궤적 모양 그대로 보인다. Shoot을 누르면 물리 모드로 되돌아간다.
+    w.set_kinematic_robot(true);
+    // `state.snap_to_pose`(State만)가 아니라 `SimWorld::snap_robot_pose`를 써야
+    // 한다 — 후자만 Rapier 다물체(실제 팔 위치)까지 함께 텔레포트한다. State만
+    // 스냅하면 다음 물리 스텝의 `set_measured_joints`가 실제 다물체 위치(옛
+    // 자세)로 곧바로 덮어써서, "start"가 화면엔 한 프레임만 반짝이고 실제로는
+    // 옛 위치에서 end로 쫓아가 버린다 — end가 옛 위치와 가까우면 거의 안
+    // 움직이는 것처럼 보인다.
+    w.snap_robot_pose(start_pose.clone());
+    // 기본 랠리 동작(스윙 끝나면 중앙 복귀)이 end 도달 직후 곧바로 되돌려버리면
+    // 결과 자세를 확인할 새가 없다 — Shoot을 누르기 전까지 꺼 둔다.
+    w.robot_mut().set_auto_return_to_center(false);
+
+    match motion::Planner::move_to_fastest(&arm, &start_pose, Joints::from_slice(&end_rad), rail_x)
+    {
+        Ok(trajectory) => {
+            ui_state.joint_test_last_duration_secs = Some(trajectory.duration_secs);
+            ui_state.joint_test_error = None;
+            w.robot_mut().replace_swing(trajectory);
+        }
+        Err(err) => {
+            ui_state.joint_test_last_duration_secs = None;
+            ui_state.joint_test_error = Some(format!("{err}"));
+        }
     }
 }
 
@@ -633,6 +817,17 @@ fn start_eval_protocol(ui_state: &PanelUiState, world: &Arc<Mutex<SimWorld>>, mo
             crate::sim::eval::Protocol::run(&robot, physics, &launch, mode, Some(progress));
         running.store(false, Ordering::Relaxed);
     });
+}
+
+/// 관절 한계[deg]가 있으면 그 범위로 자르는 `DragValue` — 한계 밖 값을 넣고
+/// `move_to_fastest`가 "InfeasibleSwing"으로 조용히 실패하는(로봇이 왜 안
+/// 움직이는지 모르는) 경우를 입력 단계에서 막는다.
+fn add_bounded_drag_value(ui: &mut egui::Ui, value: &mut f64, limit_deg: Option<(f64, f64)>) {
+    let mut drag = egui::DragValue::new(value).suffix("°").speed(1.0);
+    if let Some((lo, hi)) = limit_deg {
+        drag = drag.range(lo..=hi);
+    }
+    ui.add(drag);
 }
 
 fn debug_checkbox(

@@ -511,14 +511,55 @@ pub fn plan_return_to_center(arm: &Arm, start: &robot::Pose) -> Result<Trajector
 ///
 /// [`plan_return_to_center`]가 목표만 센터로 고정한 특수형이고, real의 coarse 선추종도
 /// 같은 것이 필요하다 — 임팩트 근처로 미리 옮겨두면 커밋 스윙이 이동까지 떠맡지 않는다.
+///
+/// 부드러운 재추종용으로 [`RETURN_TO_CENTER_MIN_SECS`] 하한을 둔다 — 모터
+/// 한계까지 짜내는 순수 최단 시간이 필요하면 [`plan_move_to_fastest`].
 pub fn plan_move_to(
     arm: &Arm,
     start: &robot::Pose,
-    center_joints: Joints,
-    center_rail_x: f64,
+    target_joints: Joints,
+    target_rail_x: f64,
+) -> Result<Trajectory, DomainError> {
+    return search_move_to_trajectory(
+        arm,
+        start,
+        target_joints,
+        target_rail_x,
+        RETURN_TO_CENTER_MIN_SECS,
+    );
+}
+
+/// [`plan_move_to`]와 같은 정지→정지 탐색이지만, 부드러운 재추종용
+/// [`RETURN_TO_CENTER_MIN_SECS`] 하한(0.3 s)을 두지 않는다 — 관절 속도·가속·
+/// 토크 한계만으로 실현 가능한 가장 빠른 궤적을 찾는다. "Motor Test" 같은
+/// 모터 한계 실측 벤치용 — 실제 게임플레이 스윙(`plan_swing`)이 이미 시간
+/// 하한 없이 같은 방식(WP: 2026-07-31)으로 도는 것과 대칭이다.
+pub fn plan_move_to_fastest(
+    arm: &Arm,
+    start: &robot::Pose,
+    target_joints: Joints,
+    target_rail_x: f64,
+) -> Result<Trajectory, DomainError> {
+    return search_move_to_trajectory(arm, start, target_joints, target_rail_x, MIN_SEARCH_SECS);
+}
+
+/// 탐색 시작 시간의 절대 하한 — 0으로 두면 `duration=0`인 채로 quintic 계수를
+/// 못 세운다(동일 시작/목표 등 거리 0인 경우 포함). 실행 가능성 판정에는
+/// 영향 없는 수치적 안전값일 뿐, 이 자체가 실제 최소 소요 시간이 되진 않는다
+/// — `duration *= RETURN_TO_CENTER_GROWTH`로 금방 실제 한계까지 자란다.
+const MIN_SEARCH_SECS: f64 = 1e-3;
+
+/// [`plan_move_to`]/[`plan_move_to_fastest`] 공유 탐색 — 등속 근사로 시작
+/// 시간을 잡고(재시도 줄이기), 실현 가능해질 때까지 `duration`을 키운다.
+fn search_move_to_trajectory(
+    arm: &Arm,
+    start: &robot::Pose,
+    target_joints: Joints,
+    target_rail_x: f64,
+    min_duration: f64,
 ) -> Result<Trajectory, DomainError> {
     let start_velocity = vec![0.0; start.joints.values.len()];
-    let end_velocity = vec![0.0; center_joints.values.len()];
+    let end_velocity = vec![0.0; target_joints.values.len()];
 
     // 끝속도가 항상 0이라 `fit_end_velocity`의 스케일링은 아무 것도 못 바꾼다
     // (0에 뭘 곱해도 0) — 첫 시도부터 웬만하면 통과하도록, 실제 이동 거리
@@ -528,10 +569,10 @@ pub fn plan_move_to(
         .joints
         .values
         .iter()
-        .zip(center_joints.values.iter())
-        .map(|(actual, home)| (actual - home).abs())
+        .zip(target_joints.values.iter())
+        .map(|(actual, target)| (actual - target).abs())
         .fold(0.0_f64, f64::max);
-    let rail_distance = (start.rail_x - center_rail_x).abs();
+    let rail_distance = (start.rail_x - target_rail_x).abs();
     let joint_time_estimate = if arm.max_joint_speed > 0.0 {
         joint_distance / (arm.max_joint_speed * 0.5)
     } else {
@@ -547,19 +588,19 @@ pub fn plan_move_to(
 
     let mut duration = joint_time_estimate
         .max(rail_time_estimate)
-        .max(RETURN_TO_CENTER_MIN_SECS);
+        .max(min_duration);
     let mut last_error = None;
     while duration <= RETURN_TO_CENTER_MAX_SECS {
         let rail = Rail {
             start: start.rail_x,
-            end: center_rail_x,
+            end: target_rail_x,
             start_velocity: 0.0,
             end_velocity: 0.0,
         };
         match build_feasible_trajectory(
             arm,
             &start.joints,
-            center_joints.clone(),
+            target_joints.clone(),
             start_velocity.clone(),
             end_velocity.clone(),
             duration,
@@ -574,7 +615,7 @@ pub fn plan_move_to(
     }
     return Err(DomainError::InfeasibleSwing(last_error.unwrap_or(
         SwingPlanError::InverseKinematicsNoSolution {
-            target_x: center_rail_x,
+            target_x: target_rail_x,
             target_y: 0.0,
             target_z: table::SURFACE_Z,
         },
@@ -2071,6 +2112,36 @@ mod tests {
         assert!(
             kinematic_limit_violation(&arm, &trajectory).is_some(),
             "극단적 knot 가속도는 기존 기구학 한계 검사에 걸려야 한다"
+        );
+    }
+
+    /// `plan_move_to_fastest`는 부드러운 재추종용 [`RETURN_TO_CENTER_MIN_SECS`]
+    /// 하한을 두지 않는다 — 작은 델타에서 `plan_move_to`보다 눈에 띄게 짧은
+    /// 궤적을 내야 한다. "Motor Test" GUI 버튼이 `move_to`를 그대로 썼을 때,
+    /// 작은 델타조차 0.3s 하한에 걸려 사실상 "모터 100% 사용"이 아니었던
+    /// 회귀를 막는다.
+    #[test]
+    fn plan_move_to_fastest_ignores_gentle_floor_for_small_delta() {
+        let arm = sample_three_dof_arm();
+        let start = sample_start(&arm);
+        let mut target = start.joints.clone();
+        target.values[0] += 0.02; // ~1.1° — 부드러운 하한(0.3s)이면 훨씬 못 미침.
+
+        let gentle = plan_move_to(&arm, &start, target.clone(), start.rail_x)
+            .expect("gentle plan_move_to");
+        let fastest = plan_move_to_fastest(&arm, &start, target, start.rail_x)
+            .expect("fastest plan_move_to_fastest");
+
+        assert!(
+            gentle.duration_secs >= RETURN_TO_CENTER_MIN_SECS - 1e-9,
+            "gentle 쪽은 부드러운 하한을 지켜야 한다: {}",
+            gentle.duration_secs
+        );
+        assert!(
+            fastest.duration_secs < gentle.duration_secs * 0.5,
+            "fastest는 하한 없이 훨씬 짧아야 한다: fastest={} gentle={}",
+            fastest.duration_secs,
+            gentle.duration_secs
         );
     }
 }

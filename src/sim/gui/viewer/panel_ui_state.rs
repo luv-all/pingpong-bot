@@ -36,6 +36,12 @@ pub struct PanelUiState {
     pub eval_launch: eval::LaunchParams,
     /// Run 30 이후 선택한 시나리오를 시뮬에서 다시 실행 중일 때.
     pub eval_live: Option<EvalLiveRun>,
+    /// "Motor Test" 창 입력 — IK 없이 4관절 각 [deg]로 직접 지정하는 시작/끝 포즈.
+    pub joint_test_start_deg: [f64; 4],
+    pub joint_test_end_deg: [f64; 4],
+    /// 마지막 Test 실행 결과 — 실패 사유 또는 계획된 소요 시간.
+    pub joint_test_error: Option<String>,
+    pub joint_test_last_duration_secs: Option<f64>,
 }
 
 impl PanelUiState {
@@ -53,6 +59,10 @@ impl PanelUiState {
             eval_mode: eval::Mode::Block,
             eval_launch: eval::LaunchParams::default(),
             eval_live: None,
+            joint_test_start_deg: [0.0; 4],
+            joint_test_end_deg: [0.0; 4],
+            joint_test_error: None,
+            joint_test_last_duration_secs: None,
         };
     }
 }
