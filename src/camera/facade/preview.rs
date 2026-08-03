@@ -5,8 +5,8 @@ use crate::camera;
 use crate::camera::io::{
     FittedBgr, ShowBgrResult, WorldGridParams, apply_grid_key, arrow_delta, destroy_window,
     display_fit_bounds, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines,
-    draw_pixel_loupe, draw_world_grid, draw_world_velocity, fit_bgr_downscale, hstack_bgr,
-    show_bgr, unscale_xy,
+    draw_pixel_loupe, draw_world_grid, draw_world_track, draw_world_velocity, fit_bgr_downscale,
+    hstack_bgr, show_bgr, unscale_xy,
 };
 
 /// OpenCV 프리뷰/오버레이 공개 진입점.
@@ -88,6 +88,16 @@ impl Preview {
         grid: &WorldGridParams,
     ) -> opencv::Result<()> {
         return draw_world_grid(img, params, *grid);
+    }
+
+    pub fn draw_world_track(
+        img: &mut opencv::core::Mat,
+        params: &camera::Params,
+        points: &[Point3],
+        color: opencv::core::Scalar,
+        thickness: i32,
+    ) -> opencv::Result<()> {
+        return draw_world_track(img, params, points, color, thickness);
     }
 
     pub fn apply_grid_key(grid: &mut WorldGridParams, key: i32) {

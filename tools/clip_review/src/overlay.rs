@@ -13,18 +13,10 @@
 //! 밑선을 한 겹 깔고 그 위에 그린다 — 배경이 무엇이든 경계가 선다.
 
 use anyhow::Result;
-use opencv::core::{Mat, Point, Scalar};
-use opencv::imgproc;
+use opencv::core::{Mat, Scalar};
 use opencv::prelude::*;
 use pingpong_bot::Point3;
 use pingpong_bot::camera::{self, Preview};
-
-/// 좌표 폭주 방지 — OpenCV에 넘기기 전 자른다.
-const DRAW_CLAMP_PX: f64 = 20_000.0;
-
-/// 밑선 — 배경이 밝든 어둡든 경계가 서게.
-const OUTLINE: Scalar = Scalar::new(0.0, 0.0, 0.0, 0.0);
-const OUTLINE_EXTRA_PX: i32 = 2;
 
 /// 실제 궤적, 지금까지 — 초록, 굵게.
 const ACTUAL_PAST: Scalar = Scalar::new(60.0, 255.0, 60.0, 0.0);
@@ -36,6 +28,8 @@ const ACTUAL_FUTURE: Scalar = Scalar::new(30.0, 110.0, 30.0, 0.0);
 const FILTERED: Scalar = Scalar::new(255.0, 200.0, 0.0, 0.0);
 /// 커밋 순간에 얼린 예측 — 자홍, 굵게. 초록과 보색이라 겹쳐도 갈린다.
 const COMMITTED: Scalar = Scalar::new(255.0, 0.0, 255.0, 0.0);
+/// 밑선 — 밝은 배경에서도 검출 원이 보이게.
+const OUTLINE: Scalar = Scalar::new(0.0, 0.0, 0.0, 0.0);
 /// 검출 픽셀 — 노랑. 선들과 다른 채널이라 안 묻힌다.
 const DETECTED: Scalar = Scalar::new(0.0, 255.0, 255.0, 0.0);
 /// EKF 추정 위치 재투영 — 흰 테두리 작은 원.
@@ -66,10 +60,10 @@ pub fn draw(
     let mut img = frame.try_clone()?;
 
     // 덜 중요한 것부터 — 겹치면 나중에 그린 게 위로 온다.
-    track(&mut img, params, tracks.actual_future, ACTUAL_FUTURE, 1)?;
-    track(&mut img, params, tracks.actual_past, ACTUAL_PAST, 3)?;
-    track(&mut img, params, tracks.filtered, FILTERED, 2)?;
-    track(&mut img, params, tracks.committed, COMMITTED, 3)?;
+    Preview::draw_world_track(&mut img, params, tracks.actual_future, ACTUAL_FUTURE, 1)?;
+    Preview::draw_world_track(&mut img, params, tracks.actual_past, ACTUAL_PAST, 3)?;
+    Preview::draw_world_track(&mut img, params, tracks.filtered, FILTERED, 2)?;
+    Preview::draw_world_track(&mut img, params, tracks.committed, COMMITTED, 3)?;
 
     if let Some(point) = ekf
         && let Some(pixel) = params.project_world_unclipped(point)
@@ -84,55 +78,4 @@ pub fn draw(
     Preview::draw_debug_lines(&mut img, hud, EKF)?;
     Preview::draw_cam_label(&mut img, label, EKF)?;
     return Ok(img);
-}
-
-/// 검은 밑선을 깔고 그 위에 색을 얹는다 — 배경 밝기와 무관하게 읽힌다.
-fn track(
-    img: &mut Mat,
-    params: &camera::Params,
-    points: &[Point3],
-    color: Scalar,
-    thickness: i32,
-) -> Result<()> {
-    let projected = project_all(params, points);
-    for (from, to) in &projected {
-        imgproc::line(
-            img,
-            *from,
-            *to,
-            OUTLINE,
-            thickness + OUTLINE_EXTRA_PX,
-            imgproc::LINE_AA,
-            0,
-        )?;
-    }
-    for (from, to) in &projected {
-        imgproc::line(img, *from, *to, color, thickness, imgproc::LINE_AA, 0)?;
-    }
-    return Ok(());
-}
-
-/// 이어 그릴 선분 목록. 카메라 뒤로 넘어간 점에서 끊는다.
-fn project_all(params: &camera::Params, points: &[Point3]) -> Vec<(Point, Point)> {
-    let mut segments = Vec::new();
-    let mut previous: Option<Point> = None;
-    for point in points {
-        let Some(pixel) = params.project_world_unclipped(*point) else {
-            previous = None;
-            continue;
-        };
-        let current = pt(pixel.x, pixel.y);
-        if let Some(prev) = previous {
-            segments.push((prev, current));
-        }
-        previous = Some(current);
-    }
-    return segments;
-}
-
-fn pt(x: f64, y: f64) -> Point {
-    return Point::new(
-        x.clamp(-DRAW_CLAMP_PX, DRAW_CLAMP_PX) as i32,
-        y.clamp(-DRAW_CLAMP_PX, DRAW_CLAMP_PX) as i32,
-    );
 }

@@ -7,6 +7,7 @@ mod preview_action;
 mod show_bgr_result;
 mod text_block;
 mod world_grid_params;
+mod world_track;
 
 pub use fitted_bgr::{FittedBgr, fit_bgr_downscale};
 pub use ops::{draw_cam_label, draw_circle_px, draw_world_velocity, hstack_bgr, unscale_xy};
@@ -17,3 +18,4 @@ pub use preview_action::PreviewAction;
 pub use show_bgr_result::{ShowBgrResult, destroy_window, display_fit_bounds, show_bgr};
 pub use text_block::{draw_debug_lines, draw_help_lines};
 pub use world_grid_params::{WorldGridParams, apply_grid_key, draw_world_grid};
+pub use world_track::draw_world_track;
