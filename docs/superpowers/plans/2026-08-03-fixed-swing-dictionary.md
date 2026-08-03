@@ -30,6 +30,7 @@
 - Modify `src/sim/session/session.rs` — sync the new toggle into `SimWorld` each physics tick.
 - Modify `src/sim/physics/world.rs` — add the field/setter and `try_fixed_swing_dictionary`, wired into `try_auto_swing`.
 - Modify `src/sim/gui/viewer/panel_ui_state.rs`, `src/sim/gui/viewer/panel.rs` — GUI checkbox next to the existing "Bang-bang swing (debug)" toggle.
+- **Task 3b (correction, inserted after live-GUI testing exposed a design defect):** modify `src/robot/motion/fixed_swing.rs`/`planner.rs`/`mod.rs`, `src/sim/physics/world.rs`, `src/sim/session/controls.rs`/`session.rs`, `src/sim/gui/viewer/panel_ui_state.rs`/`panel.rs` again — replace "gate on the swing's full duration" with "gate on an assumed impact instant partway through the swing" (`ImpactTimeStrategy::{Midpoint, PeakRacketSpeed}`), with a live GUI selector to compare both.
 - Create `src/real/fixed_swing_worker.rs` — real-hardware control worker for this mode (parallel to, not a rewrite of, `control_worker.rs`).
 - Modify `src/real/mod.rs` — register the new worker module.
 - Modify `src/real/options.rs`, `src/cli/args.rs`, `src/real/run.rs` — `--fixed-swing-dictionary` flag, threaded through to pick which worker `run()` spawns.
@@ -605,6 +606,423 @@ git commit -m "feat(sim): add GUI toggle for the fixed swing dictionary mode"
 
 ---
 
+### Task 3b: Impact-time-aware swing timing (correction — hit mid-swing, not end-of-swing)
+
+**Why this task exists:** Tasks 1-2's `should_start_fixed_swing(time_to_impact_secs, swing_duration_secs)` compared the ball's remaining flight time against the *entire* swing's duration, implicitly treating "the swing finishes" as "the racket meets the ball." That's wrong: the racket sweeps continuously from the start pose to the end pose, and the ball must be met *during* that sweep, not at its end. Live-GUI testing during Task 3 confirmed the practical symptom: for `defaults::robot()` and the default sim shot, `plan_fixed_swing`'s duration (0.5297s) exceeded even the most generous available lead time (0.517s, the y=0 hit-plane) — so the old "start when `time_to_impact_secs <= duration_secs`" condition was already true on the very first tick after launch, and the swing still finished too late to make contact.
+
+**Fix:** introduce an explicit "assumed impact instant within the swing" (`impact_time_secs`, `0 < impact_time_secs < duration_secs`) and gate `should_start_fixed_swing` on that instead of the full duration. Two selectable strategies for computing it (the user wants to compare both live):
+- **Midpoint** — `duration_secs * 0.5`. Trivial, no FK evaluation.
+- **PeakRacketSpeed** — the elapsed time within the swing where the racket center's Cartesian speed (via forward-kinematics finite difference over the fixed joint trajectory) is highest — a common "this is where the swing is moving fastest, and fastest predictably reproducible motion" heuristic.
+
+Because the racket's Cartesian *velocity profile* over the fixed START→END joint trajectory does not depend on rail x (the rail is held fixed during the swing; rail_x only translates the racket's position, not its velocity-over-time shape), both strategies can be computed once per planned trajectory and don't need to be recomputed per candidate rail position.
+
+`should_start_fixed_swing`'s function body is unchanged — only what callers pass as its second argument changes (from `trajectory.duration_secs` to the newly computed `impact_time_secs`).
+
+**Files:**
+- Modify: `src/robot/motion/fixed_swing.rs` — add `ImpactTimeStrategy`, `DEFAULT_IMPACT_TIME_STRATEGY`, `fixed_swing_impact_time_secs`; update `should_start_fixed_swing`'s doc comment (no body change).
+- Modify: `src/robot/motion/planner.rs` — expose `Planner::fixed_swing_impact_time_secs`.
+- Modify: `src/sim/physics/world.rs` — `try_fixed_swing_dictionary` computes and uses the impact time instead of `trajectory.duration_secs`; add a `fixed_swing_impact_strategy: ImpactTimeStrategy` field + setter/getter, mirroring the existing `use_fixed_swing_dictionary` field.
+- Modify: `src/sim/session/controls.rs` — add `fixed_swing_impact_strategy: ImpactTimeStrategy` to `SimRuntimeControls`.
+- Modify: `src/sim/session/session.rs` — sync the new field into `SimWorld` each physics tick, alongside `use_fixed_swing_dictionary`.
+- Modify: `src/sim/gui/viewer/panel_ui_state.rs`, `src/sim/gui/viewer/panel.rs` — a small selector (e.g. two `ui.radio_value` buttons) next to the "Fixed swing dictionary" checkbox so the strategy can be flipped live for comparison.
+
+**Interfaces:**
+- Consumes: `Trajectory` (`src/robot/motion/trajectory.rs`, unchanged — reads `.duration_secs` and `.sample_at(t)`), `Arm::forward_kinematics_with_rail` (unchanged).
+- Produces: `Planner::fixed_swing_impact_time_secs(arm: &Arm, rail_x: f64, trajectory: &Trajectory, strategy: motion::ImpactTimeStrategy) -> f64`, consumed by Task 2's already-merged `try_fixed_swing_dictionary` (modified here) and by Task 4 (not yet started — its brief already reflects this).
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `src/robot/motion/fixed_swing.rs`'s existing `#[cfg(test)] mod tests` block:
+
+```rust
+    #[test]
+    fn midpoint_strategy_is_exactly_half_duration() {
+        let robot = crate::defaults::robot().expect("robot");
+        let rail_x = robot.arm.rail.expect("rail").default_x();
+        let trajectory = plan_fixed_swing(&robot.arm, rail_x).expect("fixed swing plan");
+        let impact_time = fixed_swing_impact_time_secs(
+            &robot.arm,
+            rail_x,
+            &trajectory,
+            ImpactTimeStrategy::Midpoint,
+        );
+        assert!((impact_time - trajectory.duration_secs * 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn peak_speed_strategy_picks_a_time_strictly_inside_the_swing() {
+        let robot = crate::defaults::robot().expect("robot");
+        let rail_x = robot.arm.rail.expect("rail").default_x();
+        let trajectory = plan_fixed_swing(&robot.arm, rail_x).expect("fixed swing plan");
+        let impact_time = fixed_swing_impact_time_secs(
+            &robot.arm,
+            rail_x,
+            &trajectory,
+            ImpactTimeStrategy::PeakRacketSpeed,
+        );
+        assert!(impact_time > 0.0, "impact_time={impact_time}");
+        assert!(
+            impact_time < trajectory.duration_secs,
+            "impact_time={impact_time} duration={}",
+            trajectory.duration_secs
+        );
+    }
+
+    #[test]
+    fn should_start_fixed_swing_now_gates_on_impact_time_not_full_duration() {
+        // 회귀 방지: `duration_secs`(전체 소요)가 아니라 그보다 짧은
+        // `impact_time_secs`(스윙 내부 임팩트 시각)를 기준으로 삼아야, 스윙이
+        // "끝나는" 시점이 아니라 "공을 맞히는" 시점에 남은 시간을 맞춘다.
+        let duration_secs = 0.53;
+        let impact_time_secs = duration_secs * 0.5;
+        // 남은 시간이 절반(임팩트 시각)보다 크면 아직 시작하면 안 된다 — 예전
+        // 로직(`duration_secs` 기준)이었다면 이 값에서 이미 시작했을 것이다.
+        assert!(!should_start_fixed_swing(0.45, impact_time_secs));
+        assert!(should_start_fixed_swing(impact_time_secs, impact_time_secs));
+        assert!(should_start_fixed_swing(0.10, impact_time_secs));
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cargo test -p pingpong-bot --lib fixed_swing 2>&1 | tail -40`
+Expected: compile error — `ImpactTimeStrategy`/`fixed_swing_impact_time_secs` don't exist yet.
+
+- [ ] **Step 3: Implement the impact-time functions**
+
+In `src/robot/motion/fixed_swing.rs`, add (near `should_start_fixed_swing`):
+
+```rust
+/// 고정 스윙 내부에서 라켓이 공과 만난다고 가정하는 시각을 고르는 전략.
+///
+/// 라켓은 START→END를 실시간으로 스윕하므로, 공은 그 스윕 **도중** 만나야
+/// 한다 — 스윙이 끝나는 순간(= END 자세 도달)을 임팩트로 보면 안 된다
+/// (2026-08-03 실측 회귀: 기본 슈터 샷에서 스윙 전체 소요 시간이 로봇
+/// 접수창의 어떤 평면에 대해서도 남은 비행 시간보다 길어, "지금 시작해도
+/// 이미 늦음"이 발사 첫 틱부터 참이었다).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImpactTimeStrategy {
+    /// 스윙 소요 시간의 정확히 절반.
+    Midpoint,
+    /// 라켓 중심의 순간 속력(FK 유한차분)이 최대가 되는 시각.
+    PeakRacketSpeed,
+}
+
+/// 두 전략을 비교 중이라 기본값은 더 단순하고 예측 가능한 쪽으로 둔다.
+pub const DEFAULT_IMPACT_TIME_STRATEGY: ImpactTimeStrategy = ImpactTimeStrategy::Midpoint;
+
+/// `strategy`에 따라 고정 스윙 내부의 가정 임팩트 시각 [s]을 고른다
+/// (`0 < 반환값 < trajectory.duration_secs`).
+///
+/// 레일은 스윙 도중 고정이라(`plan_fixed_swing`이 `rail_x`를 시작=끝으로 둔다)
+/// 라켓의 시간에 따른 **속도** 형태는 `rail_x`와 무관하다 — 위치만
+/// 평행이동한다. 그래서 이 계산은 궤적당 한 번만 하면 되고, 레일 위치가
+/// 바뀌어도 다시 스윕할 필요가 없다(다만 인터페이스는 `rail_x`를 그대로
+/// 받아 FK 위치를 실제로 구한다 — 속도만 rail_x 불변이라는 뜻).
+pub fn fixed_swing_impact_time_secs(
+    arm: &Arm,
+    rail_x: f64,
+    trajectory: &Trajectory,
+    strategy: ImpactTimeStrategy,
+) -> f64 {
+    return match strategy {
+        ImpactTimeStrategy::Midpoint => trajectory.duration_secs * 0.5,
+        ImpactTimeStrategy::PeakRacketSpeed => {
+            peak_racket_speed_time(arm, rail_x, trajectory)
+        }
+    };
+}
+
+/// 라켓 중심 속력이 최대인 시각을 유한차분으로 찾는다 — 균등 표본
+/// 중심차분, 표본 수는 정확도와 계산량의 실용적 절충.
+fn peak_racket_speed_time(arm: &Arm, rail_x: f64, trajectory: &Trajectory) -> f64 {
+    const SAMPLES: usize = 64;
+    let duration = trajectory.duration_secs;
+    if duration <= 0.0 {
+        return 0.0;
+    }
+    let step = duration / SAMPLES as f64;
+    let position_at = |t: f64| -> Option<nalgebra::Vector3<f64>> {
+        return arm
+            .forward_kinematics_with_rail(rail_x, &trajectory.sample_at(t))
+            .map(|pose| pose.position.coords);
+    };
+    let mut best_time = duration * 0.5;
+    let mut best_speed = -1.0_f64;
+    for index in 0..=SAMPLES {
+        let t = step * index as f64;
+        let before = (t - step * 0.5).max(0.0);
+        let after = (t + step * 0.5).min(duration);
+        let span = (after - before).max(1e-9);
+        if let (Some(p0), Some(p1)) = (position_at(before), position_at(after)) {
+            let speed = (p1 - p0).norm() / span;
+            if speed > best_speed {
+                best_speed = speed;
+                best_time = t;
+            }
+        }
+    }
+    return best_time;
+}
+```
+
+Update `should_start_fixed_swing`'s doc comment (function body unchanged) to:
+
+```rust
+/// 남은 시간이 스윙 **내부의 가정 임팩트 시각**([`fixed_swing_impact_time_secs`]) 이하가
+/// 되는 즉시 스윙을 시작해야 한다 — 스윙 전체 소요 시간이 아니다. 스윙은
+/// START→END를 실시간으로 스윕하므로, 공은 그 스윕 도중 만나야 한다.
+pub fn should_start_fixed_swing(time_to_impact_secs: f64, impact_time_secs: f64) -> bool {
+    return time_to_impact_secs.is_finite()
+        && time_to_impact_secs > defaults::MIN_TIME_TO_GO_SECS
+        && time_to_impact_secs <= impact_time_secs;
+}
+```
+
+In `src/robot/motion/mod.rs`, add `ImpactTimeStrategy`, `DEFAULT_IMPACT_TIME_STRATEGY`, `fixed_swing_impact_time_secs` to the `fixed_swing` re-export list.
+
+In `src/robot/motion/planner.rs`, add:
+
+```rust
+    /// [`super::fixed_swing::fixed_swing_impact_time_secs`].
+    pub fn fixed_swing_impact_time_secs(
+        arm: &Arm,
+        rail_x: f64,
+        trajectory: &Trajectory,
+        strategy: super::fixed_swing::ImpactTimeStrategy,
+    ) -> f64 {
+        return super::fixed_swing::fixed_swing_impact_time_secs(arm, rail_x, trajectory, strategy);
+    }
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo test -p pingpong-bot --lib fixed_swing 2>&1 | tail -40`
+Expected: all `fixed_swing` tests (the 4 from Task 1 + the 3 new ones) PASS.
+
+- [ ] **Step 5: Update the sim commit path to use impact time, not full duration**
+
+In `src/sim/physics/world.rs`, add a field next to `use_fixed_swing_dictionary` (added in Task 2):
+
+```rust
+    use_fixed_swing_dictionary: bool,
+    /// 고정 스윙 내부 임팩트 시각을 고르는 전략 — GUI에서 두 전략을 실시간
+    /// 비교할 수 있게 노출한다.
+    fixed_swing_impact_strategy: motion::ImpactTimeStrategy,
+```
+
+Initialize it in the constructor next to `use_fixed_swing_dictionary: false,`:
+
+```rust
+            use_fixed_swing_dictionary: false,
+            fixed_swing_impact_strategy: motion::DEFAULT_IMPACT_TIME_STRATEGY,
+```
+
+Add setter/getter next to `set_use_fixed_swing_dictionary`/`use_fixed_swing_dictionary`:
+
+```rust
+    pub fn set_fixed_swing_impact_strategy(&mut self, strategy: motion::ImpactTimeStrategy) {
+        self.fixed_swing_impact_strategy = strategy;
+    }
+
+    pub fn fixed_swing_impact_strategy(&self) -> motion::ImpactTimeStrategy {
+        return self.fixed_swing_impact_strategy;
+    }
+```
+
+In `try_fixed_swing_dictionary` (added in Task 2), replace the `should_start_fixed_swing` call:
+
+```rust
+        let Ok(trajectory) = motion::Planner::plan_fixed_swing(&self.arm, target_rail_x) else {
+            return;
+        };
+        let impact_time = motion::Planner::fixed_swing_impact_time_secs(
+            &self.arm,
+            target_rail_x,
+            &trajectory,
+            self.fixed_swing_impact_strategy,
+        );
+        if !motion::should_start_fixed_swing(prediction.time_to_impact_secs, impact_time) {
+            return;
+        }
+```
+
+- [ ] **Step 6: Write the failing sim-level regression test**
+
+Add to `src/sim/physics/world.rs`'s test module, next to `fixed_swing_dictionary_commits_the_exact_dictionary_poses`:
+
+```rust
+    /// 회귀 방지: 스윙은 남은 비행시간이 스윙 **전체 소요 시간**만큼 남았을 때가
+    /// 아니라, 스윙 내부 임팩트 시각(절반)만큼 남았을 때 시작해야 한다 — 즉
+    /// 발사 직후 곧바로 커밋하면 안 되고, 공이 접근해 tti가 그 절반 수준으로
+    /// 줄어들 때까지 실제로 기다려야 한다.
+    #[test]
+    fn fixed_swing_dictionary_waits_for_the_midpoint_not_the_full_duration() {
+        let robot = crate::defaults::robot().expect("robot");
+        let mut world = SimWorld::new(robot);
+        world.set_use_ground_truth(true);
+        world.set_use_fixed_swing_dictionary(true);
+        world.set_fixed_swing_impact_strategy(crate::robot::motion::ImpactTimeStrategy::Midpoint);
+
+        world.shoot_ball(&launch::Settings::default());
+        // 발사 바로 다음 스텝에서는 아직 커밋되지 않아야 한다 — 예전(전체
+        // 소요 시간 기준) 로직이었다면 이 시점에 이미 커밋했을 것이다.
+        world.step(1.0 / 1000.0, None);
+        assert!(
+            world.robot.active_trajectory().is_none(),
+            "발사 즉시 커밋되면 안 된다 — 스윙 절반 시각만큼 남기고 시작해야 한다"
+        );
+
+        let dt = 1.0 / 1000.0;
+        let mut committed = false;
+        for _ in 0..4000 {
+            world.step(dt, None);
+            if world.robot.active_trajectory().is_some() {
+                committed = true;
+                break;
+            }
+        }
+        assert!(committed, "결국은 커밋돼야 한다");
+    }
+```
+
+- [ ] **Step 7: Run test to verify it fails, then passes after Step 5's fix**
+
+Run: `cargo test -p pingpong-bot --lib fixed_swing_dictionary_waits_for_the_midpoint_not_the_full_duration -- --nocapture 2>&1 | tail -30`
+
+If you're implementing Steps 5 and 6 in order (recommended), this test should already pass once Step 5 is done — if so, that's fine; confirm it passes and move on. If you write this test before Step 5's change, expect it to fail first (proving the old behavior was indeed "commits on the very first tick"), then pass after Step 5.
+
+- [ ] **Step 8: Sim GUI comparison selector**
+
+In `src/sim/session/controls.rs`, add to `SimRuntimeControls`:
+
+```rust
+    /// 고정 스윙 딕셔너리의 내부 임팩트 시각 전략 ("Fixed swing dictionary" 옆
+    /// 선택기). 공이 주차된 동안만 반영해도 되지만, 이 값은 위험이 없어
+    /// 비행 중에도 즉시 반영한다.
+    pub fixed_swing_impact_strategy: crate::robot::motion::ImpactTimeStrategy,
+```
+
+and in its `Default`:
+
+```rust
+            fixed_swing_impact_strategy: crate::robot::motion::DEFAULT_IMPACT_TIME_STRATEGY,
+```
+
+In `src/sim/session/session.rs`, extend the same tuple/sync block Task 2 added (alongside `use_fixed_swing_dictionary`) to also read and apply `fixed_swing_impact_strategy`:
+
+```rust
+                    let (
+                        shoot,
+                        park,
+                        shooter,
+                        use_bang_bang_swing,
+                        use_fixed_swing_dictionary,
+                        fixed_swing_impact_strategy,
+                        rail_frame,
+                        intercept,
+                    ) = {
+                        let mut ctrl = physics_controls.lock().expect("sim controls");
+                        let shoot = ctrl.shoot_requested;
+                        let park = ctrl.park_requested;
+                        ctrl.shoot_requested = false;
+                        ctrl.park_requested = false;
+                        (
+                            shoot,
+                            park,
+                            ctrl.shooter.clone(),
+                            ctrl.use_bang_bang_swing,
+                            ctrl.use_fixed_swing_dictionary,
+                            ctrl.fixed_swing_impact_strategy,
+                            ctrl.rail_frame,
+                            ctrl.intercept,
+                        )
+                    };
+                    let mut w = physics_world.lock().expect("sim 월드");
+                    w.set_use_bang_bang_swing(use_bang_bang_swing);
+                    w.set_use_fixed_swing_dictionary(use_fixed_swing_dictionary);
+                    w.set_fixed_swing_impact_strategy(fixed_swing_impact_strategy);
+```
+
+In `src/sim/gui/viewer/panel_ui_state.rs`, add next to `use_fixed_swing_dictionary`:
+
+```rust
+    pub fixed_swing_impact_strategy: crate::robot::motion::ImpactTimeStrategy,
+```
+
+and in its constructor-from-controls:
+
+```rust
+            fixed_swing_impact_strategy: controls.fixed_swing_impact_strategy,
+```
+
+In `src/sim/gui/viewer/panel.rs`, directly below the "Fixed swing dictionary" checkbox added in Task 3, add a small selector:
+
+```rust
+    ui.horizontal(|ui| {
+        ui.label("임팩트 시각:");
+        ui.radio_value(
+            &mut ui_state.fixed_swing_impact_strategy,
+            crate::robot::motion::ImpactTimeStrategy::Midpoint,
+            "중간 시점",
+        );
+        ui.radio_value(
+            &mut ui_state.fixed_swing_impact_strategy,
+            crate::robot::motion::ImpactTimeStrategy::PeakRacketSpeed,
+            "최대 속도 시점",
+        );
+    });
+```
+
+and in `draw()`, next to `ctrl.use_fixed_swing_dictionary = ui_state.use_fixed_swing_dictionary;`:
+
+```rust
+        ctrl.fixed_swing_impact_strategy = ui_state.fixed_swing_impact_strategy;
+```
+
+- [ ] **Step 9: Build and run the full test suite**
+
+Run: `cargo build -p pingpong-bot 2>&1 | tail -30`
+Expected: clean build.
+
+Run: `cargo test -p pingpong-bot --lib 2>&1 | tail -20`
+Expected: the same 7 pre-existing failures from this branch's base commit (confirmed pre-existing, unrelated to this feature — see prior tasks' reports), plus all `fixed_swing`-related tests passing, no new failures.
+
+- [ ] **Step 10: Manual GUI comparison (best-effort, report what you can and cannot verify)**
+
+Run the sim GUI (check `run-sim-macos.sh` or the project's existing sim launch invocation). Toggle "Fixed swing dictionary" on, try both "중간 시점" and "최대 속도 시점" with the default shooter settings, and observe:
+1. With "중간 시점" (Midpoint): does the swing now visibly wait after launch before starting (rather than starting immediately), and does contact look closer to correct?
+2. With "최대 속도 시점" (PeakRacketSpeed): same questions.
+
+As in Task 3, you cannot click/interact with the native window yourself — build clean, launch briefly to confirm no panic, and report plainly that full visual comparison needs the user's own hands-on check.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add src/robot/motion/fixed_swing.rs src/robot/motion/mod.rs src/robot/motion/planner.rs \
+        src/sim/physics/world.rs src/sim/session/controls.rs src/sim/session/session.rs \
+        src/sim/gui/viewer/panel_ui_state.rs src/sim/gui/viewer/panel.rs
+git commit -m "$(cat <<'EOF'
+fix(robot): hit the ball mid-swing, not at the end of the swing
+
+should_start_fixed_swing was gated on the swing's full duration, which
+implicitly treated "the swing finishes" as "the racket meets the ball."
+The racket actually sweeps continuously from the start pose to the end
+pose, so impact should happen partway through, not at the end. Add
+ImpactTimeStrategy (Midpoint, PeakRacketSpeed via FK finite-difference)
+and gate on that instead, with a live GUI selector to compare both.
+
+Confirmed via direct measurement before this fix: the default sim shot's
+lead time to every candidate hit-plane (0.39-0.52s) was already shorter
+than the swing's full duration (0.53s), so the old gate fired on the
+very first physics tick after launch — exactly the "starts swinging the
+instant the ball is launched" symptom reported from the live GUI.
+EOF
+)"
+```
+
+---
+
 ### Task 4: Real-hardware control worker (no IK, no `PositionController`)
 
 **Files:**
@@ -612,7 +1030,7 @@ git commit -m "feat(sim): add GUI toggle for the fixed swing dictionary mode"
 - Modify: `src/real/mod.rs`
 
 **Interfaces:**
-- Consumes: `CommitRequest { trajectory: BallTrajectory, stage, ball_x, ball_y, ball_vx, raw_ball_x, at }` (`src/real/commit_request.rs`, unchanged), `Hardware` trait (`command`, `read_pose`, `is_busy`, `cancel`, `command_initial_pose`; `src/hardware/hardware.rs`, unchanged), `robot::control::{HitTargetSelector, HitTarget}` (`src/robot/control.rs` — geometry-only interpolation, **not** `PositionController`, no IK), `Planner::{plan_fixed_swing, fixed_swing_start_joints}`, `motion::fixed_swing_rail_target`, `motion::should_start_fixed_swing` (Task 1), `ShotEvent`/`ControlStatus`/`Shutdown`/`SimUpdate`/`PoseMsg`/`SwingMsg` (`src/real/mod.rs` re-exports, unchanged).
+- Consumes: `CommitRequest { trajectory: BallTrajectory, stage, ball_x, ball_y, ball_vx, raw_ball_x, at }` (`src/real/commit_request.rs`, unchanged), `Hardware` trait (`command`, `read_pose`, `is_busy`, `cancel`, `command_initial_pose`; `src/hardware/hardware.rs`, unchanged), `robot::control::{HitTargetSelector, HitTarget}` (`src/robot/control.rs` — geometry-only interpolation, **not** `PositionController`, no IK), `Planner::{plan_fixed_swing, fixed_swing_start_joints, fixed_swing_impact_time_secs}` (the last one added in Task 3b), `motion::{fixed_swing_rail_target, should_start_fixed_swing, DEFAULT_IMPACT_TIME_STRATEGY}` (Task 1 + Task 3b — gate on `fixed_swing_impact_time_secs`'s result, never on `trajectory.duration_secs` directly), `ShotEvent`/`ControlStatus`/`Shutdown`/`SimUpdate`/`PoseMsg`/`SwingMsg` (`src/real/mod.rs` re-exports, unchanged).
 - Produces: `pub fn spawn(hardware, arm, intercept, home, rx, status_tx, sim_tx, event_tx, shutdown) -> JoinHandle<()>` — **same signature as `control_worker::spawn`** so `real/run.rs` (Task 5) can pick either worker with a plain `if`/`else` and no changes to the channel/event contract.
 
 - [ ] **Step 1: Write the failing test**
@@ -787,10 +1205,17 @@ pub fn spawn(
             };
             let remaining_secs =
                 target.time_secs - request.trajectory.reference_time.elapsed().as_secs_f64();
-            if !pingpong_bot::robot::motion::should_start_fixed_swing(
-                remaining_secs,
-                trajectory.duration_secs,
-            ) {
+            // Task 3b: 스윙 전체 소요 시간이 아니라 스윙 내부 임팩트 시각을
+            // 기준으로 삼는다 — 라켓은 START→END를 스윕하는 도중 공을 만나야
+            // 하고, 스윙이 "끝나는" 시점을 임팩트로 보면 안 된다.
+            let impact_time = Planner::fixed_swing_impact_time_secs(
+                &arm,
+                rail_x,
+                &trajectory,
+                pingpong_bot::robot::motion::DEFAULT_IMPACT_TIME_STRATEGY,
+            );
+            if !pingpong_bot::robot::motion::should_start_fixed_swing(remaining_secs, impact_time)
+            {
                 continue;
             }
 
