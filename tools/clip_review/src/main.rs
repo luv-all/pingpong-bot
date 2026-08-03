@@ -85,18 +85,20 @@ struct Args {
 /// 클립 전부를 훑어 그림과 표를 남긴다. 창은 안 띄운다.
 fn run_all(out: &std::path::Path) -> Result<()> {
     std::fs::create_dir_all(out).with_context(|| format!("mkdir {}", out.display()))?;
+    // 폴더를 훑지 않는다. 카메라를 옮긴 뒤로 옛 클립은 지금 캘리브와 안 맞아서, 같이 돌리면
+    // 지표가 조용히 거짓말을 한다. 하나만 보려면 `--clip` 으로 명시하면 된다.
     let root = std::path::Path::new("data/clips");
-    let mut names: Vec<String> = std::fs::read_dir(root)
-        .with_context(|| format!("read_dir {}", root.display()))?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            // 두 avi 가 다 있어야 클립이다.
-            entry.path().join("left.avi").is_file().then_some(())?;
-            entry.path().join("right.avi").is_file().then_some(())?;
-            return entry.file_name().into_string().ok();
-        })
+    let names: Vec<String> = defaults::CURRENT_RIG_CLIPS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .filter(|name| root.join(name).join("left.avi").is_file())
         .collect();
-    names.sort();
+    if names.is_empty() {
+        bail!(
+            "지금 리그 클립이 하나도 없다 ({:?}) — 카메라를 옮긴 뒤로 찍은 클립이 필요하다",
+            defaults::CURRENT_RIG_CLIPS
+        );
+    }
 
     let mut lines = vec![report::summary_header()];
     println!("{}", lines[0]);

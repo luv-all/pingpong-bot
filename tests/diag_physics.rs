@@ -41,9 +41,8 @@ use pingpong_bot::vision::Vision;
 use pingpong_bot::vision::triggers::PlaneCrossing;
 use pingpong_bot::{Point3, Vector3};
 
-const CLIPS: [&str; 9] = [
-    "fly_01", "fly_02", "fly_03", "fly_04", "fly_05", "fly_06", "fly_07", "fly_08", "fly_09",
-];
+/// 지금 리그로 찍은 클립만 쓴다 — 카메라를 옮겼으므로 옛 클립은 캘리브와 안 맞는다.
+use pingpong_bot::defaults::CURRENT_RIG_CLIPS as CLIPS;
 const DT: f64 = 0.001;
 /// 공기 밀도 [kg/m³].
 const AIR_DENSITY: f64 = 1.2;

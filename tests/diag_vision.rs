@@ -16,7 +16,7 @@ use pingpong_bot::vision::triggers::PlaneCrossing;
 use pingpong_bot::vision::{Trajectory, Vision};
 
 fn clip() -> String {
-    return std::env::var("CLIP").unwrap_or_else(|_| "fly_04".to_owned());
+    return std::env::var("CLIP").unwrap_or_else(|_| defaults::CURRENT_RIG_CLIPS[0].to_owned());
 }
 
 fn meas_fps(dir: &Path) -> f64 {
@@ -49,7 +49,8 @@ fn vision_pipeline_on_a_clip() {
     let mut committed: Option<(usize, Trajectory)> = None;
     let mut last: Option<Trajectory> = None;
     let mut detected = [0usize; 2];
-    // clip-review 기준 fly_04 비행 구간. 이 밖의 검출은 오검출이다.
+    // TODO(측정): 클립마다 비행 구간이 다르다. fly_04 시절 값이라 지금 클립엔 안 맞는다 —
+    // 구간 밖 오검출 수치는 그때까지 못 믿는다. clip-review 로 구간을 확인해 갱신할 것.
     let flight = 380..=460;
     let mut in_flight = [0usize; 2];
     let (mut accepted, mut rejected, mut idle, mut seeded) = (0, 0, 0, 0);

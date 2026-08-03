@@ -16,9 +16,8 @@ use pingpong_bot::vision::triggers::{Any, PlaneCrossing, SigmaThreshold};
 use pingpong_bot::vision::{State, Track, Trigger, Vision};
 use pingpong_bot::{Point3, Vector3, defaults};
 
-const CLIPS: [&str; 9] = [
-    "fly_01", "fly_02", "fly_03", "fly_04", "fly_05", "fly_06", "fly_07", "fly_08", "fly_09",
-];
+/// 지금 리그로 찍은 클립만 쓴다 — 카메라를 옮겼으므로 옛 클립은 캘리브와 안 맞는다.
+use pingpong_bot::defaults::CURRENT_RIG_CLIPS as CLIPS;
 
 fn net() -> f64 {
     return table::LENGTH_Y * 0.5;

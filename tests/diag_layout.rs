@@ -248,3 +248,86 @@ fn compare_camera_layouts() {
     }
     println!("(σ 는 x y z 순. 한 프레임 두 시선만 쓴 값 — 배치끼리 견주는 용도다)");
 }
+
+/// 커밋된 캘리브가 **접수 창**을 보나.
+///
+/// 테이블 전체 평균이 좋아도 로봇이 치는 자리가 사각이면 소용없다. 두 대가 같이 보는
+/// 칸에서만 삼각측량이 되고, 한 대만 보는 칸은 깊이가 안 잡힌다.
+#[test]
+#[ignore = "커밋된 캘리브 확인: cargo test --release --test diag_layout -- --ignored --nocapture"]
+fn does_the_committed_rig_cover_the_intercept_window() {
+    use pingpong_bot::robot::motion::InterceptWindow;
+
+    let calibration = Calibration::load_json(&defaults::calibration_path()).expect("calibration");
+    let planes = InterceptWindow::default().hit_planes();
+    println!(
+        "접수 창 y {:.2}~{:.2}, 타점 높이 {:.2}~{:.2} m",
+        planes.first().map_or(0.0, |p| p.y),
+        planes.last().map_or(0.0, |p| p.y),
+        table::SURFACE_Z + 0.05,
+        table::SURFACE_Z + 0.55
+    );
+    println!(
+        "{:<8} {:>7} {:>7} {:>7} {:>8}",
+        "y", "σx", "σy", "σz", "보이는 칸"
+    );
+    for plane in planes {
+        let (mut sum, mut ok, mut total) = (V3::zeros(), 0usize, 0usize);
+        for i in 0..=8 {
+            for k in 0..=2 {
+                total += 1;
+                let point = Point3::new(
+                    table::WIDTH_X * i as f64 / 8.0,
+                    plane.y,
+                    table::SURFACE_Z + 0.05 + 0.25 * k as f64,
+                );
+                if let Some(sigma) = sigma_at(&calibration.cameras, point) {
+                    sum += sigma;
+                    ok += 1;
+                }
+            }
+        }
+        if ok == 0 {
+            println!(
+                "{:<8.2} {:>25} {:>8}",
+                plane.y,
+                "두 대가 같이 보는 칸 없음",
+                format!("0/{total}")
+            );
+            continue;
+        }
+        let mean = sum / ok as f64;
+        println!(
+            "{:<8.2} {:>6.0}mm {:>6.0}mm {:>6.0}mm {:>8}",
+            plane.y,
+            mean.x * 1000.0,
+            mean.y * 1000.0,
+            mean.z * 1000.0,
+            format!("{ok}/{total}")
+        );
+    }
+
+    // 사각이 어디인지 — 카메라를 어느 쪽으로 돌릴지가 여기서 갈린다.
+    println!("\n접수 창 한가운데(y=0.20)에서 칸별로 몇 대가 보나:");
+    println!("        {:>26}", "x [m]");
+    print!("{:<8}", "z [m]");
+    for i in 0..=8 {
+        print!("{:>5.2}", table::WIDTH_X * i as f64 / 8.0);
+    }
+    println!();
+    for k in (0..=2).rev() {
+        let z = table::SURFACE_Z + 0.05 + 0.25 * k as f64;
+        print!("{z:<8.2}");
+        for i in 0..=8 {
+            let point = Point3::new(table::WIDTH_X * i as f64 / 8.0, 0.20, z);
+            let seen = calibration
+                .cameras
+                .iter()
+                .filter(|params| params.project_world(point).is_some())
+                .count();
+            print!("{seen:>5}");
+        }
+        println!();
+    }
+    println!("2 = 삼각측량 가능, 1 이하 = 깊이 안 잡힘");
+}

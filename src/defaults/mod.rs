@@ -40,12 +40,12 @@ pub mod vision;
 
 pub use calib::{
     CHARUCO_MARKER_LENGTH_M, CHARUCO_SQUARE_LENGTH_M, CHARUCO_SQUARES_X, CHARUCO_SQUARES_Y,
-    DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME, DEFAULT_CLIPS_DIR,
-    DEFAULT_COLORMASK_PATH, DEFAULT_DATA_DIR, DEFAULT_FOV_Y_DEG, DEFAULT_STEREO_CAM_ROLES,
-    DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT,
-    DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH, LEFT_CAMERA_ID, LEFT_DEVICE, MAX_REPROJ_RMSE_PX,
-    MIN_CHARUCO_CORNERS, RIGHT_CAMERA_ID, RIGHT_DEVICE, calibration_path, calibration_pending_path,
-    colormask_path, ensure_parent_dir,
+    CURRENT_RIG_CLIPS, DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME,
+    DEFAULT_CLIPS_DIR, DEFAULT_COLORMASK_PATH, DEFAULT_DATA_DIR, DEFAULT_FOV_Y_DEG,
+    DEFAULT_STEREO_CAM_ROLES, DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
+    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH, LEFT_CAMERA_ID,
+    LEFT_DEVICE, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, RIGHT_CAMERA_ID, RIGHT_DEVICE,
+    calibration_path, calibration_pending_path, colormask_path, ensure_parent_dir,
 };
 pub use control::ControlParams;
 pub use dxl_limits::{
@@ -103,8 +103,6 @@ mod tests {
         ImpactParams::default().validate().unwrap();
         EstimatorParams::default().validate().unwrap();
         InterceptWindow::default().validate().unwrap();
-        colormask_for(camera::Id(0)).unwrap().validate().unwrap();
-        colormask_for(camera::Id(1)).unwrap().validate().unwrap();
         DynamixelConfig::default().validate().unwrap();
         RailConfig::default().validate().unwrap();
         let c = ControlParams::default();
@@ -113,6 +111,20 @@ mod tests {
         assert!((c.max_joint_torques[2] - 1.25).abs() < 1e-12);
         assert!((c.max_joint_torques[3] - 1.25).abs() < 1e-12);
         assert!((ImpactParams::default().max_return_speed - 6.0).abs() < 1e-12);
+    }
+
+    /// 커밋된 색 마스크가 읽히고 유효한가.
+    ///
+    /// `presets_validate` 와 나눠 둔다 — 이건 코드가 아니라 **리그 산출물**을 검사하므로,
+    /// 카메라를 옮기면 정당하게 빨개진다. 그때 `tune-colormask` 로 다시 잡으라는 신호다.
+    #[test]
+    fn committed_colormask_is_valid() {
+        for id in [camera::Id(0), camera::Id(1)] {
+            let params = colormask_for(id).unwrap_or_else(|error| {
+                panic!("cam{}: {error:#} — tune-colormask 로 다시 잡을 것", id.0)
+            });
+            params.validate().unwrap();
+        }
     }
 
     #[test]
