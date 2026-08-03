@@ -184,6 +184,14 @@ pub fn aero_accel(
 }
 
 /// 바운스 시 \(v\)는 커널 SSOT; \(\omega\)는 유지(스핀 확장 후속).
+/// 공 중심이 테이블 상판 위에 있나. 가장자리는 공 반지름만큼 봐준다.
+fn over_table(p: Vector3<f64>) -> bool {
+    return p.x >= -ball::RADIUS
+        && p.x <= table::WIDTH_X + ball::RADIUS
+        && p.y >= -ball::RADIUS
+        && p.y <= table::LENGTH_Y + ball::RADIUS;
+}
+
 pub fn semi_implicit_euler(
     pos: Vector3<f64>,
     vel: Vector3<f64>,
@@ -195,7 +203,10 @@ pub fn semi_implicit_euler(
     let next_vel = vel + a * dt;
     let next_pos = pos + next_vel * dt;
     let floor_z = table::SURFACE_Z + ball::RADIUS;
-    if next_pos.z <= floor_z && next_vel.z < 0.0 {
+    // 테이블 **바닥면 위**에서만 튄다. 이 검사가 없으면 예측이 허공에서 계속 튀면서
+    // 테이블 밖으로 몇 미터를 더 날아간다 — Rapier 쪽 콜라이더는 유한한 직육면체라
+    // 그쪽과도 어긋난다.
+    if next_pos.z <= floor_z && next_vel.z < 0.0 && over_table(next_pos) {
         let (bounced_v, bounced_w) =
             crate::estimator::bounce::table_bounce(next_vel, omega, physics);
         return (
@@ -212,6 +223,32 @@ mod tests {
     use super::*;
     use crate::constants::table;
     use crate::defaults;
+
+    /// 테이블 밖에서는 안 튄다. 이게 없으면 예측이 허공에서 계속 튀면서 몇 미터를 더 간다.
+    #[test]
+    fn the_ball_only_bounces_over_the_table() {
+        let physics = defaults::PhysicsParams::default();
+        let below = table::SURFACE_Z + ball::RADIUS - 0.01;
+        let falling = Vector3::new(0.0, 0.0, -3.0);
+
+        let over = Vector3::new(table::WIDTH_X * 0.5, table::LENGTH_Y * 0.5, below);
+        let (_, v, _) = semi_implicit_euler(over, falling, Vector3::zeros(), 0.001, &physics);
+        assert!(v.z > 0.0, "테이블 위에서는 튀어야 한다: vz={}", v.z);
+
+        // 로봇 뒤(y<0)와 옆(x>WIDTH_X) — Rapier 콜라이더도 여기 없다.
+        for outside in [
+            Vector3::new(table::WIDTH_X * 0.5, -0.5, below),
+            Vector3::new(table::WIDTH_X + 0.5, table::LENGTH_Y * 0.5, below),
+        ] {
+            let (_, v, _) =
+                semi_implicit_euler(outside, falling, Vector3::zeros(), 0.001, &physics);
+            assert!(
+                v.z < 0.0,
+                "테이블 밖에서는 계속 떨어져야 한다: {outside:?} vz={}",
+                v.z
+            );
+        }
+    }
 
     #[test]
     fn default_shot_like_impact_at_hit_plane() {

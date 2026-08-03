@@ -46,8 +46,13 @@ pub const INTEGRATE_DT: Duration = Duration::from_millis(1);
 pub const SAMPLE_DT: Duration = Duration::from_millis(5);
 /// 예측 궤적 상한.
 pub const HORIZON: Duration = Duration::from_secs(2);
-/// 플레이 부피 여유 [m].
+/// 트랙을 유지할 부피 여유 [m]. 검출이 테이블 밖으로 조금 나가도 트랙은 살려 둔다.
 const VOLUME_MARGIN: f64 = 1.0;
+/// 예측을 끊을 로봇 쪽 y [m].
+///
+/// 로봇은 `y = 0` 근처에 있고 접수 평면은 0.08 이다. 그 뒤는 이미 지나친 자리라 적분할
+/// 이유가 없는데, 부피 여유(1 m)를 그대로 쓰면 궤적이 로봇 1 m 뒤까지 이어진다.
+const PREDICT_UNTIL_Y: f64 = -0.2;
 /// 시드 버퍼에 검출을 들고 있을 시간. 시드는 두 시선이 필요한데 프레임은 한 대씩 온다.
 pub const PENDING_TTL: Duration = Duration::from_millis(50);
 
@@ -372,7 +377,8 @@ impl Ekf {
                 sample.velocity = velocity;
                 out.push(sample);
             }
-            if outside_volume(Point3::from(position)) {
+            // 로봇을 지났거나 옆으로 빠졌으면 끝. 뒤는 칠 수 없는 자리다.
+            if position.y < PREDICT_UNTIL_Y || outside_volume(Point3::from(position)) {
                 break;
             }
         }
