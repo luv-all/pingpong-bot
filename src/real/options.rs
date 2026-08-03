@@ -19,6 +19,8 @@ pub struct Options {
     pub sim: bool,
     /// 종료 시 토크를 빼서 팔을 손으로 옮길 수 있게 한다.
     pub release_torque: bool,
+    /// IK 없는 고정 스윙 딕셔너리 모드 (`fixed_swing_worker`)로 실행.
+    pub fixed_swing_dictionary: bool,
     /// 공을 기다리는 최대 시간 [s].
     pub timeout_secs: f64,
     /// Dynamixel 포트 오버라이드.
@@ -34,6 +36,7 @@ impl Options {
             clip: args.clip.clone(),
             sim: args.sim,
             release_torque: args.release_torque,
+            fixed_swing_dictionary: args.fixed_swing_dictionary,
             timeout_secs: args.timeout_secs,
             dxl_port: args.dxl_port.clone(),
         };

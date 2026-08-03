@@ -36,6 +36,10 @@ pub struct Args {
     /// real: 종료 시 토크를 뺀다. 기본은 켠 채로 둬서 팔이 주저앉지 않게 한다.
     #[arg(long)]
     pub release_torque: bool,
+    /// real: IK 없는 고정 스윙 딕셔너리 모드로 실행한다 (`control_worker` 대신
+    /// `fixed_swing_worker`).
+    #[arg(long)]
+    pub fixed_swing_dictionary: bool,
     /// real: 공을 기다리는 최대 시간 [s].
     #[arg(long, default_value_t = 60.0)]
     pub timeout_secs: f64,

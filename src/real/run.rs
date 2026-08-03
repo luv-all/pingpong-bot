@@ -22,7 +22,7 @@ use super::estimator_worker::{self, EstimatorStats};
 use super::fmt::{f2, f2_slice};
 use super::{
     ControlStatus, Options, PacedSource, PreviewEvent, PreviewWindow, ShotEvent, ShutdownGuard,
-    control_worker, shutdown_channel, sim_host,
+    control_worker, fixed_swing_worker, shutdown_channel, sim_host,
 };
 
 /// 카메라 → 추정 버퍼. 실시간이라 크게 잡을 이유가 없다 (밀리면 어차피 버린다).
@@ -106,17 +106,31 @@ pub fn run(args: &Args) -> Result<()> {
         event_tx.clone(),
         shutdown.clone(),
     );
-    let control_handle = control_worker::spawn(
-        Box::new(hardware),
-        Arc::clone(&arm),
-        args.intercept_window(),
-        options.home,
-        commit_rx,
-        status_tx,
-        sim_tx,
-        event_tx,
-        shutdown,
-    );
+    let control_handle = if options.fixed_swing_dictionary {
+        fixed_swing_worker::spawn(
+            Box::new(hardware),
+            Arc::clone(&arm),
+            args.intercept_window(),
+            options.home,
+            commit_rx,
+            status_tx,
+            sim_tx,
+            event_tx,
+            shutdown,
+        )
+    } else {
+        control_worker::spawn(
+            Box::new(hardware),
+            Arc::clone(&arm),
+            args.intercept_window(),
+            options.home,
+            commit_rx,
+            status_tx,
+            sim_tx,
+            event_tx,
+            shutdown,
+        )
+    };
 
     let outcome = main_loop(&options, &event_rx, preview_rx, guard);
 
