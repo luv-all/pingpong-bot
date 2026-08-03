@@ -8,6 +8,7 @@
 
 use pingpong_bot::Vector3;
 use pingpong_bot::constants::table;
+use pingpong_bot::robot::motion::InterceptWindow;
 
 use crate::track::Reviewed;
 
@@ -44,7 +45,12 @@ pub struct Score {
     /// 감속하지 않는다. 입력이 감속하는데 예측이 안 하면 오차가 **시간에 따라 자란다** —
     /// 시간축으로 밀어도 안 줄어드는 오차의 정체가 그것이다.
     pub raw_speed: Option<(f64, f64)>,
-    /// 접수 평면 타점 오차 [m]. 제어가 실제로 쓰는 한 점이라 같이 둔다.
+    /// 로봇이 칠 수 있는 각 평면에서 **라켓이 얼마나 빗나가나** — `(y, 면내 오차, dx, dz)` [m].
+    ///
+    /// RMSE 는 궤적 전체의 값이라 "그래서 몇 cm 빗맞나"를 안 알려 준다. 접수 창의 평면마다
+    /// 재면 그게 곧 라켓을 놓을 자리의 오차다. y 는 평면이 고정하므로 면내 `(x, z)` 만 센다.
+    pub plane_error: Vec<(f64, Option<(f64, f64, f64)>)>,
+    /// 기본 접수 평면 타점 오차 [m]. 제어가 실제로 쓰는 한 점이라 같이 둔다.
     pub impact_error: Option<f64>,
 }
 
@@ -145,6 +151,24 @@ impl Score {
 
         let raw_speed = speed_early_late(reviewed);
 
+        // 로봇이 실제로 칠 수 있는 평면들. 여기서 빗나간 거리가 곧 라켓 오차다.
+        let plane_error = InterceptWindow::default()
+            .hit_planes()
+            .into_iter()
+            .map(|plane| {
+                let gap = reviewed
+                    .contract
+                    .as_ref()
+                    .and_then(|contract| contract.at_trigger.predicted.at_plane(plane.y))
+                    .zip(reviewed.observed_crossing_y(plane.y))
+                    .map(|(guess, truth)| {
+                        let (dx, dz) = (guess.position.x - truth.x, guess.position.z - truth.z);
+                        return (dx.hypot(dz), dx, dz);
+                    });
+                return (plane.y, gap);
+            })
+            .collect();
+
         return Self {
             frames: reviewed.len(),
             detected,
@@ -153,6 +177,7 @@ impl Score {
             trigger,
             residual: [percentiles(&mut residual[0]), percentiles(&mut residual[1])],
             lead_error,
+            plane_error,
             predicted_rmse,
             best_shift,
             raw_speed,
@@ -255,6 +280,18 @@ impl Score {
                 .map_or("--".to_owned(), |e| format!("{:.1} cm", e * 100.0)),
             table::DEFAULT_HIT_PLANE_Y
         );
+        println!("  접수 창에서 라켓이 빗나가는 거리 (면내 x·z):");
+        for (y, gap) in &self.plane_error {
+            match gap {
+                Some((all, dx, dz)) => println!(
+                    "    y={y:.2}  {:>5.1} cm   (dx {:+5.1}  dz {:+5.1})",
+                    all * 100.0,
+                    dx * 100.0,
+                    dz * 100.0
+                ),
+                None => println!("    y={y:.2}     --   (예측이나 실제가 이 평면을 안 지남)"),
+            }
+        }
         println!("────────────────────────────────────────────");
     }
 }

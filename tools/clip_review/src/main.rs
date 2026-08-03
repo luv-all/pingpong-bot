@@ -118,6 +118,7 @@ fn run_all(out: &std::path::Path) -> Result<()> {
         "동시=두 캠 동시 검출 프레임, 잔차=적합 재투영 p50 [px], 관측=트리거 시점 관측 수".into(),
     );
     lines.push("RMSE·리드타임 오차는 cm, 전부 생 삼각측량 기준".into());
+    lines.push("y0.08~y0.35 = 접수 창의 평면들 — 그 자리에서 라켓이 빗나가는 거리 [cm]".into());
     let summary = out.join("summary.txt");
     std::fs::write(&summary, lines.join("\n") + "\n")
         .with_context(|| format!("write {}", summary.display()))?;

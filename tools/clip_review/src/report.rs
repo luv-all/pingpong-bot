@@ -14,6 +14,7 @@ use pingpong_bot::Point3;
 use pingpong_bot::camera::{self, Calibration, Preview};
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
+use pingpong_bot::robot::motion::InterceptWindow;
 
 use crate::overlay;
 use crate::score::Score;
@@ -261,8 +262,17 @@ pub fn summary_row(name: &str, score: &Score) -> String {
     let cell = |value: Option<f64>| value.map_or("--".to_owned(), |v| format!("{:.1}", v * 100.0));
     let resid =
         |slot: usize| score.residual[slot].map_or("--".to_owned(), |(p50, _)| format!("{p50:.1}"));
+    // 접수 창의 앞·가운데·뒤 — 창을 가로질러 오차가 어떻게 변하는지 보인다.
+    let plane = |ratio: f64| {
+        cell(
+            score
+                .plane_error
+                .get(plane_index(score.plane_error.len(), ratio))
+                .and_then(|(_, gap)| gap.map(|(all, _, _)| all)),
+        )
+    };
     return format!(
-        "{name:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7}",
+        "{name:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
         score.both,
         score.track_switches + 1,
         resid(0),
@@ -275,12 +285,39 @@ pub fn summary_row(name: &str, score: &Score) -> String {
         cell(score.lead_error.get(1).copied().flatten()),
         cell(score.lead_error.get(2).copied().flatten()),
         cell(score.lead_error.get(3).copied().flatten()),
+        plane(0.0),
+        plane(0.5),
+        plane(1.0),
     );
 }
 
+/// 평면 목록에서 앞(0.0)·가운데(0.5)·뒤(1.0) 를 고른다.
+fn plane_index(count: usize, ratio: f64) -> usize {
+    return (count.saturating_sub(1) as f64 * ratio).round() as usize;
+}
+
 pub fn summary_header() -> String {
+    let planes = InterceptWindow::default().hit_planes();
+    let y = |ratio: f64| {
+        planes
+            .get(plane_index(planes.len(), ratio))
+            .map_or("y--".to_owned(), |plane| format!("y{:.2}", plane.y))
+    };
     return format!(
-        "{:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7}",
-        "clip", "동시", "트랙", "잔차0", "잔차1", "관측", "RMSE", "0.4s", "0.3s", "0.2s", "0.1s"
+        "{:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+        "clip",
+        "동시",
+        "트랙",
+        "잔차0",
+        "잔차1",
+        "관측",
+        "RMSE",
+        "0.4s",
+        "0.3s",
+        "0.2s",
+        "0.1s",
+        y(0.0),
+        y(0.5),
+        y(1.0),
     );
 }
