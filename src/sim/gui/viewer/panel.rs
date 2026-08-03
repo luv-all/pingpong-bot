@@ -236,6 +236,7 @@ pub fn draw(
         ctrl.intercept = ui_state.intercept;
         ctrl.time_scale = ui_state.time_scale;
         ctrl.use_bang_bang_swing = ui_state.use_bang_bang_swing;
+        ctrl.use_fixed_swing_dictionary = ui_state.use_fixed_swing_dictionary;
         if shoot {
             ctrl.request_shoot();
             // Motor Test가 켰을 수 있는 키네마틱 미리보기·꺼둔 자동 복귀를 정식
@@ -544,6 +545,11 @@ fn draw_view_panel(ui: &mut egui::Ui, ui_state: &mut PanelUiState) {
             "Bang-bang (pure torque, debug)",
         );
         ui.small("commit을 quintic 대신 순수 토크 bang-bang으로 — 육안 비교용");
+        ui.checkbox(
+            &mut ui_state.use_fixed_swing_dictionary,
+            "Fixed swing dictionary (debug, no IK)",
+        );
+        ui.small("commit을 IK 없는 고정 스윙 딕셔너리로 — 육안 비교용");
     });
     egui::CollapsingHeader::new("Debug overlays")
         .default_open(false)

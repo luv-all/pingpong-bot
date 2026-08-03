@@ -25,6 +25,8 @@ pub struct PanelUiState {
     pub camera_dist: f32,
     /// commit 시 quintic 대신 순수 토크 bang-bang을 쓸지 - 디버그 토글.
     pub use_bang_bang_swing: bool,
+    /// commit 시 IK 없는 고정 스윙 딕셔너리를 쓸지 - 디버그 토글.
+    pub use_fixed_swing_dictionary: bool,
     pub debug: DebugOverlays,
     /// 평가 프로토콜 백그라운드 진행.
     pub eval: Arc<Mutex<eval::Progress>>,
@@ -53,6 +55,7 @@ impl PanelUiState {
             time_scale: controls.time_scale,
             camera_dist: CAMERA_DIST_DEFAULT,
             use_bang_bang_swing: controls.use_bang_bang_swing,
+            use_fixed_swing_dictionary: controls.use_fixed_swing_dictionary,
             debug: DebugOverlays::debug_defaults(),
             eval: Arc::new(Mutex::new(eval::Progress::default())),
             eval_running: Arc::new(AtomicBool::new(false)),
