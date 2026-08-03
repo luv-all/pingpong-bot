@@ -213,8 +213,9 @@ fn run(args: &Args) -> Result<()> {
         };
         let fast = first_ball.is_some_and(|first| index < first);
 
-        // 추적 중인 프레임만, 그리고 같은 프레임을 두 번 찍지 않는다.
-        if state.tracking && printed != Some(index) {
+        // 이번 프레임에 뭘 봤을 때만 찍는다. 검출이 없으면 적합 상태가 그대로라 같은 줄이
+        // 수백 개 쌓이고, 놓친 구간은 프레임 번호가 건너뛰는 것으로 이미 보인다.
+        if state.pixels.iter().any(Option::is_some) && printed != Some(index) {
             printed = Some(index);
             println!("{}", console_line(&reviewed, state, index));
         }

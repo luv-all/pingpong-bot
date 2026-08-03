@@ -142,6 +142,26 @@ fn a_long_gap_starts_a_new_track() {
     assert!(fit.seq() > seq, "트랙이 갈렸어야 한다");
 }
 
+/// 공이 화면을 떠나면 트랙도 죽어야 한다. 안 죽으면 제어가 지나간 공의 예측을 계속 받는다.
+#[test]
+fn silence_after_the_ball_leaves_kills_the_track() {
+    let calibration = rig();
+    let truth = truth();
+    let mut fit = Fit::new(&calibration, Box::new(never()));
+    let samples = sightings(&calibration, &truth, 10, 120.0);
+    feed(&mut fit, &samples);
+    assert!(fit.has_track());
+
+    // 검출 없는 프레임만 계속 들어온다 — 공이 나갔다.
+    let last = samples.last().expect("표본").2;
+    let mut t = last;
+    for _ in 0..80 {
+        t += Duration::from_millis(13);
+        fit.observe(camera::Id(0), None, t);
+    }
+    assert!(!fit.has_track(), "관측이 끊기면 트랙을 버려야 한다");
+}
+
 /// 아무 때도 안 걸리는 트리거 — 예측 적분을 빼고 적합만 보고 싶을 때.
 fn never() -> impl Trigger {
     struct Never;

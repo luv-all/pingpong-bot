@@ -163,19 +163,17 @@ impl Fit {
         });
     }
 
-    /// 검출 하나를 먹인다.
+    /// 프레임 하나를 먹인다. 그 프레임에서 못 찾았으면 `found` 가 `None` 이다.
+    ///
+    /// 못 찾은 프레임도 넘겨야 한다 — 공이 화면을 떠난 걸 아는 유일한 신호가 "그 뒤로
+    /// 아무것도 안 온다"이기 때문이다. 검출된 것만 넘기면 트랙이 영영 안 죽고, 제어는
+    /// 지나간 공의 예측을 계속 받는다.
     pub fn observe(
         &mut self,
         camera_id: camera::Id,
         found: Option<Candidate>,
         t: Duration,
     ) -> Outcome {
-        let Some(candidate) = found else {
-            return Outcome::Idle;
-        };
-        let Some(camera) = self.cameras.iter().position(|p| p.camera_id == camera_id) else {
-            return Outcome::Idle;
-        };
         // 순서 뒤집힌 프레임은 여기서 걸린다.
         if self.sightings.last().is_some_and(|last| t < last.t) {
             return Outcome::Idle;
@@ -185,6 +183,12 @@ impl Fit {
         {
             self.drop_track();
         }
+        let Some(candidate) = found else {
+            return Outcome::Idle;
+        };
+        let Some(camera) = self.cameras.iter().position(|p| p.camera_id == camera_id) else {
+            return Outcome::Idle;
+        };
 
         self.sightings.push(Sighting {
             camera,
