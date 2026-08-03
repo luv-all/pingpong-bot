@@ -98,6 +98,8 @@ pub struct SimWorld {
     /// 고정 스윙 내부 임팩트 시각을 고르는 전략 — GUI에서 두 전략을 실시간
     /// 비교할 수 있게 노출한다.
     fixed_swing_impact_strategy: motion::ImpactTimeStrategy,
+    /// 고정 스윙의 관절 타이밍 모양 — GUI에서 두 전략을 실시간 비교한다.
+    fixed_swing_shape_strategy: motion::SwingShapeStrategy,
     /// 이번 비행에서 스윙을 이미 commit했는지 (재계획·팔 떨림 방지)
     swing_committed: bool,
     /// 1차 이동 후 0.25 s 시점의 정밀 목표로 재계획했는지.
@@ -412,6 +414,7 @@ impl SimWorld {
             use_bang_bang_swing: false,
             use_fixed_swing_dictionary: false,
             fixed_swing_impact_strategy: motion::DEFAULT_IMPACT_TIME_STRATEGY,
+            fixed_swing_shape_strategy: motion::DEFAULT_SWING_SHAPE_STRATEGY,
             swing_committed: false,
             position_refined: false,
             swing_abandoned: false,
@@ -531,6 +534,14 @@ impl SimWorld {
 
     pub fn fixed_swing_impact_strategy(&self) -> motion::ImpactTimeStrategy {
         return self.fixed_swing_impact_strategy;
+    }
+
+    pub fn set_fixed_swing_shape_strategy(&mut self, strategy: motion::SwingShapeStrategy) {
+        self.fixed_swing_shape_strategy = strategy;
+    }
+
+    pub fn fixed_swing_shape_strategy(&self) -> motion::SwingShapeStrategy {
+        return self.fixed_swing_shape_strategy;
     }
 
     /// 이번 공에 스윙을 이미 commit했는지.
@@ -1003,7 +1014,11 @@ impl SimWorld {
             motion::fixed_swing_rail_target(&rail, prediction.impact_position.coords.x);
         self.robot.set_rail_target(target_rail_x);
 
-        let Ok(trajectory) = motion::Planner::plan_fixed_swing(&self.arm, target_rail_x) else {
+        let Ok(trajectory) = motion::Planner::plan_fixed_swing(
+            &self.arm,
+            target_rail_x,
+            self.fixed_swing_shape_strategy,
+        ) else {
             return;
         };
         let impact_time = motion::Planner::fixed_swing_impact_time_secs(

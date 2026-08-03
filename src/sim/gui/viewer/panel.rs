@@ -238,6 +238,7 @@ pub fn draw(
         ctrl.use_bang_bang_swing = ui_state.use_bang_bang_swing;
         ctrl.use_fixed_swing_dictionary = ui_state.use_fixed_swing_dictionary;
         ctrl.fixed_swing_impact_strategy = ui_state.fixed_swing_impact_strategy;
+        ctrl.fixed_swing_shape_strategy = ui_state.fixed_swing_shape_strategy;
         if shoot {
             ctrl.request_shoot();
             // Motor Test가 켰을 수 있는 키네마틱 미리보기·꺼둔 자동 복귀를 정식
@@ -562,6 +563,19 @@ fn draw_view_panel(ui: &mut egui::Ui, ui_state: &mut PanelUiState) {
                 &mut ui_state.fixed_swing_impact_strategy,
                 crate::robot::motion::ImpactTimeStrategy::PeakRacketSpeed,
                 "최대 속도 시점",
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label("스윙 모양:");
+            ui.radio_value(
+                &mut ui_state.fixed_swing_shape_strategy,
+                crate::robot::motion::SwingShapeStrategy::Synchronized,
+                "동기화형(기존)",
+            );
+            ui.radio_value(
+                &mut ui_state.fixed_swing_shape_strategy,
+                crate::robot::motion::SwingShapeStrategy::Staggered,
+                "채찍형(신규)",
             );
         });
     });

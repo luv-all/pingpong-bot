@@ -110,7 +110,11 @@ pub fn spawn(
             };
             let rail_x = pingpong_bot::robot::motion::fixed_swing_rail_target(&rail, target.position.x);
 
-            let Ok(trajectory) = Planner::plan_fixed_swing(&arm, rail_x) else {
+            let Ok(trajectory) = Planner::plan_fixed_swing(
+                &arm,
+                rail_x,
+                pingpong_bot::robot::motion::DEFAULT_SWING_SHAPE_STRATEGY,
+            ) else {
                 continue;
             };
             let remaining_secs =

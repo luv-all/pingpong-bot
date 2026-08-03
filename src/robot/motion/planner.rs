@@ -118,8 +118,12 @@ impl Planner {
     }
 
     /// [`super::fixed_swing::plan_fixed_swing`].
-    pub fn plan_fixed_swing(arm: &Arm, rail_x: f64) -> Result<Trajectory, DomainError> {
-        return super::fixed_swing::plan_fixed_swing(arm, rail_x);
+    pub fn plan_fixed_swing(
+        arm: &Arm,
+        rail_x: f64,
+        shape: super::fixed_swing::SwingShapeStrategy,
+    ) -> Result<Trajectory, DomainError> {
+        return super::fixed_swing::plan_fixed_swing(arm, rail_x, shape);
     }
 
     /// [`super::fixed_swing::fixed_swing_impact_time_secs`].

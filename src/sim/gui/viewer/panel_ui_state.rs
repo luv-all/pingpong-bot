@@ -29,6 +29,8 @@ pub struct PanelUiState {
     pub use_fixed_swing_dictionary: bool,
     /// 고정 스윙 딕셔너리의 내부 임팩트 시각 전략 - 두 전략 비교용 선택기.
     pub fixed_swing_impact_strategy: crate::robot::motion::ImpactTimeStrategy,
+    /// 고정 스윙 딕셔너리의 관절 타이밍 모양 - 두 전략 비교용 선택기.
+    pub fixed_swing_shape_strategy: crate::robot::motion::SwingShapeStrategy,
     pub debug: DebugOverlays,
     /// 평가 프로토콜 백그라운드 진행.
     pub eval: Arc<Mutex<eval::Progress>>,
@@ -59,6 +61,7 @@ impl PanelUiState {
             use_bang_bang_swing: controls.use_bang_bang_swing,
             use_fixed_swing_dictionary: controls.use_fixed_swing_dictionary,
             fixed_swing_impact_strategy: controls.fixed_swing_impact_strategy,
+            fixed_swing_shape_strategy: controls.fixed_swing_shape_strategy,
             debug: DebugOverlays::debug_defaults(),
             eval: Arc::new(Mutex::new(eval::Progress::default())),
             eval_running: Arc::new(AtomicBool::new(false)),

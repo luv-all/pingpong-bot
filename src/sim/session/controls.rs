@@ -35,6 +35,10 @@ pub struct SimRuntimeControls {
     /// 선택기). 공이 주차된 동안만 반영해도 되지만, 이 값은 위험이 없어
     /// 비행 중에도 즉시 반영한다.
     pub fixed_swing_impact_strategy: crate::robot::motion::ImpactTimeStrategy,
+    /// 고정 스윙 딕셔너리의 관절 타이밍 모양 (동기화형/채찍형) 선택기. 공이
+    /// 주차된 동안만 반영해도 되지만, 이 값도 위험이 없어 비행 중에도 즉시
+    /// 반영한다.
+    pub fixed_swing_shape_strategy: crate::robot::motion::SwingShapeStrategy,
     /// 발사 버튼 — 물리 스레드가 소비
     pub shoot_requested: bool,
     /// 공 회수 — 슈터에 다시 주차
@@ -51,6 +55,7 @@ impl Default for SimRuntimeControls {
             use_bang_bang_swing: false,
             use_fixed_swing_dictionary: false,
             fixed_swing_impact_strategy: crate::robot::motion::DEFAULT_IMPACT_TIME_STRATEGY,
+            fixed_swing_shape_strategy: crate::robot::motion::DEFAULT_SWING_SHAPE_STRATEGY,
             shoot_requested: false,
             park_requested: false,
         };

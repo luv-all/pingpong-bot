@@ -114,6 +114,7 @@ impl SimSession {
                         use_bang_bang_swing,
                         use_fixed_swing_dictionary,
                         fixed_swing_impact_strategy,
+                        fixed_swing_shape_strategy,
                         rail_frame,
                         intercept,
                     ) = {
@@ -129,6 +130,7 @@ impl SimSession {
                             ctrl.use_bang_bang_swing,
                             ctrl.use_fixed_swing_dictionary,
                             ctrl.fixed_swing_impact_strategy,
+                            ctrl.fixed_swing_shape_strategy,
                             ctrl.rail_frame,
                             ctrl.intercept,
                         )
@@ -137,6 +139,7 @@ impl SimSession {
                     w.set_use_bang_bang_swing(use_bang_bang_swing);
                     w.set_use_fixed_swing_dictionary(use_fixed_swing_dictionary);
                     w.set_fixed_swing_impact_strategy(fixed_swing_impact_strategy);
+                    w.set_fixed_swing_shape_strategy(fixed_swing_shape_strategy);
                     w.step(
                         physics_dt,
                         Some(SimStepInput {

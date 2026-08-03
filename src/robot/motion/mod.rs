@@ -21,9 +21,10 @@ pub mod trajectory;
 pub use bang_bang::{RacketGuidanceScratch, RacketGuidanceStep};
 pub use feasibility::Feasibility;
 pub use fixed_swing::{
-    DEFAULT_IMPACT_TIME_STRATEGY, FIXED_SWING_END_DEG, FIXED_SWING_START_DEG, ImpactTimeStrategy,
-    fixed_swing_end_joints, fixed_swing_impact_time_secs, fixed_swing_rail_target,
-    fixed_swing_start_joints, should_start_fixed_swing,
+    DEFAULT_IMPACT_TIME_STRATEGY, DEFAULT_SWING_SHAPE_STRATEGY, FIXED_SWING_END_DEG,
+    FIXED_SWING_START_DEG, ImpactTimeStrategy, SwingShapeStrategy, fixed_swing_end_joints,
+    fixed_swing_impact_time_secs, fixed_swing_rail_target, fixed_swing_start_joints,
+    should_start_fixed_swing,
 };
 pub use intercept_window::InterceptWindow;
 pub use planned_intercept::PlannedIntercept;
