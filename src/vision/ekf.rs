@@ -9,7 +9,7 @@
 
 use std::time::Duration;
 
-use nalgebra::{Matrix2, Matrix2x3, Matrix2x6, Matrix6, Vector2, Vector6};
+use nalgebra::{Matrix2, Matrix2x3, Matrix2x6, Matrix3, Matrix6, Vector2, Vector6};
 
 use crate::camera::{self, Calibration};
 use crate::constants::table;
@@ -265,14 +265,17 @@ impl Ekf {
         };
     }
 
-    /// 물리로 상태를 밀고 공분산을 키운다. 물리는 `estimator::Kinematics` SSOT.
+    /// 물리로 상태를 밀고 공분산을 그 **적분기의** 야코비안으로 민다.
+    ///
+    /// 물리는 `estimator::Kinematics` SSOT.
     fn predict(&mut self, dt: f64) {
         if dt <= 0.0 {
             return;
         }
+        let before = self.velocity();
         let (position, velocity, _) = Kinematics::step(
             self.position().coords,
-            self.velocity(),
+            before,
             Vector3::zeros(),
             dt,
             &self.physics,
@@ -282,9 +285,12 @@ impl Ekf {
         );
 
         let mut f = Matrix6::identity();
+        let (dp_dv, dv_dv) = jacobian(before, velocity, dt, &self.physics);
+        f.fixed_view_mut::<3, 3>(0, 3).copy_from(&dp_dv);
+        f.fixed_view_mut::<3, 3>(3, 3).copy_from(&dv_dv);
+
         let mut q = Matrix6::zeros();
         for axis in 0..3 {
-            f[(axis, axis + 3)] = dt;
             q[(axis, axis)] = Q_POSITION * dt;
             q[(axis + 3, axis + 3)] = Q_VELOCITY * dt;
         }
@@ -384,9 +390,78 @@ impl Ekf {
     }
 }
 
+/// `Kinematics::step` 한 걸음의 야코비안 `(∂p'/∂v, ∂v'/∂v)`.
+///
+/// 반적분 오일러라 정확히 이 꼴이다:
+///
+/// ```text
+/// v' = v + (g + a(v))·dt   ⇒  ∂v'/∂v = I + D·dt          (D = ∂a/∂v)
+/// p' = p + v'·dt           ⇒  ∂p'/∂v = (I + D·dt)·dt
+/// ```
+///
+/// `∂p'/∂p = I`, `∂v'/∂p = 0` 이라 나머지 블록은 호출자가 단위행렬로 둔다.
+///
+/// 전에는 `D`를 통째로 빼고 `∂p'/∂v = I·dt`(등속)만 썼다. 항력이 속도를 줄이는 만큼
+/// 공분산도 줄어야 하는데 그걸 안 줬으니 필터가 실제보다 확신했고, 마할라노비스 게이트는
+/// 그 과신한 `P`로 좁아진다 — 멀쩡한 측정이 거부된다.
+fn jacobian(
+    before: Vector3,
+    after: Vector3,
+    dt: f64,
+    physics: &PhysicsParams,
+) -> (Matrix3<f64>, Matrix3<f64>) {
+    let flight = Matrix3::identity() + drag_jacobian(before, physics.drag) * dt;
+    // 자유낙하에서 v_z 는 줄기만 한다. 한 걸음에 부호가 위로 뒤집혔으면 바운스뿐이다.
+    if before.z < 0.0 && after.z > 0.0 {
+        // 위치 z 는 테이블 면에 고정되므로 속도와 무관해진다.
+        let mut dp_dv = flight * dt;
+        dp_dv.set_row(2, &nalgebra::RowVector3::zeros());
+        return (dp_dv, bounce_jacobian(before, physics) * flight);
+    }
+    return (flight * dt, flight);
+}
+
+/// 항력 `-k·|v|·v` 의 속도 미분 — `-k·(|v|·I + v·vᵀ/|v|)`.
+///
+/// Magnus 항은 `ω`에 비례하는데 이 필터는 스핀을 추정하지 않아 `ω = 0` 이다. 상태에 `ω`가
+/// 들어오면 `c·[ω]ₓ` 를 더해야 한다.
+fn drag_jacobian(v: Vector3, drag: f64) -> Matrix3<f64> {
+    let speed = v.norm();
+    if speed < 1e-9 {
+        return Matrix3::zeros();
+    }
+    return -drag * (Matrix3::identity() * speed + v * v.transpose() / speed);
+}
+
+/// 바운스 사상의 속도 미분. 중심차분으로 낸다.
+///
+/// `table_bounce`는 마찰이 미끄러짐과 고착 중 작은 쪽으로 잘리는(min) 조각별 함수라
+/// 해석 미분이 길고 틀리기 쉽다. 순수 함수라 차분 6회면 끝이고 잘못 유도할 위험이 없다.
+///
+/// 비행 후 속도가 아니라 걸음 **시작** 속도에서 잰다 — 한 걸음의 항력 차이는 `dt`에 대해
+/// 2차라 10 ms 에서 무시할 만하다.
+fn bounce_jacobian(v: Vector3, physics: &PhysicsParams) -> Matrix3<f64> {
+    /// 차분 폭 [m/s].
+    const H: f64 = 1e-4;
+    let mut j = Matrix3::zeros();
+    for axis in 0..3 {
+        let (mut plus, mut minus) = (v, v);
+        plus[axis] += H;
+        minus[axis] -= H;
+        let (up, _) = Kinematics::bounce_on_table(plus, Vector3::zeros(), physics);
+        let (down, _) = Kinematics::bounce_on_table(minus, Vector3::zeros(), physics);
+        j.set_column(axis, &((up - down) / (2.0 * H)));
+    }
+    return j;
+}
+
 fn outside_volume(p: Point3) -> bool {
     return p.y < -VOLUME_MARGIN
         || p.y > table::LENGTH_Y + VOLUME_MARGIN
         || p.x < -VOLUME_MARGIN
         || p.x > table::WIDTH_X + VOLUME_MARGIN;
 }
+
+#[cfg(test)]
+#[path = "ekf_tests.rs"]
+mod tests;

@@ -31,8 +31,9 @@ const ACTUAL_PAST: Scalar = Scalar::new(60.0, 255.0, 60.0, 0.0);
 /// 실제 궤적, 아직 안 온 구간 — 같은 색을 죽여서. 오프라인 재생이라 미래를 이미 알지만,
 /// 과거와 같은 굵기로 그리면 "지금 아는 것"과 구분이 안 된다.
 const ACTUAL_FUTURE: Scalar = Scalar::new(30.0, 110.0, 30.0, 0.0);
-/// 매 프레임 다시 굴린 예측 — 회색, 얇게. 언제나 현재 공에서 출발하므로 실제에 붙어
-/// 보이는 게 정상이다. "예측이 맞았나"의 대상이 아니라 눈에 덜 띄어야 한다.
+/// EKF 가 보정한 궤적 — 하늘색. 초록(생 삼각측량) 바로 옆에 그려져야 필터가 얼마나
+/// 흔들리는 입력을 폈는지 보인다.
+const FILTERED: Scalar = Scalar::new(255.0, 200.0, 0.0, 0.0);
 /// 커밋 순간에 얼린 예측 — 자홍, 굵게. 초록과 보색이라 겹쳐도 갈린다.
 const COMMITTED: Scalar = Scalar::new(255.0, 0.0, 255.0, 0.0);
 /// 검출 픽셀 — 노랑. 선들과 다른 채널이라 안 묻힌다.
@@ -40,12 +41,14 @@ const DETECTED: Scalar = Scalar::new(0.0, 255.0, 255.0, 0.0);
 /// EKF 추정 위치 재투영 — 흰 테두리 작은 원.
 const EKF: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
 
-/// 창에 그릴 궤적 넷.
+/// 창에 그릴 궤적들.
 pub struct Tracks<'a> {
-    /// 실제, 현재 프레임까지.
+    /// 생 삼각측량, 현재 프레임까지 — 필터를 안 거친 것.
     pub actual_past: &'a [Point3],
-    /// 실제, 현재 프레임 이후 (pass 1이 이미 알고 있다).
+    /// 생 삼각측량, 현재 프레임 이후 (pass 1이 이미 알고 있다).
     pub actual_future: &'a [Point3],
+    /// EKF 가 보정한 궤적 (`Trajectory::measured`), 현재 프레임까지.
+    pub filtered: &'a [Point3],
     /// 커밋 순간에 얼린 예측. 커밋 전이면 비어 있다.
     pub committed: &'a [Point3],
 }
@@ -65,6 +68,7 @@ pub fn draw(
     // 덜 중요한 것부터 — 겹치면 나중에 그린 게 위로 온다.
     track(&mut img, params, tracks.actual_future, ACTUAL_FUTURE, 1)?;
     track(&mut img, params, tracks.actual_past, ACTUAL_PAST, 3)?;
+    track(&mut img, params, tracks.filtered, FILTERED, 2)?;
     track(&mut img, params, tracks.committed, COMMITTED, 3)?;
 
     if let Some(point) = ekf

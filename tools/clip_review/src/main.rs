@@ -180,6 +180,7 @@ fn run(args: &Args) -> Result<()> {
         let (past, future) = reviewed.observed_split(index);
         let actual_past = track::clip_to_mount(&past);
         let actual_future = track::clip_to_mount(&future);
+        let filtered = track::clip_to_mount(&reviewed.filtered_track(index));
         // 예측은 트리거 순간에 한 번 얼린다 — 프레임이 지나도 안 바뀐다.
         // 매 프레임 다시 굴리면 언제나 현재 위치에서 출발하니 실제와 겹쳐 보여 볼 게 없다.
         let committed = reviewed
@@ -212,6 +213,7 @@ fn run(args: &Args) -> Result<()> {
                 &overlay::Tracks {
                     actual_past: &actual_past,
                     actual_future: &actual_future,
+                    filtered: &filtered,
                     committed: &committed,
                 },
                 state.pixels[slot],
@@ -236,6 +238,7 @@ fn run(args: &Args) -> Result<()> {
                 raw: state.observed.map(|o| o.point.into()),
                 observed: actual_past.iter().copied().map(Into::into).collect(),
                 observed_future: actual_future.iter().copied().map(Into::into).collect(),
+                filtered: filtered.iter().copied().map(Into::into).collect(),
                 committed: committed.iter().copied().map(Into::into).collect(),
             };
             if writeln!(stdin, "{}", message.to_line()).is_err() || stdin.flush().is_err() {

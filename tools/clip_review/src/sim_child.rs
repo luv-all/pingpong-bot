@@ -28,10 +28,9 @@ const OBSERVED_WIDTH: f32 = 4.0;
 /// 실제 궤적, 아직 안 온 구간 — 같은 색을 죽여서.
 const FUTURE_RGBA: [f32; 4] = [0.10, 0.42, 0.10, 1.0];
 const FUTURE_WIDTH: f32 = 2.0;
-/// 매 프레임 다시 굴린 예측 — 회색, 얇게. 언제나 현재 공에서 출발하므로 실제에 붙어
-/// 보이는 게 정상이다.
-const PREDICTED_RGBA: [f32; 4] = [0.62, 0.62, 0.62, 1.0];
-const PREDICTED_WIDTH: f32 = 2.0;
+/// EKF 가 보정한 궤적 — 하늘색. 초록과 나란히 놓여야 필터가 무엇을 폈는지 보인다.
+const FILTERED_RGBA: [f32; 4] = [0.0, 0.78, 1.0, 1.0];
+const FILTERED_WIDTH: f32 = 3.0;
 /// 커밋 순간에 얼린 예측 — 자홍, 굵게. 실제와 벌어진 만큼이 그대로 오차다.
 const COMMITTED_RGBA: [f32; 4] = [1.0, 0.15, 1.0, 1.0];
 const COMMITTED_WIDTH: f32 = 4.0;
@@ -40,6 +39,7 @@ pub fn run() -> Result<()> {
     let shutdown = SimRuntimeControls::new_shutdown();
     let observed = trail::Handle::new(OBSERVED_RGBA, OBSERVED_WIDTH);
     let future = trail::Handle::new(FUTURE_RGBA, FUTURE_WIDTH);
+    let filtered = trail::Handle::new(FILTERED_RGBA, FILTERED_WIDTH);
     let committed = trail::Handle::new(COMMITTED_RGBA, COMMITTED_WIDTH);
 
     let scene = SimScene::builder()
@@ -48,6 +48,7 @@ pub fn run() -> Result<()> {
         .with_ghost_ball()
         .with_trail(future.clone())
         .with_trail(observed.clone())
+        .with_trail(filtered.clone())
         .with_trail(committed.clone())
         .build();
     let ball = scene.ball().expect("with_ball").clone();
@@ -55,7 +56,7 @@ pub fn run() -> Result<()> {
 
     let stop = Arc::clone(&shutdown);
     thread::spawn(move || {
-        stdin_loop(ball, ghost, observed, future, committed, stop);
+        stdin_loop(ball, ghost, observed, future, filtered, committed, stop);
     });
 
     scene
@@ -70,6 +71,7 @@ fn stdin_loop(
     ghost: ball::Handle,
     observed: trail::Handle,
     future: trail::Handle,
+    filtered: trail::Handle,
     committed: trail::Handle,
     stop: Arc<AtomicBool>,
 ) {
@@ -89,6 +91,7 @@ fn stdin_loop(
                 ghost.set_position(msg.raw.map(Into::into));
                 observed.set_points(SceneMsg::points(&msg.observed));
                 future.set_points(SceneMsg::points(&msg.observed_future));
+                filtered.set_points(SceneMsg::points(&msg.filtered));
                 committed.set_points(SceneMsg::points(&msg.committed));
             }
             Err(error) => eprintln!("sim stdin parse: {error} ({text})"),

@@ -80,6 +80,8 @@ pub struct FrameState {
     pub filtered: Option<State>,
     /// 캠별 필터 판정. 어느 쪽 검출이 거부됐는지 봐야 진단이 된다.
     pub outcomes: [Option<Outcome>; 2],
+    /// "같은 공인가"의 근거. 트랙을 버리면 올라간다.
+    pub seq: u64,
     pub tracking: bool,
 }
 
@@ -131,6 +133,22 @@ impl Reviewed {
             .map(|o| o.point)
             .collect();
         return (past, future);
+    }
+
+    /// `frame` 시점까지 EKF 가 보정한 궤적 (`Trajectory::measured`).
+    ///
+    /// 같은 `seq` 구간만 모은다 — 트랙을 버리고 다시 세우면 다른 공이라 이어 그리면 안 된다.
+    /// 검출이 거부된 프레임은 직전 상태가 그대로 남아 같은 점이 반복되는데, 선으로는
+    /// 보이지 않으니 따로 걸러내지 않는다.
+    pub fn filtered_track(&self, frame: usize) -> Vec<Point3> {
+        let Some(current) = self.frames.get(frame) else {
+            return Vec::new();
+        };
+        return self.frames[..=frame]
+            .iter()
+            .filter(|f| f.seq == current.seq)
+            .filter_map(|f| f.filtered.map(|state| state.position))
+            .collect();
     }
 
     /// 생 궤적이 `y` 평면을 로봇 쪽으로 지난 지점 (표본 사이 선형 보간).
@@ -203,6 +221,7 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
         }
 
         state.filtered = vision.ekf().measured().last().copied();
+        state.seq = vision.ekf().seq();
         state.tracking = state.filtered.is_some();
 
         // 트리거가 처음 걸린 프레임의 예측만 얼린다.
