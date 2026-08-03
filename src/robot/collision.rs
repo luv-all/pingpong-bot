@@ -8,7 +8,8 @@ use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 use crate::Point3;
 use crate::constants::{
     geometry::{
-        LINK_FOREARM_RADIUS, RACKET_HALF_X, RACKET_HALF_Y, RACKET_HALF_Z, TABLE_CLAMP_ITERS,
+        LINK_FOREARM_RADIUS, RACKET_HALF_X, RACKET_HALF_Y, RACKET_HALF_Z,
+        RAIL_FRAME_COLLISION_WIDTH, RAIL_THICKNESS, SUPPORT_FRAME_CLEARANCE, TABLE_CLAMP_ITERS,
         TABLE_CLEARANCE,
     },
     table,
@@ -91,6 +92,24 @@ impl OrientedBox {
         }
         return out;
     }
+
+    /// 월드축 정렬 박스와의 교차 깊이. 0이면 비충돌.
+    fn aabb_penetration(&self, min: Vector3<f64>, max: Vector3<f64>) -> f64 {
+        // OBB를 월드 XYZ에 투영한 반폭. 회전된 링크를 축 정렬
+        // 장애물에 대해 보수적으로 감싼다.
+        let world_half = self.axes.map(f64::abs) * self.half_extents;
+        let obb_min = self.center - world_half;
+        let obb_max = self.center + world_half;
+        let overlap = Vector3::new(
+            obb_max.x.min(max.x) - obb_min.x.max(min.x),
+            obb_max.y.min(max.y) - obb_min.y.max(min.y),
+            obb_max.z.min(max.z) - obb_min.z.max(min.z),
+        );
+        if overlap.x <= 0.0 || overlap.y <= 0.0 || overlap.z <= 0.0 {
+            return 0.0;
+        }
+        return overlap.x.min(overlap.y).min(overlap.z);
+    }
 }
 
 /// 관절 자세의 테이블 충돌 OBB (전완/라켓).
@@ -120,6 +139,39 @@ pub fn table_penetration(arm: &Arm, rail_x: f64, joints: &Joints) -> f64 {
         .fold(0.0, f64::max);
 }
 
+/// 로봇 아래 수평 지지 프레임 금지 영역 침범량 [m].
+///
+/// 베이스가 얹히는 레일 자체는 제외하고 [`robot_obbs`]가 주는
+/// 이동 링크·라켓만 검사한다. X는 레일 전체, Y는 사진의
+/// 프로파일 묶음 폭, Z는 프로파일 하단~상단 + 여유다.
+pub fn support_frame_penetration(arm: &Arm, rail_x: f64, joints: &Joints) -> f64 {
+    let Some(rail) = arm.rail else {
+        return 0.0;
+    };
+    let clearance = SUPPORT_FRAME_CLEARANCE;
+    let half_y = RAIL_FRAME_COLLISION_WIDTH * 0.5 + clearance;
+    let min = Vector3::new(
+        rail.x_min - clearance,
+        rail.mount_y - half_y,
+        rail.mount_z - RAIL_THICKNESS - clearance,
+    );
+    let max = Vector3::new(
+        rail.x_max + clearance,
+        rail.mount_y + half_y,
+        rail.mount_z + clearance,
+    );
+    return robot_obbs(arm, rail_x, joints)
+        .iter()
+        .map(|obb| obb.aabb_penetration(min, max))
+        .fold(0.0, f64::max);
+}
+
+/// 탁구대와 로봇 하부 철제 프레임을 합친 환경 침범량.
+pub fn environment_penetration(arm: &Arm, rail_x: f64, joints: &Joints) -> f64 {
+    return table_penetration(arm, rail_x, joints)
+        .max(support_frame_penetration(arm, rail_x, joints));
+}
+
 /// 관통 시 EE를 들어 올려 재IK - 손목 open/yaw 힌트 유지.
 pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
     let mut current = joints.clone();
@@ -130,7 +182,7 @@ pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
         .unwrap_or(crate::defaults::ControlParams::default().racket_open_pitch);
 
     for _ in 0..TABLE_CLAMP_ITERS {
-        let depth = table_penetration(arm, rail_x, &current);
+        let depth = environment_penetration(arm, rail_x, &current);
         if depth <= 1e-4 {
             break;
         }
@@ -158,7 +210,7 @@ pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
         };
         // 면이 테이블을 찌르면 open을 조금 줄여 모서리를 듦
         let mut open = wrist;
-        if table_penetration(arm, rail_x, &solved) > 1e-4 {
+        if environment_penetration(arm, rail_x, &solved) > 1e-4 {
             if let Some(index) = wrist_index {
                 open = arm
                     .joint_limit(index)
@@ -204,6 +256,35 @@ fn orthonormal_plane(axis: Vector3<f64>) -> (Vector3<f64>, Vector3<f64>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn support_frame_aabb_rejects_link_inside_keepout() {
+        let obb = OrientedBox {
+            center: Vector3::new(0.7, -0.10, 0.94),
+            axes: Matrix3::identity(),
+            half_extents: Vector3::repeat(0.015),
+        };
+        let min = Vector3::new(0.0, -0.20, 0.80);
+        let max = Vector3::new(1.41, 0.00, 0.96);
+        assert!(obb.aabb_penetration(min, max) > 0.0);
+
+        let safely_above = OrientedBox {
+            center: Vector3::new(0.7, -0.10, 1.05),
+            ..obb
+        };
+        assert_eq!(safely_above.aabb_penetration(min, max), 0.0);
+    }
+
+    #[test]
+    fn default_ready_pose_clears_support_frame() {
+        let robot = crate::defaults::robot().expect("robot");
+        let state = robot.arm.initial_state();
+        assert_eq!(
+            support_frame_penetration(&robot.arm, state.rail_x(), state.joints()),
+            0.0,
+            "기본 중앙 대기 자세는 하부 프로파일 금지 영역을 침범하면 안 됨"
+        );
+    }
 
     #[test]
     fn deep_racket_penetrates_table() {

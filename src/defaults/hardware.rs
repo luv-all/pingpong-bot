@@ -31,9 +31,12 @@ impl Default for DynamixelConfig {
             addr_current_limit: 38,
             // MX-64만 Current Limit 보유(기본·최대 1941). MX-28(ID 4·5)에는 레지스터 없음.
             current_limit_max_by_id: vec![(1, 1941), (2, 1941), (3, 1941)],
-            // 초기 실기 코드에서 검증했던 기본 프로파일을 유지한다.
-            profile_acceleration: 20,
-            profile_velocity: 80,
+            // 플래너는 관절 최대 약 4.61 rad/s를 허용하는데 예전
+            // Profile Velocity=80은 약 1.92 rad/s로 모터를 절반 이하로
+            // 막았다. 192 LSB × 0.229 rpm/LSB ≈ 44 rpm = 4.60 rad/s로
+            // 스트리밍 궤적과 내부 프로파일 상한을 맞춘다.
+            profile_acceleration: 60,
+            profile_velocity: 192,
             comm_retries: 5,
             comm_retry_delay_ms: 20,
             stream_hz: 200.0,

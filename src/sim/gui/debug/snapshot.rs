@@ -4,7 +4,7 @@ use crate::defaults;
 use crate::error::SwingPlanError;
 use crate::robot::Arm;
 use crate::robot::Joints;
-use crate::robot::collision::{robot_obbs, table_penetration};
+use crate::robot::collision::{environment_penetration, robot_obbs};
 use crate::robot::motion;
 
 use super::commit_phase::CommitPhase;
@@ -201,7 +201,7 @@ impl SimDebugSnapshot {
         hit_plane_y: f64,
     ) {
         self.omega = [omega.x, omega.y, omega.z];
-        self.table_pen_depth = table_penetration(arm, rail_x, joints);
+        self.table_pen_depth = environment_penetration(arm, rail_x, joints);
         self.penetrating_obbs = robot_obbs(arm, rail_x, joints)
             .into_iter()
             .filter(|obb| obb.table_penetration() > 1e-3)

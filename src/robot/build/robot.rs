@@ -42,6 +42,11 @@ impl Robot {
         return crate::robot::collision::table_penetration(&self.arm, rail_x, joints);
     }
 
+    /// 탁구대 + 로봇 하부 철제 프레임 침범량.
+    pub fn environment_penetration(&self, rail_x: f64, joints: &Joints) -> f64 {
+        return crate::robot::collision::environment_penetration(&self.arm, rail_x, joints);
+    }
+
     pub fn clamp_above_table(&self, rail_x: f64, joints: &Joints) -> Joints {
         return crate::robot::collision::clamp_above_table(&self.arm, rail_x, joints);
     }

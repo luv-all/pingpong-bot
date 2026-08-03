@@ -119,7 +119,9 @@ pub(crate) fn best_impact_candidate_for_outgoing(
                 return;
             }
         };
-        if crate::robot::collision::table_penetration(arm, solved.rail_x, &solved.joints) > 1e-3 {
+        if crate::robot::collision::environment_penetration(arm, solved.rail_x, &solved.joints)
+            > 1e-3
+        {
             return;
         }
         let Some(pose) = arm.forward_kinematics_with_rail(solved.rail_x, &solved.joints) else {
@@ -288,7 +290,7 @@ mod tests {
                         ) else {
                             continue;
                         };
-                        if crate::robot::collision::table_penetration(
+                        if crate::robot::collision::environment_penetration(
                             arm,
                             solved.rail_x,
                             &solved.joints,
@@ -547,8 +549,11 @@ mod tests {
                 ) else {
                     continue;
                 };
-                if crate::robot::collision::table_penetration(arm, solved.rail_x, &solved.joints)
-                    > 1e-3
+                if crate::robot::collision::environment_penetration(
+                    arm,
+                    solved.rail_x,
+                    &solved.joints,
+                ) > 1e-3
                 {
                     continue;
                 }
@@ -772,8 +777,11 @@ mod tests {
                 ) else {
                     continue;
                 };
-                let _ =
-                    crate::robot::collision::table_penetration(arm, solved.rail_x, &solved.joints);
+                let _ = crate::robot::collision::environment_penetration(
+                    arm,
+                    solved.rail_x,
+                    &solved.joints,
+                );
                 if let Some(pose) = arm.forward_kinematics_with_rail(solved.rail_x, &solved.joints)
                     && let Ok(v_r) = Impact::required_racket_velocity(
                         v_in,

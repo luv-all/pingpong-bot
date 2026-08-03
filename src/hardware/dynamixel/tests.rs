@@ -10,14 +10,19 @@ fn bench_config() -> DynamixelConfig {
 }
 
 #[test]
-fn profile_velocity_to_rad_s_matches_hand_computed_value() {
-    // config/real-hardware.toml의 profile_velocity = 80.
-    // 80 LSB * 0.229 rev/min/LSB = 18.32 rev/min
-    // 18.32 rev/min * 2*PI rad/rev / 60 s/min ≈ 1.918466 rad/s
+fn profile_velocity_to_rad_s_matches_real_default() {
+    // 실기 내부 프로파일을 플래너의 관절 속도 상한과 맞춘다.
     // source: https://emanual.robotis.com/docs/en/dxl/mx/mx-64-2/ (Profile Velocity
     // unit, Protocol 2.0 control table, addr 112), retrieved 2026-07-23.
-    let rad_s = dynamixel_profile_velocity_to_rad_s(80);
-    assert!((rad_s - 1.918_466).abs() < 1e-4);
+    let raw = DynamixelConfig::default().profile_velocity;
+    assert_eq!(DynamixelConfig::default().profile_acceleration, 60);
+    let rad_s = dynamixel_profile_velocity_to_rad_s(raw);
+    assert_eq!(raw, 192);
+    assert!(
+        (rad_s - crate::defaults::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S).abs() < 0.02,
+        "실기 프로파일 {rad_s} rad/s != 플래너 {} rad/s",
+        crate::defaults::DYNAMIXEL_MAX_JOINT_SPEED_RAD_S,
+    );
 
     // 0 LSB -> 0 rad/s (register `0` also means "infinite velocity" on real hardware,
     // but the pure unit conversion itself must still be 0).

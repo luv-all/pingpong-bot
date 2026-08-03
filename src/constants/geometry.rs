@@ -56,6 +56,17 @@ pub const RAIL_THICKNESS: f64 = 0.055;
 /// 레일 시각화 단면 너비 [m]. 단면 폭 실측이 없어 장식값으로 남긴다.
 pub const RAIL_VISUAL_WIDTH: f64 = 0.06;
 
+/// 로봇 아래 수평 알루미늄 프로파일의 충돌 모델 폭(Y) [m].
+///
+/// 사진에서 보이는 상부 레일·지지 프로파일 묶음을 단일 박스로
+/// 보수적으로 감싼다. 뷰어 장식 폭(`RAIL_VISUAL_WIDTH`)과 달리
+/// 실물 간섭 검사용이다.
+pub const RAIL_FRAME_COLLISION_WIDTH: f64 = 0.16;
+
+/// 철제 프레임에 두는 최소 여유 [m]. 케이블·프레임 모서리와
+/// OBB 근사 오차를 포함해 링크가 실물 표면에 닿지 않게 한다.
+pub const SUPPORT_FRAME_CLEARANCE: f64 = 0.02;
+
 /// 테이블 면 위 최소 여유 [m] - OBB 최저점이 이보다 낮으면 관통.
 pub const TABLE_CLEARANCE: f64 = 0.003;
 

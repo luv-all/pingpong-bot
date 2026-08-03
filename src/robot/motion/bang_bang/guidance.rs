@@ -56,7 +56,7 @@ use crate::defaults::motion::{
 use crate::error::{DomainError, SwingPlanError};
 use crate::estimator::Prediction;
 use crate::robot::Arm;
-use crate::robot::collision::{clamp_above_table, table_penetration};
+use crate::robot::collision::{clamp_above_table, environment_penetration};
 use crate::robot::dynamics::{bias_torques_into, mass_matrix_into};
 use crate::robot::{self, Joints};
 
@@ -405,7 +405,8 @@ pub(crate) fn plan_bang_bang_for(
         // 보정도 되먹임돼 증폭된다(실측: 방향오차 4.3°→125.2°). 재생 샘플만
         // 클램프하면 유도법의 내부 적분은 전혀 흔들리지 않고, 실제로
         // 로봇에 나가는(그려지는) 자세만 안전해진다.
-        let sample_joints = if table_penetration(arm, rail_x, &Joints::from_slice(&q)) > 1e-4 {
+        let sample_joints = if environment_penetration(arm, rail_x, &Joints::from_slice(&q)) > 1e-4
+        {
             clamp_above_table(arm, rail_x, &Joints::from_slice(&q))
         } else {
             Joints::from_slice(&q)

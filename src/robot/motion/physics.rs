@@ -635,7 +635,7 @@ fn build_feasible_trajectory(
                 let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
                 let joints = trajectory.sample_at(time);
                 let rail_x = trajectory.sample_rail_at(time);
-                worst = worst.max(crate::robot::collision::table_penetration(
+                worst = worst.max(crate::robot::collision::environment_penetration(
                     arm, rail_x, &joints,
                 ));
             }
@@ -752,7 +752,7 @@ fn trajectory_collision_free(arm: &Arm, trajectory: &Trajectory) -> bool {
         let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
         let joints = trajectory.sample_at(time);
         let rail_x = trajectory.sample_rail_at(time);
-        if crate::robot::collision::table_penetration(arm, rail_x, &joints) > 1e-3 {
+        if crate::robot::collision::environment_penetration(arm, rail_x, &joints) > 1e-3 {
             return false;
         }
     }
@@ -1297,7 +1297,7 @@ mod tests {
             "스윙이 토크로 제한됐어야(한계 근처): util={torque_util}"
         );
         assert!(
-            crate::robot::collision::table_penetration(
+            crate::robot::collision::environment_penetration(
                 &arm,
                 trajectory.rail.end,
                 trajectory.goal_joints()
