@@ -107,7 +107,15 @@ impl SimSession {
                     if physics_shutdown.load(Ordering::Acquire) {
                         return;
                     }
-                    let (shoot, park, shooter, use_bang_bang_swing, rail_frame, intercept) = {
+                    let (
+                        shoot,
+                        park,
+                        shooter,
+                        use_bang_bang_swing,
+                        use_fixed_swing_dictionary,
+                        rail_frame,
+                        intercept,
+                    ) = {
                         let mut ctrl = physics_controls.lock().expect("sim controls");
                         let shoot = ctrl.shoot_requested;
                         let park = ctrl.park_requested;
@@ -118,12 +126,14 @@ impl SimSession {
                             park,
                             ctrl.shooter.clone(),
                             ctrl.use_bang_bang_swing,
+                            ctrl.use_fixed_swing_dictionary,
                             ctrl.rail_frame,
                             ctrl.intercept,
                         )
                     };
                     let mut w = physics_world.lock().expect("sim 월드");
                     w.set_use_bang_bang_swing(use_bang_bang_swing);
+                    w.set_use_fixed_swing_dictionary(use_fixed_swing_dictionary);
                     w.step(
                         physics_dt,
                         Some(SimStepInput {

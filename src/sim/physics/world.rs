@@ -92,6 +92,9 @@ pub struct SimWorld {
     /// true면 commit 시 quintic(`plan_best_swing`) 대신 순수 토크 bang-bang
     /// (`plan_bang_bang_swing`)을 계획한다 - GUI 디버그 토글 전용.
     use_bang_bang_swing: bool,
+    /// true면 commit 시 quintic 대신 IK 없는 고정 스윙 딕셔너리로 계획한다
+    /// - GUI 디버그 토글 전용.
+    use_fixed_swing_dictionary: bool,
     /// 이번 비행에서 스윙을 이미 commit했는지 (재계획·팔 떨림 방지)
     swing_committed: bool,
     /// 1차 이동 후 0.25 s 시점의 정밀 목표로 재계획했는지.
@@ -404,6 +407,7 @@ impl SimWorld {
             use_ground_truth: true,
             kinematic_robot: false,
             use_bang_bang_swing: false,
+            use_fixed_swing_dictionary: false,
             swing_committed: false,
             position_refined: false,
             swing_abandoned: false,
@@ -484,6 +488,37 @@ impl SimWorld {
     /// bang-bang 스윙 모드 여부.
     pub fn use_bang_bang_swing(&self) -> bool {
         return self.use_bang_bang_swing;
+    }
+
+    /// 고정 스윙 딕셔너리 모드 on/off. 켜지는 순간 팔을
+    /// [`motion::fixed_swing_start_joints`]로 이동시킨다 — 이 모드의 모든
+    /// 커밋은 그 자세에서 시작한다고 가정하므로, 실제로 거기 있어야 한다.
+    /// 일반 중앙 자동복귀([`robot::State::set_auto_return_to_center`])는
+    /// 끈다 — 이 모드는 [`Self::try_fixed_swing_dictionary`]가 직접
+    /// 시작 자세로 복귀시킨다.
+    pub fn set_use_fixed_swing_dictionary(&mut self, enabled: bool) {
+        if enabled && !self.use_fixed_swing_dictionary {
+            let rail_x = self
+                .arm
+                .rail
+                .map_or(self.robot.rail_x(), |rail| rail.default_x());
+            let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
+            if let Ok(trajectory) = motion::Planner::move_to(
+                &self.arm,
+                &start,
+                motion::fixed_swing_start_joints(),
+                rail_x,
+            ) {
+                self.robot.replace_swing(trajectory);
+            }
+        }
+        self.use_fixed_swing_dictionary = enabled;
+        self.robot.set_auto_return_to_center(!enabled);
+    }
+
+    /// 고정 스윙 딕셔너리 모드 여부.
+    pub fn use_fixed_swing_dictionary(&self) -> bool {
+        return self.use_fixed_swing_dictionary;
     }
 
     /// 이번 공에 스윙을 이미 commit했는지.
@@ -847,6 +882,10 @@ impl SimWorld {
             self.poll_and_advance_bang_bang(&predictions);
             return;
         }
+        if self.use_fixed_swing_dictionary {
+            self.try_fixed_swing_dictionary(&predictions);
+            return;
+        }
         self.debug_snap.commit_phase = CommitPhase::InWindow;
 
         self.last_swing_attempt_at = self.sim_time;
@@ -924,6 +963,51 @@ impl SimWorld {
         self.robot.replace_motion_and_return(trajectory, start);
         self.swing_committed = true;
         self.position_refined = refined;
+    }
+
+    /// IK 없이 고정 스윙 딕셔너리로 커밋한다. 레일 x는 가장 임박한 예측의
+    /// 임팩트 x를 그대로 클램프하고([`motion::fixed_swing_rail_target`]),
+    /// 스윙은 [`motion::FIXED_SWING_START_DEG`]→[`motion::FIXED_SWING_END_DEG`]를
+    /// 그대로 재생한다. 남은 시간이 그 고정 스윙의 소요 시간 이하가 되는
+    /// 순간 커밋한다([`motion::should_start_fixed_swing`]) — quintic 재적합으로
+    /// duration을 남은 시간에 맞추는 일반 경로와 달리, 이 경로는 duration이
+    /// 고정이라 "지금이 그 타이밍인가"만 판정한다.
+    fn try_fixed_swing_dictionary(&mut self, predictions: &[Prediction]) {
+        if self.swing_committed || self.robot.is_swinging() {
+            return;
+        }
+        let Some(rail) = self.arm.rail else {
+            return;
+        };
+        let Some(prediction) = predictions.iter().min_by(|left, right| {
+            left.time_to_impact_secs
+                .total_cmp(&right.time_to_impact_secs)
+        }) else {
+            return;
+        };
+        let target_rail_x =
+            motion::fixed_swing_rail_target(&rail, prediction.impact_position.coords.x);
+        self.robot.set_rail_target(target_rail_x);
+
+        let Ok(trajectory) = motion::Planner::plan_fixed_swing(&self.arm, target_rail_x) else {
+            return;
+        };
+        if !motion::should_start_fixed_swing(
+            prediction.time_to_impact_secs,
+            trajectory.duration_secs,
+        ) {
+            return;
+        }
+        let return_pose = robot::Pose::new(target_rail_x, motion::fixed_swing_start_joints());
+        self.robot
+            .replace_motion_and_return(trajectory, return_pose);
+        self.mark_swing_committed();
+        info!(
+            shot = self.shot_seq,
+            rail_x = target_rail_x,
+            time_to_impact_secs = prediction.time_to_impact_secs,
+            "shot: fixed swing dictionary commit"
+        );
     }
 
     /// bang-bang(GUI 디버그) 커밋 경로 — `plan_bang_bang_swing`을 이 스레드
@@ -2211,6 +2295,38 @@ mod tests {
             "step() 한 번이 {worst_wall_ms:.2}ms 걸림(허용 {MAX_STEP_WALL_MS}ms) — \
              bang-bang 계획이 다시 물리 스레드를 블로킹하고 있을 가능성"
         );
+    }
+
+    /// 고정 스윙 딕셔너리 모드는 커밋 시 START/END 딕셔너리 그대로 재생해야
+    /// 한다 — IK로 고른 임의 자세가 아니라 정확히 그 두 포즈.
+    #[test]
+    fn fixed_swing_dictionary_commits_the_exact_dictionary_poses() {
+        // primitive_4dof()(=`test_robot()`)의 단순화된 세그먼트 기하에서는
+        // 딕셔너리 START 자세가 테이블을 뚫는다(`TablePenetration`) — 딕셔너리
+        // 관절각은 실제 URDF 로봇(`crate::defaults::robot()`) 기준으로 골랐다.
+        let robot = crate::defaults::robot().expect("robot");
+        let mut world = SimWorld::new(robot);
+        world.set_use_ground_truth(true);
+        world.set_use_fixed_swing_dictionary(true);
+
+        world.shoot_ball(&launch::Settings::default());
+
+        let dt = 1.0 / 1000.0;
+        let mut committed_end: Option<Vec<f64>> = None;
+        for _ in 0..4000 {
+            world.step(dt, None);
+            if let Some(trajectory) = world.robot.active_trajectory() {
+                committed_end = Some(trajectory.goal_joints().values.clone());
+                break;
+            }
+        }
+        let end = committed_end.expect("고정 스윙이 커밋돼야 한다");
+        for (actual, expected) in end
+            .iter()
+            .zip(crate::robot::motion::fixed_swing_end_joints().values)
+        {
+            assert!((actual - expected).abs() < 1e-9);
+        }
     }
 
     #[test]

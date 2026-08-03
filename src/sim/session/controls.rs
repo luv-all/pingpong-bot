@@ -28,6 +28,9 @@ pub struct SimRuntimeControls {
     /// true면 commit 시 quintic 대신 순수 토크 bang-bang을 계획한다 - GUI
     /// "Bang-bang swing (debug)" 체크박스가 매 프레임 반영한다.
     pub use_bang_bang_swing: bool,
+    /// true면 commit 시 quintic 대신 IK 없는 고정 스윙 딕셔너리
+    /// (`robot::motion::fixed_swing`)로 계획한다 - GUI 체크박스가 매 프레임 반영한다.
+    pub use_fixed_swing_dictionary: bool,
     /// 발사 버튼 — 물리 스레드가 소비
     pub shoot_requested: bool,
     /// 공 회수 — 슈터에 다시 주차
@@ -42,6 +45,7 @@ impl Default for SimRuntimeControls {
             intercept: InterceptWindow::default(),
             time_scale: 1.0,
             use_bang_bang_swing: false,
+            use_fixed_swing_dictionary: false,
             shoot_requested: false,
             park_requested: false,
         };
