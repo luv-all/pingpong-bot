@@ -107,6 +107,21 @@ impl Planner {
         return physics::plan_move_to_fastest(arm, start, end_joints, end_rail_x);
     }
 
+    /// [`super::fixed_swing::fixed_swing_start_joints`].
+    pub fn fixed_swing_start_joints() -> crate::robot::Joints {
+        return super::fixed_swing::fixed_swing_start_joints();
+    }
+
+    /// [`super::fixed_swing::fixed_swing_end_joints`].
+    pub fn fixed_swing_end_joints() -> crate::robot::Joints {
+        return super::fixed_swing::fixed_swing_end_joints();
+    }
+
+    /// [`super::fixed_swing::plan_fixed_swing`].
+    pub fn plan_fixed_swing(arm: &Arm, rail_x: f64) -> Result<Trajectory, DomainError> {
+        return super::fixed_swing::plan_fixed_swing(arm, rail_x);
+    }
+
     pub fn plan_bang_bang(
         arm: &Arm,
         predictions: &[Prediction],

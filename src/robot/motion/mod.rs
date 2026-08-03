@@ -7,6 +7,7 @@
 
 pub mod bang_bang;
 pub mod feasibility;
+pub mod fixed_swing;
 pub mod impact_candidate;
 pub mod impact_target;
 pub mod intercept_window;
@@ -19,6 +20,10 @@ pub mod trajectory;
 
 pub use bang_bang::{RacketGuidanceScratch, RacketGuidanceStep};
 pub use feasibility::Feasibility;
+pub use fixed_swing::{
+    FIXED_SWING_END_DEG, FIXED_SWING_START_DEG, fixed_swing_end_joints, fixed_swing_rail_target,
+    fixed_swing_start_joints, should_start_fixed_swing,
+};
 pub use intercept_window::InterceptWindow;
 pub use planned_intercept::PlannedIntercept;
 pub use planner::Planner;
