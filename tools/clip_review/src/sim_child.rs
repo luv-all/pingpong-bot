@@ -37,10 +37,13 @@ const COMMITTED_WIDTH: f32 = 4.0;
 
 pub fn run() -> Result<()> {
     let shutdown = SimRuntimeControls::new_shutdown();
-    let observed = trail::Handle::new(OBSERVED_RGBA, OBSERVED_WIDTH);
-    let future = trail::Handle::new(FUTURE_RGBA, FUTURE_WIDTH);
-    let filtered = trail::Handle::new(FILTERED_RGBA, FILTERED_WIDTH);
-    let committed = trail::Handle::new(COMMITTED_RGBA, COMMITTED_WIDTH);
+    let observed =
+        trail::Handle::new(OBSERVED_RGBA, OBSERVED_WIDTH).labelled("raw 삼각측량 (지금까지)");
+    let future = trail::Handle::new(FUTURE_RGBA, FUTURE_WIDTH).labelled("raw 삼각측량 (앞으로)");
+    let filtered =
+        trail::Handle::new(FILTERED_RGBA, FILTERED_WIDTH).labelled("적합 궤적 (measured)");
+    let committed =
+        trail::Handle::new(COMMITTED_RGBA, COMMITTED_WIDTH).labelled("예측 궤적 (predicted)");
 
     let scene = SimScene::builder()
         .title("clip-review sim")

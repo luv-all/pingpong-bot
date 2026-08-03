@@ -16,6 +16,8 @@ pub struct Handle {
     points: Arc<Mutex<Vec<Point3>>>,
     color: Color,
     width: f32,
+    /// 범례에 쓸 이름. 없으면 범례에 안 나온다.
+    label: Option<&'static str>,
 }
 
 impl Handle {
@@ -26,7 +28,21 @@ impl Handle {
             points: Arc::new(Mutex::new(Vec::new())),
             color: Color::new(rgba[0], rgba[1], rgba[2], rgba[3]),
             width,
+            label: None,
         };
+    }
+
+    /// 범례에 이름을 단다.
+    ///
+    /// 색을 궤적 자신이 들고 있으므로 범례가 실제 선과 어긋날 수가 없다 — 툴마다 색
+    /// 목록을 따로 적으면 한쪽만 고치는 날이 온다.
+    pub fn labelled(mut self, label: &'static str) -> Self {
+        self.label = Some(label);
+        return self;
+    }
+
+    pub fn label(&self) -> Option<&'static str> {
+        return self.label;
     }
 
     /// 궤적을 통째로 갈아 끼운다. 빈 벡터면 아무것도 안 그린다.
@@ -61,6 +77,15 @@ impl Handle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 범례는 궤적이 들고 있는 색을 그대로 쓴다 — 따로 적어 둔 색과 어긋날 자리가 없다.
+    #[test]
+    fn a_labelled_trail_carries_its_own_colour() {
+        let trail = Handle::new([1.0, 0.0, 1.0, 1.0], 3.0).labelled("predicted");
+        assert_eq!(trail.label(), Some("predicted"));
+        assert!((trail.color().r - 1.0).abs() < 1e-6);
+        assert_eq!(Handle::new([0.0; 4], 1.0).label(), None);
+    }
 
     #[test]
     fn trail_handle_roundtrip() {

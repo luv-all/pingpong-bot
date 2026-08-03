@@ -12,6 +12,7 @@ mod status_snapshot;
 mod urdf_visual_node;
 
 pub use options::SimViewerOptions;
+pub use panel::ensure_korean_fonts;
 pub use panel_ui_state::PanelUiState;
 
 use std::sync::{Mutex, MutexGuard, TryLockError};
