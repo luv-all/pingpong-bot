@@ -1433,6 +1433,641 @@ git commit -m "feat(real): add --fixed-swing-dictionary flag to select the IK-fr
 
 ---
 
+### Task 5b: Per-joint phase-offset support in `Trajectory` (backward-compatible extension)
+
+**Why this task exists:** live-GUI testing (user) showed the fixed swing's racket velocity is well-aligned with the forward/return direction (96-100% of speed vector, measured directly) but the peak speed itself is low (0.879 m/s measured for the current dictionary) despite large joint excursions (j0 50°, j2 62°, j3 40°). Root cause: `plan_fixed_swing` uses `Planner::move_to_fastest`, which builds a single quintic where **all 4 joints share the same start/end time** — every joint reaches its own peak angular velocity at roughly the same instant, with no "kinetic chain" effect (proximal joints building momentum that distal joints' motion, arriving later, adds to). User confirmed: build a staggered/phase-offset ("whip") trajectory as the fix, compare it against the current synchronized shape live in the GUI.
+
+**Why split from Task 5c:** `Trajectory` (`src/robot/motion/trajectory.rs`) is the type every other swing mode in the codebase depends on (`plan_swing`, `plan_bang_bang_swing`, `plan_move_to`/`plan_move_to_fastest`, `plan_return_to_center`, coarse-track). This task extends it **additively** — a new `Option` field that is `None` for every existing call site, preserving their behavior byte-for-byte. Task 5c (which actually builds the staggered fixed-swing trajectory) depends on this extension existing and tested first, in isolation, before any feature code uses it — so a mistake here is caught by this task's own regression tests, not discovered later mixed in with new feature logic.
+
+**Files:**
+- Modify: `src/robot/motion/trajectory.rs` — add `joint_phase_offsets: Option<Vec<(f64, f64)>>` field (defaults to `None` in both existing constructors), a `with_phase_offsets` builder, a private local-time-mapping helper, and update `pre_impact_segments`/`sample_at`/`sample_velocity_at`/`sample_acceleration_at` to respect it when present. Follow-through segments are untouched — offsets apply to the pre-impact phase only.
+
+**Interfaces:**
+- Consumes: nothing new — pure extension of the existing `Trajectory` struct and its own methods.
+- Produces: `Trajectory::with_phase_offsets(self, offsets: Vec<(f64, f64)>) -> Self` (chainable builder), consumed by Task 5c. The field itself (`pub joint_phase_offsets`) is also directly readable/settable for tests.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `src/robot/motion/trajectory.rs`'s existing `#[cfg(test)] mod tests` block:
+
+```rust
+    #[test]
+    fn joint_phase_offsets_default_none_preserves_existing_sampling() {
+        let trajectory = Trajectory::new(
+            Joints::from_slice(&[0.0, 0.0]),
+            Joints::from_slice(&[1.0, 2.0]),
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+            0.5,
+            Rail::fixed(0.0),
+        );
+        assert!(trajectory.joint_phase_offsets.is_none());
+        let mid = trajectory.sample_at(0.25);
+        assert!(mid.values[0] > 0.0 && mid.values[0] < 1.0);
+        assert!(mid.values[1] > 0.0 && mid.values[1] < 2.0);
+        // 오프셋이 없으면 두 관절이 같은 진행률로 움직여야 한다(회귀 확인).
+        let ratio0 = mid.values[0] / 1.0;
+        let ratio1 = mid.values[1] / 2.0;
+        assert!(
+            (ratio0 - ratio1).abs() < 1e-9,
+            "오프셋 없으면 두 관절이 같은 진행률로 움직여야 함: {ratio0} vs {ratio1}"
+        );
+    }
+
+    #[test]
+    fn joint_phase_offsets_some_holds_before_and_after_its_own_window() {
+        // 관절0은 [0.0, 0.2]에서만, 관절1은 [0.3, 0.5]에서만 움직인다.
+        let trajectory = Trajectory::new(
+            Joints::from_slice(&[0.0, 0.0]),
+            Joints::from_slice(&[1.0, 1.0]),
+            vec![0.0, 0.0],
+            vec![0.0, 0.0],
+            0.5,
+            Rail::fixed(0.0),
+        )
+        .with_phase_offsets(vec![(0.0, 0.2), (0.3, 0.2)]);
+
+        let at0 = trajectory.sample_at(0.0);
+        assert!((at0.values[0] - 0.0).abs() < 1e-9);
+        assert!((at0.values[1] - 0.0).abs() < 1e-9);
+
+        // t=0.2: 관절0은 이미 자기 구간이 끝나 끝값(1.0)에서 정지, 관절1은
+        // 아직 자기 구간(0.3~0.5) 전이라 시작값(0.0) 그대로.
+        let mid = trajectory.sample_at(0.2);
+        assert!((mid.values[0] - 1.0).abs() < 1e-6, "관절0={}", mid.values[0]);
+        assert!((mid.values[1] - 0.0).abs() < 1e-6, "관절1={}", mid.values[1]);
+
+        // t=0.5: 관절0은 계속 끝값 유지, 관절1도 자기 구간이 끝나 끝값(1.0).
+        let end = trajectory.sample_at(0.5);
+        assert!((end.values[0] - 1.0).abs() < 1e-6);
+        assert!((end.values[1] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn joint_phase_offsets_velocity_is_zero_outside_its_own_window() {
+        let trajectory = Trajectory::new(
+            Joints::from_slice(&[0.0]),
+            Joints::from_slice(&[1.0]),
+            vec![0.0],
+            vec![0.0],
+            0.5,
+            Rail::fixed(0.0),
+        )
+        .with_phase_offsets(vec![(0.1, 0.2)]);
+        assert!((trajectory.sample_velocity_at(0.05)[0]).abs() < 1e-9, "자기 구간 전");
+        assert!((trajectory.sample_velocity_at(0.4)[0]).abs() < 1e-9, "자기 구간 후");
+    }
+
+    #[test]
+    fn other_swing_modes_never_set_joint_phase_offsets() {
+        // 회귀 가드: 다른 모든 스윙 플래너는 이 필드를 건드리지 않아야 한다.
+        let robot = crate::defaults::robot().expect("robot");
+        let rail_x = robot.arm.rail.expect("rail").default_x();
+        let start = crate::robot::Pose::new(rail_x, robot.arm.default_joints.clone());
+        let trajectory = crate::robot::motion::Planner::return_to_center(&robot.arm, &start)
+            .expect("return_to_center");
+        assert!(trajectory.joint_phase_offsets.is_none());
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cargo test -p pingpong-bot --lib joint_phase_offsets 2>&1 | tail -40`
+Expected: compile error — `joint_phase_offsets`/`with_phase_offsets` don't exist yet.
+
+- [ ] **Step 3: Add the field, builder, and local-time helper**
+
+Add the field to the `Trajectory` struct, next to `follow_through_rail_velocity`:
+
+```rust
+    pub follow_through_rail_velocity: f64,
+    /// 관절별 `(로컬 시작 오프셋 [s], 로컬 구간 길이 [s])` — pre-impact 구간에만
+    /// 적용된다. `None`이면 모든 관절이 `impact_time_secs`를 그대로 공유한다
+    /// (기존 동작, 이 필드가 없던 시절과 동일). `Some`이면 관절 i는 전역 시간
+    /// `[offset, offset+duration]` 구간에서만 움직이고, 그 밖에서는 시작/끝
+    /// 값에 정지한다 — 근위→원위 순서로 어긋난 채찍형 스윙
+    /// ([`crate::robot::motion::fixed_swing`])에 쓰인다. 팔로스루 구간은
+    /// 영향받지 않는다.
+    pub joint_phase_offsets: Option<Vec<(f64, f64)>>,
+```
+
+In both `Trajectory::new` and `Trajectory::with_follow_through`, add `joint_phase_offsets: None,` to the returned `Self { ... }` block (this is the only change needed to keep every existing call site's behavior identical).
+
+Add the builder and helper, near `pre_impact_segments`:
+
+```rust
+    /// 관절별 위상 오프셋을 부여한 사본을 돌려준다 — 채찍형 스윙 전용
+    /// (`crate::robot::motion::fixed_swing`). `offsets.len()`은 관절 수와
+    /// 같아야 한다(호출부 책임 — 검증은 하지 않는다, 내부 전용 빌더이므로).
+    pub fn with_phase_offsets(mut self, offsets: Vec<(f64, f64)>) -> Self {
+        self.joint_phase_offsets = Some(offsets);
+        return self;
+    }
+
+    /// 관절 `joint_index`의 전역 시간 `global_t`를 로컬(자기 구간 기준) 시간으로
+    /// 변환한다. `joint_phase_offsets`가 없으면 전역 시간을 그대로 쓴다(기존
+    /// 동작). 있으면 자기 구간 밖에서는 경계값으로 클램프한다 — 그 결과
+    /// `QuinticSegment::sample`이 구간 시작/끝의 경계 조건(위치·속도·가속도)을
+    /// 그대로 반환하므로, 관절이 자기 구간 전/후에는 정지해 있는 것처럼
+    /// 보인다(양끝 속도가 0인 한).
+    fn pre_impact_local_time(&self, joint_index: usize, global_t: f64) -> f64 {
+        let Some(offsets) = &self.joint_phase_offsets else {
+            return global_t;
+        };
+        let (offset, duration) = offsets[joint_index];
+        return (global_t - offset).clamp(0.0, duration);
+    }
+```
+
+Modify `pre_impact_segments` to use per-joint duration:
+
+```rust
+    fn pre_impact_segments(&self) -> Vec<QuinticSegment> {
+        let n = self.start.values.len();
+        assert_eq!(self.end.values.len(), n, "impact joint count");
+        assert_eq!(self.start_velocity.len(), n, "start velocity count");
+        assert_eq!(self.end_velocity.len(), n, "impact velocity count");
+        let mut segments = Vec::with_capacity(n);
+        for i in 0..n {
+            let impact_accel = self.impact_acceleration.get(i).copied().unwrap_or(0.0);
+            let duration = self
+                .joint_phase_offsets
+                .as_ref()
+                .map_or(self.impact_time_secs, |offsets| offsets[i].1);
+            segments.push(QuinticSegment::new(
+                self.start.values[i],
+                self.end.values[i],
+                self.start_velocity[i],
+                self.end_velocity[i],
+                0.0,
+                impact_accel,
+                duration,
+            ));
+        }
+        return segments;
+    }
+```
+
+Modify `sample_at`'s pre-impact branch to map through `pre_impact_local_time` per joint:
+
+```rust
+    pub fn sample_at(&self, t: f64) -> Joints {
+        let values = if t <= self.impact_time_secs || self.duration_secs <= self.impact_time_secs {
+            self.pre_impact_segments()
+                .into_iter()
+                .enumerate()
+                .map(|(i, segment)| segment.sample(self.pre_impact_local_time(i, t)).0)
+                .collect()
+        } else {
+            self.follow_through_segments()
+                .into_iter()
+                .map(|segment| segment.sample(t - self.impact_time_secs).0)
+                .collect()
+        };
+        return Joints { values };
+    }
+```
+
+Apply the exact same pattern (enumerate + `self.pre_impact_local_time(i, t)` in the pre-impact branch, follow-through branch unchanged) to `sample_velocity_at` and `sample_acceleration_at`.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo test -p pingpong-bot --lib joint_phase_offsets 2>&1 | tail -40`
+Expected: all 4 new tests PASS.
+
+- [ ] **Step 5: Run the full library test suite for regressions**
+
+Run: `cargo test -p pingpong-bot --lib 2>&1 | tail -20`
+Expected: the same 7 pre-existing failures documented across every prior task's report in this plan (confirmed pre-existing on this branch's base, unrelated), no new failures. This is the critical check for this task — a regression here would mean the additive field isn't as additive as designed, and it would show up as an EXISTING swing-mode test failing (e.g. anything in `physics.rs`'s or `trajectory.rs`'s own test modules), not one of the 7 known ones.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/robot/motion/trajectory.rs
+git commit -m "$(cat <<'EOF'
+feat(robot): add backward-compatible per-joint phase offsets to Trajectory
+
+Additive extension: a new Option<Vec<(f64,f64)>> field, None for every
+existing call site (unchanged behavior, verified by regression test).
+When Some, sample_at/sample_velocity_at/sample_acceleration_at map each
+joint's own local time through its own (offset, duration) window instead
+of sharing a single global timeline — the piece a staggered/whip-style
+swing needs, without touching any of the swing planners that don't use it.
+EOF
+)"
+```
+
+---
+
+### Task 5c: Staggered ("whip") fixed swing shape, with live GUI comparison
+
+**Files:**
+- Modify: `src/robot/motion/fixed_swing.rs` — add `SwingShapeStrategy` (`Synchronized`, `Staggered`), `DEFAULT_SWING_SHAPE_STRATEGY`, and change `plan_fixed_swing` to take a `shape: SwingShapeStrategy` parameter; add the staggered trajectory builder with its own torque/speed feasibility search.
+- Modify: `src/robot/motion/planner.rs` — update `Planner::plan_fixed_swing`'s signature to match.
+- Modify: `src/sim/physics/world.rs` — `try_fixed_swing_dictionary` passes a new `fixed_swing_shape_strategy` field (mirroring `fixed_swing_impact_strategy` from Task 3b) instead of a hardcoded call.
+- Modify: `src/real/fixed_swing_worker.rs` — update its `Planner::plan_fixed_swing` call to pass `DEFAULT_SWING_SHAPE_STRATEGY` (matching how it already passes `DEFAULT_IMPACT_TIME_STRATEGY`).
+- Modify: `src/sim/session/controls.rs`, `src/sim/session/session.rs`, `src/sim/gui/viewer/panel_ui_state.rs`, `src/sim/gui/viewer/panel.rs` — the same 4-hop GUI plumbing pattern as Task 3b's impact-time selector, for a second, independent live comparison toggle.
+
+**Interfaces:**
+- Consumes: `Trajectory::with_phase_offsets` (Task 5b), `Arm::required_torque_with_rotor` (already exists, public — `src/robot/arm.rs`), `Trajectory::{peak_joint_speed, sample_at, sample_velocity_at, sample_acceleration_at}` (already exist, public — the last three now offset-aware per Task 5b).
+- Produces: `plan_fixed_swing(arm: &Arm, rail_x: f64, shape: SwingShapeStrategy) -> Result<Trajectory, DomainError>` (signature change from Tasks 1/2/4 — this task updates both existing call sites in the same commit), `Planner::fixed_swing_shape_strategy` equivalents.
+
+**Why a bespoke feasibility check instead of reusing `physics.rs`'s `peak_torque_utilization`:** that function (and `kinematic_limit_violation`) samples `Trajectory::joint_segments()` using **one shared local time for every joint** (`segments[i].sample(local_t)` with the same `local_t` for all `i`) — correct only when every joint shares one timeline, which is exactly what this task's `Staggered` shape does NOT do. Reusing it on a staggered trajectory would silently sample the wrong instant for offset joints. Instead, this task samples through `Trajectory::sample_at`/`sample_velocity_at`/`sample_acceleration_at` (Task 5b made these offset-aware) and calls `Arm::required_torque_with_rotor` directly — both already `pub`, no visibility changes to `physics.rs` needed, and correct for any trajectory shape.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `src/robot/motion/fixed_swing.rs`'s `#[cfg(test)] mod tests`:
+
+```rust
+    #[test]
+    fn synchronized_shape_matches_the_original_move_to_fastest_behavior() {
+        let robot = crate::defaults::robot().expect("robot");
+        let rail_x = robot.arm.rail.expect("rail").default_x();
+        let via_shape =
+            plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Synchronized).expect("sync");
+        assert!(via_shape.joint_phase_offsets.is_none());
+        for (actual, expected) in via_shape.start.values.iter().zip(fixed_swing_start_joints().values) {
+            assert!((actual - expected).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn staggered_shape_sets_distinct_per_joint_windows_and_stays_feasible() {
+        let robot = crate::defaults::robot().expect("robot");
+        let rail_x = robot.arm.rail.expect("rail").default_x();
+        let staggered =
+            plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Staggered).expect("staggered");
+        let offsets = staggered
+            .joint_phase_offsets
+            .clone()
+            .expect("staggered trajectory must set phase offsets");
+        assert_eq!(offsets.len(), 4);
+        // 근위(j0/j1)가 원위(j3)보다 먼저 시작해야 한다 — 채찍 순서 확인.
+        assert!(offsets[0].0 <= offsets[3].0, "j0 시작 {} > j3 시작 {}", offsets[0].0, offsets[3].0);
+        assert!(offsets[1].0 <= offsets[3].0, "j1 시작 {} > j3 시작 {}", offsets[1].0, offsets[3].0);
+        // 각 관절 구간은 궤적 전체 시간 안에 들어와야 한다.
+        for (index, (offset, duration)) in offsets.iter().enumerate() {
+            assert!(*offset >= 0.0, "joint {index} offset={offset}");
+            assert!(
+                offset + duration <= staggered.duration_secs + 1e-6,
+                "joint {index}: {offset}+{duration} > {}",
+                staggered.duration_secs
+            );
+        }
+    }
+
+    #[test]
+    fn staggered_shape_reaches_a_higher_peak_racket_speed_than_synchronized() {
+        // 이 테스트가 곧 이 기능의 존재 이유다: 채찍형이 동기화형보다
+        // 라켓 중심 최고 속력을 실제로 더 내야 한다.
+        let robot = crate::defaults::robot().expect("robot");
+        let rail_x = robot.arm.rail.expect("rail").default_x();
+        let sync =
+            plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Synchronized).expect("sync");
+        let staggered =
+            plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Staggered).expect("staggered");
+
+        let peak_speed = |trajectory: &Trajectory| -> f64 {
+            const SAMPLES: usize = 80;
+            let step = trajectory.duration_secs / SAMPLES as f64;
+            let mut best = 0.0_f64;
+            for index in 0..=SAMPLES {
+                let t = step * index as f64;
+                let dt = (step * 0.5).max(1e-6);
+                let before = (t - dt).max(0.0);
+                let after = (t + dt).min(trajectory.duration_secs);
+                let p0 = robot
+                    .arm
+                    .forward_kinematics_with_rail(rail_x, &trajectory.sample_at(before))
+                    .expect("fk")
+                    .position
+                    .coords;
+                let p1 = robot
+                    .arm
+                    .forward_kinematics_with_rail(rail_x, &trajectory.sample_at(after))
+                    .expect("fk")
+                    .position
+                    .coords;
+                let speed = (p1 - p0).norm() / (after - before).max(1e-9);
+                best = best.max(speed);
+            }
+            return best;
+        };
+
+        let sync_peak = peak_speed(&sync);
+        let staggered_peak = peak_speed(&staggered);
+        assert!(
+            staggered_peak > sync_peak,
+            "채찍형 최고속={staggered_peak} 동기화형 최고속={sync_peak} — 개선이 없음"
+        );
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cargo test -p pingpong-bot --lib fixed_swing 2>&1 | tail -40`
+Expected: compile error — `SwingShapeStrategy`/the new `plan_fixed_swing` signature don't exist yet.
+
+- [ ] **Step 3: Implement `SwingShapeStrategy` and the staggered builder**
+
+In `src/robot/motion/fixed_swing.rs`, add:
+
+```rust
+/// 고정 스윙의 관절 타이밍 모양 — 사용자가 GUI에서 실시간 비교할 두 선택지.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwingShapeStrategy {
+    /// 4관절이 같은 시간축을 공유하는 단일 quintic(기존 `move_to_fastest`).
+    /// 라켓 방향은 이미 정확하지만(실측 96-100%가 전진 방향), 근위·원위
+    /// 관절이 동시에 각자의 한계까지만 움직여 라켓 최고 속력이 낮다
+    /// (2026-08-03 실측: 0.879 m/s).
+    Synchronized,
+    /// 근위(j0/j1)가 먼저 움직이기 시작해 멈추고, 원위(j2/j3)가 그 뒤에
+    /// 시작해 임팩트 순간 "스냅"되는 채찍형 — 각 관절은 여전히 정지→정지
+    /// quintic이지만 구간이 서로 어긋나 겹친다(채찍/골프 스윙의 kinetic
+    /// chain과 같은 원리).
+    Staggered,
+}
+
+/// 사용자가 GUI에서 두 전략을 비교하는 동안의 기본값 — 고친 쪽(Staggered)을
+/// 기본으로 둔다.
+pub const DEFAULT_SWING_SHAPE_STRATEGY: SwingShapeStrategy = SwingShapeStrategy::Staggered;
+
+/// 근위→원위 순서로 어긋난 구간 — 궤적 전체 시간에 대한 분수 `(시작, 끝)`.
+/// j0/j1이 먼저 시작해 먼저 끝나고, j2가 그 위에 걸쳐 움직이다가, j3가
+/// 가장 늦게 시작해 임팩트 순간 스냅한다. 실측으로 조정 가능한 시작값
+/// (`fixed_swing_impact_time_secs`처럼 이후 실측 기반 재조정 여지가 있다).
+const STAGGERED_PHASE_FRACTIONS: [(f64, f64); 4] = [
+    (0.0, 0.55),  // j0 yaw
+    (0.0, 0.65),  // j1 shoulder
+    (0.20, 0.65), // j2 elbow (0.20~0.85)
+    (0.45, 0.55), // j3 wrist (0.45~1.00)
+];
+```
+
+Change `plan_fixed_swing`'s signature and implementation:
+
+```rust
+/// 레일 `rail_x`에 고정한 채, IK 없이 시작→끝 관절각을 모터 한계(속도·가속·
+/// 토크) 100%로 잇는 quintic — `shape`로 관절 타이밍을 고른다.
+pub fn plan_fixed_swing(
+    arm: &Arm,
+    rail_x: f64,
+    shape: SwingShapeStrategy,
+) -> Result<Trajectory, DomainError> {
+    return match shape {
+        SwingShapeStrategy::Synchronized => {
+            let start = Pose::new(rail_x, fixed_swing_start_joints());
+            Planner::move_to_fastest(arm, &start, fixed_swing_end_joints(), rail_x)
+        }
+        SwingShapeStrategy::Staggered => plan_staggered_fixed_swing(arm, rail_x),
+    };
+}
+
+/// [`SwingShapeStrategy::Staggered`] 빌더 — 동기화형(`move_to_fastest`)이 낸
+/// 실현가능 소요 시간을 기준선으로 잡고, 그 위에 [`STAGGERED_PHASE_FRACTIONS`]
+/// 비율로 관절별 구간을 어긋나게 둔 뒤, 이 모양 자체의 속도·토크 실현가능성을
+/// (동기화형과 별개로) 확인한다 — 같은 각도 변화를 더 짧은 자기 구간에
+/// 눌러넣으므로 관절별 각속도가 동기화형보다 커져, 기준선이 실현 가능했다고
+/// 이 모양도 자동으로 실현 가능한 건 아니다. 안 되면 기준 소요 시간을 늘려
+/// 재시도한다(`move_to_fastest`/`plan_return_to_center`와 같은 성장 탐색 정신).
+fn plan_staggered_fixed_swing(arm: &Arm, rail_x: f64) -> Result<Trajectory, DomainError> {
+    let baseline = {
+        let start = Pose::new(rail_x, fixed_swing_start_joints());
+        Planner::move_to_fastest(arm, &start, fixed_swing_end_joints(), rail_x)?
+    };
+    let start_joints = fixed_swing_start_joints();
+    let end_joints = fixed_swing_end_joints();
+    let n = start_joints.values.len();
+
+    let mut duration = baseline.duration_secs;
+    const MAX_DURATION_SECS: f64 = 3.0;
+    const GROWTH: f64 = 1.2;
+    let mut last_error: Option<DomainError> = None;
+    while duration <= MAX_DURATION_SECS {
+        let offsets: Vec<(f64, f64)> = STAGGERED_PHASE_FRACTIONS
+            .iter()
+            .take(n)
+            .map(|(start_fraction, end_fraction)| {
+                let offset = start_fraction * duration;
+                (offset, (end_fraction - start_fraction) * duration)
+            })
+            .collect();
+        let candidate = Trajectory::new(
+            start_joints.clone(),
+            end_joints.clone(),
+            vec![0.0; n],
+            vec![0.0; n],
+            duration,
+            Rail::fixed(rail_x),
+        )
+        .with_phase_offsets(offsets);
+
+        match staggered_feasibility(arm, &candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) => {
+                last_error = Some(error);
+                duration *= GROWTH;
+            }
+        }
+    }
+    return Err(last_error.unwrap_or(DomainError::InfeasibleSwing(
+        crate::error::SwingPlanError::InverseKinematicsNoSolution {
+            target_x: rail_x,
+            target_y: 0.0,
+            target_z: 0.0,
+        },
+    )));
+}
+
+/// `candidate`가 관절 속도·토크 한계 안인지 직접 샘플링으로 확인한다 —
+/// `physics.rs`의 `peak_torque_utilization`/`kinematic_limit_violation`은
+/// 관절마다 **같은** 로컬 시간을 공유한다고 가정해 위상이 어긋난 이
+/// 궤적에는 안 맞는다(모듈 문서 참고). `Trajectory::sample_at` 계열은
+/// (Task 5b에서) 위상 오프셋을 이미 반영하므로, 이 함수는 그것만으로 검사한다.
+fn staggered_feasibility(arm: &Arm, candidate: &Trajectory) -> Result<(), DomainError> {
+    if candidate.peak_joint_speed() > arm.max_joint_speed {
+        return Err(DomainError::InfeasibleSwing(
+            crate::error::SwingPlanError::TrajectoryExceedsLimits {
+                rail_end_x: candidate.rail.end,
+                violated: "관절 속도",
+            },
+        ));
+    }
+    if arm.joint_torque_limits.iter().all(|limit| !limit.is_finite()) {
+        return Ok(());
+    }
+    const SAMPLES: usize = 40;
+    let mut worst = 0.0_f64;
+    for index in 0..=SAMPLES {
+        let t = candidate.duration_secs * index as f64 / SAMPLES as f64;
+        let q = candidate.sample_at(t);
+        let qd = candidate.sample_velocity_at(t);
+        let qdd = candidate.sample_acceleration_at(t);
+        let Some(torques) = arm.required_torque_with_rotor(&q.values, &qd, &qdd) else {
+            continue;
+        };
+        for (torque, &limit) in torques.iter().zip(arm.joint_torque_limits.iter()) {
+            if limit.is_finite() && limit > 0.0 {
+                worst = worst.max(torque.abs() / limit);
+            }
+        }
+    }
+    if worst > 1.0 {
+        return Err(DomainError::InfeasibleSwing(
+            crate::error::SwingPlanError::TrajectoryExceedsTorque {
+                rail_end_x: candidate.rail.end,
+                utilization: worst,
+            },
+        ));
+    }
+    return Ok(());
+}
+```
+
+Add `use super::rail::Rail;` and `use crate::error::DomainError;`/`SwingPlanError` imports as needed at the top of `fixed_swing.rs` if not already present (check the existing import list first — `Rail`/`DomainError` may already be imported from Task 1).
+
+In `src/robot/motion/mod.rs`, add `SwingShapeStrategy`, `DEFAULT_SWING_SHAPE_STRATEGY` to the `fixed_swing` re-export list.
+
+In `src/robot/motion/planner.rs`, update the existing `Planner::plan_fixed_swing` wrapper's signature to match:
+
+```rust
+    /// [`super::fixed_swing::plan_fixed_swing`].
+    pub fn plan_fixed_swing(
+        arm: &Arm,
+        rail_x: f64,
+        shape: super::fixed_swing::SwingShapeStrategy,
+    ) -> Result<Trajectory, DomainError> {
+        return super::fixed_swing::plan_fixed_swing(arm, rail_x, shape);
+    }
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo test -p pingpong-bot --lib fixed_swing 2>&1 | tail -60`
+Expected: all tests pass, including `staggered_shape_reaches_a_higher_peak_racket_speed_than_synchronized` — this is the test that actually proves the fix works. If it fails (staggered peak ≤ synchronized peak), the `STAGGERED_PHASE_FRACTIONS` values need adjusting (try widening the overlap between j2/j3's windows and j0/j1's, or shifting j3's start earlier) — iterate on the constant, not the test.
+
+- [ ] **Step 5: Update the two existing call sites**
+
+In `src/sim/physics/world.rs`'s `try_fixed_swing_dictionary` (Task 2/3b), add a field next to `fixed_swing_impact_strategy`:
+
+```rust
+    fixed_swing_impact_strategy: motion::ImpactTimeStrategy,
+    /// 고정 스윙의 관절 타이밍 모양 — GUI에서 두 전략을 실시간 비교한다.
+    fixed_swing_shape_strategy: motion::SwingShapeStrategy,
+```
+
+Initialize next to `fixed_swing_impact_strategy: motion::DEFAULT_IMPACT_TIME_STRATEGY,`:
+
+```rust
+            fixed_swing_shape_strategy: motion::DEFAULT_SWING_SHAPE_STRATEGY,
+```
+
+Setter/getter next to the impact-strategy ones:
+
+```rust
+    pub fn set_fixed_swing_shape_strategy(&mut self, strategy: motion::SwingShapeStrategy) {
+        self.fixed_swing_shape_strategy = strategy;
+    }
+
+    pub fn fixed_swing_shape_strategy(&self) -> motion::SwingShapeStrategy {
+        return self.fixed_swing_shape_strategy;
+    }
+```
+
+Update the `plan_fixed_swing` call inside `try_fixed_swing_dictionary`:
+
+```rust
+        let Ok(trajectory) = motion::Planner::plan_fixed_swing(
+            &self.arm,
+            target_rail_x,
+            self.fixed_swing_shape_strategy,
+        ) else {
+            return;
+        };
+```
+
+In `src/real/fixed_swing_worker.rs`, update its `Planner::plan_fixed_swing` call:
+
+```rust
+            let Ok(trajectory) = Planner::plan_fixed_swing(
+                &arm,
+                rail_x,
+                pingpong_bot::robot::motion::DEFAULT_SWING_SHAPE_STRATEGY,
+            ) else {
+                continue;
+            };
+```
+
+- [ ] **Step 6: Wire the second GUI comparison selector**
+
+Repeat Task 3b's exact 4-hop pattern (Step 8 of that task) a second time, for `fixed_swing_shape_strategy` instead of `fixed_swing_impact_strategy`: add the field to `SimRuntimeControls` (`src/sim/session/controls.rs`) with default `motion::DEFAULT_SWING_SHAPE_STRATEGY`; extend the same tuple/sync block in `src/sim/session/session.rs` to also read and apply it; add the field to `PanelUiState` (`src/sim/gui/viewer/panel_ui_state.rs`); add a second `ui.radio_value` pair in `src/sim/gui/viewer/panel.rs`, directly below the impact-time selector added in Task 3b:
+
+```rust
+    ui.horizontal(|ui| {
+        ui.label("스윙 모양:");
+        ui.radio_value(
+            &mut ui_state.fixed_swing_shape_strategy,
+            crate::robot::motion::SwingShapeStrategy::Synchronized,
+            "동기화형(기존)",
+        );
+        ui.radio_value(
+            &mut ui_state.fixed_swing_shape_strategy,
+            crate::robot::motion::SwingShapeStrategy::Staggered,
+            "채찍형(신규)",
+        );
+    });
+```
+
+and the corresponding sync-back line in `draw()` next to `ctrl.fixed_swing_impact_strategy = ...`:
+
+```rust
+        ctrl.fixed_swing_shape_strategy = ui_state.fixed_swing_shape_strategy;
+```
+
+- [ ] **Step 7: Build and run the full test suite**
+
+Run: `cargo build -p pingpong-bot 2>&1 | tail -30`
+Expected: clean build.
+
+Run: `cargo test -p pingpong-bot --lib 2>&1 | tail -20`
+Expected: the same 7 pre-existing failures, plus all new tests passing, no new failures.
+
+- [ ] **Step 8: Measure and report the actual improvement**
+
+Write a short-lived diagnostic (or reuse the `staggered_shape_reaches_a_higher_peak_racket_speed_than_synchronized` test's own numbers via `--nocapture` on a temporary `println!`/`panic!`, then remove it before committing) to report the actual peak-speed numbers for both shapes on `defaults::robot()` at `rail.default_x()`. Include these numbers in your report — this is the direct answer to "did the fix work," parallel to Task 3b's duration/impact-time numbers.
+
+- [ ] **Step 9: Manual GUI comparison (best-effort, report what you can and cannot verify)**
+
+Same caveat as prior GUI tasks: launch briefly to confirm no panic in either radio-button state; you cannot click/interact with the window yourself. Report plainly that the live "does it feel like more force" comparison needs the user's own hands-on check.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add src/robot/motion/fixed_swing.rs src/robot/motion/mod.rs src/robot/motion/planner.rs \
+        src/sim/physics/world.rs src/real/fixed_swing_worker.rs \
+        src/sim/session/controls.rs src/sim/session/session.rs \
+        src/sim/gui/viewer/panel_ui_state.rs src/sim/gui/viewer/panel.rs
+git commit -m "$(cat <<'EOF'
+feat(robot): add a staggered (whip-style) fixed swing shape
+
+The synchronized quintic shape (all 4 joints sharing one timeline) had
+the ball-return direction almost exactly right (96-100% forward-aligned,
+measured) but a low peak racket speed (0.879 m/s) despite large joint
+excursions, because every joint hit its own speed limit at the same
+instant instead of building sequential momentum. Add
+SwingShapeStrategy::Staggered: proximal joints (yaw/shoulder) move first
+and stop, distal joints (elbow/wrist) start later and snap through near
+impact — a kinetic-chain profile, built on Task 5b's per-joint phase
+offsets. Own torque/speed feasibility search (not physics.rs's
+shared-local-time checks, which assume no phase offsets exist). Both
+shapes are compared live via a new GUI selector, alongside Task 3b's
+impact-time selector.
+EOF
+)"
+```
+
+---
+
 ### Task 6: Manual real-hardware testing via `tools/jog`
 
 **Files:**
@@ -1475,9 +2110,15 @@ In `tools/jog/src/plan/mod.rs`, add a match arm in `compose` (next to `Kind::Swi
 
 ```rust
         Kind::Swing => anyhow::bail!("스윙은 plan_swing()으로 계획합니다"),
-        Kind::FixedSwing => motion::Planner::plan_fixed_swing(arm, start.rail_x)
-            .map_err(|error| anyhow::anyhow!("{error}"))
-            .context("고정 스윙 딕셔너리"),
+        // Task 5c: 관절 타이밍 모양(Synchronized/Staggered)이 추가돼
+        // plan_fixed_swing이 세 번째 인자를 받는다 — 기본값(Staggered)을 쓴다.
+        Kind::FixedSwing => motion::Planner::plan_fixed_swing(
+            arm,
+            start.rail_x,
+            pingpong_bot::robot::motion::DEFAULT_SWING_SHAPE_STRATEGY,
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("고정 스윙 딕셔너리"),
 ```
 
 Also update `reach_ok`'s wildcard arm — it already returns `true` for unmatched kinds via its `_ => true` catch-all, so `Kind::FixedSwing` needs no change there, but double check by reading the current match before assuming.
