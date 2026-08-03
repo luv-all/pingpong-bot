@@ -1,7 +1,7 @@
 //! 툴이 보는 단계별 산출물. 본선([`Vision::feed`](super::Vision::feed))은 안 만든다.
 
 use super::detect::{Candidate, Mask};
-use super::ekf::Outcome;
+use super::fit::Outcome;
 
 /// 한 프레임의 진단.
 #[derive(Default)]

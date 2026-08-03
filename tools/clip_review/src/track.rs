@@ -235,7 +235,7 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
             state.observed = Some(hit);
         }
 
-        state.filtered = vision.ekf().measured().last().copied();
+        state.filtered = vision.fit().measured().last().copied();
         state.tracking = state.filtered.is_some();
 
         // 계약이 생기면 잡고, 같은 공인 동안 갱신한다 — measured 가 계속 자란다.

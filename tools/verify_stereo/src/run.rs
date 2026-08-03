@@ -20,7 +20,7 @@ use pingpong_bot::camera::{
 use pingpong_bot::defaults::calibration_path;
 use pingpong_bot::defaults::detector_for;
 use pingpong_bot::vision::Detector;
-use pingpong_bot::vision::{Ekf, Outcome, ekf as ekf_params, triggers};
+use pingpong_bot::vision::{Fit, Outcome, fit as fit_params, triggers};
 
 use crate::args::Args;
 use crate::msg::BallMsg;
@@ -141,7 +141,7 @@ pub fn run_opencv(args: &Args) -> Result<()> {
     // 검출이 튀어도 궤적이 끊기지 않게 하는 게이팅 필터. `e`로 끄면 생값만 본다.
     //
     // 트리거는 이 툴이 안 쓴다 (예측 궤적을 안 그린다). 뭐든 하나는 있어야 해서 네트로 둔다.
-    let mut ekf = Ekf::new(
+    let mut ekf = Fit::new(
         &calibration,
         Box::new(triggers::PlaneCrossing {
             y: pingpong_bot::constants::table::LENGTH_Y * 0.5,
@@ -149,7 +149,7 @@ pub fn run_opencv(args: &Args) -> Result<()> {
     );
     let mut epoch: Option<std::time::Instant> = None;
     let mut ekf_enabled = true;
-    let mut last_d2: Option<f64> = None;
+    let mut last_px: Option<f64> = None;
     let mut rejected_this_frame = false;
     let mut rejected_total: u64 = 0;
     let mut seeds_total: u64 = 0;
@@ -227,10 +227,10 @@ pub fn run_opencv(args: &Args) -> Result<()> {
                     let base = *epoch.get_or_insert(frame.timestamp);
                     let t = frame.timestamp.saturating_duration_since(base);
                     match ekf.observe(id, found, t) {
-                        Outcome::Rejected { d2 } => {
+                        Outcome::Rejected { px } => {
                             rejected_total += 1;
                             rejected_this_frame = true;
-                            last_d2 = Some(d2);
+                            last_px = Some(px);
                         }
                         Outcome::Seeded => seeds_total += 1,
                         Outcome::Accepted | Outcome::Idle => {}
@@ -341,8 +341,11 @@ pub fn run_opencv(args: &Args) -> Result<()> {
                 Some(s) => format!("|v|={:.1}m/s", s.velocity.norm()),
                 None => "|v|=—".into(),
             };
-            let d2 = match last_d2 {
-                Some(d) => format!("d2={d:.1}/{:.1}", ekf_params::GATE_CHI2),
+            let d2 = match last_px {
+                Some(d) => format!(
+                    "resid={d:.1}/{:.1}px",
+                    fit_params::OUTLIER_SIGMA * fit_params::SIGMA_PX
+                ),
                 None => "d2=—".into(),
             };
             let lines = [

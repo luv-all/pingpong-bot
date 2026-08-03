@@ -13,7 +13,7 @@
 
 pub mod contract;
 pub mod detect;
-pub mod ekf;
+pub mod fit;
 pub mod seed;
 pub mod trace;
 pub mod trigger;
@@ -21,7 +21,7 @@ pub mod triggers;
 
 pub use contract::{State, Track, Trajectory};
 pub use detect::{Candidate, Detector, Layer};
-pub use ekf::{Ekf, Outcome};
+pub use fit::{Fit, Outcome};
 pub use trace::Trace;
 pub use trigger::Trigger;
 
@@ -34,7 +34,7 @@ use crate::camera::{self, Calibration, Frame};
 /// 검출기와 필터를 한 스레드에서 묶는다. 클립 도구와 진단이 쓴다.
 pub struct Vision {
     detectors: Vec<(camera::Id, Detector)>,
-    ekf: Ekf,
+    fit: Fit,
     /// 첫 프레임 시각. 클립이든 실기든 거기서 t=0 이 시작한다.
     origin: Option<Instant>,
     last_outcome: Option<Outcome>,
@@ -49,7 +49,7 @@ impl Vision {
             .map(|params| Ok((params.camera_id, Detector::for_camera(params)?)))
             .collect::<Result<Vec<_>>>()?;
         return Ok(Self {
-            ekf: Ekf::new(calibration, trigger),
+            fit: Fit::new(calibration, trigger),
             detectors,
             origin: None,
             last_outcome: None,
@@ -61,8 +61,8 @@ impl Vision {
         return self.origin;
     }
 
-    pub fn ekf(&self) -> &Ekf {
-        return &self.ekf;
+    pub fn fit(&self) -> &Fit {
+        return &self.fit;
     }
 
     /// 직전 [`Self::feed`]의 필터 판정. 진단용.
@@ -108,7 +108,7 @@ impl Vision {
 
     /// 지금 계약. 첫 프레임 전이거나 트리거 전이면 `None`.
     pub fn trajectory(&self) -> Option<Trajectory> {
-        return self.ekf.trajectory(self.origin?);
+        return self.fit.trajectory(self.origin?);
     }
 
     fn detector_for(&mut self, camera_id: camera::Id) -> Option<&mut Detector> {
@@ -127,7 +127,7 @@ impl Vision {
 
     fn absorb(&mut self, camera_id: camera::Id, found: Option<Candidate>, t: Duration) {
         self.last_found = found;
-        self.last_outcome = Some(self.ekf.observe(camera_id, found, t));
+        self.last_outcome = Some(self.fit.observe(camera_id, found, t));
     }
 }
 

@@ -1,6 +1,6 @@
 //! 추정 워커 — 검출 픽셀 → EKF → 접수 평면 예측 → 커밋 게이트.
 //!
-//! [`Ekf`]를 **단독 소유**한다. 로봇 포즈는 볼 수 없다 (제어 워커만 안다).
+//! [`Fit`]을 **단독 소유**한다. 로봇 포즈는 볼 수 없다 (제어 워커만 안다).
 //!
 //! 삼각측량은 시드 한 번뿐이다. 그 뒤로는 카메라가 서로를 기다리지 않고 각자 자기 시각의
 //! 픽셀로 필터를 보정한다 — 짝 맞추기, 보간 지연, `stale_skipped` 가 전부 사라졌다.
@@ -14,7 +14,7 @@ use pingpong_bot::constants::table;
 use pingpong_bot::defaults::EstimatorParams;
 use pingpong_bot::estimator::{HitPlane, Prediction};
 use pingpong_bot::robot::motion::{InterceptWindow, Planner};
-use pingpong_bot::vision::{Ekf, Outcome, State, Trajectory, Trigger, triggers};
+use pingpong_bot::vision::{Fit, Outcome, State, Trajectory, Trigger, triggers};
 use tracing::{debug, info_span};
 
 use super::fmt::f2;
@@ -85,7 +85,7 @@ pub fn spawn(
         let _span = info_span!("estimator").entered();
         let mut stats = EstimatorStats::default();
         let estimator_params = EstimatorParams::default();
-        let mut ekf = Ekf::new(&calibration, default_trigger(&estimator_params));
+        let mut ekf = Fit::new(&calibration, default_trigger(&estimator_params));
         // 프레임 시각은 벽시계지만 필터는 경과만 안다. 첫 프레임이 t=0 이다.
         let mut origin: Option<Instant> = None;
         let planes = intercept.hit_planes();
@@ -119,8 +119,12 @@ pub fn spawn(
             let t = event.frame.timestamp.saturating_duration_since(base);
             let outcome = ekf.observe(event.frame.camera_id, event.found, t);
             stats.record(outcome);
-            if let Outcome::Rejected { d2 } = outcome {
-                debug!(d2 = f2(d2), cam = event.frame.camera_id.0, "측정 거부");
+            if let Outcome::Rejected { px } = outcome {
+                debug!(
+                    resid_px = f2(px),
+                    cam = event.frame.camera_id.0,
+                    "관측 제외"
+                );
             }
 
             let trajectory = ekf.trajectory(base);

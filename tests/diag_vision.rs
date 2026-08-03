@@ -66,10 +66,10 @@ fn vision_pipeline_on_a_clip() {
         let l = Frame::new(camera::Id(0), l.image, at);
         let r = Frame::new(camera::Id(1), r.image, at);
         for (slot, frame) in [(0usize, &l), (1usize, &r)] {
-            let before = vision.ekf().has_track();
+            let before = vision.fit().has_track();
             let got = vision.feed(frame).expect("feed");
             let _ = (slot, before);
-            if !before && vision.ekf().has_track() {
+            if !before && vision.fit().has_track() {
                 seeded += 1;
                 if first_track.is_none() {
                     first_track = Some(frames);
@@ -135,7 +135,7 @@ fn vision_pipeline_on_a_clip() {
     let Some((_, trajectory)) = committed else {
         println!(
             "트리거가 안 걸렸다 — 관측 {}개",
-            vision.ekf().measured().len()
+            vision.fit().measured().len()
         );
         return;
     };
@@ -227,12 +227,12 @@ fn filtered_state_against_raw_triangulation() {
         if let (Some(a), Some(b)) = (pixels[0], pixels[1])
             && let Some(raw) =
                 Triangulate::pixels(&[(camera::Id(0), a), (camera::Id(1), b)], &calibration)
-            && let Some(state) = vision.ekf().measured().last()
+            && let Some(state) = vision.fit().measured().last()
         {
             let d = state.position - raw;
             rows.push(Row {
                 frame: index,
-                seq: vision.ekf().seq(),
+                seq: vision.fit().seq(),
                 marks,
                 raw,
                 gap: d,

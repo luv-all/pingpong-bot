@@ -421,7 +421,7 @@ fn console_line(reviewed: &Reviewed, state: &FrameState, index: usize) -> String
     };
     let gate = |slot: usize| match state.outcomes[slot] {
         Some(Outcome::Accepted) => "ok".to_owned(),
-        Some(Outcome::Rejected { d2 }) => format!("rej{d2:.0}"),
+        Some(Outcome::Rejected { px }) => format!("rej{px:.0}"),
         Some(Outcome::Seeded) => "seed".to_owned(),
         Some(Outcome::Idle) | None => "--".to_owned(),
     };
