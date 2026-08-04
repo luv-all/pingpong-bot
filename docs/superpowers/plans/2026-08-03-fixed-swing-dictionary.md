@@ -34,7 +34,10 @@
 - Create `src/real/fixed_swing_worker.rs` — real-hardware control worker for this mode (parallel to, not a rewrite of, `control_worker.rs`).
 - Modify `src/real/mod.rs` — register the new worker module.
 - Modify `src/real/options.rs`, `src/cli/args.rs`, `src/real/run.rs` — `--fixed-swing-dictionary` flag, threaded through to pick which worker `run()` spawns.
-- Modify `tools/jog/src/plan/kind.rs`, `tools/jog/src/plan/mod.rs`, `tools/jog/src/panel.rs` — a `Kind::FixedSwing` manual mode for real-hardware dry-run/apply testing.
+- **Task 5b (extension, needed by 5c):** modify `src/robot/motion/trajectory.rs` — add an optional per-joint phase-offset field to `Trajectory`, `None` for every existing swing mode (verified backward-compatible).
+- **Task 5c (fix, user-directed after live-GUI testing showed weak forward-driving force):** modify `src/robot/motion/fixed_swing.rs`/`planner.rs`/`mod.rs`, `src/sim/physics/world.rs`, `src/real/fixed_swing_worker.rs`, `src/sim/session/controls.rs`/`session.rs`, `src/sim/gui/viewer/panel_ui_state.rs`/`panel.rs` — add a staggered ("whip") joint-timing shape alongside the original synchronized one, with a live GUI selector to compare both (+22% peak racket speed measured).
+- **Task 5d (extension, user-directed after real-hardware testing):** modify `src/robot/motion/fixed_swing.rs`/`planner.rs`/`mod.rs`, `src/sim/physics/world.rs`, `src/real/fixed_swing_worker.rs` — replace the single END pose with three height-selected ones (`SwingHeightBand::{Mid,High,ExtraHigh}`), chosen automatically from the predicted impact z at commit time. START stays shared across all three bands.
+- Modify `tools/jog/src/plan/kind.rs`, `tools/jog/src/plan/draft.rs`, `tools/jog/src/plan/mod.rs`, `tools/jog/src/panel.rs` — a `Kind::FixedSwing` manual mode (with a manual height-band picker, since jog has no real predicted trajectory) for real-hardware dry-run/apply testing.
 
 ---
 
@@ -2068,16 +2071,361 @@ EOF
 
 ---
 
+### Task 5d: Height-banded swing dictionary (replace the single END pose with 3 height-selected ones)
+
+**Why this task exists:** the single fixed END pose only ever produces one impact height. Live testing (user, on real hardware) found that a passively-held neutral pose (all joints at 0°) already intercepts low incoming balls — so a dedicated "low" swing band is unnecessary and was explicitly dropped. What's needed instead is three END poses for three height bands above the passively-reachable low zone — Mid, High, and ExtraHigh — selected automatically from the predicted impact z at commit time. START stays the single existing pose (`FIXED_SWING_START_DEG`) for all three bands, per the user's explicit decision.
+
+**Values (already derived and visually confirmed by the user via the sim GUI's "Motor Test" panel):** IK was solved with a fixed representative scenario (`x` = table center, `y` = intercept-window midpoint, `incoming_velocity` = `(0, -6.5, 0.3)` m/s) and only the impact height varied (20cm / 30cm / 40cm above the table surface), starting from the existing `FIXED_SWING_START_DEG` as the IK hint. All three converged with comfortable joint-speed margin (`peak_joint_speed_ratio` 1.15 / 0.89 / 0.54, all well under the near-singularity threshold of 2.5) and the resulting poses were confirmed by the user via the sim GUI:
+
+- **Mid** (band boundary: impact z-offset above the table surface < 0.25 m): `[52.6, 0.0, 8.5, -73.1]` degrees, `[j0 yaw, j1 shoulder, j2 elbow, j3 wrist]` — derived at 20cm.
+- **High** (0.25 m ≤ offset < 0.35 m): `[33.1, 0.0, 2.6, -46.7]` degrees — derived at 30cm.
+- **ExtraHigh** (offset ≥ 0.35 m): `[24.3, 0.0, -21.7, -12.6]` degrees — derived at 40cm.
+
+The two boundaries (0.25, 0.35) are the midpoints between the three derivation heights (20/30/40cm) — a simple, symmetric choice given no data suggests otherwise.
+
+**Files:**
+- Modify: `src/robot/motion/fixed_swing.rs` — add `SwingHeightBand` enum, boundary constants, three `SWING_END_DEG_*` constants; change `fixed_swing_end_joints` and `plan_fixed_swing` to take a `SwingHeightBand` parameter; update `plan_staggered_fixed_swing` internally; update every existing test in this file's `#[cfg(test)] mod tests` block that calls `plan_fixed_swing`.
+- Modify: `src/robot/motion/mod.rs` — export `SwingHeightBand`.
+- Modify: `src/robot/motion/planner.rs` — update `Planner::plan_fixed_swing`'s and `Planner::fixed_swing_end_joints`'s signatures to match.
+- Modify: `src/sim/physics/world.rs` — `try_fixed_swing_dictionary` computes the band from `prediction.impact_position.coords.z` and passes it through; update the two existing tests that call `plan_fixed_swing`/exercise this path.
+- Modify: `src/real/fixed_swing_worker.rs` — same band computation from `target.position.z`.
+
+**Interfaces:**
+- Consumes: nothing new — pure extension of `fixed_swing.rs`'s own existing types.
+- Produces: `pub enum SwingHeightBand { Mid, High, ExtraHigh }`, `impl SwingHeightBand { pub fn for_impact_z(impact_z: f64) -> Self }`, `pub fn fixed_swing_end_joints(band: SwingHeightBand) -> Joints` (signature change), `pub fn plan_fixed_swing(arm: &Arm, rail_x: f64, shape: SwingShapeStrategy, band: SwingHeightBand) -> Result<Trajectory, DomainError>` (signature change — **this breaks every existing call site**, all of which this task updates in the same commit). Consumed by Task 6 (not yet started — its brief text below already reflects this final signature).
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `src/robot/motion/fixed_swing.rs`'s existing `#[cfg(test)] mod tests` block:
+
+```rust
+    #[test]
+    fn swing_height_band_selects_mid_below_first_boundary() {
+        let z = crate::constants::table::SURFACE_Z + 0.10;
+        assert_eq!(SwingHeightBand::for_impact_z(z), SwingHeightBand::Mid);
+    }
+
+    #[test]
+    fn swing_height_band_selects_high_between_boundaries() {
+        let z = crate::constants::table::SURFACE_Z + 0.30;
+        assert_eq!(SwingHeightBand::for_impact_z(z), SwingHeightBand::High);
+    }
+
+    #[test]
+    fn swing_height_band_selects_extra_high_above_second_boundary() {
+        let z = crate::constants::table::SURFACE_Z + 0.40;
+        assert_eq!(SwingHeightBand::for_impact_z(z), SwingHeightBand::ExtraHigh);
+    }
+
+    #[test]
+    fn swing_height_band_boundaries_are_inclusive_on_the_higher_band() {
+        // 경계값 자체는 더 높은 구간에 속한다 — `for_impact_z`가 `<`(미만)로
+        // 판정하므로 정확히 경계에서는 그 위 구간을 고른다.
+        let mid_high = crate::constants::table::SURFACE_Z + 0.25;
+        assert_eq!(SwingHeightBand::for_impact_z(mid_high), SwingHeightBand::High);
+        let high_extra = crate::constants::table::SURFACE_Z + 0.35;
+        assert_eq!(
+            SwingHeightBand::for_impact_z(high_extra),
+            SwingHeightBand::ExtraHigh
+        );
+    }
+
+    #[test]
+    fn fixed_swing_end_joints_differs_per_band() {
+        let mid = fixed_swing_end_joints(SwingHeightBand::Mid);
+        let high = fixed_swing_end_joints(SwingHeightBand::High);
+        let extra_high = fixed_swing_end_joints(SwingHeightBand::ExtraHigh);
+        for (a, b) in [(&mid, &high), (&high, &extra_high)] {
+            let same = a
+                .values
+                .iter()
+                .zip(&b.values)
+                .all(|(x, y)| (x - y).abs() < 1e-9);
+            assert!(!same, "인접 구간의 END는 달라야 한다");
+        }
+        for (actual, expected_deg) in mid.values.iter().zip(SWING_END_DEG_MID) {
+            assert!((actual.to_degrees() - expected_deg).abs() < 1e-9);
+        }
+        for (actual, expected_deg) in high.values.iter().zip(SWING_END_DEG_HIGH) {
+            assert!((actual.to_degrees() - expected_deg).abs() < 1e-9);
+        }
+        for (actual, expected_deg) in extra_high.values.iter().zip(SWING_END_DEG_EXTRA_HIGH) {
+            assert!((actual.to_degrees() - expected_deg).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn plan_fixed_swing_uses_the_requested_bands_end_pose() {
+        let robot = crate::defaults::robot().expect("robot");
+        let rail_x = robot.arm.rail.expect("rail").default_x();
+        for band in [
+            SwingHeightBand::Mid,
+            SwingHeightBand::High,
+            SwingHeightBand::ExtraHigh,
+        ] {
+            let trajectory = plan_fixed_swing(
+                &robot.arm,
+                rail_x,
+                SwingShapeStrategy::Synchronized,
+                band,
+            )
+            .unwrap_or_else(|error| panic!("{band:?}: {error}"));
+            let expected = fixed_swing_end_joints(band);
+            for (actual, expected) in trajectory.goal_joints().values.iter().zip(expected.values) {
+                assert!((actual - expected).abs() < 1e-9, "band={band:?}");
+            }
+        }
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cargo test -p pingpong-bot --lib fixed_swing 2>&1 | tail -60`
+Expected: compile error — `SwingHeightBand` and the new signatures don't exist yet, and every EXISTING call to `plan_fixed_swing`/`fixed_swing_end_joints` in this file's test module (added by Tasks 1, 3b, 5c) now fails to compile too, since their call sites are missing the new `band` argument. This is expected — Step 3 fixes all of them in the same pass.
+
+- [ ] **Step 3: Implement `SwingHeightBand` and update every call site**
+
+In `src/robot/motion/fixed_swing.rs`, replace the single `FIXED_SWING_END_DEG` constant and `fixed_swing_end_joints` function:
+
+```rust
+/// 스윙 시작(백스윙/준비) 자세 [deg] — j0 yaw, j1 shoulder, j2 elbow, j3 wrist.
+/// 높이 구간과 무관하게 항상 이 자세에서 시작한다(사용자 결정, 2026-08-04).
+pub const FIXED_SWING_START_DEG: [f64; 4] = [-10.0, 0.0, 50.0, -30.0];
+
+/// 임팩트 높이(탁구대 면 기준 z 오프셋)에 따라 고르는 스윙 딕셔너리 구간.
+///
+/// "낮음" 구간은 없다 — 실기 확인(2026-08-04): 팔을 관절 전부 0°로 그냥
+/// 고정만 해 둬도 슈터의 낮은 공이 이미 라켓에 맞았다. 즉 낮은 공은 별도
+/// 스윙 없이도 이미 닿는 영역이라, 이 딕셔너리가 다루는 범위를 그 위로
+/// 옮겼다(중간/높음/더높음 셋).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwingHeightBand {
+    Mid,
+    High,
+    ExtraHigh,
+}
+
+/// `Mid`/`High` 경계 — 탁구대 면 기준 z 오프셋 [m]. IK로 확정한 대표 높이
+/// (20/30/40cm)의 중간값(0.25, 0.35)을 그대로 쓴다 — 다른 근거가 없는
+/// 대칭적인 선택.
+const MID_HIGH_BOUNDARY_Z_OFFSET_M: f64 = 0.25;
+/// `High`/`ExtraHigh` 경계 — 위와 같은 근거.
+const HIGH_EXTRA_HIGH_BOUNDARY_Z_OFFSET_M: f64 = 0.35;
+
+impl SwingHeightBand {
+    /// 예측 임팩트 z(월드 좌표, m)로 구간을 고른다.
+    pub fn for_impact_z(impact_z: f64) -> Self {
+        let z_offset = impact_z - crate::constants::table::SURFACE_Z;
+        if z_offset < MID_HIGH_BOUNDARY_Z_OFFSET_M {
+            return Self::Mid;
+        }
+        if z_offset < HIGH_EXTRA_HIGH_BOUNDARY_Z_OFFSET_M {
+            return Self::High;
+        }
+        return Self::ExtraHigh;
+    }
+}
+
+/// 구간별 임팩트(END) 자세 [deg] — 관절 순서는 [`FIXED_SWING_START_DEG`]와 동일.
+/// IK로 도출(2026-08-04): x=테이블 중앙, y=접수창 중간 깊이, 입사속도
+/// `(0,-6.5,0.3)` m/s로 고정하고 임팩트 z만 20/30/40cm로 바꿔 풀었다
+/// (`peak_joint_speed_ratio` 1.15/0.89/0.54, 전부 근특이점 한계 2.5 아래).
+/// 사용자가 sim GUI "Motor Test" 패널로 세 값 모두 육안 확인했다.
+pub const SWING_END_DEG_MID: [f64; 4] = [52.6, 0.0, 8.5, -73.1];
+pub const SWING_END_DEG_HIGH: [f64; 4] = [33.1, 0.0, 2.6, -46.7];
+pub const SWING_END_DEG_EXTRA_HIGH: [f64; 4] = [24.3, 0.0, -21.7, -12.6];
+
+pub fn fixed_swing_start_joints() -> Joints {
+    return Joints::from_slice(&FIXED_SWING_START_DEG.map(f64::to_radians));
+}
+
+pub fn fixed_swing_end_joints(band: SwingHeightBand) -> Joints {
+    let deg = match band {
+        SwingHeightBand::Mid => SWING_END_DEG_MID,
+        SwingHeightBand::High => SWING_END_DEG_HIGH,
+        SwingHeightBand::ExtraHigh => SWING_END_DEG_EXTRA_HIGH,
+    };
+    return Joints::from_slice(&deg.map(f64::to_radians));
+}
+```
+
+Update `plan_fixed_swing` and `plan_staggered_fixed_swing` to take and thread through `band`:
+
+```rust
+/// 레일 `rail_x`에 고정한 채, IK 없이 시작→끝 관절각을 모터 한계(속도·가속·
+/// 토크) 100%로 잇는 quintic — `shape`로 관절 타이밍을, `band`로 임팩트
+/// 높이 구간을 고른다.
+pub fn plan_fixed_swing(
+    arm: &Arm,
+    rail_x: f64,
+    shape: SwingShapeStrategy,
+    band: SwingHeightBand,
+) -> Result<Trajectory, DomainError> {
+    return match shape {
+        SwingShapeStrategy::Synchronized => {
+            let start = Pose::new(rail_x, fixed_swing_start_joints());
+            Planner::move_to_fastest(arm, &start, fixed_swing_end_joints(band), rail_x)
+        }
+        SwingShapeStrategy::Staggered => plan_staggered_fixed_swing(arm, rail_x, band),
+    };
+}
+
+fn plan_staggered_fixed_swing(
+    arm: &Arm,
+    rail_x: f64,
+    band: SwingHeightBand,
+) -> Result<Trajectory, DomainError> {
+    let baseline = {
+        let start = Pose::new(rail_x, fixed_swing_start_joints());
+        Planner::move_to_fastest(arm, &start, fixed_swing_end_joints(band), rail_x)?
+    };
+    let start_joints = fixed_swing_start_joints();
+    let end_joints = fixed_swing_end_joints(band);
+    let n = start_joints.values.len();
+    // ... (rest of the function body is UNCHANGED from Task 5c — only the two
+    // fixed_swing_end_joints() calls above gained the `band` argument; the
+    // duration growth-search loop, STAGGERED_PHASE_FRACTIONS usage, and
+    // staggered_feasibility call are untouched)
+    ...
+}
+```
+
+(The elided `...` above is literally the rest of Task 5c's `plan_staggered_fixed_swing` body — do not rewrite it, only add the `band: SwingHeightBand` parameter to the function signature and pass it to both `fixed_swing_end_joints(band)` call sites within it, which Task 5c's version called with no arguments.)
+
+Now fix every existing test in this file that calls `plan_fixed_swing` or `fixed_swing_end_joints` (added across Tasks 1, 3b, 5c) — each needs a `SwingHeightBand` argument added. Search the file for every call site (`grep -n "plan_fixed_swing(\|fixed_swing_end_joints(" src/robot/motion/fixed_swing.rs`) and update each:
+
+- `plan_fixed_swing_starts_and_ends_at_the_dictionary_poses_with_rail_held` (Task 1): change the call to `plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Synchronized, SwingHeightBand::Mid)` and update its END assertion loop to compare against `fixed_swing_end_joints(SwingHeightBand::Mid).values` instead of the old argumentless `fixed_swing_end_joints()`.
+- `midpoint_strategy_is_exactly_half_duration` (Task 3b): add `SwingHeightBand::Mid` to its `plan_fixed_swing` call — this test only cares about `trajectory.duration_secs`, so any band works; `Mid` is the simplest choice.
+- `peak_speed_strategy_picks_a_time_strictly_inside_the_swing` (Task 3b): same — add `SwingHeightBand::Mid`.
+- `synchronized_shape_matches_the_original_move_to_fastest_behavior` (Task 5c): add `SwingHeightBand::Mid` to its `plan_fixed_swing` call; its `fixed_swing_start_joints()` comparison is unaffected (band doesn't change START).
+- `staggered_shape_sets_distinct_per_joint_windows_and_stays_feasible` (Task 5c): add `SwingHeightBand::Mid`.
+- `staggered_shape_reaches_a_higher_peak_racket_speed_than_synchronized` (Task 5c): add `SwingHeightBand::Mid` to BOTH its `plan_fixed_swing` calls (`sync` and `staggered`) — must use the SAME band for both so the comparison is apples-to-apples.
+
+In `src/robot/motion/mod.rs`, add `SwingHeightBand` to the `fixed_swing` re-export list (alongside the existing `ImpactTimeStrategy`, `SwingShapeStrategy`, etc.).
+
+In `src/robot/motion/planner.rs`, update the `Planner::plan_fixed_swing` wrapper:
+
+```rust
+    /// [`super::fixed_swing::plan_fixed_swing`].
+    pub fn plan_fixed_swing(
+        arm: &Arm,
+        rail_x: f64,
+        shape: super::fixed_swing::SwingShapeStrategy,
+        band: super::fixed_swing::SwingHeightBand,
+    ) -> Result<Trajectory, DomainError> {
+        return super::fixed_swing::plan_fixed_swing(arm, rail_x, shape, band);
+    }
+```
+
+Also add a `Planner::fixed_swing_end_joints` wrapper next to the existing `Planner::fixed_swing_start_joints` one, if Task 1 didn't already add one — check first (Task 1's plan text only added `fixed_swing_start_joints`/`fixed_swing_end_joints`/`plan_fixed_swing` wrappers; confirm `fixed_swing_end_joints` exists and update its signature the same way as `plan_fixed_swing` above if so, or skip if it was never added).
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cargo test -p pingpong-bot --lib fixed_swing 2>&1 | tail -80`
+Expected: all tests in `robot::motion::fixed_swing::tests` pass — the 5 new ones plus every pre-existing one now compiling again with the added `band` arguments.
+
+- [ ] **Step 5: Update the sim call site and its tests**
+
+In `src/sim/physics/world.rs`'s `try_fixed_swing_dictionary` (Task 2/3b/5c), compute the band from the prediction and pass it:
+
+```rust
+        let band = motion::SwingHeightBand::for_impact_z(prediction.impact_position.coords.z);
+        let Ok(trajectory) = motion::Planner::plan_fixed_swing(
+            &self.arm,
+            target_rail_x,
+            self.fixed_swing_shape_strategy,
+            band,
+        ) else {
+            return;
+        };
+```
+
+Update the two existing tests that exercise this path (search `fixed_swing_dictionary_commits_the_exact_dictionary_poses` and `fixed_swing_dictionary_waits_for_the_midpoint_not_the_full_duration` in `src/sim/physics/world.rs`'s test module). Neither test currently knows in advance which height band the default sim shot's predicted impact z will fall into, and that's fine — don't hardcode a specific band's expected END. Instead, change `fixed_swing_dictionary_commits_the_exact_dictionary_poses`'s assertion from comparing against one hardcoded END to checking the committed end matches ONE of the three known band ends:
+
+```rust
+        let end = committed_end.expect("고정 스윙이 커밋돼야 한다");
+        let bands = [
+            crate::robot::motion::SwingHeightBand::Mid,
+            crate::robot::motion::SwingHeightBand::High,
+            crate::robot::motion::SwingHeightBand::ExtraHigh,
+        ];
+        let matches_some_band = bands.iter().any(|&band| {
+            let expected = crate::robot::motion::fixed_swing_end_joints(band);
+            end.iter()
+                .zip(expected.values.iter())
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-9)
+        });
+        assert!(
+            matches_some_band,
+            "커밋된 끝 관절각이 세 높이 구간 중 어느 것과도 안 맞음: {end:?}"
+        );
+```
+
+`fixed_swing_dictionary_waits_for_the_midpoint_not_the_full_duration` doesn't inspect the committed END pose at all (only whether/when a commit happens), so it needs no change beyond compiling — confirm it still does by running it.
+
+- [ ] **Step 6: Update the real-hardware call site**
+
+In `src/real/fixed_swing_worker.rs`, compute the band from the target and pass it:
+
+```rust
+            let band =
+                pingpong_bot::robot::motion::SwingHeightBand::for_impact_z(target.position.z);
+            let Ok(trajectory) = Planner::plan_fixed_swing(
+                &arm,
+                rail_x,
+                pingpong_bot::robot::motion::DEFAULT_SWING_SHAPE_STRATEGY,
+                band,
+            ) else {
+                continue;
+            };
+```
+
+- [ ] **Step 7: Build and run the full test suite**
+
+Run: `cargo build -p pingpong-bot 2>&1 | tail -30`
+Expected: clean build.
+
+Run: `cargo test -p pingpong-bot --lib 2>&1 | tail -20`
+Expected: the same 6-7 pre-existing failures documented across every prior task in this plan (the exact count flakes between 6 and 7 depending on a load-sensitive wall-clock guard test, `sim::physics::world::tests::bang_bang_swing_planning_does_not_block_physics_step` — this is confirmed pre-existing and unrelated, not something to chase), no OTHER new failures.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/robot/motion/fixed_swing.rs src/robot/motion/mod.rs src/robot/motion/planner.rs \
+        src/sim/physics/world.rs src/real/fixed_swing_worker.rs
+git commit -m "$(cat <<'EOF'
+feat(robot): split the fixed swing END pose into three height bands
+
+The single END pose could only ever produce one impact height. Real-
+hardware testing found that a passively-held neutral pose already
+intercepts low balls, so there's no need for a dedicated low band --
+instead this adds Mid/High/ExtraHigh bands (boundaries at 25cm/35cm
+above the table surface) selected automatically from the predicted
+impact z at commit time. START stays the single existing pose for all
+three bands.
+
+Values derived via IK with a fixed representative scenario (table
+center, mid-intercept depth, one representative incoming velocity),
+varying only impact height (20/30/40cm) -- all three converge with
+comfortable joint-speed margin and were visually confirmed by the user
+via the sim GUI's Motor Test panel before being adopted here.
+EOF
+)"
+```
+
+---
+
 ### Task 6: Manual real-hardware testing via `tools/jog`
 
 **Files:**
 - Modify: `tools/jog/src/plan/kind.rs`
+- Modify: `tools/jog/src/plan/draft.rs`
 - Modify: `tools/jog/src/plan/mod.rs`
 - Modify: `tools/jog/src/panel.rs`
 
 **Interfaces:**
-- Consumes: `Planner::plan_fixed_swing`, `Planner::fixed_swing_start_joints` (Task 1). `plan::compose`'s existing `move_traj` helper and `Draft`/`JogApp` Sync→Preview→Apply flow (`tools/jog/src/plan/mod.rs`, `tools/jog/src/state/jog_app.rs` — unchanged).
-- Produces: `Kind::FixedSwing`, selectable in the jog GUI, previewable and applicable to real hardware (or dry-run) through the existing `Action::{Sync,Preview,Apply,Discard}` machinery — this is this plan's actual "test on the real robot" tool, per `docs/two-stage-position-control.md`'s convention of dry-run-first hardware verification.
+- Consumes: `Planner::plan_fixed_swing(arm, rail_x, shape, band)` (Task 1, signature finalized by Task 5d), `Planner::fixed_swing_start_joints` (Task 1), `motion::{SwingHeightBand, DEFAULT_SWING_SHAPE_STRATEGY}` (Tasks 5c/5d). `plan::compose`'s existing `move_traj` helper and `Draft`/`JogApp` Sync→Preview→Apply flow (`tools/jog/src/plan/mod.rs`, `tools/jog/src/state/jog_app.rs` — unchanged).
+- Produces: `Kind::FixedSwing`, selectable in the jog GUI with a height-band picker (Mid/High/ExtraHigh — jog has no real predicted ball trajectory to derive a band from automatically, so the user picks one manually to preview each band on real hardware), previewable and applicable to real hardware (or dry-run) through the existing `Action::{Sync,Preview,Apply,Discard}` machinery — this is this plan's actual "test on the real robot" tool, per `docs/two-stage-position-control.md`'s convention of dry-run-first hardware verification.
 
 - [ ] **Step 1: Add the `Kind` variant**
 
@@ -2104,18 +2452,28 @@ and in `Kind::label`:
             Self::FixedSwing => "고정 스윙 딕셔너리 (IK 없음)",
 ```
 
-- [ ] **Step 2: Handle it in `compose`**
+- [ ] **Step 2: Add a height-band field to `Draft` and handle `Kind::FixedSwing` in `compose`**
+
+In `tools/jog/src/plan/draft.rs`, find `Draft`'s struct definition and its `Default` impl (or equivalent construction) and add a field for the manually-picked height band:
+
+```rust
+    pub fixed_swing_height_band: pingpong_bot::robot::motion::SwingHeightBand,
+```
+
+and initialize it to `pingpong_bot::robot::motion::SwingHeightBand::Mid` wherever the struct's default/initial values are set (match the file's existing pattern for initializing `Draft`'s other fields — read that constructor/`Default` impl first, since `SwingHeightBand` does not derive `Default` and this field must be set explicitly).
 
 In `tools/jog/src/plan/mod.rs`, add a match arm in `compose` (next to `Kind::Swing`'s `anyhow::bail!`):
 
 ```rust
         Kind::Swing => anyhow::bail!("스윙은 plan_swing()으로 계획합니다"),
-        // Task 5c: 관절 타이밍 모양(Synchronized/Staggered)이 추가돼
-        // plan_fixed_swing이 세 번째 인자를 받는다 — 기본값(Staggered)을 쓴다.
+        // Task 5c/5d: 관절 타이밍 모양(Synchronized/Staggered)은 기본값을
+        // 쓰고, 임팩트 높이 구간은 draft에서 사용자가 고른 값을 쓴다 — jog는
+        // 실제 예측 궤적이 없어 자동으로 구간을 고를 수 없다.
         Kind::FixedSwing => motion::Planner::plan_fixed_swing(
             arm,
             start.rail_x,
             pingpong_bot::robot::motion::DEFAULT_SWING_SHAPE_STRATEGY,
+            draft.fixed_swing_height_band,
         )
         .map_err(|error| anyhow::anyhow!("{error}"))
         .context("고정 스윙 딕셔너리"),
@@ -2123,7 +2481,7 @@ In `tools/jog/src/plan/mod.rs`, add a match arm in `compose` (next to `Kind::Swi
 
 Also update `reach_ok`'s wildcard arm — it already returns `true` for unmatched kinds via its `_ => true` catch-all, so `Kind::FixedSwing` needs no change there, but double check by reading the current match before assuming.
 
-- [ ] **Step 3: Add it to the panel's motion-kind selector**
+- [ ] **Step 3: Add it to the panel's motion-kind selector, with a height-band picker**
 
 In `tools/jog/src/panel.rs`, add `Kind::FixedSwing` to the `for kind in [...]` list in `draw_motion` (next to `Kind::Swing`):
 
@@ -2139,7 +2497,32 @@ In `tools/jog/src/panel.rs`, add `Kind::FixedSwing` to the `for kind in [...]` l
             ] {
 ```
 
-Since `compose` for `Kind::FixedSwing` needs no extra draft fields (no reach delta, no tilt, no shooter), no new match arm is needed in `draw_motion`'s `match app.draft.kind { ... }` body — the default (no extra widgets drawn) is correct; confirm this by checking whether that match is exhaustive (if it is, add `Kind::FixedSwing => {}` with a short label reminding the user it uses whatever rail x Sync captured).
+Unlike the other kinds, `Kind::FixedSwing` DOES need a widget in `draw_motion`'s `match app.draft.kind { ... }` body — a height-band picker, so the user can preview/apply each of the three bands on real hardware in turn (this is the only way to exercise `High`/`ExtraHigh` through jog, since jog has no predicted ball trajectory to derive a band from automatically). Add a match arm there:
+
+```rust
+            Kind::FixedSwing => {
+                ui.label("임팩트 높이 구간 (실제 예측이 없어 직접 선택)");
+                ui.horizontal(|ui| {
+                    ui.radio_value(
+                        &mut app.draft.fixed_swing_height_band,
+                        pingpong_bot::robot::motion::SwingHeightBand::Mid,
+                        "중간",
+                    );
+                    ui.radio_value(
+                        &mut app.draft.fixed_swing_height_band,
+                        pingpong_bot::robot::motion::SwingHeightBand::High,
+                        "높음",
+                    );
+                    ui.radio_value(
+                        &mut app.draft.fixed_swing_height_band,
+                        pingpong_bot::robot::motion::SwingHeightBand::ExtraHigh,
+                        "더높음",
+                    );
+                });
+            }
+```
+
+Confirm this match arm's exact placement by reading the current (exhaustive) `match app.draft.kind { ... }` in `draw_motion` first — insert alongside the other `Kind::*` arms (e.g. `Kind::Ik`/`Kind::Pose`'s `draw_reach` calls), matching their style.
 
 - [ ] **Step 4: Build**
 
@@ -2154,19 +2537,20 @@ This is the actual "test on the real robot" step. Follow the project's existing 
 cargo run -p jog --release -- --dry-run
 ```
 
-In the jog GUI:
+In the jog GUI, for EACH of the three height bands (중간/높음/더높음):
 1. Click "동기화" (Sync) to read the (simulated, since dry-run) starting pose.
 2. Select "고정 스윙 딕셔너리 (IK 없음)" from the motion dropdown.
-3. Click "미리보기" (Preview) — the sim view should animate the arm moving from the fixed start pose (j0=-10°, j1=0°, j2=50°, j3=-30°) to the fixed end pose (j0=40°, j1=0°, j2=-12°, j3=-70°) at the currently-synced rail x.
-4. Confirm the reported duration in the status area is sane (not near-zero, not implausibly long) — compare against the `plan_fixed_swing` test's `trajectory.duration_secs > 0.0` from Task 1, and sanity check it against `1/DYNAMIXEL_MAX_JOINT_SPEED_RAD_S`-scale expectations.
-5. Click "적용" (Apply) — in dry-run this drives the simulated/mirrored path only; confirm no errors.
+3. Select the height band via the new radio buttons.
+4. Click "미리보기" (Preview) — the sim view should animate the arm moving from the fixed start pose (j0=-10°, j1=0°, j2=50°, j3=-30°) to that band's END pose (Mid: `[52.6, 0.0, 8.5, -73.1]`, High: `[33.1, 0.0, 2.6, -46.7]`, ExtraHigh: `[24.3, 0.0, -21.7, -12.6]`) at the currently-synced rail x.
+5. Confirm the reported duration in the status area is sane (not near-zero, not implausibly long).
+6. Click "적용" (Apply) — in dry-run this drives the simulated/mirrored path only; confirm no errors.
 
-Report the observed preview duration and whether Apply completed without error. Do not proceed to a live (non-dry-run) hardware run without the user present and explicitly approving it — `RealHardware::new` (non-dry-run) drives actual motors.
+Report the observed preview duration for each of the three bands and whether Apply completed without error for all three. Do not proceed to a live (non-dry-run) hardware run without the user present and explicitly approving it — `RealHardware::new` (non-dry-run) drives actual motors.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add tools/jog/src/plan/kind.rs tools/jog/src/plan/mod.rs tools/jog/src/panel.rs
+git add tools/jog/src/plan/kind.rs tools/jog/src/plan/draft.rs tools/jog/src/plan/mod.rs tools/jog/src/panel.rs
 git commit -m "feat(jog): add a fixed swing dictionary mode for real-hardware dry-run/apply testing"
 ```
 
