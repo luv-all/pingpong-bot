@@ -1,8 +1,8 @@
-# `src/real` — 손목·리니어 레일 2단계 제어
+# `src/real` — 상대 코트 중앙 조준·리니어 레일 2단계 제어
 
 `--mode real` 런타임은 카메라로 공을 추적하고, 예측한 목표의 x좌표로
-AXL 리니어 레일을 이동한다. 정밀 예측 단계에서는 Dynamixel ID 5 손목축을
-준비각에서 15° 움직인다.
+AXL 리니어 레일을 이동한다. 정밀 예측 단계에서는 공의 입사 속도와 상대 코트
+중앙 바운드 목표로부터 라켓 법선을 구하고, 전체 Dynamixel 관절 자세를 이동한다.
 
 현재 목적은 장비 응답 확인이다. 공을 되치는 전체 스윙 제어가 아니다.
 
@@ -11,9 +11,10 @@ AXL 리니어 레일을 이동한다. 정밀 예측 단계에서는 Dynamixel ID
 - 시작할 때 `--home`이면 레일과 네 관절을 준비 자세로 이동한다.
 - 공마다 `Provisional`과 `Refined` 명령을 최대 한 번씩 보낸다.
 - 레일은 두 단계 모두 선택 목표의 x좌표를 따라간다.
-- 손목은 `Provisional`에서 준비각을 유지하고 `Refined`에서 15° 전진한다.
-- 나머지 Dynamixel 축에는 추적 중 Goal Position을 다시 보내지 않는다.
-- IK, 전체 자세 계획, 타격 속도, 팔로스루, 자동 복귀는 실행하지 않는다.
+- `Provisional`은 현재 팔 자세를 유지하고 손목 준비각과 레일을 먼저 맞춘다.
+- `Refined`는 상대 코트 중앙 반환 법선과 공 위치를 만족하는 전체 자세 IK를 푼다.
+- 관절·레일 속도/가속도, 토크, 테이블 충돌을 통과한 정지→정지 궤적만 보낸다.
+- 동적 타격 속도, 백스윙, 팔로스루, 자동 복귀는 실행하지 않는다.
 
 ## 데이터 흐름
 
@@ -25,7 +26,7 @@ flowchart LR
     stage -->|"CommitRequest 최신 1개"| shared["DirectController 공통 명령 계산"]
     shared --> ctl["control_worker"]
     ctl --> rail["AXL 리니어 레일"]
-    ctl --> wrist["Dynamixel ID 5 손목"]
+    ctl --> wrist["Dynamixel 전체 라켓 자세"]
     rail --> readback["명령 후 재측정"]
     wrist --> readback
     est --> preview["프리뷰 · 목표 표시"]
@@ -53,22 +54,23 @@ flowchart LR
 2. 직전 명령 후 20ms가 지나지 않았으면 버린다.
 3. `y=0.08~0.35m` 구간에서 목표 하나를 선택한다.
 4. 목표 x를 레일 범위로 제한한다.
-5. 현재 위치와 레일 가속·속도, 손목 속도로 시간 내 도달 가능한지 검사한다.
-6. 레일 목표와 손목 목표를 함께 하드웨어에 보내고 실제 적용값을 받는다.
+5. 정밀 단계에서 상대 코트 중앙 반환 법선과 전체 자세 IK를 계산한다.
+6. 속도·가속도·토크·충돌을 검사한 궤적을 보내고 실제 적용값을 받는다.
 7. 예상 도착 시점부터 20ms 간격으로 재측정해 허용치 안에 2회 연속 들어오면 완료한다.
 8. 예상 도착 후 500ms 타임아웃이 3회 연속이면 장치를 정지하고 제어를 종료한다.
 
 위 3~5번은 `robot::control::DirectController`에 있으며 GUI 시뮬레이션도
 같은 계산을 사용한다. 실기는 명령 후 엔코더를 읽고, 시뮬레이션은
-같은 명령을 `robot::State`의 레일·손목 목표에 적용한다.
+같은 정지→정지 궤적을 `robot::State`에 재생한다.
 
 ### 제어 괴리 로그
 
 - 레일: commanded, measured, commanded-minus-measured를 m 단위 소수점 4자리로 기록
-- 손목: 같은 세 값을 rad·deg 둘 다 기록
+- 전체 관절: commanded, measured, 차이와 최대 오차를 기록
+- 라켓 방향: 요구 법선과 실측 법선 사이 `aim_error_deg` 기록
 - 로그 필드의 commanded는 하드웨어가 반환한 applied이며, 제어기의 requested는 별도 기록
 - 정밀 명령으로 덮어쓴 1차 명령: `superseded`로 당시 실측값 보존
-- 레일 오차 20mm 또는 손목 오차 3° 초과: `WARN`
+- 레일 20mm, 관절 3°, 조준 10° 중 하나라도 초과: `WARN`
 - 허용치 이내: `INFO`
 
 ### 관전 창 공 상태 로그
@@ -80,11 +82,11 @@ flowchart LR
 
 ## 하드웨어 경계
 
-`Hardware::command_rail_and_racket`이 단순 제어 전용 명령이다.
+`Hardware::command_rail_and_racket`이 2단계 자세 제어 전용 명령이다.
 
 - AXL은 매 단계의 최신 목표를 받으며, 가속·감속 램프를 포함해 명령 시간에 맞는 속도를 계산한다.
-- `DynamixelBus::write_joint(3, ...)`으로 논리 관절 3만 쓴다.
-- 기본 모터 배열 `[1, 3, 4, 5]`에서 논리 관절 3은 실제 ID 5다.
+- `DynamixelBus::write_joints`로 전체 자세 궤적을 스트리밍한다.
+- 모터 clamp·tick 양자화가 반영된 전체 적용 관절값을 반환한다.
 - 모터 각도와 레일 위치는 기존 하드웨어 한계로 제한되며 적용된 값이 호출자에 반환된다.
 
 전체 궤적용 `Hardware::command`는 시작 시 홈 이동에만 사용한다.
@@ -95,7 +97,7 @@ flowchart LR
 
 - `Ready`: 하드웨어 초기화와 선택적 홈 이동 완료
 - `Tracking`: 새 공의 위치·속도 추정 시작
-- `Commanded`: 레일·손목 명령 전송 완료(하드웨어가 반환한 실제 적용값 포함)
+- `Commanded`: 레일·전체 관절 자세 명령 전송 완료(실제 적용값 포함)
 - `Failed`: 하드웨어 오류
 - `Done`: 제어 워커 종료
 
@@ -119,7 +121,7 @@ flowchart LR
 | `camera_worker.rs` | 캡처와 검출 |
 | `estimator_worker.rs` | 삼각측량, EKF, 목표 선택, 단계 분류 |
 | `commit_request.rs` | `track_seq + BallTrajectory + PredictionStage` |
-| `control_worker.rs` | 단계별 중복 방지와 레일·손목 명령 |
+| `control_worker.rs` | 단계별 중복 방지와 레일·전체 라켓 자세 명령 |
 | `runtime_event.rs` | 현재 런타임 이벤트 |
 | `preview.rs` | 검출·목표 HUD |
 | `sim_update.rs` | 관전 창용 공·목표·포즈 메시지 |

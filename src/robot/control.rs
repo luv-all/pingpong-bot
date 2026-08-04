@@ -4,10 +4,11 @@ use nalgebra::Vector3;
 use thiserror::Error;
 
 use crate::Point3;
-use crate::estimator::{BallTrajectory, TrajectorySample};
+use crate::constants::{BALL_RADIUS, geometry};
+use crate::estimator::{BallTrajectory, Impact, TrajectorySample};
 
 use super::motion::{Planner, Trajectory};
-use super::{Arm, Pose};
+use super::{Arm, IkSearch, Joints, Pose};
 
 /// 위치 제어기가 받는 유일한 명령.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -183,29 +184,39 @@ pub enum PredictionStage {
     Refined,
 }
 
-/// 실기와 시뮬레이션이 함께 사용하는 직접 제어 손목축 인덱스.
+/// 실기와 시뮬레이션이 함께 사용하는 라켓 손목축 인덱스.
 pub const DIRECT_WRIST_JOINT_INDEX: usize = 3;
-/// 정밀 예측에서 준비 자세보다 더 움직이는 손목 각도.
-pub const DIRECT_WRIST_STROKE_RAD: f64 = 15.0_f64.to_radians();
 pub const MIN_DIRECT_COMMAND_SECS: f64 = 0.05;
 pub const MAX_DIRECT_COMMAND_SECS: f64 = 0.30;
+/// IK가 요구 반환 법선에서 이보다 더 벗어나면 중앙 조준 명령을 보내지 않는다.
+pub const MAX_DIRECT_AIM_ERROR_RAD: f64 = 10.0_f64.to_radians();
 
-/// 공 예측 한 건에서 계산된 레일·손목 직접 명령.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// 공 예측 한 건에서 계산된 레일·라켓 자세 직접 명령.
+#[derive(Debug, Clone, PartialEq)]
 pub struct DirectControlCommand {
     pub stage: PredictionStage,
     pub target: HitTarget,
     pub rail_x: f64,
-    pub wrist_rad: f64,
+    pub joints: Joints,
+    /// 상대 코트 중앙 반환을 위해 요구한 라켓 면 법선.
+    pub desired_normal: Vector3<f64>,
+    /// IK 목표 관절이 실제로 만드는 라켓 면 법선.
+    pub commanded_normal: Vector3<f64>,
     pub duration_secs: f64,
+    /// 속도·가속·토크·테이블 충돌 검사를 통과한 정지→정지 자세 이동.
+    pub trajectory: Trajectory,
 }
 
 /// 명령 뒤 읽은 실제 위치와의 차이(`commanded - measured`).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DirectControlMeasurement {
     pub rail_commanded_m: f64,
     pub rail_measured_m: f64,
     pub rail_error_m: f64,
+    pub joint_commanded_rad: Vec<f64>,
+    pub joint_measured_rad: Vec<f64>,
+    pub joint_error_rad: Vec<f64>,
+    pub max_joint_error_rad: f64,
     pub wrist_commanded_rad: f64,
     pub wrist_measured_rad: f64,
     pub wrist_error_rad: f64,
@@ -213,21 +224,39 @@ pub struct DirectControlMeasurement {
 
 impl DirectControlCommand {
     pub fn compare_with_pose(&self, pose: &Pose) -> Option<DirectControlMeasurement> {
-        return DirectControlMeasurement::from_commanded(self.rail_x, self.wrist_rad, pose);
+        return DirectControlMeasurement::from_commanded(self.rail_x, &self.joints, pose);
     }
 }
 
 impl DirectControlMeasurement {
     pub fn from_commanded(
         rail_commanded_m: f64,
-        wrist_commanded_rad: f64,
+        joint_commanded: &Joints,
         pose: &Pose,
     ) -> Option<Self> {
+        if joint_commanded.values.len() != pose.joints.values.len() {
+            return None;
+        }
+        let joint_error_rad: Vec<f64> = joint_commanded
+            .values
+            .iter()
+            .zip(&pose.joints.values)
+            .map(|(commanded, measured)| commanded - measured)
+            .collect();
+        let max_joint_error_rad = joint_error_rad
+            .iter()
+            .map(|error| error.abs())
+            .fold(0.0_f64, f64::max);
+        let wrist_commanded_rad = *joint_commanded.values.get(DIRECT_WRIST_JOINT_INDEX)?;
         let wrist_measured_rad = *pose.joints.values.get(DIRECT_WRIST_JOINT_INDEX)?;
         return Some(Self {
             rail_commanded_m,
             rail_measured_m: pose.rail_x,
             rail_error_m: rail_commanded_m - pose.rail_x,
+            joint_commanded_rad: joint_commanded.values.clone(),
+            joint_measured_rad: pose.joints.values.clone(),
+            joint_error_rad,
+            max_joint_error_rad,
             wrist_commanded_rad,
             wrist_measured_rad,
             wrist_error_rad: wrist_commanded_rad - wrist_measured_rad,
@@ -235,8 +264,8 @@ impl DirectControlMeasurement {
     }
 }
 
-/// 전체 팔 궤적 대신 공의 x를 레일에, 예측 단계를 손목에 매핑하는 공통 제어기.
-/// 실제 장치와 GUI 시뮬레이션 모두 이 계산 결과를 각 하드웨어 어댑터에 적용한다.
+/// 1차에는 레일을 먼저 맞추고, 정밀 단계에는 공 위치와 상대 코트 중앙 반환
+/// 법선을 함께 만족하는 정지 자세를 계산하는 공통 제어기.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DirectController {
     selector: HitTargetSelector,
@@ -298,62 +327,88 @@ impl DirectController {
                 late_by_secs: -remaining_secs,
             });
         }
-        let rail_x = arm
-            .rail
-            .map_or(target.position.x, |rail| rail.clamp_x(target.position.x));
-        let wrist_requested_rad = match stage {
-            PredictionStage::Provisional => self.ready_wrist_rad,
-            PredictionStage::Refined => self.ready_wrist_rad + DIRECT_WRIST_STROKE_RAD,
+        let (rail_x, joints, desired_normal, commanded_normal) = match stage {
+            PredictionStage::Provisional => {
+                let rail_x = arm
+                    .rail
+                    .map_or(target.position.x, |rail| rail.clamp_x(target.position.x));
+                let mut joints = start.joints.clone();
+                let wrist = joints
+                    .values
+                    .get_mut(DIRECT_WRIST_JOINT_INDEX)
+                    .ok_or(DirectControlError::MissingWrist)?;
+                *wrist = arm
+                    .joint_limit(DIRECT_WRIST_JOINT_INDEX)
+                    .map_or(self.ready_wrist_rad, |limit| {
+                        self.ready_wrist_rad.clamp(limit.min, limit.max)
+                    });
+                let pose = arm
+                    .forward_kinematics_with_rail(rail_x, &joints)
+                    .ok_or(DirectControlError::ForwardKinematics)?;
+                (rail_x, joints, pose.normal, pose.normal)
+            }
+            PredictionStage::Refined => {
+                let outgoing = Impact::rally_return(target.position, target.incoming_velocity);
+                let delta = outgoing - target.incoming_velocity;
+                if !delta.iter().all(|value| value.is_finite()) || delta.norm() <= 1e-9 {
+                    return Err(DirectControlError::InvalidReturnDirection);
+                }
+                let desired_normal = delta.normalize();
+                let racket_center = Point3::from(
+                    target.position.coords
+                        - desired_normal * (BALL_RADIUS + geometry::RACKET_HALF_Z),
+                );
+                let (goal, _) = arm
+                    .inverse_pose_with_rail_best_normal(
+                        racket_center,
+                        desired_normal,
+                        start,
+                        IkSearch::Global,
+                    )
+                    .map_err(|error| DirectControlError::AimUnreachable(error.to_string()))?;
+                let commanded = arm
+                    .forward_kinematics_with_rail(goal.rail_x, &goal.joints)
+                    .ok_or(DirectControlError::ForwardKinematics)?;
+                let aim_error_rad = commanded
+                    .normal
+                    .dot(&desired_normal)
+                    .clamp(-1.0, 1.0)
+                    .acos();
+                if aim_error_rad > MAX_DIRECT_AIM_ERROR_RAD {
+                    return Err(DirectControlError::AimErrorTooLarge { aim_error_rad });
+                }
+                (goal.rail_x, goal.joints, desired_normal, commanded.normal)
+            }
         };
-        let wrist_rad = arm
-            .joint_limit(DIRECT_WRIST_JOINT_INDEX)
-            .map_or(wrist_requested_rad, |limit| {
-                wrist_requested_rad.clamp(limit.min, limit.max)
-            });
-        let rail_distance_m = (rail_x - start.rail_x).abs();
-        let rail_required_secs = arm.rail.map_or(0.0, |rail| {
-            minimum_trapezoid_time(
-                rail_distance_m,
-                rail.max_speed,
-                crate::defaults::motion::RAIL_ACCEL_M_S2,
-            )
-        });
-        let wrist_current_rad = *start
-            .joints
-            .values
-            .get(DIRECT_WRIST_JOINT_INDEX)
-            .ok_or(DirectControlError::MissingWrist)?;
-        let wrist_required_secs =
-            (wrist_rad - wrist_current_rad).abs() / arm.max_joint_speed.max(1e-9);
-        let required_secs = rail_required_secs.max(wrist_required_secs);
+        if joints.values.len() != start.joints.values.len() {
+            return Err(DirectControlError::JointCountMismatch);
+        }
+        let mut trajectory = Planner::move_to(arm, start, joints.clone(), rail_x)
+            .map_err(|error| DirectControlError::Planning(error.to_string()))?;
+        let required_secs = trajectory.duration_secs;
         if required_secs > remaining_secs {
             return Err(DirectControlError::InsufficientTime {
                 remaining_secs,
                 required_secs,
             });
         }
+        let duration_secs = remaining_secs
+            .min(MAX_DIRECT_COMMAND_SECS)
+            .max(MIN_DIRECT_COMMAND_SECS.min(remaining_secs))
+            .max(required_secs);
+        trajectory.impact_time_secs = duration_secs;
+        trajectory.duration_secs = duration_secs;
         return Ok(DirectControlCommand {
             stage,
             target,
             rail_x,
-            wrist_rad,
-            duration_secs: remaining_secs
-                .min(MAX_DIRECT_COMMAND_SECS)
-                .max(MIN_DIRECT_COMMAND_SECS.min(remaining_secs))
-                .max(required_secs),
+            joints,
+            desired_normal,
+            commanded_normal,
+            duration_secs,
+            trajectory,
         });
     }
-}
-
-fn minimum_trapezoid_time(distance: f64, max_speed: f64, acceleration: f64) -> f64 {
-    if distance <= 0.0 {
-        return 0.0;
-    }
-    let ramp_distance = max_speed * max_speed / acceleration;
-    if distance <= ramp_distance {
-        return 2.0 * (distance / acceleration).sqrt();
-    }
-    return 2.0 * max_speed / acceleration + (distance - ramp_distance) / max_speed;
 }
 
 /// 한 프레임만 우연히 맞은 예측을 정밀 단계로 착각하지 않도록
@@ -550,7 +605,7 @@ pub enum TargetSelectionError {
     OutsideWindow,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum DirectControlError {
     #[error("준비 손목 각도가 유효하지 않음")]
     InvalidReadyWrist,
@@ -562,7 +617,21 @@ pub enum DirectControlError {
     Target(TargetSelectionError),
     #[error("현재 포즈에 손목축이 없음")]
     MissingWrist,
-    #[error("남은 시간 {remaining_secs:.3}s, 레일·손목에 필요한 최소 시간 {required_secs:.3}s")]
+    #[error("현재 자세의 순기구학 계산 실패")]
+    ForwardKinematics,
+    #[error("현재 포즈와 목표 포즈의 관절 수가 다름")]
+    JointCountMismatch,
+    #[error("상대 코트 중앙 반환 방향을 계산할 수 없음")]
+    InvalidReturnDirection,
+    #[error("상대 코트 중앙을 향하는 라켓 자세를 만들 수 없음: {0}")]
+    AimUnreachable(String),
+    #[error("달성 가능한 라켓 방향이 중앙 반환 방향에서 {aim_error_rad:.3}rad 벗어남")]
+    AimErrorTooLarge { aim_error_rad: f64 },
+    #[error("안전한 라켓 자세 이동 궤적을 만들 수 없음: {0}")]
+    Planning(String),
+    #[error(
+        "남은 시간 {remaining_secs:.3}s, 레일·전체 관절에 필요한 최소 시간 {required_secs:.3}s"
+    )]
     InsufficientTime {
         remaining_secs: f64,
         required_secs: f64,
@@ -620,50 +689,60 @@ mod tests {
     }
 
     #[test]
-    fn direct_controller_maps_the_same_prediction_to_rail_and_wrist() {
+    fn refined_direct_controller_aims_return_at_opponent_center() {
         let robot = crate::defaults::robot().unwrap();
-        let trajectory = BallTrajectory::new(
-            vec![],
-            vec![
-                TrajectorySample::new(Point3::new(0.2, 0.5, 0.4), Vector3::zeros(), 0.1),
-                TrajectorySample::new(Point3::new(0.4, 0.1, 0.2), Vector3::zeros(), 0.3),
-            ],
-            Instant::now(),
-        )
-        .unwrap();
-        let controller = DirectController::new(0.2, 0.4, -0.7).unwrap();
-        let start = Pose::new(
-            0.3,
-            super::super::Joints::from_slice(&[0.0, 0.0, 0.0, -0.7]),
+        let rail_x = robot.arm.rail.as_ref().unwrap().default_x();
+        let start = Pose::new(rail_x, robot.arm.default_joints.clone());
+        let start_racket = robot
+            .arm
+            .forward_kinematics_with_rail(rail_x, &start.joints)
+            .unwrap();
+        let ball = Point3::from(
+            start_racket.position.coords
+                + start_racket.normal * (BALL_RADIUS + geometry::RACKET_HALF_Z),
         );
+        let outgoing = Impact::rally_return(ball, Vector3::zeros());
+        let incoming = outgoing - start_racket.normal * 2.0;
+        let target = HitTarget {
+            position: ball,
+            incoming_velocity: incoming,
+            time_secs: 2.0,
+        };
+        let ready = start.joints.values[DIRECT_WRIST_JOINT_INDEX];
+        let controller = DirectController::new(0.0, 1.0, ready).unwrap();
 
         let provisional = controller
-            .command(
+            .command_for_target(
                 &robot.arm,
                 &start,
-                &trajectory,
+                target,
                 PredictionStage::Provisional,
-                0.05,
+                0.0,
             )
             .unwrap();
         let refined = controller
-            .command(
-                &robot.arm,
-                &start,
-                &trajectory,
-                PredictionStage::Refined,
-                0.05,
-            )
+            .command_for_target(&robot.arm, &start, target, PredictionStage::Refined, 0.0)
             .unwrap();
 
-        assert!((provisional.rail_x - 0.3).abs() < 1e-12);
-        assert!((provisional.wrist_rad + 0.7).abs() < 1e-12);
-        assert!((provisional.duration_secs - 0.15).abs() < 1e-12);
-        assert!((refined.wrist_rad - (-0.7 + DIRECT_WRIST_STROKE_RAD)).abs() < 1e-12);
+        assert_eq!(provisional.joints, start.joints);
+        let aim_error = refined
+            .commanded_normal
+            .dot(&refined.desired_normal)
+            .clamp(-1.0, 1.0)
+            .acos();
+        assert!(aim_error <= MAX_DIRECT_AIM_ERROR_RAD);
+        let refined_racket = robot
+            .arm
+            .forward_kinematics_with_rail(refined.rail_x, &refined.joints)
+            .unwrap();
+        let expected_center =
+            ball.coords - refined.desired_normal * (BALL_RADIUS + geometry::RACKET_HALF_Z);
+        assert!((refined_racket.position.coords - expected_center).norm() < 0.005);
     }
 
     #[test]
     fn direct_measurement_is_commanded_minus_measured() {
+        let joints = super::super::Joints::from_slice(&[0.1, 0.2, 0.3, -0.40]);
         let command = DirectControlCommand {
             stage: PredictionStage::Refined,
             target: HitTarget {
@@ -672,17 +751,28 @@ mod tests {
                 time_secs: 0.2,
             },
             rail_x: 0.30,
-            wrist_rad: -0.40,
+            joints: joints.clone(),
+            desired_normal: Vector3::y(),
+            commanded_normal: Vector3::y(),
             duration_secs: 0.1,
+            trajectory: Trajectory::new(
+                joints.clone(),
+                joints,
+                vec![0.0; 4],
+                vec![0.0; 4],
+                0.1,
+                crate::robot::motion::Rail::fixed(0.30),
+            ),
         };
         let pose = Pose::new(
             0.27,
-            super::super::Joints::from_slice(&[0.0, 0.0, 0.0, -0.45]),
+            super::super::Joints::from_slice(&[0.08, 0.18, 0.28, -0.45]),
         );
         let measured = command.compare_with_pose(&pose).unwrap();
 
         assert!((measured.rail_error_m - 0.03).abs() < 1e-12);
         assert!((measured.wrist_error_rad - 0.05).abs() < 1e-12);
+        assert!((measured.max_joint_error_rad - 0.05).abs() < 1e-12);
     }
 
     #[test]

@@ -124,15 +124,40 @@ impl RealHardware {
             error!("Dynamixel 궤적 executor 패닉");
         }
     }
-}
 
-impl Hardware for RealHardware {
-    fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
+    /// 레일 이동을 시작하고 Dynamixel quintic 스트리밍 워커를 띄운다.
+    /// 반환값은 AXL이 clamp한 실제 레일 목표다.
+    fn start_trajectory(&mut self, trajectory: &motion::Trajectory) -> Result<f64, HwError> {
         self.reap_executor();
         if self.busy.swap(true, Ordering::AcqRel) {
-            debug!("Dynamixel 궤적 실행 중 — 중복 명령 무시");
-            return Ok(());
+            return Err(HwError::CommandFailed {
+                duration_secs: trajectory.duration_secs,
+                joint_count: trajectory.end.values.len(),
+                reason: "이전 궤적이 아직 실행 중입니다".into(),
+            });
         }
+
+        let rail_result = (|| {
+            let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
+                duration_secs: trajectory.duration_secs,
+                joint_count: trajectory.end.values.len(),
+                reason: "레일 mutex poisoned".into(),
+            })?;
+            return match rail.as_mut() {
+                Some(rail) => rail.command_abs_in_secs(
+                    trajectory.follow_through_rail_x,
+                    trajectory.duration_secs,
+                ),
+                None => Ok(0.0),
+            };
+        })();
+        let applied_rail_m = match rail_result {
+            Ok(value) => value,
+            Err(error) => {
+                self.busy.store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
 
         let trajectory = trajectory.clone();
         let bus = Arc::clone(&self.bus);
@@ -141,23 +166,7 @@ impl Hardware for RealHardware {
         self.cancel.store(false, Ordering::Release);
         let cancel = Arc::clone(&self.cancel);
         let tick = Duration::from_secs_f64(1.0 / self.stream_hz);
-        let rail_target = trajectory.follow_through_rail_x;
-        let rail_duration = trajectory.duration_secs;
         self.executor = Some(thread::spawn(move || {
-            if let Ok(mut guard) = rail.lock()
-                && let Some(rail_hw) = guard.as_mut()
-                && let Err(error) = rail_hw.command_abs_in_secs(rail_target, rail_duration)
-            {
-                error!(
-                    rail_target,
-                    rail_duration,
-                    error = %error,
-                    "AXL 레일 이동 시작 실패 — 궤적 중단"
-                );
-                busy.store(false, Ordering::Release);
-                return;
-            }
-
             let started = Instant::now();
             loop {
                 if cancel.load(Ordering::Acquire) {
@@ -166,16 +175,11 @@ impl Hardware for RealHardware {
                 let elapsed = started.elapsed().as_secs_f64();
                 let sample_time = elapsed.min(trajectory.duration_secs);
                 let joints = trajectory.sample_at(sample_time);
-
                 let joints_ok = match bus.lock() {
                     Ok(mut bus) => match bus.write_joints(&joints) {
                         Ok(()) => true,
                         Err(error) => {
-                            error!(
-                                sample_time,
-                                error = %error,
-                                "Dynamixel goal position 전송 실패 — 궤적 중단"
-                            );
+                            error!(sample_time, error = %error, "Dynamixel goal position 전송 실패 — 궤적 중단");
                             false
                         }
                     },
@@ -184,17 +188,11 @@ impl Hardware for RealHardware {
                         false
                     }
                 };
-                if !joints_ok {
-                    break;
-                }
-
-                if elapsed >= trajectory.duration_secs {
+                if !joints_ok || elapsed >= trajectory.duration_secs {
                     break;
                 }
                 thread::sleep(tick);
             }
-            // 정상 완주에서는 관절뿐 아니라 레일까지 실제 정지해야 명령 완료다.
-            // 취소된 경우에는 다음 정밀 명령이 AxmMoveSStop 후 즉시 재목표하므로 기다리지 않는다.
             if !cancel.load(Ordering::Acquire)
                 && let Ok(mut guard) = rail.lock()
                 && let Some(rail_hw) = guard.as_mut()
@@ -204,7 +202,13 @@ impl Hardware for RealHardware {
             }
             busy.store(false, Ordering::Release);
         }));
-        return Ok(());
+        return Ok(applied_rail_m);
+    }
+}
+
+impl Hardware for RealHardware {
+    fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
+        return self.start_trajectory(trajectory).map(|_| ());
     }
 
     fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
@@ -221,45 +225,25 @@ impl Hardware for RealHardware {
 
     fn command_rail_and_racket(
         &mut self,
-        rail_x: f64,
-        racket_joint_rad: f64,
-        duration_secs: f64,
+        trajectory: &motion::Trajectory,
     ) -> Result<AppliedRailRacketCommand, HwError> {
-        self.reap_executor();
-        if self.busy.load(Ordering::Acquire) {
-            return Err(HwError::CommandFailed {
-                duration_secs,
-                joint_count: 1,
-                reason: "중앙 이동 궤적이 아직 실행 중입니다".into(),
-            });
-        }
-
-        let (applied_rail_m, rail_sent) = {
-            let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
-                duration_secs,
-                joint_count: 1,
-                reason: "레일 mutex poisoned".into(),
-            })?;
-            match rail.as_mut() {
-                Some(rail) => (rail.command_abs_in_secs(rail_x, duration_secs)?, true),
-                None => (0.0, false),
-            }
-        };
-        // 4-DOF 배선의 마지막 논리 관절은 라켓 손목(ID 5)이다. 이 호출은
-        // ID 1/2/3/4에 Goal Position을 보내지 않는다.
-        let applied_wrist_rad = self
+        let applied_joints = self
             .bus
             .lock()
             .map_err(|_| HwError::CommandFailed {
-                duration_secs,
-                joint_count: 1,
+                duration_secs: trajectory.duration_secs,
+                joint_count: trajectory.end.values.len(),
                 reason: "Dynamixel bus mutex poisoned".into(),
             })?
-            .write_joint(3, racket_joint_rad)?;
+            .quantize_joints(&trajectory.end)?;
+        let mut applied_trajectory = trajectory.clone();
+        applied_trajectory.end = applied_joints.clone();
+        applied_trajectory.follow_through = applied_joints.clone();
+        let applied_rail_m = self.start_trajectory(&applied_trajectory)?;
         return Ok(AppliedRailRacketCommand {
             rail_m: applied_rail_m,
-            wrist_rad: applied_wrist_rad,
-            rail_sent,
+            joints: applied_joints,
+            rail_sent: self.rail.lock().is_ok_and(|rail| rail.is_some()),
         });
     }
 
@@ -269,8 +253,8 @@ impl Hardware for RealHardware {
     }
 
     fn cancel(&mut self) {
-        // executor 루프가 매 틱 이 플래그를 보고 빠져나오며 `busy`를 내린다.
-        // `Drop`이 쓰는 것과 같은 경로다.
+        // 다음 명령을 즉시 시작할 수 있도록 executor 종료를 기다린 뒤
+        // 실측 관절을 다시 명령해 현재 위치를 홀드한다.
         self.cancel.store(true, Ordering::Release);
         if let Ok(mut rail) = self.rail.lock()
             && let Some(rail) = rail.as_mut()
@@ -278,11 +262,14 @@ impl Hardware for RealHardware {
         {
             error!(%error, "AXL 레일 안전 정지 실패");
         }
+        if let Some(handle) = self.executor.take() {
+            let _ = handle.join();
+        }
+        self.busy.store(false, Ordering::Release);
         if let Ok(mut bus) = self.bus.lock()
             && let Ok(joints) = bus.read_joints()
-            && let Some(wrist) = joints.values.get(3)
         {
-            let _ = bus.write_joint(3, *wrist);
+            let _ = bus.write_joints(&joints);
         }
     }
 }
@@ -368,6 +355,43 @@ mod tests {
     }
 
     #[test]
+    fn cancel_allows_an_immediate_replacement_trajectory() {
+        let config = DynamixelConfig {
+            stream_hz: 500.0,
+            ..DynamixelConfig::default()
+        };
+        let mut hardware = RealHardware::dry_run(config, None).expect("dry-run hardware");
+        let first = motion::Trajectory::new(
+            Joints::from_slice(&[0.0; 4]),
+            Joints::from_slice(&[0.2; 4]),
+            vec![0.0; 4],
+            vec![0.0; 4],
+            0.2,
+            motion::Rail::fixed(0.0),
+        );
+        let replacement = motion::Trajectory::new(
+            Joints::from_slice(&[0.0; 4]),
+            Joints::from_slice(&[-0.1; 4]),
+            vec![0.0; 4],
+            vec![0.0; 4],
+            0.02,
+            motion::Rail::fixed(0.0),
+        );
+
+        hardware.command(&first).expect("first command");
+        hardware.cancel();
+        hardware.command(&replacement).expect("replacement command");
+        while hardware.is_busy() {
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        let pose = hardware.read_pose().expect("pose");
+        for angle in pose.joints.values {
+            assert!((angle - -0.1).abs() < 0.002);
+        }
+    }
+
+    #[test]
     fn dry_run_syncs_rail_with_joint_trajectory() {
         let config = DynamixelConfig {
             stream_hz: 500.0,
@@ -401,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_tracking_changes_only_rail_and_racket_joint() {
+    fn direct_tracking_applies_rail_and_full_racket_pose() {
         let config = DynamixelConfig {
             stream_hz: 500.0,
             ..DynamixelConfig::default()
@@ -409,20 +433,38 @@ mod tests {
         let mut hardware =
             RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
         let before = hardware.read_pose().expect("before");
+        let target = Joints::from_slice(&[0.10, -0.15, 0.20, -0.25]);
+        let trajectory = motion::Trajectory::new(
+            before.joints,
+            target.clone(),
+            vec![0.0; target.values.len()],
+            vec![0.0; target.values.len()],
+            0.1,
+            motion::Rail {
+                start: before.rail_x,
+                end: 0.35,
+                start_velocity: 0.0,
+                end_velocity: 0.0,
+            },
+        );
 
         let applied = hardware
-            .command_rail_and_racket(0.35, -0.25, 0.1)
+            .command_rail_and_racket(&trajectory)
             .expect("tracking command");
         assert!((applied.rail_m - 0.35).abs() < 1e-9);
-        assert!((applied.wrist_rad - -0.25).abs() < 0.002);
+        for (actual, requested) in applied.joints.values.iter().zip(&target.values) {
+            assert!((actual - requested).abs() < 0.002);
+        }
         assert!(applied.rail_sent);
 
+        while hardware.is_busy() {
+            thread::sleep(Duration::from_millis(5));
+        }
         let after = hardware.read_pose().expect("after");
         assert!((after.rail_x - 0.35).abs() < 1e-9);
-        for index in 0..3 {
-            assert!((after.joints.values[index] - before.joints.values[index]).abs() < 0.002);
+        for (actual, requested) in after.joints.values.iter().zip(&target.values) {
+            assert!((actual - requested).abs() < 0.002);
         }
-        assert!((after.joints.values[3] - -0.25).abs() < 0.002);
     }
 
     #[test]

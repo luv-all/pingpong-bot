@@ -21,8 +21,8 @@ BallTrajectory {
 ```
 
 real 제어는 `BallTrajectory → CommitRequest → DirectController` 경로로 목표와
-레일·손목 명령을 계산한다. 현재 실기 출력은 전체 스윙이 아니라 리니어
-레일과 손목 ID 5의 2단계 시험 명령이며, GUI sim도 같은 명령 계산을 쓴다.
+레일·라켓 자세 명령을 계산한다. 정밀 단계에서는 상대편 코트 중앙에
+바운드하는 반환 속도와 라켓 법선을 구하고, 전체 관절 정지 자세로 이동한다.
 
 ---
 
@@ -88,7 +88,7 @@ cargo run -p pingpong-bot -- --debug
 
 실행하면 Rapier 디지털 트윈(탁구대·공·로봇) + kiss3d/egui 뷰어가 뜬다.  
 슈터 GUI로 발사하면 기본 경로는 월드 ground-truth 궤적을
-`DirectController`에 넣어 레일·손목 2단계 명령을 계산한다.
+`DirectController`에 넣어 레일·라켓 자세 2단계 명령을 계산한다.
 
 ### 시뮬레이션 사용법
 
@@ -106,14 +106,14 @@ cargo run -p pingpong-bot -- --mode sim --debug
 4. **Park**는 공을 회수한다. 마우스 드래그/스크롤은 시점 회전/줌이다.
 
 기본 sim은 카메라 추정값이 아닌 월드 ground-truth로 `BallTrajectory`를 만들지만,
-그 뒤의 목표 선택·단계 판정·레일·손목 명령 계산은 실기와 같은 코드를 쓴다.
+그 뒤의 목표 선택·단계 판정·레일·라켓 자세 명령 계산은 실기와 같은 코드를 쓴다.
 **Eval**과 bang-bang 스윙 토글은 보존 중인 시뮬레이션 진단 기능이며 현재 실기
 직접 제어 경로에는 대응하지 않는다.
 
 ### 실기 실행 순서
 
 실기는 **Windows 2단계** 환경을 기준으로 한다. 시작 시 선택적 홈 이동 후,
-공마다 레일을 최대 두 번 위치 제어하고 정밀 단계에서 손목만 15° 움직인다.
+공마다 레일을 최대 두 번 위치 제어하고 정밀 단계에서 상대편 중앙 반환 자세를 만든다.
 전체 스윙·자동 복귀·결선 랠리는 아직 지원하지 않는다.
 
 실행 전 체크리스트:
@@ -285,10 +285,11 @@ cargo run -p jog -- --port COM8 --debug
 cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 ```
 
-### `--mode real` — 손목·리니어 레일 2단계 제어
+### `--mode real` — 리니어 레일·라켓 자세 2단계 제어
 
-공 궤적의 1차·정밀 목표 x로 레일을 이동하고, 정밀 단계에서 손목 ID 5를
-15° 시험 구동한다. 전체 스윙과 자동 복귀는 실행하지 않는다.
+공 궤적의 1차 목표로 레일을 선행 이동하고, 정밀 단계에서 상대편 코트 중앙
+`(WIDTH_X/2, LENGTH_Y×0.75)`으로 반환하도록 전체 관절 자세를 명령한다. 전체
+스윙과 자동 복귀는 실행하지 않는다.
 스레드와 하드웨어 경계는 [`src/real/README.md`](src/real/README.md)에 정리돼 있다.
 
 ```bash
@@ -309,9 +310,9 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 | `--timeout-secs` | 60 | 공 대기 경고 간격. 초과해도 세션은 계속 |
 
 새 공은 `track_seq`로 구분하며, 공마다 1차·정밀 명령을 최대 한 번씩 보낸다.
-명령 예상 도착 시점부터 레일·손목을 20ms 간격으로 다시 읽어,
+명령 예상 도착 시점부터 레일·전체 관절을 20ms 간격으로 다시 읽어,
 허용치 안에 2회 연속 들어와야 수렴으로 인정한다. 로그는 요청값, 실제 적용값,
-실측값을 분리하며 레일 20mm 또는 손목 3° 초과 시 `WARN`을 남긴다.
+실측값을 분리하며 레일 20mm, 관절 3°, 조준 10° 중 하나라도 초과하면 `WARN`을 남긴다.
 ESC·`q`로 세션을 종료한다.
 
 카메라 2대(`data/calibration.json`)와 `data/colormask.json`이 있어야 한다.
@@ -325,7 +326,7 @@ ESC·`q`로 세션을 종료한다.
 현재 활성 제어의 공통 경계는 `BallTrajectory → DirectController → Hardware`다.
 `sim`과 `real`은 같은 목표 선택·단계 판정·명령 시간 계산을 사용한다. 실기는
 `Hardware::command_rail_and_racket`으로 전송하고 GUI sim은 `robot::State`의
-레일·손목 목표에 적용한다. GUI sim 엔트리(`main`)는 뷰어와 `SimSession`을 함께 실행한다.
+같은 정지→정지 궤적을 재생한다. GUI sim 엔트리(`main`)는 뷰어와 `SimSession`을 함께 실행한다.
 
 ### 도메인
 
@@ -405,7 +406,7 @@ flowchart LR
     simHw --> physics
   end
 
-  subgraph realSide ["real — 레일·손목 2단계 시험"]
+  subgraph realSide ["real — 레일·라켓 자세 2단계 제어"]
     realCamera["UVC × 2"]
     realWorkers["src/real 워커<br/>cam × 2 · 추정 · 제어"]
     realHw["RealHardware"]
@@ -430,7 +431,7 @@ src/
   planner/      보존 중인 스윙·임팩트·충돌 계획 라이브러리 (현재 직접 제어에서 미사용)
   robot/        build/ · urdf/ · Arm · state
   sim/          physics/ · session/ · gui/
-  real/         실기 레일·손목 2단계 제어 런타임 (bin 전용 · README.md)
+  real/         실기 레일·라켓 자세 2단계 제어 런타임 (bin 전용 · README.md)
   hardware/     rail/ · SimHardware · RealHardware
   pipeline/     카메라→추정→DirectController 골격 (현재 호출부 없음)
   telemetry/
@@ -529,7 +530,7 @@ cargo build -p pingpong-bot --release
 | fuse 검출 · measure_* → defaults 스니펫 | ✅ |
 | EKF (sim 기본은 ground truth) | ✅ |
 | Dynamixel 4축 · AXL 레일 · `jog` | ✅ (Windows 재검증) |
-| real 비전→레일·손목 2단계 제어 | ✅ 코드 완료, Windows 실물 재검증 필요 |
+| real 비전→레일·라켓 자세 2단계 제어 | ✅ 코드 완료, Windows 실물 재검증 필요 |
 
 **로드맵:** [`TODO.md`](TODO.md) · [`docs/decisions.md`](docs/decisions.md)
 

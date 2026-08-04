@@ -879,43 +879,35 @@ impl SimWorld {
         }
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
         // 이 궤적은 현재 sim 상태에서 바로 표본화했으므로 기준시각 경과는 0이다.
-        // 목표 선택·레일 clamp·손목 단계·명령시간 계산은 실기 워커와 같은 코드다.
+        // 목표 선택·레일 clamp·중앙 반환 자세·명령시간 계산은 실기 워커와 같은 코드다.
         let command = match controller.command_for_target(&self.arm, &start, target, stage, 0.0) {
             Ok(command) => command,
             Err(error) => {
                 self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
                 self.debug_snap.last_fail_text = Some(error.to_string());
                 if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
-                    warn!(shot = self.shot_seq, %error, "shot: 레일·손목 명령 계산 실패");
+                    warn!(shot = self.shot_seq, %error, "shot: 레일·라켓 자세 명령 계산 실패");
                 }
                 return;
             }
         };
         self.hard_fail_streak = 0;
         self.debug_snap.clear_fail_on_success();
-        let mut targets = self.robot.targets().clone();
-        let Some(wrist) = targets.values.get_mut(DIRECT_WRIST_JOINT_INDEX) else {
-            warn!(
-                shot = self.shot_seq,
-                joint_count = targets.values.len(),
-                "shot: sim 손목축이 없어 명령 적용 실패"
-            );
-            return;
-        };
-        *wrist = command.wrist_rad;
         self.robot.set_auto_return_to_center(false);
-        self.robot
-            .set_rail_target_in_secs(&self.arm, command.rail_x, command.duration_secs);
-        self.robot.set_targets(targets);
+        self.robot.replace_swing(command.trajectory.clone());
+        let wrist_rad = command.joints.values[DIRECT_WRIST_JOINT_INDEX];
         info!(
             shot = self.shot_seq,
             stage = ?command.stage,
             duration_secs = command.duration_secs,
             rail_commanded_m = command.rail_x,
-            wrist_commanded_deg = command.wrist_rad.to_degrees(),
+            joints_commanded_rad = ?command.joints.values,
+            wrist_commanded_deg = wrist_rad.to_degrees(),
+            desired_normal = ?command.desired_normal,
+            commanded_normal = ?command.commanded_normal,
             target = ?command.target.position.coords,
             arrival_secs = command.target.time_secs,
-            "shot: 공통 레일·손목 직접 명령 commit"
+            "shot: 공통 레일·라켓 자세 직접 명령 commit"
         );
         self.swing_committed = true;
         self.debug_snap.commit_phase = CommitPhase::Committed;
