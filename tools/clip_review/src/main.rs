@@ -50,6 +50,8 @@ use track::{FrameState, Reviewed};
 
 /// 카메라 창 하나. 둘로 띄우면 어느 쪽이 포커스인지에 따라 키가 안 먹는다.
 const WINDOW: &str = "clip-review";
+/// 일시정지 중 키를 기다리는 주기 [ms]. `waitKey(0)` 은 macOS 에서 키를 못 받는다.
+const PAUSED_POLL_MS: i32 = 20;
 
 #[derive(Parser, Debug)]
 #[command(about = "클립 리뷰 — 실제 궤적 vs 예측 궤적 (카메라 2창 + sim 창)")]
@@ -82,6 +84,17 @@ struct Args {
     out: std::path::PathBuf,
 }
 
+/// 클립 하나 — 성적표 한 줄.
+fn run_one(root: &std::path::Path, name: &str, out: &std::path::Path) -> Result<String> {
+    let clip = camera::StereoOfflineArgs {
+        clip: Some(root.join(name)),
+    }
+    .resolve()
+    .map_err(anyhow::Error::msg)?
+    .context("클립 해석 실패")?;
+    return Ok(report::summary_row(name, &report::one(&clip, name, out)?));
+}
+
 /// 클립 전부를 훑어 그림과 표를 남긴다. 창은 안 띄운다.
 fn run_all(out: &std::path::Path) -> Result<()> {
     std::fs::create_dir_all(out).with_context(|| format!("mkdir {}", out.display()))?;
@@ -103,17 +116,18 @@ fn run_all(out: &std::path::Path) -> Result<()> {
     let mut lines = vec![report::summary_header()];
     println!("{}", lines[0]);
     for name in &names {
-        let clip = camera::StereoOfflineArgs {
-            clip: Some(root.join(name)),
+        // 한 클립이 나빠도 나머지는 돌린다 — 배치가 통째로 멎으면 아무 표도 안 나온다.
+        match run_one(root, name, out) {
+            Ok(row) => {
+                println!("{row}");
+                lines.push(row);
+            }
+            Err(error) => {
+                let row = format!("{name:<8} 건너뜀 — {error:#}");
+                println!("{row}");
+                lines.push(row);
+            }
         }
-        .resolve()
-        .map_err(anyhow::Error::msg)
-        .with_context(|| format!("클립 {name}"))?
-        .with_context(|| format!("클립 {name} 해석 실패"))?;
-        let score = report::one(&clip, name, out)?;
-        let row = report::summary_row(name, &score);
-        println!("{row}");
-        lines.push(row);
     }
     lines.push(String::new());
     lines.push(
@@ -237,7 +251,7 @@ fn run(args: &Args) -> Result<()> {
         let Some((left, right)) = player.at(index) else {
             paused = true;
             let last = index.saturating_sub(1);
-            match Step::of(highgui::wait_key_ex(0)?, &mut paused) {
+            match Step::of(highgui::wait_key_ex(PAUSED_POLL_MS)?, &mut paused) {
                 Step::Quit => break,
                 Step::Delta(delta) => index = shift(last, delta, last_frame + 1),
                 Step::Home => index = 0,
@@ -322,9 +336,11 @@ fn run(args: &Args) -> Result<()> {
             }
         }
 
-        // 일시정지면 0 — 키가 올 때까지 블록한다. 프리롤은 1배속으로 지나간다.
+        // 일시정지여도 0 을 넘기지 않는다. macOS highgui 는 `waitKey(0)` 에서 창 이벤트를
+        // 안 돌려서 `q` 가 안 먹는다 — 저장소의 다른 툴이 전부 `.max(1)` 을 쓰는 이유다.
+        // 짧게 폴링하면 같은 "멈춰 있음"이면서 키는 받는다.
         let wait = match (paused, fast) {
-            (true, _) => 0,
+            (true, _) => PAUSED_POLL_MS,
             (false, true) => live_wait_ms,
             (false, false) => slow_wait_ms,
         };

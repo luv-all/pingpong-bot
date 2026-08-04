@@ -27,9 +27,9 @@ pub const DEFAULT_FOV_Y_DEG: f64 = arducam_b0332::VFOV_DEG;
 ///
 /// 리그를 또 만지면 여기를 갱신한다. 클립 자체에 캘리브 지문을 박는 게 더 튼튼하지만
 /// (`meta.json` 에 캘리브 해시), 그건 녹화 도구를 고쳐야 해서 후속이다.
-pub const CURRENT_RIG_CLIPS: [&str; 10] = [
+pub const CURRENT_RIG_CLIPS: [&str; 11] = [
     "fly_10", "fly_11", "fly_12", "fly_13", "fly_14", "fly_15", "fly_16", "fly_17", "fly_18",
-    "fly_19",
+    "fly_19", "fly_20",
 ];
 
 /// 캘리브·colormask 등 비전 산출물 루트.
