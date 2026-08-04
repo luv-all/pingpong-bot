@@ -110,6 +110,7 @@ pub fn run(args: &Args) -> Result<()> {
         Arc::clone(&arm),
         options.home,
         options.coarse_track,
+        InterceptWindow::default(),
         commit_rx,
         track_rx,
         status_tx,

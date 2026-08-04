@@ -11,11 +11,12 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use pingpong_bot::camera::Calibration;
 use pingpong_bot::defaults::EstimatorParams;
-use pingpong_bot::robot::motion::{HitPlane, Prediction};
+use pingpong_bot::robot::motion::Prediction;
 use pingpong_bot::robot::motion::{InterceptWindow, Planner};
-use pingpong_bot::vision::{Fit, Outcome, State, Trajectory, triggers};
+use pingpong_bot::vision::{Fit, Outcome, State, triggers};
 use tracing::{debug, info_span};
 
+use super::commit_request::predictions_at;
 use super::fmt::f2;
 use super::{
     CommitRequest, ControlStatus, Decision, PreviewEvent, ShotEvent, Shutdown, SimUpdate, Throttle,
@@ -122,7 +123,12 @@ pub fn spawn(
                 });
             }
 
-            let predictions = predictions_at(trajectory.as_ref(), &planes);
+            // 게이트가 판단하려면 잘라 봐야 한다. 제어에 넘길 때 다시 자르는 건
+            // 같은 함수라 결과가 갈릴 수 없다.
+            let predictions = trajectory
+                .as_ref()
+                .map(|t| predictions_at(t, &planes))
+                .unwrap_or_default();
             let impact_sigma = display_candidate(&predictions)
                 .zip(ball)
                 .map(|(prediction, state)| impact_sigma(&state, prediction.time_to_impact_secs));
@@ -151,11 +157,12 @@ pub fn spawn(
             }
 
             let shown = display_candidate(&predictions);
-            match decision {
-                Decision::Attempt if accepting => {
+            // 제어에 넘기는 건 **계약 그 자체**다. 접수 평면마다 자르는 건 제어 쪽이 한다 —
+            // 도달 범위는 로봇 것이라 비전이 알 이유가 없다.
+            match (decision, trajectory) {
+                (Decision::Attempt, Some(trajectory)) if accepting => {
                     let request = CommitRequest {
-                        predictions,
-                        ball_y: ball.map_or(f64::NAN, |state| state.position.y),
+                        trajectory,
                         at: Instant::now(),
                     };
                     // 제어 워커가 아직 앞 요청을 계획 중이면 버린다 — 더 새 예측이 곧 온다.
@@ -163,16 +170,15 @@ pub fn spawn(
                         stats.commit_dropped += 1;
                     }
                 }
-                // 아직 칠 때가 아니어도 예측이 있으면 제어 워커가 미리 옮길 수 있게 보낸다.
-                Decision::Attempt | Decision::Wait(_) => {
-                    if !predictions.is_empty() {
-                        // 놓쳐도 다음 프레임에 다시 온다.
-                        let _ = track_tx.try_send(TrackRequest {
-                            predictions,
-                            at: Instant::now(),
-                        });
-                    }
+                // 아직 칠 때가 아니어도 궤적이 있으면 제어 워커가 미리 옮길 수 있게 보낸다.
+                (_, Some(trajectory)) => {
+                    // 놓쳐도 다음 프레임에 다시 온다.
+                    let _ = track_tx.try_send(TrackRequest {
+                        trajectory,
+                        at: Instant::now(),
+                    });
                 }
+                (_, None) => {}
             }
 
             if let Some(sim_tx) = &sim_tx {
@@ -228,31 +234,6 @@ pub fn spawn(
         );
         return stats;
     });
-}
-
-/// 예측 궤적을 각 접수 평면에서 잘라 기구학 계약으로 바꾼다.
-///
-/// 궤적은 트리거 순간에 한 번 얼고 그 뒤로 갱신되지 않는다. 매 프레임 다시 적분하면
-/// 예측이 측정에 끌려가 "예측이 맞았는지"를 볼 수 없다.
-fn predictions_at(trajectory: Option<&Trajectory>, planes: &[HitPlane]) -> Vec<Prediction> {
-    let Some(trajectory) = trajectory else {
-        return Vec::new();
-    };
-    // 예측 시작 시각 기준의 잔여 시간이어야 제어측 리드타임과 뜻이 같다.
-    let Some(now) = trajectory.measured.last().map(|state| state.t) else {
-        return Vec::new();
-    };
-    return planes
-        .iter()
-        .filter_map(|plane| {
-            let state = trajectory.predicted.at_plane(plane.y)?;
-            return Some(Prediction {
-                time_to_impact_secs: state.t.saturating_sub(now).as_secs_f64(),
-                impact_position: state.position,
-                incoming_velocity: state.velocity,
-            });
-        })
-        .collect();
 }
 
 /// 도달점 불확실성 [m] — 리드가 길수록 σ_v가 크게 실린다.
