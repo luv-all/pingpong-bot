@@ -14,7 +14,7 @@ pub struct RailConfig {
     pub irq_no: i32,
     pub pulses_per_meter: u32,
     /// `true`이면 앱 도메인과 AXL 보드의 좌표축 방향이 반대이다.
-    /// 도메인 `[min, max]`는 보드 `[-max, -min]`에 대응한다.
+    /// AXL 보드의 0은 레일 중앙이며 도메인 중점에 대응한다.
     pub reverse: bool,
     pub x_min_m: f64,
     pub x_max_m: f64,
@@ -70,7 +70,7 @@ impl RailConfig {
     /// `reverse`면 실제 AXL 엔코더 좌표처럼 부호를 반전한다.
     pub fn domain_to_board_abs(&self, domain_m: f64) -> f64 {
         if self.reverse {
-            return -domain_m;
+            return self.domain_midpoint_m() - domain_m;
         }
         return domain_m;
     }
@@ -78,7 +78,7 @@ impl RailConfig {
     /// 절대 위치: 보드(cmd/act) → 앱이 해석하는 도메인 좌표.
     pub fn board_to_domain_abs(&self, board_m: f64) -> f64 {
         if self.reverse {
-            return -board_m;
+            return self.domain_midpoint_m() - board_m;
         }
         return board_m;
     }
@@ -94,7 +94,8 @@ impl RailConfig {
     /// 도메인 이동 범위를 AXL 보드 좌표계의 양/음 소프트 리밋으로 변환한다.
     pub fn soft_limit_args(&self) -> SoftLimitArgs {
         let (positive_m, negative_m) = if self.reverse {
-            (-self.x_min_m, -self.x_max_m)
+            let midpoint_m = self.domain_midpoint_m();
+            (midpoint_m - self.x_min_m, midpoint_m - self.x_max_m)
         } else {
             (self.x_max_m, self.x_min_m)
         };
@@ -105,6 +106,10 @@ impl RailConfig {
             positive_m,
             negative_m,
         };
+    }
+
+    fn domain_midpoint_m(&self) -> f64 {
+        return 0.5 * (self.x_min_m + self.x_max_m);
     }
 }
 
@@ -156,23 +161,23 @@ mod tests {
     }
 
     #[test]
-    fn reverse_abs_and_soft_limits_use_negative_board_axis() {
+    fn reverse_abs_and_soft_limits_use_centered_board_axis() {
         let cfg = RailConfig {
             reverse: true,
             x_min_m: 0.0,
             x_max_m: 1.43,
             ..RailConfig::default()
         };
-        assert_eq!(cfg.domain_to_board_abs(0.0), 0.0);
-        assert_eq!(cfg.domain_to_board_abs(1.43), -1.43);
-        assert_eq!(cfg.domain_to_board_abs(0.2), -0.2);
-        assert_eq!(cfg.board_to_domain_abs(-0.2), 0.2);
+        assert_eq!(cfg.domain_to_board_abs(0.0), 0.715);
+        assert_eq!(cfg.domain_to_board_abs(1.43), -0.715);
+        assert!((cfg.domain_to_board_abs(0.2) - 0.515).abs() < 1e-12);
+        assert!((cfg.board_to_domain_abs(0.515) - 0.2).abs() < 1e-12);
         assert_eq!(cfg.domain_to_board_rel(0.1), -0.1);
         assert_eq!(cfg.domain_to_board_rel(-0.05), 0.05);
-        // 도메인 [0, 1.43]은 실제 AXL 보드 좌표 [-1.43, 0]이다.
+        // 도메인 [0, 1.43]은 중앙 원점 AXL 보드 좌표 [-0.715, 0.715]다.
         let args = cfg.soft_limit_args();
-        assert_eq!(args.positive_m, 0.0);
-        assert_eq!(args.negative_m, -1.43);
+        assert_eq!(args.positive_m, 0.715);
+        assert_eq!(args.negative_m, -0.715);
     }
 
     #[test]
@@ -183,8 +188,8 @@ mod tests {
             x_max_m: 1.41,
             ..RailConfig::default()
         };
-        assert_eq!(cfg.board_to_domain_abs(-0.647304), 0.647304);
-        assert_eq!(cfg.domain_to_board_abs(0.760), -0.760);
+        assert!((cfg.board_to_domain_abs(-0.647304) - 1.352304).abs() < 1e-12);
+        assert!((cfg.domain_to_board_abs(0.760) - -0.055).abs() < 1e-12);
     }
 
     #[test]

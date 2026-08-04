@@ -306,11 +306,11 @@ mod tests {
         let commanded = rail.move_abs_m(0.25).unwrap();
         assert_eq!(commanded, 0.25);
         assert_eq!(rail.read_x_m().unwrap(), 0.25);
-        // reverse=true이면 실제 AXL 보드 좌표는 도메인 좌표의 음수다.
-        assert_eq!(rail.read_board_x_m().unwrap(), -0.25);
+        // reverse=true이면 AXL 보드 중앙 0이 도메인 중점 0.2에 대응한다.
+        assert_eq!(rail.read_board_x_m().unwrap(), -0.05);
         let commanded = rail.move_rel_m(0.05).unwrap();
         assert_eq!(commanded, 0.3);
-        assert_eq!(rail.read_board_x_m().unwrap(), -0.3);
+        assert_eq!(rail.read_board_x_m().unwrap(), -0.1);
     }
 
     #[cfg(all(windows, feature = "real"))]
