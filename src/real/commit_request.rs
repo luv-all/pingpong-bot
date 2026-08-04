@@ -26,23 +26,23 @@ impl CommitRequest {
         return self.at.elapsed().as_secs_f64();
     }
 
-    /// 요청 시점의 공 y [m] — 로그용.
+    /// 마지막으로 **본** 공 y [m] — 로그용.
+    ///
+    /// [`Self::at`] 시각으로 보간하지 않는다. 표본 사이를 이으면 관측이 아니라 모델을 찍게
+    /// 되는데, "요청할 때 공이 어디였나"를 로그로 되짚을 땐 실제로 본 값이어야 한다.
+    /// 보간이 필요한 곳(`at_plane`·`at_time`)은 계약이 이미 해 준다.
     pub fn ball_y(&self) -> f64 {
-        return ball_y(&self.trajectory);
+        return self
+            .trajectory
+            .measured
+            .last()
+            .map_or(f64::NAN, |state| state.position.y);
     }
 
     /// 접수 평면마다 잘라 플래너가 아는 모양으로.
     pub fn predictions(&self, planes: &[HitPlane]) -> Vec<Prediction> {
         return predictions_at(&self.trajectory, planes);
     }
-}
-
-/// 궤적의 지금 위치 [m].
-pub(super) fn ball_y(trajectory: &Trajectory) -> f64 {
-    return trajectory
-        .measured
-        .last()
-        .map_or(f64::NAN, |state| state.position.y);
 }
 
 /// 예측 궤적을 접수 평면마다 잘라 [`Prediction`]으로.
