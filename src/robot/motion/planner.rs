@@ -113,8 +113,10 @@ impl Planner {
     }
 
     /// [`super::fixed_swing::fixed_swing_end_joints`].
-    pub fn fixed_swing_end_joints() -> crate::robot::Joints {
-        return super::fixed_swing::fixed_swing_end_joints();
+    pub fn fixed_swing_end_joints(
+        band: super::fixed_swing::SwingHeightBand,
+    ) -> crate::robot::Joints {
+        return super::fixed_swing::fixed_swing_end_joints(band);
     }
 
     /// [`super::fixed_swing::plan_fixed_swing`].
@@ -122,8 +124,9 @@ impl Planner {
         arm: &Arm,
         rail_x: f64,
         shape: super::fixed_swing::SwingShapeStrategy,
+        band: super::fixed_swing::SwingHeightBand,
     ) -> Result<Trajectory, DomainError> {
-        return super::fixed_swing::plan_fixed_swing(arm, rail_x, shape);
+        return super::fixed_swing::plan_fixed_swing(arm, rail_x, shape, band);
     }
 
     /// [`super::fixed_swing::fixed_swing_impact_time_secs`].

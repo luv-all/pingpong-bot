@@ -13,16 +13,68 @@ use super::rail::Rail;
 use super::{Planner, Trajectory};
 
 /// 스윙 시작(백스윙/준비) 자세 [deg] — j0 yaw, j1 shoulder, j2 elbow, j3 wrist.
+/// 높이 구간과 무관하게 항상 이 자세에서 시작한다(사용자 결정, 2026-08-04).
 pub const FIXED_SWING_START_DEG: [f64; 4] = [-10.0, 0.0, 50.0, -30.0];
-/// 스윙 끝(임팩트) 자세 [deg] — 관절 순서는 시작과 동일.
-pub const FIXED_SWING_END_DEG: [f64; 4] = [40.0, 0.0, -12.0, -70.0];
+
+/// 임팩트 높이(탁구대 면 기준 z 오프셋)에 따라 고르는 스윙 딕셔너리 구간.
+///
+/// "낮음" 구간은 없다 — 실기 확인(2026-08-04): 팔을 관절 전부 0°로 그냥
+/// 고정만 해 둬도 슈터의 낮은 공이 이미 라켓에 맞았다. 즉 낮은 공은 별도
+/// 스윙 없이도 이미 닿는 영역이라, 이 딕셔너리가 다루는 범위를 그 위로
+/// 옮겼다(중간/높음/더높음 셋).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwingHeightBand {
+    Mid,
+    High,
+    ExtraHigh,
+}
+
+/// `Mid`/`High` 경계 — 탁구대 면 기준 z 오프셋 [m]. IK로 확정한 대표 높이
+/// (20/30/40cm)의 중간값(0.25, 0.35)을 그대로 쓴다 — 다른 근거가 없는
+/// 대칭적인 선택.
+const MID_HIGH_BOUNDARY_Z_OFFSET_M: f64 = 0.25;
+/// `High`/`ExtraHigh` 경계 — 위와 같은 근거.
+const HIGH_EXTRA_HIGH_BOUNDARY_Z_OFFSET_M: f64 = 0.35;
+
+/// 경계 비교용 부동소수점 여유 — `impact_z - SURFACE_Z`가 뜻하지 않게 경계값
+/// 바로 아래로 반올림돼(예: 0.35가 아니라 0.34999999999999987) 경계값 자체가
+/// 더 낮은 구간으로 잘못 분류되는 걸 막는다.
+const BOUNDARY_EPSILON_M: f64 = 1e-9;
+
+impl SwingHeightBand {
+    /// 예측 임팩트 z(월드 좌표, m)로 구간을 고른다.
+    pub fn for_impact_z(impact_z: f64) -> Self {
+        let z_offset = impact_z - crate::constants::table::SURFACE_Z + BOUNDARY_EPSILON_M;
+        if z_offset < MID_HIGH_BOUNDARY_Z_OFFSET_M {
+            return Self::Mid;
+        }
+        if z_offset < HIGH_EXTRA_HIGH_BOUNDARY_Z_OFFSET_M {
+            return Self::High;
+        }
+        return Self::ExtraHigh;
+    }
+}
+
+/// 구간별 임팩트(END) 자세 [deg] — 관절 순서는 [`FIXED_SWING_START_DEG`]와 동일.
+/// IK로 도출(2026-08-04): x=테이블 중앙, y=접수창 중간 깊이, 입사속도
+/// `(0,-6.5,0.3)` m/s로 고정하고 임팩트 z만 20/30/40cm로 바꿔 풀었다
+/// (`peak_joint_speed_ratio` 1.15/0.89/0.54, 전부 근특이점 한계 2.5 아래).
+/// 사용자가 sim GUI "Motor Test" 패널로 세 값 모두 육안 확인했다.
+pub const SWING_END_DEG_MID: [f64; 4] = [52.6, 0.0, 8.5, -73.1];
+pub const SWING_END_DEG_HIGH: [f64; 4] = [33.1, 0.0, 2.6, -46.7];
+pub const SWING_END_DEG_EXTRA_HIGH: [f64; 4] = [24.3, 0.0, -21.7, -12.6];
 
 pub fn fixed_swing_start_joints() -> Joints {
     return Joints::from_slice(&FIXED_SWING_START_DEG.map(f64::to_radians));
 }
 
-pub fn fixed_swing_end_joints() -> Joints {
-    return Joints::from_slice(&FIXED_SWING_END_DEG.map(f64::to_radians));
+pub fn fixed_swing_end_joints(band: SwingHeightBand) -> Joints {
+    let deg = match band {
+        SwingHeightBand::Mid => SWING_END_DEG_MID,
+        SwingHeightBand::High => SWING_END_DEG_HIGH,
+        SwingHeightBand::ExtraHigh => SWING_END_DEG_EXTRA_HIGH,
+    };
+    return Joints::from_slice(&deg.map(f64::to_radians));
 }
 
 /// 고정 스윙의 관절 타이밍 모양 — 사용자가 GUI에서 실시간 비교할 두 선택지.
@@ -46,30 +98,39 @@ pub const DEFAULT_SWING_SHAPE_STRATEGY: SwingShapeStrategy = SwingShapeStrategy:
 
 /// 근위→원위 순서로 어긋난 구간 — 궤적 전체 시간에 대한 분수 `(시작, 끝)`.
 /// j0/j1이 먼저 시작해 먼저 끝나고, j2가 그 위에 걸쳐 움직이다가, j3가
-/// 가장 늦게 시작해 임팩트 순간 스냅한다. 실측으로 조정 가능한 시작값
-/// (`fixed_swing_impact_time_secs`처럼 이후 실측 기반 재조정 여지가 있다).
+/// 가장 늦게 시작해 임팩트 순간 스냅한다.
+///
+/// 2026-08-04 재조정(Task 5d): 이 값들은 원래(Task 5c) 단일 END 자세
+/// `[40.0, 0.0, -12.0, -70.0]`을 기준으로 실측 스윕한 것이었다. `Mid` 밴드의
+/// 새 END(`SWING_END_DEG_MID`, j0/j3 이동량이 더 크고 j2 이동량이 더 작음)로
+/// 바꾸자 `Mid`에서 채찍형이 동기화형보다 오히려 느려지는 회귀가 나타나
+/// (최고 속력 0.677 < 0.884 m/s), 세 밴드 전부에서 FK 기반 최고 속력을 직접
+/// 재측정하며 그리드 탐색으로 다시 골랐다. 세 밴드 전부 동기화형 대비 여유
+/// 있는 마진으로 앞선다(2026-08-04 재측정: Mid +0.049, High +0.067,
+/// ExtraHigh +0.248 m/s) — 단일 밴드가 아니라 셋 다 만족하는 공유 상수다.
 const STAGGERED_PHASE_FRACTIONS: [(f64, f64); 4] = [
-    (0.0, 0.55),  // j0 yaw
-    (0.0, 0.65),  // j1 shoulder
-    (0.25, 0.85), // j2 elbow (0.25~0.85)
-    (0.30, 1.00), // j3 wrist (0.30~1.00) — 실측 스윕(2026-08-03)으로 고른 값,
-                  // j3가 이보다 늦게 시작하면(예: 0.45) 임팩트까지 남은 자기
-                  // 구간이 너무 짧아 최고 속력이 오히려 낮아진다.
+    (0.0, 0.62),  // j0 yaw
+    (0.0, 0.64),  // j1 shoulder — j1은 START/END 모두 0°라 실제로는 움직이지
+                  // 않는다(세 밴드 전부). 그래도 j0와 짝맞춰 "근위" 구간으로 둔다.
+    (0.38, 0.87), // j2 elbow
+    (0.40, 1.00), // j3 wrist — 임팩트 순간 스냅.
 ];
 
 /// 레일 `rail_x`에 고정한 채, IK 없이 시작→끝 관절각을 모터 한계(속도·가속·
-/// 토크) 100%로 잇는 quintic — `shape`로 관절 타이밍을 고른다.
+/// 토크) 100%로 잇는 quintic — `shape`로 관절 타이밍을, `band`로 임팩트
+/// 높이 구간을 고른다.
 pub fn plan_fixed_swing(
     arm: &Arm,
     rail_x: f64,
     shape: SwingShapeStrategy,
+    band: SwingHeightBand,
 ) -> Result<Trajectory, DomainError> {
     return match shape {
         SwingShapeStrategy::Synchronized => {
             let start = Pose::new(rail_x, fixed_swing_start_joints());
-            Planner::move_to_fastest(arm, &start, fixed_swing_end_joints(), rail_x)
+            Planner::move_to_fastest(arm, &start, fixed_swing_end_joints(band), rail_x)
         }
-        SwingShapeStrategy::Staggered => plan_staggered_fixed_swing(arm, rail_x),
+        SwingShapeStrategy::Staggered => plan_staggered_fixed_swing(arm, rail_x, band),
     };
 }
 
@@ -80,13 +141,17 @@ pub fn plan_fixed_swing(
 /// 눌러넣으므로 관절별 각속도가 동기화형보다 커져, 기준선이 실현 가능했다고
 /// 이 모양도 자동으로 실현 가능한 건 아니다. 안 되면 기준 소요 시간을 늘려
 /// 재시도한다(`move_to_fastest`/`plan_return_to_center`와 같은 성장 탐색 정신).
-fn plan_staggered_fixed_swing(arm: &Arm, rail_x: f64) -> Result<Trajectory, DomainError> {
+fn plan_staggered_fixed_swing(
+    arm: &Arm,
+    rail_x: f64,
+    band: SwingHeightBand,
+) -> Result<Trajectory, DomainError> {
     let baseline = {
         let start = Pose::new(rail_x, fixed_swing_start_joints());
-        Planner::move_to_fastest(arm, &start, fixed_swing_end_joints(), rail_x)?
+        Planner::move_to_fastest(arm, &start, fixed_swing_end_joints(band), rail_x)?
     };
     let start_joints = fixed_swing_start_joints();
-    let end_joints = fixed_swing_end_joints();
+    let end_joints = fixed_swing_end_joints(band);
     let n = start_joints.values.len();
 
     let mut duration = baseline.duration_secs;
@@ -267,11 +332,11 @@ mod tests {
     #[test]
     fn dictionary_joints_convert_degrees_to_radians() {
         let start = fixed_swing_start_joints();
-        let end = fixed_swing_end_joints();
+        let end = fixed_swing_end_joints(SwingHeightBand::Mid);
         for (actual, expected_deg) in start.values.iter().zip(FIXED_SWING_START_DEG) {
             assert!((actual.to_degrees() - expected_deg).abs() < 1e-9);
         }
-        for (actual, expected_deg) in end.values.iter().zip(FIXED_SWING_END_DEG) {
+        for (actual, expected_deg) in end.values.iter().zip(SWING_END_DEG_MID) {
             assert!((actual.to_degrees() - expected_deg).abs() < 1e-9);
         }
     }
@@ -282,8 +347,13 @@ mod tests {
         let rail = robot.arm.rail.expect("rail");
         let rail_x = rail.default_x();
 
-        let trajectory = plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Synchronized)
-            .expect("fixed swing plan");
+        let trajectory = plan_fixed_swing(
+            &robot.arm,
+            rail_x,
+            SwingShapeStrategy::Synchronized,
+            SwingHeightBand::Mid,
+        )
+        .expect("fixed swing plan");
 
         for (actual, expected) in trajectory
             .start
@@ -297,7 +367,7 @@ mod tests {
             .goal_joints()
             .values
             .iter()
-            .zip(fixed_swing_end_joints().values)
+            .zip(fixed_swing_end_joints(SwingHeightBand::Mid).values)
         {
             assert!((actual - expected).abs() < 1e-9);
         }
@@ -334,8 +404,13 @@ mod tests {
     fn midpoint_strategy_is_exactly_half_duration() {
         let robot = crate::defaults::robot().expect("robot");
         let rail_x = robot.arm.rail.expect("rail").default_x();
-        let trajectory = plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Synchronized)
-            .expect("fixed swing plan");
+        let trajectory = plan_fixed_swing(
+            &robot.arm,
+            rail_x,
+            SwingShapeStrategy::Synchronized,
+            SwingHeightBand::Mid,
+        )
+        .expect("fixed swing plan");
         let impact_time = fixed_swing_impact_time_secs(
             &robot.arm,
             rail_x,
@@ -349,8 +424,13 @@ mod tests {
     fn peak_speed_strategy_picks_a_time_strictly_inside_the_swing() {
         let robot = crate::defaults::robot().expect("robot");
         let rail_x = robot.arm.rail.expect("rail").default_x();
-        let trajectory = plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Synchronized)
-            .expect("fixed swing plan");
+        let trajectory = plan_fixed_swing(
+            &robot.arm,
+            rail_x,
+            SwingShapeStrategy::Synchronized,
+            SwingHeightBand::Mid,
+        )
+        .expect("fixed swing plan");
         let impact_time = fixed_swing_impact_time_secs(
             &robot.arm,
             rail_x,
@@ -383,8 +463,13 @@ mod tests {
     fn synchronized_shape_matches_the_original_move_to_fastest_behavior() {
         let robot = crate::defaults::robot().expect("robot");
         let rail_x = robot.arm.rail.expect("rail").default_x();
-        let via_shape =
-            plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Synchronized).expect("sync");
+        let via_shape = plan_fixed_swing(
+            &robot.arm,
+            rail_x,
+            SwingShapeStrategy::Synchronized,
+            SwingHeightBand::Mid,
+        )
+        .expect("sync");
         assert!(via_shape.joint_phase_offsets.is_none());
         for (actual, expected) in via_shape.start.values.iter().zip(fixed_swing_start_joints().values) {
             assert!((actual - expected).abs() < 1e-9);
@@ -395,8 +480,13 @@ mod tests {
     fn staggered_shape_sets_distinct_per_joint_windows_and_stays_feasible() {
         let robot = crate::defaults::robot().expect("robot");
         let rail_x = robot.arm.rail.expect("rail").default_x();
-        let staggered =
-            plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Staggered).expect("staggered");
+        let staggered = plan_fixed_swing(
+            &robot.arm,
+            rail_x,
+            SwingShapeStrategy::Staggered,
+            SwingHeightBand::Mid,
+        )
+        .expect("staggered");
         let offsets = staggered
             .joint_phase_offsets
             .clone()
@@ -417,15 +507,103 @@ mod tests {
     }
 
     #[test]
+    fn swing_height_band_selects_mid_below_first_boundary() {
+        let z = crate::constants::table::SURFACE_Z + 0.10;
+        assert_eq!(SwingHeightBand::for_impact_z(z), SwingHeightBand::Mid);
+    }
+
+    #[test]
+    fn swing_height_band_selects_high_between_boundaries() {
+        let z = crate::constants::table::SURFACE_Z + 0.30;
+        assert_eq!(SwingHeightBand::for_impact_z(z), SwingHeightBand::High);
+    }
+
+    #[test]
+    fn swing_height_band_selects_extra_high_above_second_boundary() {
+        let z = crate::constants::table::SURFACE_Z + 0.40;
+        assert_eq!(SwingHeightBand::for_impact_z(z), SwingHeightBand::ExtraHigh);
+    }
+
+    #[test]
+    fn swing_height_band_boundaries_are_inclusive_on_the_higher_band() {
+        // 경계값 자체는 더 높은 구간에 속한다 — `for_impact_z`가 `<`(미만)로
+        // 판정하므로 정확히 경계에서는 그 위 구간을 고른다.
+        let mid_high = crate::constants::table::SURFACE_Z + 0.25;
+        assert_eq!(SwingHeightBand::for_impact_z(mid_high), SwingHeightBand::High);
+        let high_extra = crate::constants::table::SURFACE_Z + 0.35;
+        assert_eq!(
+            SwingHeightBand::for_impact_z(high_extra),
+            SwingHeightBand::ExtraHigh
+        );
+    }
+
+    #[test]
+    fn fixed_swing_end_joints_differs_per_band() {
+        let mid = fixed_swing_end_joints(SwingHeightBand::Mid);
+        let high = fixed_swing_end_joints(SwingHeightBand::High);
+        let extra_high = fixed_swing_end_joints(SwingHeightBand::ExtraHigh);
+        for (a, b) in [(&mid, &high), (&high, &extra_high)] {
+            let same = a
+                .values
+                .iter()
+                .zip(&b.values)
+                .all(|(x, y)| (x - y).abs() < 1e-9);
+            assert!(!same, "인접 구간의 END는 달라야 한다");
+        }
+        for (actual, expected_deg) in mid.values.iter().zip(SWING_END_DEG_MID) {
+            assert!((actual.to_degrees() - expected_deg).abs() < 1e-9);
+        }
+        for (actual, expected_deg) in high.values.iter().zip(SWING_END_DEG_HIGH) {
+            assert!((actual.to_degrees() - expected_deg).abs() < 1e-9);
+        }
+        for (actual, expected_deg) in extra_high.values.iter().zip(SWING_END_DEG_EXTRA_HIGH) {
+            assert!((actual.to_degrees() - expected_deg).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn plan_fixed_swing_uses_the_requested_bands_end_pose() {
+        let robot = crate::defaults::robot().expect("robot");
+        let rail_x = robot.arm.rail.expect("rail").default_x();
+        for band in [
+            SwingHeightBand::Mid,
+            SwingHeightBand::High,
+            SwingHeightBand::ExtraHigh,
+        ] {
+            let trajectory = plan_fixed_swing(
+                &robot.arm,
+                rail_x,
+                SwingShapeStrategy::Synchronized,
+                band,
+            )
+            .unwrap_or_else(|error| panic!("{band:?}: {error}"));
+            let expected = fixed_swing_end_joints(band);
+            for (actual, expected) in trajectory.goal_joints().values.iter().zip(expected.values) {
+                assert!((actual - expected).abs() < 1e-9, "band={band:?}");
+            }
+        }
+    }
+
+    #[test]
     fn staggered_shape_reaches_a_higher_peak_racket_speed_than_synchronized() {
         // 이 테스트가 곧 이 기능의 존재 이유다: 채찍형이 동기화형보다
         // 라켓 중심 최고 속력을 실제로 더 내야 한다.
         let robot = crate::defaults::robot().expect("robot");
         let rail_x = robot.arm.rail.expect("rail").default_x();
-        let sync =
-            plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Synchronized).expect("sync");
-        let staggered =
-            plan_fixed_swing(&robot.arm, rail_x, SwingShapeStrategy::Staggered).expect("staggered");
+        let sync = plan_fixed_swing(
+            &robot.arm,
+            rail_x,
+            SwingShapeStrategy::Synchronized,
+            SwingHeightBand::Mid,
+        )
+        .expect("sync");
+        let staggered = plan_fixed_swing(
+            &robot.arm,
+            rail_x,
+            SwingShapeStrategy::Staggered,
+            SwingHeightBand::Mid,
+        )
+        .expect("staggered");
 
         let peak_speed = |trajectory: &Trajectory| -> f64 {
             const SAMPLES: usize = 80;

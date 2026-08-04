@@ -110,10 +110,13 @@ pub fn spawn(
             };
             let rail_x = pingpong_bot::robot::motion::fixed_swing_rail_target(&rail, target.position.x);
 
+            let band =
+                pingpong_bot::robot::motion::SwingHeightBand::for_impact_z(target.position.z);
             let Ok(trajectory) = Planner::plan_fixed_swing(
                 &arm,
                 rail_x,
                 pingpong_bot::robot::motion::DEFAULT_SWING_SHAPE_STRATEGY,
+                band,
             ) else {
                 continue;
             };

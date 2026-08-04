@@ -1014,10 +1014,12 @@ impl SimWorld {
             motion::fixed_swing_rail_target(&rail, prediction.impact_position.coords.x);
         self.robot.set_rail_target(target_rail_x);
 
+        let band = motion::SwingHeightBand::for_impact_z(prediction.impact_position.coords.z);
         let Ok(trajectory) = motion::Planner::plan_fixed_swing(
             &self.arm,
             target_rail_x,
             self.fixed_swing_shape_strategy,
+            band,
         ) else {
             return;
         };
@@ -2353,12 +2355,21 @@ mod tests {
             }
         }
         let end = committed_end.expect("고정 스윙이 커밋돼야 한다");
-        for (actual, expected) in end
-            .iter()
-            .zip(crate::robot::motion::fixed_swing_end_joints().values)
-        {
-            assert!((actual - expected).abs() < 1e-9);
-        }
+        let bands = [
+            crate::robot::motion::SwingHeightBand::Mid,
+            crate::robot::motion::SwingHeightBand::High,
+            crate::robot::motion::SwingHeightBand::ExtraHigh,
+        ];
+        let matches_some_band = bands.iter().any(|&band| {
+            let expected = crate::robot::motion::fixed_swing_end_joints(band);
+            end.iter()
+                .zip(expected.values.iter())
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-9)
+        });
+        assert!(
+            matches_some_band,
+            "커밋된 끝 관절각이 세 높이 구간 중 어느 것과도 안 맞음: {end:?}"
+        );
     }
 
     /// 회귀 방지: 스윙은 남은 비행시간이 스윙 **전체 소요 시간**만큼 남았을 때가
