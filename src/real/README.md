@@ -69,6 +69,7 @@ flowchart LR
 ### 제어 괴리 로그
 
 - 레일: commanded, measured, commanded-minus-measured를 m 단위 소수점 4자리로 기록
+- AXL 시작 시 ActPos와 CmdPos 원점 차이를 기록하고 실제 위치 기준으로 명령을 보정
 - 조준축: 같은 세 값을 rad·deg 둘 다 기록
 - 로그 필드의 commanded는 하드웨어가 반환한 applied이며, 제어기의 requested는 별도 기록
 - 정밀 명령으로 덮어쓴 1차 명령: `superseded`로 당시 실측값 보존

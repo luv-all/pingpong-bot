@@ -45,12 +45,15 @@ impl AxlRail {
         let mut live = super::axl_live::AxlLive::new(ffi);
         live.configure(&config)?;
         tracing::debug!(axis = config.axis, "AXL 축 설정·서보 ON 완료");
-        let board_position_m = live.read_x_m(config.axis)?;
+        let (board_position_m, board_command_position_m) =
+            live.read_actual_and_command_m(config.axis)?;
         let domain_position_m = config.board_to_domain_abs(board_position_m);
         let board_limits = config.soft_limit_args();
         info!(
             axis = config.axis,
             board_position_m,
+            board_command_position_m,
+            board_command_minus_actual_m = board_command_position_m - board_position_m,
             domain_position_m,
             configured_domain_min_m = config.x_min_m,
             configured_domain_max_m = config.x_max_m,

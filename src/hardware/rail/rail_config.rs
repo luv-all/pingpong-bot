@@ -108,6 +108,26 @@ impl RailConfig {
         };
     }
 
+    /// CmdPos 기준 소프트 리밋을 ActPos와 CmdPos의 원점 차이만큼 보정한다.
+    /// AXL selection=0은 명령 위치, selection=1은 실제 위치 기준이다.
+    pub fn soft_limit_args_for_command_offset(&self, command_minus_actual_m: f64) -> SoftLimitArgs {
+        let mut args = self.soft_limit_args();
+        if args.selection == 0 {
+            args.positive_m += command_minus_actual_m;
+            args.negative_m += command_minus_actual_m;
+        }
+        return args;
+    }
+
+    /// 원하는 ActPos를 현재 CmdPos 좌표계의 절대 명령으로 변환한다.
+    pub fn command_position_for_actual_target(
+        actual_target_m: f64,
+        actual_now_m: f64,
+        command_now_m: f64,
+    ) -> f64 {
+        return command_now_m + (actual_target_m - actual_now_m);
+    }
+
     fn domain_midpoint_m(&self) -> f64 {
         return 0.5 * (self.x_min_m + self.x_max_m);
     }
@@ -190,6 +210,27 @@ mod tests {
         };
         assert!((cfg.board_to_domain_abs(-0.647304) - 1.352304).abs() < 1e-12);
         assert!((cfg.domain_to_board_abs(0.760) - -0.055).abs() < 1e-12);
+    }
+
+    #[test]
+    fn command_position_compensates_axl_actual_command_origin_gap() {
+        let command_target =
+            RailConfig::command_position_for_actual_target(-0.055, -0.5742, -0.055);
+        assert!((command_target - 0.4642).abs() < 1e-12);
+    }
+
+    #[test]
+    fn command_based_soft_limits_include_axl_origin_gap() {
+        let cfg = RailConfig {
+            reverse: true,
+            x_min_m: 0.0,
+            x_max_m: 1.41,
+            soft_limit_selection: 0,
+            ..RailConfig::default()
+        };
+        let args = cfg.soft_limit_args_for_command_offset(0.5192);
+        assert!((args.positive_m - 1.2242).abs() < 1e-12);
+        assert!((args.negative_m - -0.1858).abs() < 1e-12);
     }
 
     #[test]
