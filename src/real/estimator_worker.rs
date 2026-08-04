@@ -141,6 +141,7 @@ pub fn spawn(
         let mut track_seq: u64 = 1;
         let mut receding = BallReceding::new(MIN_DELTA_Y, MIN_SAMPLES);
         let mut announced_track = false;
+        let mut was_tracking = false;
         let mut last_stage: Option<PredictionStage> = None;
         let mut progress = Throttle::new(PROGRESS_PERIOD);
 
@@ -242,6 +243,21 @@ pub fn spawn(
             if ball_y.is_none() {
                 ball_y = ekf.position().map(|position| position.coords.y);
             }
+
+            // y 증가를 못 볼 수도 있다 — 지금 실기 제어는 아직 공을 실제로 치받아 보내지
+            // 않아(2단계 rail·wrist 시험 구동뿐) "멀어짐"이 카메라에 안 잡히고 그냥 화각을
+            // 벗어나거나 굴러가 사라질 수 있다. 그 경우도 새 공으로 봐야 한다 — 그렇지 않으면
+            // 첫 공 이후로는 track_seq가 영원히 그대로라 `CommandLatch`가 이후 모든 공을 조용히
+            // 무시한다.
+            if is_new_ball_reacquisition(tracking, was_tracking, announced_track) {
+                prediction_stability.reset();
+                announced_track = false;
+                last_stage = None;
+                receding.reset();
+                track_seq = track_seq.saturating_add(1);
+                debug!(track = track_seq, "추적 재획득 — 새 공으로 처리");
+            }
+            was_tracking = tracking;
 
             if tracking && !announced_track {
                 announced_track = true;
@@ -359,6 +375,18 @@ pub fn spawn(
     });
 }
 
+/// 추적이 끊겼다가 다시 잡혔는가 — 그렇다면 새 공으로 본다.
+///
+/// `receding`(y 증가) 검출과는 별개 경로다. 로봇이 아직 공을 실제로 치받아 보내지
+/// 않는 개발 단계에서는 "멀어짐"이 카메라에 안 잡힐 수 있어, 재획득 자체를 새 공
+/// 신호로 삼아야 `track_seq`가 첫 공 이후로도 계속 올라간다.
+///
+/// 최초 획득(`previously_announced = false`)은 새 공이 아니다 — `track_seq`의
+/// 초기값 1이 이미 그 첫 공을 가리킨다.
+fn is_new_ball_reacquisition(tracking: bool, was_tracking: bool, previously_announced: bool) -> bool {
+    return tracking && !was_tracking && previously_announced;
+}
+
 /// 캘리브레이션이 순간적으로 잘못 대응돼도 수십 미터 밖 점을 EKF에 넣지 않는다.
 ///
 /// 로그의 (-26, -5.5, -18)m는 재투영 오차만으로 통과했지만 탁구공일 수 없다.
@@ -429,6 +457,26 @@ mod tests {
         send_latest_commit(&tx, &rx, request(1), &mut stats);
         send_latest_commit(&tx, &rx, request(2), &mut stats);
         assert_eq!(rx.recv().unwrap().track_seq, 2);
+    }
+
+    #[test]
+    fn reacquisition_after_an_announced_track_is_a_new_ball() {
+        assert!(is_new_ball_reacquisition(true, false, true));
+    }
+
+    #[test]
+    fn first_ever_acquisition_is_not_a_new_ball() {
+        assert!(!is_new_ball_reacquisition(true, false, false));
+    }
+
+    #[test]
+    fn continuous_tracking_is_not_a_new_ball() {
+        assert!(!is_new_ball_reacquisition(true, true, true));
+    }
+
+    #[test]
+    fn losing_tracking_is_not_itself_a_new_ball() {
+        assert!(!is_new_ball_reacquisition(false, true, true));
     }
 }
 
