@@ -14,6 +14,12 @@ pub struct AppliedRailRacketCommand {
 /// 로봇 팔과 리니어 레일 구동 인터페이스.
 pub trait Hardware: Send {
     fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError>;
+
+    /// 진행 중인 레일 직접 명령을 유지하며 관절 궤적만 실행한다.
+    fn command_joints(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
+        return self.command(trajectory);
+    }
+
     fn read_pose(&mut self) -> Result<robot::Pose, HwError>;
 
     /// 2단계 제어 명령: 레일과 라켓 수평 조준축만 갱신한다.

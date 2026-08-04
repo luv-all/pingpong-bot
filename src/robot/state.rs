@@ -143,7 +143,12 @@ impl State {
 
     /// 스윙을 현재 포즈 기준 새 quintic 궤적으로 교체한다 (elapsed=0).
     pub fn replace_swing(&mut self, trajectory: motion::Trajectory) {
-        self.replace_playback(PlaybackTrajectory::Quintic(trajectory), 0.0);
+        self.replace_playback(PlaybackTrajectory::Quintic(trajectory), 0.0, true);
+    }
+
+    /// 기존 레일 직접 이동을 유지하면서 관절 quintic만 재생한다.
+    pub fn replace_joint_swing(&mut self, trajectory: motion::Trajectory) {
+        self.replace_playback(PlaybackTrajectory::Quintic(trajectory), 0.0, false);
     }
 
     /// 목표 위치 이동을 시작하고, 완료 후 출발 포즈로 복귀한다.
@@ -164,7 +169,7 @@ impl State {
     /// (elapsed=0) - GUI "bang-bang swing" 토글이 켜졌을 때 `replace_swing`
     /// 대신 쓴다.
     pub fn replace_bang_bang_swing(&mut self, trajectory: motion::bang_bang::Trajectory) {
-        self.replace_playback(PlaybackTrajectory::BangBang(trajectory), 0.0);
+        self.replace_playback(PlaybackTrajectory::BangBang(trajectory), 0.0, true);
     }
 
     /// `replace_bang_bang_swing`과 같지만 재생을 `elapsed`[s] 지점부터
@@ -178,21 +183,24 @@ impl State {
         trajectory: motion::bang_bang::Trajectory,
         elapsed: f64,
     ) {
-        self.replace_playback(PlaybackTrajectory::BangBang(trajectory), elapsed);
+        self.replace_playback(PlaybackTrajectory::BangBang(trajectory), elapsed, true);
     }
 
-    fn replace_playback(&mut self, trajectory: PlaybackTrajectory, elapsed: f64) {
+    fn replace_playback(&mut self, trajectory: PlaybackTrajectory, elapsed: f64, drive_rail: bool) {
         let elapsed = elapsed.clamp(0.0, trajectory.duration_secs());
         self.targets = trajectory.sample_at(elapsed);
         self.angles = self.targets.clone();
-        self.rail_target = trajectory.follow_through_rail_x();
-        self.rail_x = trajectory.sample_rail_at(elapsed);
-        // 궤적 재생 중에는 레일 위치를 궤적이 직접 준다 — 슬루 적분 상태를
-        // 남겨두면 재생이 끝난 뒤 낡은 속도로 튄다.
-        self.rail_vel = 0.0;
+        if drive_rail {
+            self.rail_target = trajectory.follow_through_rail_x();
+            self.rail_x = trajectory.sample_rail_at(elapsed);
+            // 궤적 재생 중에는 레일 위치를 궤적이 직접 준다 — 슬루 적분 상태를
+            // 남겨두면 재생이 끝난 뒤 낡은 속도로 튄다.
+            self.rail_vel = 0.0;
+        }
         self.active_swing = Some(SwingPlayback {
             trajectory,
             elapsed,
+            drive_rail,
             joint_vel: Vec::new(),
         });
     }
@@ -214,7 +222,14 @@ impl State {
     /// 시뮬 폐루프: 궤적·레일 명령만 갱신한다. 측정 관절각은 건드리지 않는다.
     pub fn step_commands(&mut self, arm: &Arm, dt: f64) {
         if self.active_swing.is_some() {
+            let drive_rail = self
+                .active_swing
+                .as_ref()
+                .is_some_and(|playback| playback.drive_rail);
             let finished = self.advance_swing_commands(dt);
+            if !drive_rail {
+                self.advance_rail(arm, dt);
+            }
             if finished && let Some(return_pose) = self.return_pose_after_motion.take() {
                 self.start_return_to_pose(arm, return_pose);
             } else if finished && self.auto_return_to_center && !self.is_at_center(arm) {
@@ -296,7 +311,9 @@ impl State {
         let duration = playback.trajectory.duration_secs();
         let t = playback.elapsed.min(duration);
         self.targets = playback.trajectory.sample_at(t);
-        self.rail_x = playback.trajectory.sample_rail_at(t);
+        if playback.drive_rail {
+            self.rail_x = playback.trajectory.sample_rail_at(t);
+        }
         if playback.elapsed >= duration {
             self.active_swing = None;
             return true;
@@ -322,7 +339,9 @@ impl State {
         let duration = playback.trajectory.duration_secs();
         let t = playback.elapsed.min(duration);
         let sampled = playback.trajectory.sample_at(t);
-        self.rail_x = playback.trajectory.sample_rail_at(t);
+        if playback.drive_rail {
+            self.rail_x = playback.trajectory.sample_rail_at(t);
+        }
         self.angles = sampled;
         if playback.elapsed >= duration {
             self.active_swing = None;
@@ -358,7 +377,9 @@ impl State {
         let t = playback.elapsed.min(duration);
         let desired = playback.trajectory.sample_at(t);
         let desired_vel = playback.trajectory.sample_velocity_at(t);
-        self.rail_x = playback.trajectory.sample_rail_at(t);
+        if playback.drive_rail {
+            self.rail_x = playback.trajectory.sample_rail_at(t);
+        }
 
         let inertia = control.joint_inertia.max(1e-9);
         let n = self.angles.values.len().min(desired.values.len());
@@ -494,6 +515,34 @@ mod tests {
         for (actual, expected) in state.joints().values.iter().zip(end.values) {
             assert!((actual - expected).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn joint_only_swing_keeps_direct_rail_move_running() {
+        const DT: f64 = 1.0 / 1000.0;
+        let arm = crate::defaults::primitive_4dof().expect("arm").arm;
+        let mut state = arm.initial_state();
+        let rail_start = state.rail_x();
+        let rail_goal = rail_start + 0.20;
+        state.set_rail_target_in_secs(&arm, rail_goal, 0.40);
+
+        let mut impact = state.joints().clone();
+        impact.values[0] += 0.04;
+        let trajectory = motion::Trajectory::new(
+            state.joints().clone(),
+            impact,
+            vec![0.0; 4],
+            vec![0.0; 4],
+            0.30,
+            motion::Rail::fixed(rail_start),
+        );
+        state.replace_joint_swing(trajectory);
+        for _ in 0..300 {
+            state.step_commands(&arm, DT);
+        }
+
+        assert!(state.rail_x() > rail_start + 0.05);
+        assert!(state.rail_x() <= rail_goal + 1e-9);
     }
 
     /// 레일은 정지 상태에서 한 틱 만에 `max_speed`로 뛰지 못한다 —

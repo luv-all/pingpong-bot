@@ -6,7 +6,7 @@ use crate::Point3;
 use crate::constants::table;
 use crate::defaults;
 use crate::defaults::motion::{
-    FIXED_IMPACT_LEAD_SECS, FIXED_IMPACT_PUSH_DISTANCE_M, FIXED_IMPACT_PUSH_SPEED_M_S,
+    FIXED_IMPACT_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_DISTANCE_M, FIXED_IMPACT_PUSH_SPEED_M_S,
     RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
@@ -515,6 +515,15 @@ pub fn plan_return_to_center(arm: &Arm, start: &robot::Pose) -> Result<Trajector
 /// 임팩트 knot에 0이 아닌 관절 속도를 남겨 공을 실제로 밀어낸다. 레일은 타격 중
 /// 고정하며, 짧은 팔로스루 뒤 호출자가 기존 중앙 복귀 궤적을 이어 붙인다.
 pub fn plan_fixed_impact_push(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
+    return plan_fixed_impact_push_in(arm, start, FIXED_IMPACT_MIN_DURATION_SECS);
+}
+
+/// 레일 직접 이동과 동시에 시작해 지정 시간 뒤 공과 만나도록 관절 푸시를 만든다.
+pub fn plan_fixed_impact_push_in(
+    arm: &Arm,
+    start: &robot::Pose,
+    impact_duration_secs: f64,
+) -> Result<Trajectory, DomainError> {
     let racket = arm
         .forward_kinematics_with_rail(start.rail_x, &start.joints)
         .ok_or_else(|| {
@@ -559,7 +568,7 @@ pub fn plan_fixed_impact_push(arm: &Arm, start: &robot::Pose) -> Result<Trajecto
         impact_joints,
         vec![0.0; start.joints.values.len()],
         impact_velocity,
-        FIXED_IMPACT_LEAD_SECS,
+        impact_duration_secs.max(FIXED_IMPACT_MIN_DURATION_SECS),
         Rail::fixed(start.rail_x),
     )
     .map_err(DomainError::InfeasibleSwing);
@@ -1116,7 +1125,9 @@ mod tests {
         .expect("impact velocity");
         let forward_speed = impact_velocity.dot(&impact.normal);
 
-        assert!(trajectory.duration_secs <= 0.20);
+        let expected_duration = FIXED_IMPACT_MIN_DURATION_SECS
+            + defaults::ControlParams::default().swing_follow_through_secs;
+        assert!((trajectory.duration_secs - expected_duration).abs() < 1e-9);
         assert!(
             trajectory
                 .end_velocity
@@ -1130,6 +1141,24 @@ mod tests {
         assert!(
             (impact.position - before.position).dot(&before.normal) > 0.01,
             "라켓이 면 법선 방향으로 실제 전진해야 함"
+        );
+    }
+
+    #[test]
+    fn fixed_impact_push_can_start_early_and_hit_at_requested_time() {
+        let arm = sample_three_dof_arm();
+        let start = sample_start(&arm);
+        let requested_impact_secs = 0.60;
+        let trajectory = plan_fixed_impact_push_in(&arm, &start, requested_impact_secs)
+            .expect("early fixed impact push");
+
+        assert!((trajectory.impact_time_secs - requested_impact_secs).abs() < 1e-9);
+        assert!(
+            (trajectory.duration_secs
+                - requested_impact_secs
+                - defaults::ControlParams::default().swing_follow_through_secs)
+                .abs()
+                < 1e-9
         );
     }
 

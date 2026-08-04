@@ -80,6 +80,13 @@ impl Hardware for SimHardware {
         return Ok(());
     }
 
+    fn command_joints(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
+        let mut world = self.world.lock().expect("sim 월드");
+        world.robot_mut().replace_joint_swing(trajectory.clone());
+        self.command_count += 1;
+        return Ok(());
+    }
+
     fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
         let world = self.world.lock().expect("sim 월드");
         let robot = world.robot();

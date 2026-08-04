@@ -90,6 +90,15 @@ impl Planner {
         return physics::plan_fixed_impact_push(arm, start);
     }
 
+    /// 지금 관절 동작을 시작해 `impact_duration_secs` 뒤 임팩트에 도달한다.
+    pub fn fixed_impact_push_in(
+        arm: &Arm,
+        start: &robot::Pose,
+        impact_duration_secs: f64,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_fixed_impact_push_in(arm, start, impact_duration_secs);
+    }
+
     /// 정지 → 정지로 임의 포즈까지 잇는 최단 실행가능 궤적 (coarse 선추종용).
     pub fn move_to(
         arm: &Arm,

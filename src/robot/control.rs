@@ -291,11 +291,10 @@ impl DirectController {
                 late_by_secs: -remaining_secs,
             });
         }
-        let positioning_secs = remaining_secs - crate::defaults::motion::FIXED_IMPACT_LEAD_SECS;
-        if positioning_secs <= 0.0 {
+        if remaining_secs < crate::defaults::motion::FIXED_IMPACT_MIN_DURATION_SECS {
             return Err(DirectControlError::InsufficientTime {
                 remaining_secs,
-                required_secs: crate::defaults::motion::FIXED_IMPACT_LEAD_SECS,
+                required_secs: crate::defaults::motion::FIXED_IMPACT_MIN_DURATION_SECS,
             });
         }
         let rail_x = rail_for_racket_head_x(arm, start, target.position.x)?;
@@ -315,10 +314,10 @@ impl DirectController {
             .ok_or(DirectControlError::MissingAimJoint)?;
         let aim_required_secs = (aim_rad - aim_current_rad).abs() / arm.max_joint_speed.max(1e-9);
         let required_secs = rail_required_secs.max(aim_required_secs);
-        if required_secs > positioning_secs {
+        if required_secs > remaining_secs {
             return Err(DirectControlError::InsufficientTime {
                 remaining_secs,
-                required_secs: required_secs + crate::defaults::motion::FIXED_IMPACT_LEAD_SECS,
+                required_secs,
             });
         }
         return Ok(DirectControlCommand {
@@ -326,9 +325,9 @@ impl DirectController {
             target,
             rail_x,
             aim_rad,
-            duration_secs: positioning_secs
+            duration_secs: remaining_secs
                 .min(MAX_DIRECT_COMMAND_SECS)
-                .max(MIN_DIRECT_COMMAND_SECS.min(positioning_secs))
+                .max(MIN_DIRECT_COMMAND_SECS.min(remaining_secs))
                 .max(required_secs),
         });
     }

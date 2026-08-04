@@ -24,12 +24,12 @@ pub const RETURN_TO_CENTER_MIN_SECS: f64 = 0.3;
 pub const RETURN_TO_CENTER_MAX_SECS: f64 = 3.0;
 pub const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
 
-/// 발사기 반복 시험용 고정 푸시: 공 도착 전 이만큼 앞서 타격 동작을 시작한다.
-pub const FIXED_IMPACT_LEAD_SECS: f64 = 0.12;
+/// 발사기 반복 시험용 고정 푸시가 한계를 지키며 임팩트를 만들 최소 시간.
+pub const FIXED_IMPACT_MIN_DURATION_SECS: f64 = 0.25;
 /// 라켓 면 법선 방향의 짧은 임팩트 전진 거리 [m].
-pub const FIXED_IMPACT_PUSH_DISTANCE_M: f64 = 0.025;
+pub const FIXED_IMPACT_PUSH_DISTANCE_M: f64 = 0.050;
 /// 임팩트 순간 목표 라켓 선속도 [m/s].
-pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 0.65;
+pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 0.90;
 
 impl Default for InterceptWindow {
     fn default() -> Self {

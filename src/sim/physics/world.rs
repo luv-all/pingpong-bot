@@ -115,8 +115,8 @@ pub struct SimWorld {
     /// 이번 비행이 발사된 `sim_time` — `park_if_out_of_play`의 최대 비행
     /// 시간 안전장치(`MAX_BALL_FLIGHT_SECS`)가 기준으로 삼는다.
     flight_started_at: f64,
-    /// 직접 제어 목표 시각 직전에 고정 임팩트 푸시를 시작할 sim 시각.
-    direct_strike_at: Option<f64>,
+    /// 관절 푸시 시작 sim 시각과 공 도착까지 남은 임팩트 시간.
+    direct_strike_at: Option<(f64, f64)>,
     /// 고정 임팩트 푸시 완료 후 중앙 복귀를 시작할 sim 시각.
     direct_return_at: Option<f64>,
     /// 뷰어·Status용 디버그 스냅샷 (실패 사유·궤적·한계).
@@ -912,12 +912,7 @@ impl SimWorld {
         self.robot
             .set_rail_target_in_secs(&self.arm, command.rail_x, command.duration_secs);
         self.robot.set_targets(targets);
-        self.direct_strike_at = Some(
-            self.sim_time
-                + (command.target.time_secs - crate::defaults::motion::FIXED_IMPACT_LEAD_SECS)
-                    .max(command.duration_secs)
-                    .max(0.0),
-        );
+        self.direct_strike_at = Some((self.sim_time, command.target.time_secs));
         self.direct_return_at = None;
         info!(
             shot = self.shot_seq,
@@ -934,26 +929,33 @@ impl SimWorld {
         self.position_refined = refined;
     }
 
-    /// 공 도착 직전에 짧은 고정 임팩트 푸시를 시작한다.
+    /// 레일·조준과 거의 동시에 관절 푸시를 시작하고 공 도착 시각에 임팩트한다.
     fn try_direct_fixed_impact(&mut self) {
-        let Some(strike_at) = self.direct_strike_at else {
+        let Some((strike_at, impact_duration_secs)) = self.direct_strike_at else {
             return;
         };
         if self.sim_time < strike_at || self.robot.is_swinging() {
             return;
         }
-        let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        match motion::Planner::fixed_impact_push(&self.arm, &start) {
+        let mut push_joints = self.robot.joints().clone();
+        if let (Some(aim), Some(target_aim)) = (
+            push_joints.values.get_mut(DIRECT_AIM_JOINT_INDEX),
+            self.robot.targets().values.get(DIRECT_AIM_JOINT_INDEX),
+        ) {
+            *aim = *target_aim;
+        }
+        let start = robot::Pose::new(self.robot.rail_x(), push_joints);
+        match motion::Planner::fixed_impact_push_in(&self.arm, &start, impact_duration_secs) {
             Ok(trajectory) => {
                 self.direct_strike_at = None;
                 self.direct_return_at = Some(self.sim_time + trajectory.duration_secs);
-                self.robot.replace_swing(trajectory.clone());
+                self.robot.replace_joint_swing(trajectory.clone());
                 info!(
                     shot = self.shot_seq,
                     impact_time_secs = trajectory.impact_time_secs,
                     duration_secs = trajectory.duration_secs,
                     impact_joint_velocity = ?trajectory.end_velocity,
-                    "shot: 고정 임팩트 푸시 시작"
+                    "shot: 레일·조준과 관절 임팩트 동시 시작"
                 );
             }
             Err(error) => {

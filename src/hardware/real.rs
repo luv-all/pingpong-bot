@@ -124,10 +124,12 @@ impl RealHardware {
             error!("Dynamixel 궤적 executor 패닉");
         }
     }
-}
 
-impl Hardware for RealHardware {
-    fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
+    fn start_trajectory(
+        &mut self,
+        trajectory: &motion::Trajectory,
+        drive_rail: bool,
+    ) -> Result<(), HwError> {
         self.reap_executor();
         if self.busy.swap(true, Ordering::AcqRel) {
             debug!("Dynamixel 궤적 실행 중 — 중복 명령 무시");
@@ -144,7 +146,8 @@ impl Hardware for RealHardware {
         let rail_target = trajectory.follow_through_rail_x;
         let rail_duration = trajectory.duration_secs;
         self.executor = Some(thread::spawn(move || {
-            if let Ok(mut guard) = rail.lock()
+            if drive_rail
+                && let Ok(mut guard) = rail.lock()
                 && let Some(rail_hw) = guard.as_mut()
                 && let Err(error) = rail_hw.command_abs_in_secs(rail_target, rail_duration)
             {
@@ -193,9 +196,8 @@ impl Hardware for RealHardware {
                 }
                 thread::sleep(tick);
             }
-            // 정상 완주에서는 관절뿐 아니라 레일까지 실제 정지해야 명령 완료다.
-            // 취소된 경우에는 다음 정밀 명령이 AxmMoveSStop 후 즉시 재목표하므로 기다리지 않는다.
-            if !cancel.load(Ordering::Acquire)
+            if drive_rail
+                && !cancel.load(Ordering::Acquire)
                 && let Ok(mut guard) = rail.lock()
                 && let Some(rail_hw) = guard.as_mut()
                 && let Err(error) = rail_hw.wait_idle()
@@ -205,6 +207,16 @@ impl Hardware for RealHardware {
             busy.store(false, Ordering::Release);
         }));
         return Ok(());
+    }
+}
+
+impl Hardware for RealHardware {
+    fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
+        return self.start_trajectory(trajectory, true);
+    }
+
+    fn command_joints(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
+        return self.start_trajectory(trajectory, false);
     }
 
     fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
@@ -400,6 +412,33 @@ mod tests {
         for angle in pose.joints.values {
             assert!((angle - 0.05).abs() < 0.002);
         }
+    }
+
+    #[test]
+    fn joint_only_trajectory_does_not_overwrite_direct_rail_target() {
+        let config = DynamixelConfig {
+            stream_hz: 500.0,
+            ..DynamixelConfig::default()
+        };
+        let mut hardware =
+            RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
+        hardware
+            .command_rail_and_racket(0.35, 0.0, 0.10)
+            .expect("direct rail command");
+        let trajectory = motion::Trajectory::new(
+            Joints::from_slice(&[0.0; 4]),
+            Joints::from_slice(&[0.05; 4]),
+            vec![0.0; 4],
+            vec![0.0; 4],
+            0.04,
+            motion::Rail::fixed(0.0),
+        );
+
+        hardware.command_joints(&trajectory).expect("joint command");
+        thread::sleep(Duration::from_millis(100));
+
+        let pose = hardware.read_pose().expect("pose");
+        assert!((pose.rail_x - 0.35).abs() < 1e-9);
     }
 
     #[test]

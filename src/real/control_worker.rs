@@ -27,7 +27,6 @@ const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const BUSY_POLL: Duration = Duration::from_millis(5);
 const VERIFY_POLL_PERIOD: Duration = Duration::from_millis(20);
-const VERIFY_TIMEOUT_AFTER_COMMAND: Duration = Duration::from_millis(500);
 const VERIFY_STABLE_SAMPLES: u8 = 2;
 const MAX_CONSECUTIVE_MISSES: u8 = 3;
 const RAIL_ERROR_WARN_M: f64 = 0.020;
@@ -116,9 +115,9 @@ pub fn spawn(
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
         let mut pending_verification: Option<PendingVerification> = None;
-        let mut strike_due_at: Option<(u64, Instant)> = None;
         let mut return_due_at: Option<Instant> = None;
         let mut struck_track_seq: Option<u64> = None;
+        let mut pending_impact_measurement: Option<(u64, f64, pingpong_bot::robot::Joints)> = None;
         let mut consecutive_misses: u8 = 0;
 
         while !shutdown.is_down() {
@@ -143,56 +142,37 @@ pub fn spawn(
                 }
                 VerificationResult::Pending => {}
             }
-            if let Some((track_seq, due_at)) = strike_due_at
-                && Instant::now() >= due_at
-            {
-                strike_due_at = None;
-                let start = match hardware.read_pose() {
-                    Ok(pose) => pose,
-                    Err(error) => {
-                        let _ = event_tx.send(RuntimeEvent::Failed {
-                            track_seq: Some(track_seq),
-                            reason: format!("고정 임팩트 직전 포즈 읽기 실패: {error}"),
-                        });
-                        break;
-                    }
-                };
-                if let Some(previous) = pending_verification.take() {
-                    log_verification(&previous, &start, "impact_started", false);
-                }
-                let trajectory = match Planner::fixed_impact_push(&arm, &start) {
-                    Ok(trajectory) => trajectory,
-                    Err(error) => {
-                        let _ = event_tx.send(RuntimeEvent::Failed {
-                            track_seq: Some(track_seq),
-                            reason: format!("고정 임팩트 계획 실패: {error}"),
-                        });
-                        break;
-                    }
-                };
-                if let Err(error) = hardware.command(&trajectory) {
-                    let _ = event_tx.send(RuntimeEvent::Failed {
-                        track_seq: Some(track_seq),
-                        reason: format!("고정 임팩트 실행 실패: {error}"),
-                    });
-                    break;
-                }
-                struck_track_seq = Some(track_seq);
-                return_due_at =
-                    Some(Instant::now() + Duration::from_secs_f64(trajectory.duration_secs));
-                info!(
-                    track_seq,
-                    impact_time_secs = f4(trajectory.impact_time_secs),
-                    total_duration_secs = f4(trajectory.duration_secs),
-                    impact_joint_velocity = %format!("{:?}", trajectory.end_velocity),
-                    "고정 임팩트 푸시 시작"
-                );
-            }
             if pending_verification.is_none()
                 && return_due_at.is_some_and(|due_at| Instant::now() >= due_at)
                 && !hardware.is_busy()
             {
                 return_due_at = None;
+                if let Some((track_seq, rail_commanded_m, joints_commanded)) =
+                    pending_impact_measurement.take()
+                {
+                    match hardware.read_pose() {
+                        Ok(measured) => {
+                            let joint_errors: Vec<f64> = joints_commanded
+                                .values
+                                .iter()
+                                .zip(&measured.joints.values)
+                                .map(|(commanded, measured)| commanded - measured)
+                                .collect();
+                            info!(
+                                track_seq,
+                                rail_commanded_m = f4(rail_commanded_m),
+                                rail_measured_m = f4(measured.rail_x),
+                                rail_commanded_minus_measured_m =
+                                    f4(rail_commanded_m - measured.rail_x),
+                                joints_commanded = %format!("{:?}", joints_commanded.values),
+                                joints_measured = %format!("{:?}", measured.joints.values),
+                                joints_commanded_minus_measured = %format!("{joint_errors:?}"),
+                                "동시 임팩트 완료 후 실측"
+                            );
+                        }
+                        Err(error) => warn!(%error, "동시 임팩트 완료 후 포즈 읽기 실패"),
+                    }
+                }
                 if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
                     let reason = format!("제어 후 중앙 복귀 실패: {error}");
                     warn!(%error, "제어 후 중앙 복귀 실패 — 제어를 중단한다");
@@ -233,9 +213,6 @@ pub fn spawn(
                     due_at.saturating_duration_since(now)
                 };
                 timeout = timeout.min(return_wait);
-            }
-            if let Some((_, due_at)) = strike_due_at {
-                timeout = timeout.min(due_at.saturating_duration_since(now));
             }
             let request = match rx.recv_timeout(timeout) {
                 Ok(request) => request,
@@ -300,24 +277,41 @@ pub fn spawn(
 
             let issued_at = Instant::now();
             let remaining_until_target_secs = (command.target.time_secs - elapsed).max(0.0);
-            let strike_delay_secs =
-                fixed_impact_start_delay(remaining_until_target_secs, command.duration_secs);
-            strike_due_at = Some((
+            let mut push_joints = start.joints.clone();
+            if let Some(aim) = push_joints
+                .values
+                .get_mut(pingpong_bot::robot::control::DIRECT_AIM_JOINT_INDEX)
+            {
+                *aim = applied.aim_rad;
+            }
+            let push_start = pingpong_bot::robot::Pose::new(applied.rail_m, push_joints);
+            let trajectory =
+                match Planner::fixed_impact_push_in(&arm, &push_start, remaining_until_target_secs)
+                {
+                    Ok(trajectory) => trajectory,
+                    Err(error) => {
+                        let _ = event_tx.send(RuntimeEvent::Failed {
+                            track_seq: Some(request.track_seq),
+                            reason: format!("동시 고정 임팩트 계획 실패: {error}"),
+                        });
+                        break;
+                    }
+                };
+            if let Err(error) = hardware.command_joints(&trajectory) {
+                let _ = event_tx.send(RuntimeEvent::Failed {
+                    track_seq: Some(request.track_seq),
+                    reason: format!("동시 고정 임팩트 실행 실패: {error}"),
+                });
+                break;
+            }
+            struck_track_seq = Some(request.track_seq);
+            return_due_at = Some(issued_at + Duration::from_secs_f64(trajectory.duration_secs));
+            pending_impact_measurement = Some((
                 request.track_seq,
-                issued_at + Duration::from_secs_f64(strike_delay_secs),
+                applied.rail_m,
+                trajectory.follow_through.clone(),
             ));
-            return_due_at = None;
-            pending_verification = Some(PendingVerification {
-                track_seq: request.track_seq,
-                command,
-                applied,
-                issued_at,
-                next_check_at: issued_at + Duration::from_secs_f64(command.duration_secs),
-                deadline: issued_at
-                    + Duration::from_secs_f64(command.duration_secs)
-                    + VERIFY_TIMEOUT_AFTER_COMMAND,
-                stable_samples: 0,
-            });
+            pending_verification = None;
 
             info!(
                 stage = ?request.stage,
@@ -331,18 +325,15 @@ pub fn spawn(
                 aim_applied_rad = f4(applied.aim_rad),
                 aim_applied_deg = f2(applied.aim_rad.to_degrees()),
                 duration_secs = f2(command.duration_secs),
-                "2단계 라켓 헤드 정렬·조준 명령"
+                impact_time_secs = f4(trajectory.impact_time_secs),
+                total_impact_motion_secs = f4(trajectory.duration_secs),
+                impact_joint_velocity = %format!("{:?}", trajectory.end_velocity),
+                "레일·조준과 관절 임팩트 동시 시작"
             );
         }
 
         let _ = event_tx.send(RuntimeEvent::Done);
     });
-}
-
-fn fixed_impact_start_delay(remaining_secs: f64, positioning_duration_secs: f64) -> f64 {
-    return (remaining_secs - pingpong_bot::defaults::motion::FIXED_IMPACT_LEAD_SECS)
-        .max(positioning_duration_secs)
-        .max(0.0);
 }
 
 fn verify_due_command(
@@ -652,12 +643,6 @@ mod tests {
         assert!(latch.should_send(1, PredictionStage::Provisional));
         latch.mark_sent(PredictionStage::Provisional);
         assert!(latch.should_send(2, PredictionStage::Provisional));
-    }
-
-    #[test]
-    fn fixed_impact_starts_one_lead_time_before_ball_arrival() {
-        let delay = fixed_impact_start_delay(0.50, 0.30);
-        assert!((delay - 0.38).abs() < 1e-12);
     }
 
     #[test]
