@@ -355,9 +355,9 @@ flowchart TB
   defaults -.-> robot
   robot -.->|한계·현재 포즈| control
 
-  sim -->|가상 프레임| camera
+  sim -->|기본: ground-truth 궤적| target
   sim -->|robot::State| hardware
-  real -.->|실 프레임| camera
+  real -->|실 프레임| camera
   real -.->|RealHardware| hardware
 
   subgraph support ["③ 지원"]
@@ -373,7 +373,8 @@ flowchart TB
 
 ### 파이프라인 스레드
 
-워커 구성은 어느 쪽이든 같다: 카메라당 1 + 추정 1 + 제어 1.
+아래 워커 구성은 real 런타임과 호출부 없는 generic pipeline의 구조다.
+기본 GUI sim은 이 카메라 워커 체인을 거치지 않고 물리 월드 상태로 궤적을 만든다.
 
 ```mermaid
 flowchart LR

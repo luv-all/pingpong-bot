@@ -1,7 +1,8 @@
 //! sim 궤적 추정 — Rapier 진실 상태를 domain ballistics / EKF에 넣는다.
 //!
-//! 자동 스윙(`predict_impact`)은 진실 탄도(+스핀 Magnus)를 쓰고, 파이프라인
-//! Estimator는 같은 상태를 EKF에 주입해 hit-plane 예측을 검증한다.
+//! 기본 직접 제어는 진실 상태로 `BallTrajectory`를 만들고, 보존 중인
+//! 임팩트 진단(`predict_impact`)도 같은 진실 탄도(+스핀 Magnus)를 쓴다.
+//! 파이프라인 Estimator는 같은 상태를 EKF에 주입한다.
 
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -13,7 +14,7 @@ use crate::sim::physics;
 use crate::sim::physics::world::SimWorld;
 use nalgebra::Vector3;
 
-/// Rapier 월드 스냅샷으로 접수 평면 교차를 예측한다 (물리 스텝·자동 스윙 공용).
+/// Rapier 월드 스냅샷으로 접수 평면 교차를 예측한다(보존 중인 임팩트 진단용).
 pub(crate) fn predict_impact(world: &SimWorld, plane: HitPlane) -> Option<Prediction> {
     let snap = snapshot_from_world(world)?;
     return estimator::Kinematics::predict_to(
@@ -71,7 +72,7 @@ impl Estimator for SimBallEstimator {
             self.publish_debug_prediction(None);
             return;
         };
-        // 진실 위치·속도로 EKF를 리셋해 파이프라인 예측이 스윙과 맞게 유지
+        // 진실 위치·속도로 EKF를 리셋해 파이프라인 궤적이 월드와 맞게 유지
         self.ekf.set_state(snap.position, snap.velocity, timestamp);
     }
 

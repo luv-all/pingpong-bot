@@ -360,7 +360,7 @@ fn draw_view_panel(ui: &mut egui::Ui, ui_state: &mut PanelUiState) {
             });
             debug_checkbox(ui, &mut d.fail_status, "fail status", |ui| {
                 ui.strong("실패 사유 (Status)");
-                ui.label("스윙 포기·건너뛴 이유를 Status에 표시합니다.");
+                ui.label("직접 명령 또는 구형 계획기가 건너뛴 이유를 표시합니다.");
             });
             debug_checkbox(ui, &mut d.unreachable_x, "unreachable X", |ui| {
                 ui.strong("도달 불가 목표");
@@ -383,8 +383,8 @@ fn draw_view_panel(ui: &mut egui::Ui, ui_state: &mut PanelUiState) {
                 ui.label("주황 — 관절 가동범위 끝, 또는 토크 상한 초과");
             });
             debug_checkbox(ui, &mut d.commit_bar, "commit bar", |ui| {
-                ui.strong("스윙 결정 타이밍");
-                ui.label("tti가 commit 구간인지 Status 막대로 표시합니다.");
+                ui.strong("구형 스윙 결정 타이밍");
+                ui.label("보존 중인 계획기의 commit 구간을 표시합니다.");
             });
             debug_checkbox(ui, &mut d.table_obb, "table OBB", |ui| {
                 ui.strong("테이블 침투 OBB");
@@ -403,8 +403,8 @@ fn draw_view_panel(ui: &mut egui::Ui, ui_state: &mut PanelUiState) {
                 ui.label("실제 경로 (주황 점).");
             });
             debug_checkbox(ui, &mut d.swing_ghost, "swing ghost", |ui| {
-                ui.strong("스윙 경로");
-                ui.label("확정 스윙의 라켓 중심 경로.");
+                ui.strong("구형 스윙 경로");
+                ui.label("보존 중인 계획기가 만든 라켓 중심 경로.");
             });
             debug_checkbox(ui, &mut d.rail_stroke, "rail stroke", |ui| {
                 ui.strong("레일 이동 범위");
@@ -665,11 +665,11 @@ fn draw_status_panel(ui: &mut egui::Ui, status: &StatusSnapshot, debug: &DebugOv
         .default_open(true)
         .show(ui, |ui| {
             ui.label(format!("관절각 [rad]  {}", status.joints.join("  ")));
-            ui.label(format!("스윙  {swing_ko}"));
+            ui.label(format!("로봇 동작  {swing_ko}"));
             ui.label(format!("단계  {}", status.commit_phase.label_ko()));
         });
 
-    egui::CollapsingHeader::new("Impact")
+    egui::CollapsingHeader::new("Prediction / legacy impact")
         .default_open(true)
         .show(ui, |ui| {
             if let Some(pred) = &status.debug_prediction {
@@ -983,7 +983,7 @@ fn draw_commit_bar(ui: &mut egui::Ui, status: &StatusSnapshot) {
         .map(|p| p.time_to_impact_secs);
     let Some(tti) = tti else {
         ui.label(format!(
-            "스윙 확정 구간  {min_s:.2}–{max_s:.2} s (임팩트까지 남은 시간)"
+            "구형 스윙 확정 구간  {min_s:.2}–{max_s:.2} s (임팩트까지 남은 시간)"
         ));
         return;
     };
