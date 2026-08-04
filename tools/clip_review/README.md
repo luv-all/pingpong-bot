@@ -156,3 +156,18 @@ COMMIT  frame 402 t=5.461s  tti 0.28s  sigma 12cm
 ## SSOT
 
 `data/calibration.json` · `data/colormask.json` · `defaults::detector_for` (본선과 같은 조립)
+
+## sim 창 시점 조작
+
+kiss3d `OrbitCamera3d` 기본 바인딩이다.
+
+| 조작 | 입력 |
+|---|---|
+| 회전 | 왼쪽 드래그 |
+| 이동(팬) | 오른쪽 드래그 |
+| 확대·축소 | 휠 스크롤 |
+| 초점 원점으로 | `Enter` |
+
+맥 트랙패드는 두 손가락 클릭이 우클릭이라 그걸로 팬이 걸린다.
+macOS 기본 줌 배율이 스크롤 단위당 `1.0001`(다른 OS는 `1.01`)이라
+마우스 휠로는 거의 안 움직이는 것처럼 느껴진다 — 라이브러리 기본값이다.

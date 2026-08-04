@@ -204,6 +204,8 @@ fn run(args: &Args) -> Result<()> {
     );
     print_commit_summary(&reviewed);
     println!("keys: Space 일시정지 | ←/→ or ,/. 한 프레임 | [/] 10프레임 | 0 처음 | q 종료");
+    // kiss3d OrbitCamera3d 기본 바인딩. 어디에도 안 적혀 있어 매번 다시 찾게 된다.
+    println!("sim: 왼쪽 드래그 회전 | 오른쪽 드래그 이동 | 휠 확대 | Enter 초점 리셋");
     println!(
         "frame  t     | cam0 cam1 | 3d x y z reproj | ekf x y z |v| sigma_p sigma_v | gate0 gate1 | err +.1/+.2/+.3s [cm]"
     );
