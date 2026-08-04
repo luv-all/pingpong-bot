@@ -50,7 +50,9 @@ pub struct Score {
     /// RMSE 는 궤적 전체의 값이라 "그래서 몇 cm 빗맞나"를 안 알려 준다. 접수 창의 평면마다
     /// 재면 그게 곧 라켓을 놓을 자리의 오차다. y 는 평면이 고정하므로 면내 `(x, z)` 만 센다.
     pub plane_error: Vec<(f64, Option<(f64, f64, f64)>)>,
-    /// 기본 접수 평면 타점 오차 [m]. 제어가 실제로 쓰는 한 점이라 같이 둔다.
+    /// 리드타임과 타점 오차를 잰 기준 평면 [m]. 클립마다 다를 수 있다.
+    pub reference_plane: f64,
+    /// 그 평면의 타점 오차 [m]. 제어가 실제로 쓰는 한 점이라 같이 둔다.
     pub impact_error: Option<f64>,
 }
 
@@ -87,6 +89,12 @@ impl Score {
 
         // 실제 도달 시각·지점이 정답이다. 리드는 거기서 거꾸로 센다 — "지금 커밋하면
         // 얼마나 틀리나"와 같은 질문이다.
+        //
+        // 기준 평면은 **공이 실제로 지나는 것 중 가장 깊은 것**을 쓴다. 라켓이 접수 창
+        // 안쪽에서 공을 치면 그보다 로봇 쪽 평면엔 공이 영영 안 온다 (실측 fly_10 은
+        // y=0.14 에서 맞아 0.08 을 안 지난다). 고정 평면을 쓰면 그런 클립은 지표가 통째로
+        // 비어 버린다.
+        let plane = reference_plane(reviewed).unwrap_or(plane);
         let impact = reviewed
             .observed
             .windows(2)
@@ -176,6 +184,7 @@ impl Score {
             track_switches: reviewed.frames.last().map_or(0, |state| state.seq),
             trigger,
             residual: [percentiles(&mut residual[0]), percentiles(&mut residual[1])],
+            reference_plane: reference_plane(reviewed).unwrap_or(plane),
             lead_error,
             plane_error,
             predicted_rmse,
@@ -286,10 +295,10 @@ impl Score {
             ));
         }
         out.push(format!(
-            "  타점 오차   {}   (y={:.2} 평면 — 평면 위치에 흔들리므로 참고용)",
+            "  타점 오차   {}   (y={:.2} — 공이 실제로 지나는 가장 깊은 접수 평면)",
             self.impact_error
                 .map_or("--".to_owned(), |e| format!("{:.1} cm", e * 100.0)),
-            table::DEFAULT_HIT_PLANE_Y
+            self.reference_plane
         ));
         out.push("  접수 창에서 라켓이 빗나가는 거리 (면내 x·z):".to_owned());
         for (y, gap) in &self.plane_error {
@@ -306,6 +315,21 @@ impl Score {
         out.push("────────────────────────────────────────────".to_owned());
         return out.join("\n");
     }
+}
+
+/// 공이 실제로 지나는 접수 평면 중 가장 로봇에 가까운 것 [m].
+///
+/// 라켓이 접수 창 안쪽에서 치면 그보다 깊은 평면엔 공이 안 온다. 그런 클립도 지표가
+/// 나오도록 실제로 지나는 평면을 고른다.
+fn reference_plane(reviewed: &Reviewed) -> Option<f64> {
+    return InterceptWindow::default()
+        .hit_planes()
+        .into_iter()
+        .map(|plane| plane.y)
+        .filter(|y| reviewed.observed_crossing_y(*y).is_some())
+        .fold(None, |best: Option<f64>, y| {
+            Some(best.map_or(y, |b| b.min(y)))
+        });
 }
 
 /// 생 궤적의 앞 1/3 과 뒤 1/3 에서 잰 속력 [m/s].

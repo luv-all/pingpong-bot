@@ -49,9 +49,22 @@ pub const MIN_SIGHTINGS: usize = 6;
 pub const WINDOW: Duration = Duration::from_millis(1500);
 /// 관측이 이만큼 끊기면 트랙을 버린다.
 pub const STALE_GAP: Duration = Duration::from_millis(500);
-/// 공이 멀어졌다고 볼 y 증가량 [m]과 연속 횟수.
-pub const RECEDE_STEP: f64 = 0.05;
-pub const RECEDE_LIMIT: u32 = 3;
+/// 연속으로 이만큼 이탈하면 트랙을 끝낸다.
+///
+/// 세계가 모델과 안 맞기 시작했다는 뜻이다 — 라켓에 맞아 되돌아가거나, 다른 공이 들어왔거나.
+/// 하나씩 빼기만 하면 되돌아온 공이 창에 조금씩 스며 적합을 망친다. 실측 fly_10 에서 한
+/// 클립에 트랙이 6개 서고 잔차가 15.7 px 였다.
+pub const OUTLIER_LIMIT: u32 = 3;
+/// 샷으로 볼 최소 속력 [m/s]. 굴러다니거나 멈춘 공이 트랙을 붙들면 안 된다.
+///
+/// 클립에는 발사 전후로 공이 놓여 있는 구간이 길다 (실측 생 속력 0.05 m/s 구간).
+pub const MIN_SPEED: f64 = 1.0;
+/// 창 안의 관측이 이미지에서 이만큼은 움직여야 적합을 시도한다 [px].
+///
+/// 속력으로만 거르면 멈춘 공에도 트랙을 세웠다 바로 죽이길 반복한다 — 실측 fly_10 에서
+/// 한 클립에 99번이었다. 화소 이동은 3D 를 풀기 **전에** 볼 수 있어서 그 헛수고를 막는다.
+/// 4 m/s 공은 80 fps 에서 6프레임에 20 px 넘게 간다. 놓여 있는 공은 2 px 도 안 움직인다.
+pub const MIN_PIXEL_SPAN: f64 = 12.0;
 /// 적분 스텝과 예측 궤적 표본 간격.
 pub const INTEGRATE_DT: Duration = Duration::from_millis(1);
 pub const SAMPLE_DT: Duration = Duration::from_millis(5);
@@ -165,7 +178,7 @@ pub struct Fit {
     predicted: Track,
     /// 트리거는 걸쇠다 — 한 번 걸리면 트랙이 끝날 때까지 안 풀린다.
     predicting: bool,
-    recedes: u32,
+    outliers: u32,
     seq: u64,
 }
 
@@ -186,7 +199,7 @@ impl Fit {
             measured: Track::default(),
             predicted: Track::default(),
             predicting: false,
-            recedes: 0,
+            outliers: 0,
             seq: 0,
         };
     }
@@ -271,13 +284,27 @@ impl Fit {
         let limit = OUTLIER_SIGMA * sigma_px(&self.cameras[camera]);
         if residual > limit {
             self.sightings.pop();
+            self.outliers += 1;
+            // 연속으로 어긋나면 이건 다른 국면이다. 하나씩 빼면서 버티면 안 된다.
+            if self.outliers >= OUTLIER_LIMIT {
+                self.drop_track();
+                return Outcome::Idle;
+            }
             self.solve();
             return Outcome::Rejected { px: residual };
         }
+        self.outliers = 0;
 
         self.refresh();
-        if self.recedes >= RECEDE_LIMIT || self.outside_volume() {
-            self.drop_track();
+        if self.finished() {
+            // 이미 서 있던 트랙이 끝난 것과, 애초에 샷이 아니었던 것은 다르다. 후자까지
+            // seq 를 올리면 라켓에 맞고 돌아가는 공이 매 프레임 트랙 하나를 세웠다 죽인다
+            // (실측 fly_10 에서 51번). 소비자는 seq 로 "같은 공인가"를 판단한다.
+            if had {
+                self.drop_track();
+            } else {
+                self.abandon();
+            }
             return Outcome::Idle;
         }
         return if had {
@@ -287,14 +314,24 @@ impl Fit {
         };
     }
 
-    /// 트랙을 버린다: 관측 공백, `y` 재증가(다음 샷), 부피 이탈.
+    /// 샷이 아니었던 적합을 버린다. `seq` 는 그대로 — 선 적이 없으니 끝난 것도 아니다.
+    fn abandon(&mut self) {
+        self.sightings.clear();
+        self.solution = None;
+        self.measured.0.clear();
+        self.predicted.0.clear();
+        self.predicting = false;
+        self.outliers = 0;
+    }
+
+    /// 서 있던 트랙을 끝낸다: 관측 공백, 되돌아감, 부피 이탈, 멈춤.
     pub fn drop_track(&mut self) {
         self.sightings.clear();
         self.solution = None;
         self.measured.0.clear();
         self.predicted.0.clear();
         self.predicting = false;
-        self.recedes = 0;
+        self.outliers = 0;
         self.seq += 1;
     }
 
@@ -306,6 +343,10 @@ impl Fit {
         // 서로 다른 카메라가 최소 둘은 있어야 깊이가 잡힌다.
         let first = self.sightings[0].camera;
         if self.sightings.iter().all(|s| s.camera == first) {
+            return false;
+        }
+        // 안 움직이면 샷이 아니다. 3D 를 풀기 전에 화소로 거른다.
+        if self.pixel_span() < MIN_PIXEL_SPAN {
             return false;
         }
         let t0 = self.sightings[0].t;
@@ -338,6 +379,26 @@ impl Fit {
         }
         self.solution = Some(start);
         return true;
+    }
+
+    /// 카메라 하나 안에서 관측이 이미지 위를 얼마나 움직였나 [px].
+    ///
+    /// 카메라를 섞으면 시차가 이동으로 둔갑하므로 카메라별로 재고 가장 큰 값을 쓴다.
+    fn pixel_span(&self) -> f64 {
+        let mut best = 0.0_f64;
+        for camera in 0..self.cameras.len() {
+            let mut seen: Option<(camera::Pixel, camera::Pixel)> = None;
+            for sighting in self.sightings.iter().filter(|s| s.camera == camera) {
+                seen = Some(match seen {
+                    None => (sighting.pixel, sighting.pixel),
+                    Some((first, _)) => (first, sighting.pixel),
+                });
+            }
+            if let Some((first, last)) = seen {
+                best = best.max((last - first).norm());
+            }
+        }
+        return best;
     }
 
     /// 초기값 — 앞뒤 두 시각을 각각 삼각측량해 위치와 속도를 잡는다.
@@ -531,7 +592,6 @@ impl Fit {
         };
         let sigma = self.parameter_sigma(&start);
 
-        let previous_y = self.measured.last().map(|s| s.position.y);
         self.measured = Track(
             self.sightings
                 .iter()
@@ -551,15 +611,6 @@ impl Fit {
                 })
                 .collect(),
         );
-        if let (Some(before), Some(now)) = (previous_y, self.measured.last().map(|s| s.position.y))
-        {
-            if now > before + RECEDE_STEP {
-                self.recedes += 1;
-            } else {
-                self.recedes = 0;
-            }
-        }
-
         self.predicting |= self.trigger.ready(&self.measured);
         if self.predicting
             && let Some(last) = self.measured.last().copied()
@@ -666,11 +717,19 @@ impl Fit {
         return Track(out);
     }
 
-    fn outside_volume(&self) -> bool {
-        return self
-            .measured
-            .last()
-            .is_some_and(|state| outside_volume(state.position));
+    /// 이 트랙은 끝났나.
+    ///
+    /// 셋 중 하나면 끝이다 — 부피를 벗어났거나, 로봇에서 멀어지고 있거나, 거의 멈췄거나.
+    /// 클립에는 한 샷만 있는 게 아니다. 라켓에 맞고 돌아가는 공, 굴러다니는 공, 놓여 있는
+    /// 공이 다 같은 영상에 있고, 그걸 한 탄도로 맞추려 들면 전부 망가진다.
+    fn finished(&self) -> bool {
+        let Some(state) = self.measured.last() else {
+            return false;
+        };
+        return outside_volume(state.position)
+            // 샷은 로봇 쪽(-y)으로 온다. 부호가 뒤집혔으면 맞고 돌아가는 중이다.
+            || state.velocity.y >= 0.0
+            || state.velocity.norm() < MIN_SPEED;
     }
 }
 
