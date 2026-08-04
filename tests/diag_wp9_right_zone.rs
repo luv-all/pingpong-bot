@@ -9,9 +9,9 @@
 //! 실패 사유(`SwingPlanError`) 히스토그램.
 
 use pingpong_bot::defaults;
-use pingpong_bot::estimator::Prediction;
 use pingpong_bot::robot;
 use pingpong_bot::robot::motion::Planner;
+use pingpong_bot::robot::motion::Prediction;
 use pingpong_bot::sim::eval;
 use pingpong_bot::sim::physics::SimWorld;
 

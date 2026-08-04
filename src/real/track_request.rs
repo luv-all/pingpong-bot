@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use pingpong_bot::estimator::Prediction;
+use pingpong_bot::robot::motion::Prediction;
 
 /// "아직 칠 때는 아니지만, 예측이 이러니 미리 옮겨 두라"는 요청.
 ///

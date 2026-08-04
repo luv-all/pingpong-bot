@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use pingpong_bot::estimator::Prediction;
+use pingpong_bot::robot::motion::Prediction;
 
 /// "지금 이 후보들로 스윙을 계획해 보라"는 요청.
 ///

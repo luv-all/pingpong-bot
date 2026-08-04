@@ -9,11 +9,11 @@ use std::sync::Arc;
 use crate::constants::{ball, table};
 use crate::defaults::PhysicsParams;
 use crate::error::{DomainError, SwingPlanError};
-use crate::estimator;
-use crate::estimator::Prediction;
+use crate::physics;
 use crate::robot::Arm;
 use crate::robot::motion;
 use crate::robot::motion::InterceptWindow;
+use crate::robot::motion::Prediction;
 use rapier3d::prelude::*;
 use tracing::{debug, info, warn};
 
@@ -273,8 +273,8 @@ impl SimWorld {
 
     pub fn predict_impact(
         &self,
-        plane: crate::estimator::HitPlane,
-    ) -> Option<crate::estimator::Prediction> {
+        plane: crate::robot::motion::HitPlane,
+    ) -> Option<crate::robot::motion::Prediction> {
         return crate::sim::session::predict_impact(self, plane);
     }
 
@@ -673,7 +673,7 @@ impl SimWorld {
 
     /// 비행 중 공에 항력·Magnus 외력을 건다 (중력은 Rapier gravity).
     ///
-    /// `estimator::Kinematics::aero_accel`과 동일 식 — 예측기와 Rapier 궤적을 맞춘다.
+    /// `physics::Kinematics::aero_accel`과 동일 식 — 예측기와 Rapier 궤적을 맞춘다.
     fn apply_ball_aero_forces(&mut self) {
         if self.ball_state != crate::sim::physics::BallState::InFlight {
             return;
@@ -686,7 +686,7 @@ impl SimWorld {
         let ang = body.angvel();
         let velocity = nalgebra::Vector3::new(f64::from(lin.x), f64::from(lin.y), f64::from(lin.z));
         let omega = nalgebra::Vector3::new(f64::from(ang.x), f64::from(ang.y), f64::from(ang.z));
-        let a = estimator::Kinematics::aero_accel(
+        let a = physics::Kinematics::aero_accel(
             velocity,
             omega,
             self.physics.drag,
@@ -2132,7 +2132,7 @@ mod tests {
         let start = robot::Pose::new(rail_x, world.robot().joints().clone());
         let traj = motion::Planner::plan(
             &arm.arm,
-            crate::estimator::Prediction {
+            crate::robot::motion::Prediction {
                 // 2026-07-30: 새 `READY_JOINTS_4DOF`(윈드업 재계산, y∈[0.20,0.55]
                 // 시나리오로만 탐색됨)는 이 테스트가 쓰는 `DEFAULT_HIT_PLANE_Y`
                 // (=0.08, 탐색 범위 밖 최근접 평면)까지의 Δq가 예전 값보다
@@ -2154,8 +2154,8 @@ mod tests {
 
     #[test]
     fn quintic_swing_moves_robot_joints() {
-        use crate::estimator::HitPlane;
         use crate::robot::motion;
+        use crate::robot::motion::HitPlane;
 
         let arm = test_robot();
         let mut world = SimWorld::new(arm.clone());
@@ -2181,7 +2181,7 @@ mod tests {
         let start = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         let trajectory = motion::Planner::plan(
             &arm.arm,
-            crate::estimator::Prediction {
+            crate::robot::motion::Prediction {
                 time_to_impact_secs: t,
                 impact_position: impact,
                 incoming_velocity: nalgebra::Vector3::new(

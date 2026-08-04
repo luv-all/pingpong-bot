@@ -9,12 +9,12 @@ use opencv::prelude::*;
 use pingpong_bot::camera;
 use pingpong_bot::camera::{Calibration, FrameSource, Preview, PreviewAction, StereoOfflineArgs};
 use pingpong_bot::defaults::detector_for;
-use pingpong_bot::estimator;
+use pingpong_bot::physics;
 use pingpong_bot::vision::Detector;
 
 pub struct CaptureResult {
-    pub traj: Vec<estimator::TrajPoint>,
-    pub bounces: Vec<estimator::BounceEvent>,
+    pub traj: Vec<physics::TrajPoint>,
+    pub bounces: Vec<physics::BounceEvent>,
     pub e: Option<f64>,
 }
 
@@ -119,15 +119,15 @@ pub fn run_capture(
             }
         };
         if let Some(pos) = camera::Triangulate::pixels(&hits, &calibration) {
-            traj.push(estimator::TrajPoint {
+            traj.push(physics::TrajPoint {
                 t: sync_t,
                 pos,
                 pixels: hits.clone(),
             });
         }
 
-        let bounces = estimator::TrajAnalysis::detect_bounces(&traj);
-        let e_mean = estimator::TrajAnalysis::mean_bounce_e(&bounces);
+        let bounces = physics::TrajAnalysis::detect_bounces(&traj);
+        let e_mean = physics::TrajAnalysis::mean_bounce_e(&bounces);
 
         if let Some(ev) = bounces.last() {
             for (i, panel) in panels.iter_mut().enumerate() {
@@ -210,9 +210,9 @@ pub fn run_capture(
         Preview::destroy_window(window);
     }
 
-    let bounces = estimator::TrajAnalysis::detect_bounces(&traj);
+    let bounces = physics::TrajAnalysis::detect_bounces(&traj);
     return Ok(CaptureResult {
-        e: estimator::TrajAnalysis::mean_bounce_e(&bounces),
+        e: physics::TrajAnalysis::mean_bounce_e(&bounces),
         traj,
         bounces,
     });

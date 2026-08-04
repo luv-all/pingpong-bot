@@ -21,9 +21,9 @@ use std::thread;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 
 use crate::error::DomainError;
-use crate::estimator::Prediction;
 use crate::robot::Arm;
 use crate::robot::motion;
+use crate::robot::motion::Prediction;
 
 mod inflight;
 mod request;

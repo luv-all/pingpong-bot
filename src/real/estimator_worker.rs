@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use pingpong_bot::camera::Calibration;
 use pingpong_bot::defaults::EstimatorParams;
-use pingpong_bot::estimator::{HitPlane, Prediction};
+use pingpong_bot::robot::motion::{HitPlane, Prediction};
 use pingpong_bot::robot::motion::{InterceptWindow, Planner};
 use pingpong_bot::vision::{Fit, Outcome, State, Trajectory, triggers};
 use tracing::{debug, info_span};

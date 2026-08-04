@@ -39,6 +39,7 @@ pub mod estimator_worker;
 
 mod commit_request;
 mod control_status;
+mod decision;
 pub mod fmt;
 mod options;
 mod paced_source;
@@ -56,9 +57,9 @@ mod vision_event;
 
 pub use commit_request::CommitRequest;
 pub use control_status::ControlStatus;
+pub use decision::{Decision, decide};
 pub use options::Options;
 pub use paced_source::PacedSource;
-pub use pingpong_bot::estimator::{Decision, decide};
 pub use preview::PreviewWindow;
 pub use preview_event::PreviewEvent;
 pub use shot_event::ShotEvent;

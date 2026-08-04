@@ -25,7 +25,7 @@ use nalgebra::{Matrix6, Vector6};
 use crate::camera::{self, Calibration, Triangulate};
 use crate::constants::table;
 use crate::defaults::PhysicsParams;
-use crate::estimator::Kinematics;
+use crate::physics::Kinematics;
 use crate::{Point3, Vector3};
 
 use super::contract::{State, Track, Trajectory};

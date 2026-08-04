@@ -8,9 +8,9 @@ use crate::defaults::motion::{
     RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
-use crate::estimator::Impact;
-use crate::estimator::Prediction;
 use crate::robot::Arm;
+use crate::robot::motion::Impact;
+use crate::robot::motion::Prediction;
 use crate::robot::{self, Joints};
 
 use super::impact_candidate::{ImpactCandidate, best_impact_candidate};
@@ -1027,8 +1027,8 @@ mod tests {
 
     use super::*;
     use crate::constants::table;
-    use crate::estimator::Prediction;
     use crate::robot::Arm;
+    use crate::robot::motion::Prediction;
 
     fn sample_three_dof_arm() -> Arm {
         // 피처 브랜치가 실기 관절속도(~2.88 rad/s)로 검증한 마운트

@@ -10,7 +10,7 @@ use crate::constants::{G, ball, table};
 use crate::defaults;
 use crate::defaults::MAGNUS_OMEGA_MAX;
 use crate::defaults::PhysicsParams;
-use crate::estimator::{HitPlane, Prediction};
+use crate::robot::motion::{HitPlane, Prediction};
 
 /// 현재 탄도가 네트 클리어 높이를 통과하는지 (슬랙 포함).
 ///
@@ -207,8 +207,7 @@ pub fn semi_implicit_euler(
     // 테이블 밖으로 몇 미터를 더 날아간다 — Rapier 쪽 콜라이더는 유한한 직육면체라
     // 그쪽과도 어긋난다.
     if next_pos.z <= floor_z && next_vel.z < 0.0 && over_table(next_pos) {
-        let (bounced_v, bounced_w) =
-            crate::estimator::bounce::table_bounce(next_vel, omega, physics);
+        let (bounced_v, bounced_w) = crate::physics::bounce::table_bounce(next_vel, omega, physics);
         return (
             Vector3::new(next_pos.x, next_pos.y, floor_z),
             bounced_v,

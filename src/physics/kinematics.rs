@@ -3,7 +3,7 @@
 use nalgebra::Vector3;
 
 use crate::defaults::PhysicsParams;
-use crate::estimator::{HitPlane, Prediction};
+use crate::robot::motion::{HitPlane, Prediction};
 
 use super::{ballistics, bounce};
 

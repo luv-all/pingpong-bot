@@ -36,7 +36,7 @@ use pingpong_bot::camera::{self, Calibration, Frame, FrameSource, OpenCvCapture,
 use pingpong_bot::constants::ball;
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults::{self, PhysicsParams};
-use pingpong_bot::estimator::Kinematics;
+use pingpong_bot::physics::Kinematics;
 use pingpong_bot::vision::Vision;
 use pingpong_bot::vision::triggers::PlaneCrossing;
 use pingpong_bot::{Point3, Vector3};

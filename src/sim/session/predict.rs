@@ -2,7 +2,7 @@
 //!
 //! 카메라가 없으므로 필터를 거치지 않는다. 진실 상태에 EKF를 씌우면 지연만 는다.
 
-use crate::estimator::{HitPlane, Prediction};
+use crate::robot::motion::{HitPlane, Prediction};
 use crate::sim::physics;
 use crate::sim::physics::world::SimWorld;
 use nalgebra::Vector3;
@@ -24,7 +24,7 @@ pub(crate) fn predict_impact(world: &SimWorld, plane: HitPlane) -> Option<Predic
         velocity: to_f64(world.ball_velocity()),
         omega: to_f64(world.ball_angular_velocity()),
     };
-    let prediction = crate::estimator::Kinematics::predict_to(
+    let prediction = crate::physics::Kinematics::predict_to(
         ball.position,
         ball.velocity,
         ball.omega,
@@ -43,7 +43,7 @@ fn to_f64(v: impl std::ops::Index<usize, Output = f32>) -> Vector3<f64> {
 #[cfg(test)]
 mod tests {
     use crate::constants::table;
-    use crate::estimator::HitPlane;
+    use crate::robot::motion::HitPlane;
 
     use super::*;
 
@@ -72,7 +72,7 @@ mod tests {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        let pred = crate::estimator::Kinematics::predict_to(
+        let pred = crate::physics::Kinematics::predict_to(
             snap.position,
             snap.velocity,
             snap.omega,
@@ -150,7 +150,7 @@ mod tests {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
         let snap = launch_snapshot();
-        let at_launch = crate::estimator::Kinematics::predict_to(
+        let at_launch = crate::physics::Kinematics::predict_to(
             snap.position,
             snap.velocity,
             snap.omega,
@@ -169,7 +169,7 @@ mod tests {
         while t < est.max_lead {
             let prev_vz = vel.z;
             let (np, nv, nw) =
-                crate::estimator::Kinematics::step(pos, vel, omega, est.integrate_dt, &physics);
+                crate::physics::Kinematics::step(pos, vel, omega, est.integrate_dt, &physics);
             pos = np;
             vel = nv;
             omega = nw;
@@ -180,7 +180,7 @@ mod tests {
             }
         }
         assert!(bounced, "ballistics가 테이블 바운스에 도달해야 함");
-        let after_bal = crate::estimator::Kinematics::predict_to(pos, vel, omega, plane, &physics)
+        let after_bal = crate::physics::Kinematics::predict_to(pos, vel, omega, plane, &physics)
             .expect("바운스 후 ballistics 예측");
         let dz_bal =
             (after_bal.impact_position.coords.z - at_launch.impact_position.coords.z).abs();
@@ -234,7 +234,7 @@ mod tests {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
         assert!(
-            crate::estimator::Kinematics::predict_to(
+            crate::physics::Kinematics::predict_to(
                 position,
                 velocity,
                 Vector3::zeros(),

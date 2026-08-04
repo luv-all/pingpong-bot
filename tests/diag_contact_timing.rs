@@ -25,7 +25,7 @@ use nalgebra::Vector3;
 use pingpong_bot::constants::geometry::{RACKET_HALF_X, RACKET_HALF_Y, RACKET_HALF_Z};
 use pingpong_bot::constants::{BALL_RADIUS, table};
 use pingpong_bot::defaults;
-use pingpong_bot::estimator::Impact;
+use pingpong_bot::robot::motion::Impact;
 use pingpong_bot::sim::eval::{
     LaunchParams as EvalLaunchParams, Mode as EvalMode, Protocol, Zone as EvalZone,
 };
@@ -534,7 +534,7 @@ fn diag_predictor_vs_rapier_divergence() {
             // 예측기 한 스텝 (Rapier와 같은 dt).
             let prev_est_vz = vel.z;
             let (np, nv, nw) =
-                pingpong_bot::estimator::semi_implicit_euler(pos, vel, omega, DT, &physics);
+                pingpong_bot::physics::semi_implicit_euler(pos, vel, omega, DT, &physics);
             pos = np;
             vel = nv;
             omega = nw;

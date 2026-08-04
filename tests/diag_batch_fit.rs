@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use pingpong_bot::camera::{self, Calibration, Frame, FrameSource, OpenCvCapture, Triangulate};
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults::{self, PhysicsParams};
-use pingpong_bot::estimator::Kinematics;
+use pingpong_bot::physics::Kinematics;
 use pingpong_bot::vision::triggers::{Any, PlaneCrossing, SigmaThreshold};
 use pingpong_bot::vision::{State, Track, Trigger, Vision};
 use pingpong_bot::{Point3, Vector3};

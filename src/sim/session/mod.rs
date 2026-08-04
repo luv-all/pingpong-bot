@@ -3,12 +3,12 @@
 mod clock_handle;
 mod config;
 pub mod controls;
-pub mod estimator;
+pub mod predict;
 mod session;
 
 pub use config::SimSessionConfig;
 pub use controls::SimRuntimeControls;
-pub(crate) use estimator::predict_impact;
+pub(crate) use predict::predict_impact;
 pub use session::SimSession;
 
 pub(crate) use clock_handle::SimClockHandle;

@@ -14,9 +14,8 @@
 //!
 //! [`SimWorld::try_auto_swing`]: https://github.com/luv-all/pingpong-bot/blob/main/src/sim/physics/world.rs
 
-use crate::defaults::EstimatorParams;
-use crate::estimator::Prediction;
-use crate::robot::motion::Planner;
+use pingpong_bot::defaults::EstimatorParams;
+use pingpong_bot::robot::motion::{Planner, Prediction};
 
 /// 아직 칠 때가 아닌 이유 — HUD·로그용.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,10 +105,10 @@ pub fn decide(
 mod tests {
     use super::*;
 
-    use crate::Point3;
-    use crate::constants::table;
-    use crate::defaults::ControlParams;
     use nalgebra::Vector3;
+    use pingpong_bot::Point3;
+    use pingpong_bot::constants::table;
+    use pingpong_bot::defaults::ControlParams;
 
     /// 미드코트를 넘은 (= 커밋 게이트를 통과하는) 공 y.
     fn past_midcourt_y() -> f64 {
@@ -206,7 +205,7 @@ mod tests {
     /// 수치 하한(0에 수렴하는 tti)만은 여전히 막는다 — quintic이 0으로 나눈다.
     #[test]
     fn rejects_only_a_numerically_degenerate_time_to_go() {
-        let degenerate = crate::defaults::MIN_TIME_TO_GO_SECS * 0.5;
+        let degenerate = pingpong_bot::defaults::MIN_TIME_TO_GO_SECS * 0.5;
         assert!(!Planner::in_commit_window(degenerate));
 
         let decision = decide(

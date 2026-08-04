@@ -13,7 +13,7 @@
 //! | [`physics`] | `PhysicsParams` |
 //! | [`control`] | `ControlParams` |
 //! | [`impact`] | `ImpactParams` |
-//! | [`estimator`] | `EstimatorParams` |
+//! | [`intercept`] | `EstimatorParams` |
 //! | [`robot`] | URDF·primitive (`Result`) |
 //! | [`vision`] | colormask/calib 로드 + [`detector_for`] |
 //! | [`calib`] | Cam* / Charuco / Rig |
@@ -28,9 +28,9 @@
 pub mod calib;
 mod control;
 pub mod dxl_limits;
-mod estimator;
 mod hardware;
 mod impact;
+mod intercept;
 pub mod motion;
 mod physics;
 mod robot;
@@ -54,8 +54,8 @@ pub use dxl_limits::{
     joint_reflected_inertias_4dof_array, joint_torque_limits_4dof, joint_torque_limits_4dof_array,
     reflected_inertia,
 };
-pub use estimator::EstimatorParams;
 pub use impact::ImpactParams;
+pub use intercept::EstimatorParams;
 pub use motion::{
     COARSE_TRACK_JOINT_FRACTION, JACOBIAN_DAMPING, JDOT_STEP, MAGNUS_OMEGA_MAX,
     MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
