@@ -319,6 +319,10 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 실측값을 분리하며 레일 20mm 또는 조준축 3° 초과 시 `WARN`을 남긴다.
 ESC·`q`로 세션을 종료한다.
 
+AXL 시작 로그는 원시 보드 위치와 앱 위치를 함께 기록한다. 기본 `reverse=true`에서는
+앱 범위 `0.0~1.41 m`가 보드 범위 `-1.41~0.0 m`에 대응한다. `1.41 m`는 현재 설정값이며,
+실제 스트로크는 레일 양 끝점에서 원시 보드 위치를 측정한 뒤 확정한다.
+
 카메라 2대(`data/calibration.json`)와 `data/colormask.json`이 있어야 한다.
 `Ekf`·`Calibration`·`Hardware`를 스레드별로 단독 소유하고 crossbeam 채널로만 잇는다.
 추정 워커는 최신 목표를 보내고 제어 워커만 하드웨어를 소유한다.

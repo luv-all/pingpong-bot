@@ -47,12 +47,15 @@ impl AxlRail {
         tracing::debug!(axis = config.axis, "AXL 축 설정·서보 ON 완료");
         let board_position_m = live.read_x_m(config.axis)?;
         let domain_position_m = config.board_to_domain_abs(board_position_m);
+        let board_limits = config.soft_limit_args();
         info!(
             axis = config.axis,
             board_position_m,
             domain_position_m,
-            configured_min_m = config.x_min_m,
-            configured_max_m = config.x_max_m,
+            configured_domain_min_m = config.x_min_m,
+            configured_domain_max_m = config.x_max_m,
+            configured_board_min_m = board_limits.negative_m,
+            configured_board_max_m = board_limits.positive_m,
             reverse = config.reverse,
             pulses_per_meter = config.pulses_per_meter,
             "AXL 시작 좌표 진단"
@@ -109,9 +112,11 @@ impl AxlRail {
         let accel = self.config.accel.min(self.config.decel);
         let vel = velocity_for_distance_duration(distance_m, usable_duration, accel)
             .clamp(self.config.min_vel, self.config.max_vel);
+        let board_target_m = normalize_m(self.config.domain_to_board_abs(domain_m));
         info!(
             current_m,
             target_m = domain_m,
+            board_target_m,
             velocity_m_s = vel,
             duration_secs,
             usable_duration_secs = usable_duration,
@@ -124,8 +129,7 @@ impl AxlRail {
             }
             #[cfg(all(windows, feature = "real"))]
             RailKind::Live(live) => {
-                let board_m = normalize_m(self.config.domain_to_board_abs(domain_m));
-                live.start_move_abs_m(&self.config, board_m, vel)?;
+                live.start_move_abs_m(&self.config, board_target_m, vel)?;
             }
         }
         return Ok(domain_m);
@@ -302,11 +306,11 @@ mod tests {
         let commanded = rail.move_abs_m(0.25).unwrap();
         assert_eq!(commanded, 0.25);
         assert_eq!(rail.read_x_m().unwrap(), 0.25);
-        // board abs = xmin + xmax - domain
-        assert_eq!(rail.read_board_x_m().unwrap(), 0.15);
+        // reverse=true이면 실제 AXL 보드 좌표는 도메인 좌표의 음수다.
+        assert_eq!(rail.read_board_x_m().unwrap(), -0.25);
         let commanded = rail.move_rel_m(0.05).unwrap();
         assert_eq!(commanded, 0.3);
-        assert_eq!(rail.read_board_x_m().unwrap(), 0.1);
+        assert_eq!(rail.read_board_x_m().unwrap(), -0.3);
     }
 
     #[cfg(all(windows, feature = "real"))]

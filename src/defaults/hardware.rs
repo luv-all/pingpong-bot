@@ -5,7 +5,8 @@ use crate::hardware::rail::RailConfig;
 
 use super::motion::RAIL_ACCEL_M_S2;
 
-/// 실측 AXL 레일의 앱 좌표 범위 [m]. 로봇 IK와 실기 드라이버가 반드시 같은 값을 쓴다.
+/// 현재 설정된 AXL 레일의 앱 좌표 범위 [m].
+/// 실제 양 끝점의 보드 좌표를 측정한 뒤 범위를 최종 확정해야 한다.
 pub const RAIL_X_MIN_M: f64 = 0.0;
 pub const RAIL_X_MAX_M: f64 = 1.41;
 /// 실기에서 눈으로 맞춘 레일 중앙 준비 위치 [m].
