@@ -28,6 +28,9 @@ use super::{
 
 /// 예측의 `time_to_impact_secs`는 요청 시각 기준이다. 계획을 시작할 때 이미 이만큼 낡았으면
 /// 그 예측으로 세운 궤적은 임팩트 시점이 어긋난다 — 버리고 다음 요청을 기다린다.
+///
+/// TODO(제어): 버리는 대신 나이만큼 전진시켜 살릴 수 있다 — `trajectory.predicted` 가 5 ms
+/// 간격 전체 궤적이므로 `at_time(t + age)` 한 줄이다.
 const MAX_REQUEST_AGE_SECS: f64 = 0.015;
 
 /// 계획 재시도 스로틀. sim `SWING_RETRY_THROTTLE_SECS`와 같은 값이다.

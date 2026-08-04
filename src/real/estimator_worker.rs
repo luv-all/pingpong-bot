@@ -69,6 +69,9 @@ pub fn spawn(
         let mut ekf = Fit::new(&calibration, triggers::primary());
         // 프레임 시각은 벽시계지만 필터는 경과만 안다. 첫 프레임이 t=0 이다.
         let mut origin: Option<Instant> = None;
+        // TODO(제어): `decide` 는 "칠 만한가" 정책이라 제어 쪽 판단이다. 여기 있는 이유는
+        // 그 결과로 요청을 보낼지 말지를 정하기 때문뿐이다. 제어가 가져가면 이 워커는
+        // 접수 평면을 몰라도 되고 `InterceptWindow` 도 여기서 사라진다.
         let planes = intercept.hit_planes();
         let mut accepting = false;
         let mut shot_seq: u64 = 0;
@@ -123,8 +126,7 @@ pub fn spawn(
                 });
             }
 
-            // 게이트가 판단하려면 잘라 봐야 한다. 제어에 넘길 때 다시 자르는 건
-            // 같은 함수라 결과가 갈릴 수 없다.
+            // 게이트가 쓸 만큼만 자른다. 제어가 쓰는 것과 같은 함수다.
             let predictions = trajectory
                 .as_ref()
                 .map(|t| predictions_at(t, &planes))
@@ -157,8 +159,6 @@ pub fn spawn(
             }
 
             let shown = display_candidate(&predictions);
-            // 제어에 넘기는 건 **계약 그 자체**다. 접수 평면마다 자르는 건 제어 쪽이 한다 —
-            // 도달 범위는 로봇 것이라 비전이 알 이유가 없다.
             match (decision, trajectory) {
                 (Decision::Attempt, Some(trajectory)) if accepting => {
                     let request = CommitRequest {
