@@ -40,7 +40,19 @@ pub fn run(args: &Args) -> Result<()> {
     let robot = robot().context("defaults::robot")?;
     let arm = Arc::clone(&robot.arm);
 
-    let hardware = open_hardware(&options)?;
+    let mut hardware = open_hardware(&options)?;
+    // 카메라·추정·제어 스레드를 시작하기 전에 실기 자세부터 확정한다. 초기화 중에
+    // 공을 잘못 추적하거나, 정렬 전 포즈를 sim에 보내는 일을 막는다.
+    if options.home {
+        info!("시작 자세 초기화 — 레일·관절을 준비 자세로 이동");
+        let pose = control_worker::initialize_pose(&mut hardware, &arm)
+            .map_err(|error| anyhow::anyhow!("시작 자세 초기화 실패: {error}"))?;
+        info!(
+            rail_x = f2(pose.rail_x),
+            joints = %f2_slice(&pose.joints.values),
+            "시작 자세 초기화 완료"
+        );
+    }
     let calibration = load_calibration()?;
     let sources = open_cameras(&options)?;
     ensure!(
@@ -106,7 +118,6 @@ pub fn run(args: &Args) -> Result<()> {
     let control_handle = control_worker::spawn(
         Box::new(hardware),
         Arc::clone(&arm),
-        options.home,
         commit_rx,
         sim_tx,
         event_tx,

@@ -1,6 +1,6 @@
 //! 실물 2단계 단순 제어 워커.
 //!
-//! 시작할 때만 기존 센터 궤적으로 레일과 4축 Dynamixel을 기본 자세에 둔다.
+//! `run`이 워커 시작 전에 레일과 4축 Dynamixel을 기본 자세에 둔다.
 //! 이후 공 하나당 1차·2차 예측을 각각 한 번만 소비한다. 각 예측 위치의 x로
 //! 레일로 라켓 헤드 x를 공 x에 맞추고, 수평 조준축을 상대편 끝선 중앙으로 돌린다.
 //! IK·스윙 계획·팔로스루는 실행하지 않고, 공의 목표 도착 시각 후 중앙으로 복귀한다.
@@ -81,7 +81,6 @@ enum VerificationResult {
 pub fn spawn(
     mut hardware: Box<dyn Hardware>,
     arm: Arc<Arm>,
-    home: bool,
     rx: Receiver<CommitRequest>,
     sim_tx: Option<Sender<SimUpdate>>,
     event_tx: Sender<RuntimeEvent>,
@@ -89,17 +88,6 @@ pub fn spawn(
 ) -> JoinHandle<()> {
     return thread::spawn(move || {
         let _span = info_span!("control").entered();
-
-        if home && let Err(error) = move_to_center(hardware.as_mut(), &arm) {
-            let reason = format!("초기 중앙 준비 자세 이동 실패: {error}");
-            warn!(%error, "초기 센터 이동 실패 — 제어를 시작하지 않는다");
-            let _ = event_tx.send(RuntimeEvent::Failed {
-                track_seq: None,
-                reason,
-            });
-            let _ = event_tx.send(RuntimeEvent::Done);
-            return;
-        }
 
         let pose = match hardware.read_pose() {
             Ok(pose) => pose,
@@ -450,7 +438,16 @@ fn log_verification(
     }
 }
 
-/// 시작 시와 공 제어 후에 기존 전체축 센터 이동을 사용한다.
+/// 런타임의 다른 스레드를 띄우기 전에 레일·전체 관절을 준비 자세로 초기화한다.
+pub(super) fn initialize_pose(
+    hardware: &mut dyn Hardware,
+    arm: &Arm,
+) -> Result<pingpong_bot::robot::Pose, MoveError> {
+    move_to_center(hardware, arm)?;
+    return hardware.read_pose().map_err(MoveError::Hardware);
+}
+
+/// 시작 자세 초기화와 공 제어 후 복귀에 같은 전체축 이동을 사용한다.
 fn move_to_center(hardware: &mut dyn Hardware, arm: &Arm) -> Result<(), MoveError> {
     let start = hardware.read_pose().map_err(MoveError::Hardware)?;
     let trajectory = Planner::return_to_center(arm, &start).map_err(MoveError::Plan)?;
@@ -462,7 +459,7 @@ fn move_to_center(hardware: &mut dyn Hardware, arm: &Arm) -> Result<(), MoveErro
 }
 
 #[derive(Debug)]
-enum MoveError {
+pub(super) enum MoveError {
     Hardware(HwError),
     Plan(DomainError),
 }
@@ -500,6 +497,41 @@ mod tests {
             self.reads += 1;
             return Ok(self.pose.clone());
         }
+    }
+
+    struct PoseApplyingHardware {
+        pose: Pose,
+    }
+
+    impl Hardware for PoseApplyingHardware {
+        fn command(
+            &mut self,
+            trajectory: &pingpong_bot::robot::motion::Trajectory,
+        ) -> Result<(), HwError> {
+            self.pose = Pose::new(
+                trajectory.follow_through_rail_x,
+                trajectory.end_joints().clone(),
+            );
+            return Ok(());
+        }
+
+        fn read_pose(&mut self) -> Result<Pose, HwError> {
+            return Ok(self.pose.clone());
+        }
+    }
+
+    #[test]
+    fn startup_initialization_sets_ready_rail_and_all_joints() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail");
+        let mut hardware = PoseApplyingHardware {
+            pose: Pose::new(rail.x_min, Joints::from_slice(&[0.0; 4])),
+        };
+
+        let initialized = initialize_pose(&mut hardware, &robot.arm).expect("initialize");
+
+        assert!((initialized.rail_x - rail.default_x()).abs() < 1e-12);
+        assert_eq!(initialized.joints, robot.arm.default_joints);
     }
 
     #[test]
