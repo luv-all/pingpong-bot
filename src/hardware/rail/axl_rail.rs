@@ -45,6 +45,18 @@ impl AxlRail {
         let mut live = super::axl_live::AxlLive::new(ffi);
         live.configure(&config)?;
         tracing::debug!(axis = config.axis, "AXL 축 설정·서보 ON 완료");
+        let board_position_m = live.read_x_m(config.axis)?;
+        let domain_position_m = config.board_to_domain_abs(board_position_m);
+        info!(
+            axis = config.axis,
+            board_position_m,
+            domain_position_m,
+            configured_min_m = config.x_min_m,
+            configured_max_m = config.x_max_m,
+            reverse = config.reverse,
+            pulses_per_meter = config.pulses_per_meter,
+            "AXL 시작 좌표 진단"
+        );
 
         return Ok(Self {
             config,

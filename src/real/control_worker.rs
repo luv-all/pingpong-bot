@@ -443,8 +443,43 @@ pub(super) fn initialize_pose(
     hardware: &mut dyn Hardware,
     arm: &Arm,
 ) -> Result<pingpong_bot::robot::Pose, MoveError> {
-    move_to_center(hardware, arm)?;
-    return hardware.read_pose().map_err(MoveError::Hardware);
+    let measured = hardware.read_pose().map_err(MoveError::Hardware)?;
+    if let Some(rail) = arm.rail {
+        info!(
+            rail_measured_m = f4(measured.rail_x),
+            rail_target_m = f4(rail.default_x()),
+            rail_commanded_minus_measured_m = f4(rail.default_x() - measured.rail_x),
+            configured_min_m = f4(rail.x_min),
+            configured_max_m = f4(rail.x_max),
+            joints_measured = %format!("{:?}", measured.joints.values),
+            "시작 자세 초기화 전 실측"
+        );
+    }
+    let trajectory = Planner::return_to_center(arm, &measured).map_err(MoveError::Plan)?;
+    hardware.command(&trajectory).map_err(MoveError::Hardware)?;
+    while hardware.is_busy() {
+        thread::sleep(BUSY_POLL);
+    }
+    let after = hardware.read_pose().map_err(MoveError::Hardware)?;
+    if let Some(rail) = arm.rail {
+        let joint_errors: Vec<f64> = arm
+            .default_joints
+            .values
+            .iter()
+            .zip(&after.joints.values)
+            .map(|(commanded, measured)| commanded - measured)
+            .collect();
+        info!(
+            rail_commanded_m = f4(rail.default_x()),
+            rail_measured_m = f4(after.rail_x),
+            rail_commanded_minus_measured_m = f4(rail.default_x() - after.rail_x),
+            joints_commanded = %format!("{:?}", arm.default_joints.values),
+            joints_measured = %format!("{:?}", after.joints.values),
+            joints_commanded_minus_measured = %format!("{joint_errors:?}"),
+            "시작 자세 초기화 후 실측"
+        );
+    }
+    return Ok(after);
 }
 
 /// 시작 자세 초기화와 공 제어 후 복귀에 같은 전체축 이동을 사용한다.
