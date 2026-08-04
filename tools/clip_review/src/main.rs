@@ -48,8 +48,8 @@ use track::{FrameState, Reviewed};
 
 /// 수렴 오차를 보여줄 리드타임 [s].
 
-const WINDOW_CAM0: &str = "clip-review cam0";
-const WINDOW_CAM1: &str = "clip-review cam1";
+/// 카메라 창 하나. 둘로 띄우면 어느 쪽이 포커스인지에 따라 키가 안 먹는다.
+const WINDOW: &str = "clip-review";
 
 #[derive(Parser, Debug)]
 #[command(about = "클립 리뷰 — 실제 궤적 vs 예측 궤적 (카메라 2창 + sim 창)")]
@@ -279,6 +279,7 @@ fn run(args: &Args) -> Result<()> {
             println!("{}", console_line(&reviewed, state, index));
         }
 
+        let mut panels = Vec::with_capacity(2);
         for (slot, frame) in [(0usize, &left), (1usize, &right)] {
             let hud = overlay_hud(&reviewed, &score, state, index, slot, speed, paused, fast);
             let panel = overlay::draw(
@@ -294,16 +295,16 @@ fn run(args: &Args) -> Result<()> {
                 &format!("cam{slot}"),
                 &hud,
             )?;
-            let shown = Preview::fit_bgr_downscale(
-                &panel,
-                (f64::from(panel.cols()) * args.scale).round() as i32,
-                (f64::from(panel.rows()) * args.scale).round() as i32,
-            )?;
-            highgui::imshow(
-                if slot == 0 { WINDOW_CAM0 } else { WINDOW_CAM1 },
-                &shown.image,
-            )?;
+            panels.push(panel);
         }
+        // 좌우로 붙여 한 창에 띄운다.
+        let mosaic = Preview::hstack_bgr(&panels)?;
+        let shown = Preview::fit_bgr_downscale(
+            &mosaic,
+            (f64::from(mosaic.cols()) * args.scale).round() as i32,
+            (f64::from(mosaic.rows()) * args.scale).round() as i32,
+        )?;
+        highgui::imshow(WINDOW, &shown.image)?;
 
         if let Some((_, stdin)) = &mut sim {
             let message = SceneMsg {
@@ -342,9 +343,7 @@ fn run(args: &Args) -> Result<()> {
         }
     }
 
-    for window in [WINDOW_CAM0, WINDOW_CAM1] {
-        Preview::destroy_window(window);
-    }
+    Preview::destroy_window(WINDOW);
     if let Some((mut child, stdin)) = sim {
         drop(stdin);
         let _ = child.wait();
@@ -379,10 +378,13 @@ enum Step {
 
 impl Step {
     fn of(key: i32, paused: &mut bool) -> Self {
-        if key == 27 || key == i32::from(b'q') || key == i32::from(b'Q') {
+        // `wait_key_ex` 는 수정자·플랫폼 비트를 위쪽에 얹어 준다. 화살표는 그 비트를 봐야
+        // 하지만 글자 키는 하위 8비트만 보면 된다 — 안 그러면 `q` 가 안 먹는 순간이 있다.
+        let ascii = key & 0xFF;
+        if ascii == 27 || ascii == i32::from(b'q') || ascii == i32::from(b'Q') {
             return Self::Quit;
         }
-        if key == i32::from(b' ') {
+        if ascii == i32::from(b' ') {
             *paused = !*paused;
             return Self::Stay;
         }
@@ -392,7 +394,7 @@ impl Step {
             *paused = true;
             return Self::Delta(i64::from(dx));
         }
-        let delta = match key {
+        let delta = match ascii {
             k if k == i32::from(b'.') => 1,
             k if k == i32::from(b',') => -1,
             k if k == i32::from(b']') => 10,
@@ -577,5 +579,47 @@ fn print_commit_summary(reviewed: &Reviewed) {
             t.x, t.z
         ),
         (None, None) => println!("  at y={plane:.2}  둘 다 평면을 안 지난다"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `wait_key_ex` 는 수정자·플랫폼 비트를 위쪽에 얹는다. 그걸 안 벗기면 `q` 가 안 먹는다.
+    #[test]
+    fn quit_survives_the_modifier_bits() {
+        let mut paused = false;
+        for key in [
+            i32::from(b'q'),
+            i32::from(b'Q'),
+            27,
+            // macOS 가 얹는 상위 비트가 붙어도 같아야 한다.
+            0x10_0000 | i32::from(b'q'),
+            0xF000 | 27,
+        ] {
+            assert!(
+                matches!(Step::of(key, &mut paused), Step::Quit),
+                "key={key:#x}"
+            );
+        }
+    }
+
+    /// 화살표는 상위 비트가 곧 정보다 — 하위 8비트만 보면 못 알아본다.
+    #[test]
+    fn arrows_still_step_frames() {
+        let mut paused = false;
+        assert!(matches!(Step::of(0x25 << 16, &mut paused), Step::Delta(-1)));
+        assert!(paused, "프레임 이동은 일시정지로 들어간다");
+        assert!(matches!(Step::of(0x27 << 16, &mut paused), Step::Delta(1)));
+    }
+
+    #[test]
+    fn space_toggles_pause() {
+        let mut paused = false;
+        assert!(matches!(Step::of(i32::from(b' '), &mut paused), Step::Stay));
+        assert!(paused);
+        assert!(matches!(Step::of(i32::from(b' '), &mut paused), Step::Stay));
+        assert!(!paused);
     }
 }
