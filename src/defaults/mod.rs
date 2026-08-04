@@ -118,7 +118,7 @@ mod tests {
         let model_rail = robot.arm.rail.expect("기본 로봇 리니어 레일");
         assert_eq!(model_rail.x_min, rail_config.x_min_m);
         assert_eq!(model_rail.x_max, rail_config.x_max_m);
-        assert!((model_rail.default_x() - 0.760).abs() < 1e-12);
+        assert!((model_rail.default_x() - 0.710).abs() < 1e-12);
         let c = ControlParams::default();
         assert!((c.max_joint_torques[0] - 12.0).abs() < 1e-12);
         assert!((c.max_joint_torques[1] - 6.0).abs() < 1e-12);

@@ -209,14 +209,14 @@ mod tests {
             ..RailConfig::default()
         };
         assert!((cfg.board_to_domain_abs(-0.647304) - 1.352304).abs() < 1e-12);
-        assert!((cfg.domain_to_board_abs(0.760) - -0.055).abs() < 1e-12);
+        assert!((cfg.domain_to_board_abs(0.710) - -0.005).abs() < 1e-12);
     }
 
     #[test]
     fn command_position_compensates_axl_actual_command_origin_gap() {
         let command_target =
-            RailConfig::command_position_for_actual_target(-0.055, -0.5742, -0.055);
-        assert!((command_target - 0.4642).abs() < 1e-12);
+            RailConfig::command_position_for_actual_target(-0.005, -0.5742, -0.055);
+        assert!((command_target - 0.5142).abs() < 1e-12);
     }
 
     #[test]

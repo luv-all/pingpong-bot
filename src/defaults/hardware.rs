@@ -10,7 +10,7 @@ use super::motion::RAIL_ACCEL_M_S2;
 pub const RAIL_X_MIN_M: f64 = 0.0;
 pub const RAIL_X_MAX_M: f64 = 1.41;
 /// 실기에서 눈으로 맞춘 레일 중앙 준비 위치 [m].
-pub const RAIL_READY_X_M: f64 = 0.76;
+pub const RAIL_READY_X_M: f64 = 0.71;
 
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.
