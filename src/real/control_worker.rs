@@ -116,7 +116,9 @@ pub fn spawn(
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
         let mut pending_verification: Option<PendingVerification> = None;
+        let mut strike_due_at: Option<(u64, Instant)> = None;
         let mut return_due_at: Option<Instant> = None;
+        let mut struck_track_seq: Option<u64> = None;
         let mut consecutive_misses: u8 = 0;
 
         while !shutdown.is_down() {
@@ -141,8 +143,54 @@ pub fn spawn(
                 }
                 VerificationResult::Pending => {}
             }
+            if let Some((track_seq, due_at)) = strike_due_at
+                && Instant::now() >= due_at
+            {
+                strike_due_at = None;
+                let start = match hardware.read_pose() {
+                    Ok(pose) => pose,
+                    Err(error) => {
+                        let _ = event_tx.send(RuntimeEvent::Failed {
+                            track_seq: Some(track_seq),
+                            reason: format!("고정 임팩트 직전 포즈 읽기 실패: {error}"),
+                        });
+                        break;
+                    }
+                };
+                if let Some(previous) = pending_verification.take() {
+                    log_verification(&previous, &start, "impact_started", false);
+                }
+                let trajectory = match Planner::fixed_impact_push(&arm, &start) {
+                    Ok(trajectory) => trajectory,
+                    Err(error) => {
+                        let _ = event_tx.send(RuntimeEvent::Failed {
+                            track_seq: Some(track_seq),
+                            reason: format!("고정 임팩트 계획 실패: {error}"),
+                        });
+                        break;
+                    }
+                };
+                if let Err(error) = hardware.command(&trajectory) {
+                    let _ = event_tx.send(RuntimeEvent::Failed {
+                        track_seq: Some(track_seq),
+                        reason: format!("고정 임팩트 실행 실패: {error}"),
+                    });
+                    break;
+                }
+                struck_track_seq = Some(track_seq);
+                return_due_at =
+                    Some(Instant::now() + Duration::from_secs_f64(trajectory.duration_secs));
+                info!(
+                    track_seq,
+                    impact_time_secs = f4(trajectory.impact_time_secs),
+                    total_duration_secs = f4(trajectory.duration_secs),
+                    impact_joint_velocity = %format!("{:?}", trajectory.end_velocity),
+                    "고정 임팩트 푸시 시작"
+                );
+            }
             if pending_verification.is_none()
                 && return_due_at.is_some_and(|due_at| Instant::now() >= due_at)
+                && !hardware.is_busy()
             {
                 return_due_at = None;
                 if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
@@ -179,6 +227,14 @@ pub fn spawn(
             if pending_verification.is_none()
                 && let Some(due_at) = return_due_at
             {
+                let return_wait = if due_at <= now && hardware.is_busy() {
+                    BUSY_POLL
+                } else {
+                    due_at.saturating_duration_since(now)
+                };
+                timeout = timeout.min(return_wait);
+            }
+            if let Some((_, due_at)) = strike_due_at {
                 timeout = timeout.min(due_at.saturating_duration_since(now));
             }
             let request = match rx.recv_timeout(timeout) {
@@ -187,6 +243,7 @@ pub fn spawn(
                 Err(RecvTimeoutError::Timeout) => continue,
             };
             if !latch.should_send(request.track_seq, request.stage)
+                || struck_track_seq == Some(request.track_seq)
                 || request.age_secs() > MAX_REQUEST_AGE_SECS
                 || last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
             {
@@ -243,12 +300,13 @@ pub fn spawn(
 
             let issued_at = Instant::now();
             let remaining_until_target_secs = (command.target.time_secs - elapsed).max(0.0);
-            return_due_at = Some(
-                issued_at
-                    + Duration::from_secs_f64(
-                        remaining_until_target_secs.max(command.duration_secs),
-                    ),
-            );
+            let strike_delay_secs =
+                fixed_impact_start_delay(remaining_until_target_secs, command.duration_secs);
+            strike_due_at = Some((
+                request.track_seq,
+                issued_at + Duration::from_secs_f64(strike_delay_secs),
+            ));
+            return_due_at = None;
             pending_verification = Some(PendingVerification {
                 track_seq: request.track_seq,
                 command,
@@ -279,6 +337,12 @@ pub fn spawn(
 
         let _ = event_tx.send(RuntimeEvent::Done);
     });
+}
+
+fn fixed_impact_start_delay(remaining_secs: f64, positioning_duration_secs: f64) -> f64 {
+    return (remaining_secs - pingpong_bot::defaults::motion::FIXED_IMPACT_LEAD_SECS)
+        .max(positioning_duration_secs)
+        .max(0.0);
 }
 
 fn verify_due_command(
@@ -588,6 +652,12 @@ mod tests {
         assert!(latch.should_send(1, PredictionStage::Provisional));
         latch.mark_sent(PredictionStage::Provisional);
         assert!(latch.should_send(2, PredictionStage::Provisional));
+    }
+
+    #[test]
+    fn fixed_impact_starts_one_lead_time_before_ball_arrival() {
+        let delay = fixed_impact_start_delay(0.50, 0.30);
+        assert!((delay - 0.38).abs() < 1e-12);
     }
 
     #[test]

@@ -115,7 +115,9 @@ pub struct SimWorld {
     /// 이번 비행이 발사된 `sim_time` — `park_if_out_of_play`의 최대 비행
     /// 시간 안전장치(`MAX_BALL_FLIGHT_SECS`)가 기준으로 삼는다.
     flight_started_at: f64,
-    /// 직접 제어 목표 시각 후 중앙 복귀를 시작할 sim 시각.
+    /// 직접 제어 목표 시각 직전에 고정 임팩트 푸시를 시작할 sim 시각.
+    direct_strike_at: Option<f64>,
+    /// 고정 임팩트 푸시 완료 후 중앙 복귀를 시작할 sim 시각.
     direct_return_at: Option<f64>,
     /// 뷰어·Status용 디버그 스냅샷 (실패 사유·궤적·한계).
     debug_snap: SimDebugSnapshot,
@@ -420,6 +422,7 @@ impl SimWorld {
             hard_fail_streak: 0,
             last_swing_attempt_at: f64::NEG_INFINITY,
             flight_started_at: 0.0,
+            direct_strike_at: None,
             direct_return_at: None,
             debug_snap: SimDebugSnapshot::default(),
             diag_marker_secs: 0.0,
@@ -588,6 +591,7 @@ impl SimWorld {
         self.robot.step_commands(&self.arm, dt);
         let t_swing = std::time::Instant::now();
         self.try_auto_swing(dt);
+        self.try_direct_fixed_impact();
         self.try_direct_return_to_center();
         self.diag_auto_swing_secs = t_swing.elapsed().as_secs_f64();
         self.drive_arm_motors();
@@ -908,7 +912,13 @@ impl SimWorld {
         self.robot
             .set_rail_target_in_secs(&self.arm, command.rail_x, command.duration_secs);
         self.robot.set_targets(targets);
-        self.direct_return_at = Some(self.sim_time + command.target.time_secs.max(0.0));
+        self.direct_strike_at = Some(
+            self.sim_time
+                + (command.target.time_secs - crate::defaults::motion::FIXED_IMPACT_LEAD_SECS)
+                    .max(command.duration_secs)
+                    .max(0.0),
+        );
+        self.direct_return_at = None;
         info!(
             shot = self.shot_seq,
             stage = ?command.stage,
@@ -924,8 +934,37 @@ impl SimWorld {
         self.position_refined = refined;
     }
 
-    /// 공의 선택 목표 시각이 지나면 기존 센터 복귀 궤적을 시작한다.
-    /// 정밀 예측 명령이 나오면 `direct_return_at`을 최신 목표 시각으로 갱신한다.
+    /// 공 도착 직전에 짧은 고정 임팩트 푸시를 시작한다.
+    fn try_direct_fixed_impact(&mut self) {
+        let Some(strike_at) = self.direct_strike_at else {
+            return;
+        };
+        if self.sim_time < strike_at || self.robot.is_swinging() {
+            return;
+        }
+        let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
+        match motion::Planner::fixed_impact_push(&self.arm, &start) {
+            Ok(trajectory) => {
+                self.direct_strike_at = None;
+                self.direct_return_at = Some(self.sim_time + trajectory.duration_secs);
+                self.robot.replace_swing(trajectory.clone());
+                info!(
+                    shot = self.shot_seq,
+                    impact_time_secs = trajectory.impact_time_secs,
+                    duration_secs = trajectory.duration_secs,
+                    impact_joint_velocity = ?trajectory.end_velocity,
+                    "shot: 고정 임팩트 푸시 시작"
+                );
+            }
+            Err(error) => {
+                self.direct_strike_at = None;
+                self.direct_return_at = Some(self.sim_time);
+                warn!(shot = self.shot_seq, %error, "shot: 고정 임팩트 푸시 계획 실패");
+            }
+        }
+    }
+
+    /// 고정 임팩트 푸시가 끝나면 기존 센터 복귀 궤적을 시작한다.
     fn try_direct_return_to_center(&mut self) {
         let Some(return_at) = self.direct_return_at else {
             return;
@@ -1120,6 +1159,7 @@ impl SimWorld {
         self.last_swing_attempt_at = f64::NEG_INFINITY;
         self.flight_started_at = self.sim_time;
         self.direct_return_at = None;
+        self.direct_strike_at = None;
         self.debug_snap.reset_for_new_flight();
         self.try_auto_swing(f64::from(self.integration_parameters.dt));
     }
@@ -1985,6 +2025,29 @@ mod tests {
         assert!(
             max_displacement > 0.02,
             "라켓 헤드 x를 공 x에 맞추려 레일이 이동해야 함 (distance={max_displacement})"
+        );
+    }
+
+    #[test]
+    fn direct_control_runs_fixed_impact_before_return() {
+        let mut world = SimWorld::new(test_robot());
+        world.set_use_ground_truth(true);
+        world.shoot_ball(&launch::Settings::default());
+
+        let mut impact_started = false;
+        for _ in 0..2_000 {
+            world.step(1.0 / 1000.0, None);
+            if world.direct_strike_at.is_none()
+                && world.direct_return_at.is_some()
+                && world.robot().is_swinging()
+            {
+                impact_started = true;
+                break;
+            }
+        }
+        assert!(
+            impact_started,
+            "중앙 복귀 전에 고정 임팩트 푸시가 실행돼야 함"
         );
     }
 

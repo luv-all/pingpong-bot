@@ -85,6 +85,11 @@ impl Planner {
         return physics::plan_return_to_center(arm, start);
     }
 
+    /// 발사기 반복 시험용 짧은 고정 임팩트 푸시.
+    pub fn fixed_impact_push(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
+        return physics::plan_fixed_impact_push(arm, start);
+    }
+
     /// 정지 → 정지로 임의 포즈까지 잇는 최단 실행가능 궤적 (coarse 선추종용).
     pub fn move_to(
         arm: &Arm,

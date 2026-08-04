@@ -2,9 +2,11 @@
 
 use nalgebra::Vector3;
 
+use crate::Point3;
 use crate::constants::table;
 use crate::defaults;
 use crate::defaults::motion::{
+    FIXED_IMPACT_LEAD_SECS, FIXED_IMPACT_PUSH_DISTANCE_M, FIXED_IMPACT_PUSH_SPEED_M_S,
     RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
@@ -505,6 +507,62 @@ pub fn plan_return_to_center(arm: &Arm, start: &robot::Pose) -> Result<Trajector
         .map(|rail| rail.default_x())
         .unwrap_or(start.rail_x);
     return plan_move_to(arm, start, center_joints, center_rail_x);
+}
+
+/// 발사기 반복 시험용 고정 임팩트 푸시.
+///
+/// 이미 레일과 라켓 방향이 맞은 자세에서 라켓 면 법선 방향으로 짧게 전진하고,
+/// 임팩트 knot에 0이 아닌 관절 속도를 남겨 공을 실제로 밀어낸다. 레일은 타격 중
+/// 고정하며, 짧은 팔로스루 뒤 호출자가 기존 중앙 복귀 궤적을 이어 붙인다.
+pub fn plan_fixed_impact_push(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
+    let racket = arm
+        .forward_kinematics_with_rail(start.rail_x, &start.joints)
+        .ok_or_else(|| {
+            DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: start.rail_x,
+                target_y: 0.0,
+                target_z: table::SURFACE_Z,
+            })
+        })?;
+    let target =
+        Point3::from(racket.position.coords + racket.normal * FIXED_IMPACT_PUSH_DISTANCE_M);
+    let impact_joints = match arm.rail {
+        Some(rail) => {
+            arm.inverse_kinematics_with_rail(&rail, start.rail_x, target, Some(&start.joints))
+        }
+        None => arm.inverse_kinematics_near(target, Some(&start.joints)),
+    }
+    .map_err(DomainError::InfeasibleSwing)?;
+    let impact_pose = robot::Pose::new(start.rail_x, impact_joints.clone());
+    let (_, mut impact_velocity) = arm
+        .linear_velocities_for_racket_velocity(
+            &impact_pose,
+            racket.normal * FIXED_IMPACT_PUSH_SPEED_M_S,
+        )
+        .map_err(DomainError::InfeasibleSwing)?;
+
+    let peak = impact_velocity
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max);
+    let velocity_limit = arm.max_joint_speed * 0.8;
+    if peak > velocity_limit && velocity_limit > 0.0 {
+        let scale = velocity_limit / peak;
+        for velocity in &mut impact_velocity {
+            *velocity *= scale;
+        }
+    }
+
+    return build_feasible_trajectory(
+        arm,
+        &start.joints,
+        impact_joints,
+        vec![0.0; start.joints.values.len()],
+        impact_velocity,
+        FIXED_IMPACT_LEAD_SECS,
+        Rail::fixed(start.rail_x),
+    )
+    .map_err(DomainError::InfeasibleSwing);
 }
 
 /// 정지 → 정지로 임의의 포즈까지 잇는 최단 실행가능 궤적.
@@ -1036,6 +1094,44 @@ mod tests {
     /// 대표 임팩트 높이 [m] — 탁구대 면 위. 1차 조사가 찾아낸 "실현 가능
     /// 대역"(10~30cm)의 한가운데.
     const SAMPLE_IMPACT_HEIGHT_M: f64 = 0.18;
+
+    #[test]
+    fn fixed_impact_push_is_short_and_has_nonzero_impact_speed() {
+        let arm = sample_three_dof_arm();
+        let start = sample_start(&arm);
+        let before = arm
+            .forward_kinematics_with_rail(start.rail_x, &start.joints)
+            .expect("start FK");
+        let trajectory = plan_fixed_impact_push(&arm, &start).expect("fixed impact push");
+        let impact = arm
+            .forward_kinematics_with_rail(trajectory.rail.end, &trajectory.end)
+            .expect("impact FK");
+        let impact_velocity = racket_velocity_fd(
+            &arm,
+            trajectory.rail.end,
+            trajectory.rail.end_velocity,
+            &trajectory.end,
+            &trajectory.end_velocity,
+        )
+        .expect("impact velocity");
+        let forward_speed = impact_velocity.dot(&impact.normal);
+
+        assert!(trajectory.duration_secs <= 0.20);
+        assert!(
+            trajectory
+                .end_velocity
+                .iter()
+                .any(|speed| speed.abs() > 1e-3)
+        );
+        assert!(
+            forward_speed > 0.10,
+            "라켓이 공을 밀 만큼의 전진 속도를 가져야 함: {forward_speed:.3}m/s"
+        );
+        assert!(
+            (impact.position - before.position).dot(&before.normal) > 0.01,
+            "라켓이 면 법선 방향으로 실제 전진해야 함"
+        );
+    }
 
     /// 이 팔이 실제로 마주치는 대표 임팩트 예측.
     ///
