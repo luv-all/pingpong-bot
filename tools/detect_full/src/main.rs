@@ -20,7 +20,7 @@ use pingpong_bot::vision::detect::{self, Detector, Layer};
 
 use cli::Args;
 
-/// 그리드 최대 열 수.
+/// 그리드 최대 열 수. 이보다 넓게 늘어놓으면 패널이 작아 못 본다.
 const MAX_COLS: usize = 3;
 
 const WHITE: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
@@ -48,12 +48,21 @@ fn detector_for(params: &camera::Params) -> Result<Detector> {
     ));
 }
 
-/// 패널을 그리드로 쌓는다. 가로로만 붙이면 패널마다 폭이 1/N 이라 못 본다.
+/// 패널 개수에 맞는 열 수 — 최대한 정사각에 가깝게, [`MAX_COLS`] 이하로.
 ///
-/// 레이어 개수는 조립에 따라 변하므로 열 수를 [`MAX_COLS`]로 묶고 줄을 늘린다.
-/// 마지막 줄이 모자라면 검은 패널로 채운다 — 크기가 다르면 `vconcat` 이 거부한다.
-fn grid_bgr(panels: &[Mat], max_cols: usize) -> Result<Mat> {
-    let cols = max_cols.max(1).min(panels.len().max(1));
+/// 가로로만 붙이면 패널마다 폭이 1/N 이라 못 본다. 그렇다고 항상 최대 열을 쓰면 4장일 때
+/// 3+1 로 어긋난다. `ceil(sqrt(n))` 이면 4장은 2x2, 5~6장은 3x2, 9장은 3x3 이 된다.
+fn columns_for(count: usize) -> usize {
+    let square = (count as f64).sqrt().ceil() as usize;
+    return square.clamp(1, MAX_COLS).min(count.max(1));
+}
+
+/// 패널을 그리드로 쌓는다.
+///
+/// 레이어 개수는 조립에 따라 변하므로 열 수를 세어서 정하고 줄을 늘린다. 마지막 줄이
+/// 모자라면 검은 패널로 채운다 — 크기가 다르면 `vconcat` 이 거부한다.
+fn grid_bgr(panels: &[Mat]) -> Result<Mat> {
+    let cols = columns_for(panels.len());
     let first = panels.first().context("패널이 하나는 있어야 한다")?;
     let blank =
         Mat::new_rows_cols_with_default(first.rows(), first.cols(), first.typ(), Scalar::all(0.0))?;
@@ -147,7 +156,7 @@ fn main() -> Result<()> {
             let color = if index == 0 { WHITE } else { LABEL_ON_MASK };
             Preview::draw_cam_label(panel, label, color)?;
         }
-        let mosaic = grid_bgr(&panels, MAX_COLS)?;
+        let mosaic = grid_bgr(&panels)?;
         let shown = Preview::fit_bgr_downscale(
             &mosaic,
             (f64::from(mosaic.cols()) * args.scale).round() as i32,
@@ -197,19 +206,35 @@ mod tests {
             .expect("panel");
     }
 
-    /// 레이어가 몇 개든 열은 3 을 안 넘고 줄이 늘어난다.
+    /// 레이어가 몇 개든 열은 상한을 안 넘고 최대한 정사각이다.
     #[test]
-    fn grid_wraps_at_the_column_cap() {
-        let (w, h) = (40, 30);
-        for count in 1..=8usize {
-            let panels: Vec<Mat> = (0..count).map(|_| panel(w, h)).collect();
-            let grid = grid_bgr(&panels, MAX_COLS).expect("grid");
+    fn the_grid_stays_square_under_the_column_cap() {
+        // (패널 수, 기대 열 수) — 4장이 2x2 가 되는 게 이 규칙의 요점이다.
+        for (count, want) in [
+            (1, 1),
+            (2, 2),
+            (3, 2),
+            (4, 2),
+            (5, 3),
+            (6, 3),
+            (9, 3),
+            (12, 3),
+        ] {
+            assert_eq!(columns_for(count), want, "패널 {count}장");
+        }
 
-            let cols = MAX_COLS.min(count);
-            let rows = count.div_ceil(cols);
-            assert_eq!(grid.cols(), w * cols as i32, "count={count} 가로");
-            assert_eq!(grid.rows(), h * rows as i32, "count={count} 세로");
+        let (w, h) = (40, 30);
+        for count in 1..=12usize {
+            let panels: Vec<Mat> = (0..count).map(|_| panel(w, h)).collect();
+            let grid = grid_bgr(&panels).expect("grid");
+            let cols = columns_for(count);
             assert!(cols <= MAX_COLS, "열이 상한을 넘었다");
+            assert_eq!(grid.cols(), w * cols as i32, "count={count} 가로");
+            assert_eq!(
+                grid.rows(),
+                h * count.div_ceil(cols) as i32,
+                "count={count} 세로"
+            );
         }
     }
 
@@ -232,19 +257,22 @@ mod tests {
     /// 빈 칸은 검게 채운다 — 크기가 어긋나면 `vconcat` 이 거부한다.
     #[test]
     fn short_last_row_is_padded() {
-        let panels: Vec<Mat> = (0..4).map(|_| panel(40, 30)).collect();
-        let grid = grid_bgr(&panels, MAX_COLS).expect("grid");
-        assert_eq!(grid.cols(), 120);
-        assert_eq!(grid.rows(), 60);
+        // 5장이면 3x2 라 마지막 칸 하나가 빈다.
+        let panels: Vec<Mat> = (0..5).map(|_| panel(40, 30)).collect();
+        let grid = grid_bgr(&panels).expect("grid");
+        assert_eq!((grid.cols(), grid.rows()), (120, 60));
 
-        // 마지막 줄 오른쪽 두 칸은 비어 있어야 한다.
-        let corner: opencv::core::Vec3b = *grid.at_2d(45, 100).expect("픽셀");
-        assert_eq!(corner, opencv::core::Vec3b::from([0, 0, 0]));
+        // 마지막 줄 오른쪽 칸은 검다.
+        let empty: opencv::core::Vec3b = *grid.at_2d(45, 100).expect("픽셀");
+        assert_eq!(empty, opencv::core::Vec3b::from([0, 0, 0]));
+        // 그 왼쪽 칸은 패널이 들어 있다 — 채운 게 아니라 남은 칸만 검어야 한다.
+        let filled: opencv::core::Vec3b = *grid.at_2d(45, 20).expect("픽셀");
+        assert_ne!(filled, opencv::core::Vec3b::from([0, 0, 0]));
     }
 
     #[test]
     fn a_single_panel_is_returned_as_one_row() {
-        let grid = grid_bgr(&[panel(40, 30)], MAX_COLS).expect("grid");
+        let grid = grid_bgr(&[panel(40, 30)]).expect("grid");
         assert_eq!((grid.cols(), grid.rows()), (40, 30));
     }
 }
