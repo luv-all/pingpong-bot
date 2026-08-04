@@ -1032,7 +1032,12 @@ impl SimWorld {
         if !motion::should_start_fixed_swing(prediction.time_to_impact_secs, impact_time) {
             return;
         }
-        let return_pose = robot::Pose::new(target_rail_x, motion::fixed_swing_start_joints());
+        // 레일은 스윙 시작 전 자리로 복귀해야 한다(일반 경로 `try_auto_swing`의
+        // `start = robot::Pose::new(self.robot.rail_x(), ...)`와 동일한 규약) —
+        // `target_rail_x`(방금 계산한 임팩트 지점)를 쓰면 스윙 뒤 레일이 공을
+        // 맞춘 자리에 눌러앉아 다음 샷마다 거기서부터 다시 움직여야 한다.
+        // 스윙 모션(관절)만 바꾸고 레일 동작은 일반 경로와 같아야 한다.
+        let return_pose = robot::Pose::new(self.robot.rail_x(), motion::fixed_swing_start_joints());
         self.robot
             .replace_motion_and_return(trajectory, return_pose);
         self.mark_swing_committed();
@@ -2403,6 +2408,48 @@ mod tests {
             }
         }
         assert!(committed, "결국은 커밋돼야 한다");
+    }
+
+    /// 회귀 방지(2026-08-04, 사용자 실기 관찰): 고정 스윙 딕셔너리 모드는
+    /// 스윙 모션(관절)만 바꾸는 것이지 레일 동작까지 바꾸는 게 아니다 —
+    /// 일반 경로([`try_auto_swing`]의 `PositionController` 분기, `start =
+    /// robot::Pose::new(self.robot.rail_x(), ...)`)와 마찬가지로, 스윙이
+    /// 끝나면 레일은 **스윙 시작 전 있던 자리**로 돌아가야 한다. 그런데
+    /// `try_fixed_swing_dictionary`의 `return_pose`가 `target_rail_x`(방금
+    /// 계산한 임팩트 지점)를 썼던 버그 때문에, 스윙이 끝난 뒤 레일이 공을
+    /// 맞춘 자리에 그대로 눌러앉아 다음 샷마다 그 자리에서 새로 움직여야
+    /// 했다 — 일반 경로는 항상 중앙으로 돌아오는 것과 달리, 연속 샷마다
+    /// 레일이 "이상하게" 널뛰는 것처럼 보였다.
+    #[test]
+    fn fixed_swing_dictionary_returns_the_rail_to_its_pre_swing_position() {
+        let robot = crate::defaults::robot().expect("robot");
+        let mut world = SimWorld::new(robot);
+        world.set_use_ground_truth(true);
+        world.set_use_fixed_swing_dictionary(true);
+
+        let rail_x_before_shot = world.robot().rail_x();
+        world.shoot_ball(&launch::Settings::default());
+
+        let dt = 1.0 / 1000.0;
+        let mut committed = false;
+        let mut swing_finished = false;
+        for _ in 0..8000 {
+            world.step(dt, None);
+            if world.robot.active_trajectory().is_some() {
+                committed = true;
+            } else if committed {
+                swing_finished = true;
+                break;
+            }
+        }
+        assert!(committed, "스윙이 커밋돼야 한다");
+        assert!(swing_finished, "스윙(임팩트+복귀)이 끝까지 재생돼야 한다");
+
+        let rail_x_after_swing = world.robot().rail_x();
+        assert!(
+            (rail_x_after_swing - rail_x_before_shot).abs() < 1e-3,
+            "레일이 스윙 시작 전 자리로 돌아와야 한다: before={rail_x_before_shot:.4} after={rail_x_after_swing:.4}"
+        );
     }
 
     #[test]
