@@ -13,7 +13,6 @@ mod cli;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use opencv::core::{Mat, Scalar};
-use opencv::imgproc;
 use opencv::prelude::*;
 use pingpong_bot::camera::{self, Calibration, Preview, PreviewAction};
 use pingpong_bot::defaults;
@@ -27,8 +26,10 @@ const MAX_COLS: usize = 3;
 const WHITE: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
 const GREEN: Scalar = Scalar::new(0.0, 255.0, 0.0, 0.0);
 const YELLOW: Scalar = Scalar::new(0.0, 255.0, 255.0, 0.0);
-/// 마스크 패널은 0/255 뿐이라 흰 글씨가 묻힌다. 두 배경 모두에서 읽히는 색으로.
+/// 마스크 패널 라벨. 원본이 깔려 있어 흰 글씨가 밝은 곳에서 묻힌다.
 const LABEL_ON_MASK: Scalar = Scalar::new(255.0, 0.0, 255.0, 0.0);
+/// 마스크가 지운 곳의 밝기. 0 이면 경계만 보이고 장면이 안 보인다.
+const DIMMED: f64 = 0.22;
 
 /// 본선과 같은 조립. 여기가 유일한 SSOT 라 툴과 런타임이 갈릴 수 없다.
 fn detector_for(params: &camera::Params) -> Result<Detector> {
@@ -71,17 +72,17 @@ fn grid_bgr(panels: &[Mat], max_cols: usize) -> Result<Mat> {
     return Ok(out);
 }
 
-/// 이진 마스크를 3채널로 — 패널로 나란히 붙이려면 채널이 맞아야 한다.
-fn as_panel(mask: &Mat) -> Result<Mat> {
-    let mut bgr = Mat::default();
-    imgproc::cvt_color(
-        mask,
-        &mut bgr,
-        imgproc::COLOR_GRAY2BGR,
-        0,
-        opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
-    )?;
-    return Ok(bgr);
+/// 마스크가 살린 곳은 원본 그대로, 죽인 곳은 어둡게.
+///
+/// 흑백 마스크만 보면 모양은 보여도 **거기에 뭐가 있는지**는 안 보인다. 부피 레이어가
+/// 정말 탁구대 위만 남겼는지 같은 건 원본을 깔아야 판정된다. 지운 쪽을 0 이 아니라
+/// [`DIMMED`] 로 두는 것도 같은 이유다 — 경계를 장면 안에서 봐야 한다.
+fn as_panel(frame: &Mat, mask: &Mat) -> Result<Mat> {
+    let mut dim = Mat::default();
+    frame.convert_to(&mut dim, -1, DIMMED, 0.0)?;
+    // 마스크가 켜진 화소만 원본으로 덮는다.
+    frame.copy_to_masked(&mut dim, mask)?;
+    return Ok(dim);
 }
 
 fn main() -> Result<()> {
@@ -124,7 +125,7 @@ fn main() -> Result<()> {
         let mut labels = vec!["raw".to_owned()];
         for (name, mask) in &stages {
             let on = opencv::core::count_non_zero(mask)?;
-            panels.push(as_panel(mask)?);
+            panels.push(as_panel(&frame.image, mask)?);
             labels.push(format!("{name} on={on}"));
         }
 
@@ -142,7 +143,7 @@ fn main() -> Result<()> {
         panels.push(picked);
         labels.push(format!("picked cand={}", candidates.len()));
 
-        // 0 번은 원본이라 흰 글씨가 읽히고, 나머지는 마스크라 자홍이어야 한다.
+        // 0 번은 손대지 않은 원본이라 흰 글씨로 구분한다.
         for (index, (panel, label)) in panels.iter_mut().zip(&labels).enumerate() {
             let color = if index == 0 { WHITE } else { LABEL_ON_MASK };
             Preview::draw_cam_label(panel, label, color)?;
@@ -211,6 +212,22 @@ mod tests {
             assert_eq!(grid.rows(), h * rows as i32, "count={count} 세로");
             assert!(cols <= MAX_COLS, "열이 상한을 넘었다");
         }
+    }
+
+    /// 살린 곳은 원본 그대로, 죽인 곳은 어둡게. 둘 다 0 이 아니어야 경계가 장면 안에서 읽힌다.
+    #[test]
+    fn a_panel_keeps_the_frame_under_the_mask() {
+        let frame = panel(4, 1);
+        let mut mask =
+            Mat::new_rows_cols_with_default(1, 4, opencv::core::CV_8UC1, Scalar::all(0.0))
+                .expect("mask");
+        *mask.at_2d_mut::<u8>(0, 1).expect("at") = 255;
+
+        let out = as_panel(&frame, &mask).expect("panel");
+        let at = |x: i32| out.at_2d::<opencv::core::Vec3b>(0, x).expect("at")[0];
+        assert_eq!(at(1), 7, "마스크가 켜진 곳은 원본 그대로");
+        assert_eq!(at(0), (7.0 * DIMMED).round() as u8, "꺼진 곳은 어둡게");
+        assert!(at(0) < at(1), "경계가 보여야 한다");
     }
 
     /// 빈 칸은 검게 채운다 — 크기가 어긋나면 `vconcat` 이 거부한다.
