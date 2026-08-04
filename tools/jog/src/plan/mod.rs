@@ -114,6 +114,17 @@ pub fn compose(
             )
         }
         Kind::Swing => anyhow::bail!("스윙은 plan_swing()으로 계획합니다"),
+        // Task 5c/5d: 관절 타이밍 모양(Synchronized/Staggered)은 기본값을
+        // 쓰고, 임팩트 높이 구간은 draft에서 사용자가 고른 값을 쓴다 — jog는
+        // 실제 예측 궤적이 없어 자동으로 구간을 고를 수 없다.
+        Kind::FixedSwing => motion::Planner::plan_fixed_swing(
+            arm,
+            start.rail_x,
+            pingpong_bot::robot::motion::DEFAULT_SWING_SHAPE_STRATEGY,
+            draft.fixed_swing_height_band,
+        )
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("고정 스윙 딕셔너리"),
     };
 }
 

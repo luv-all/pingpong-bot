@@ -19,6 +19,8 @@ pub struct Draft {
     pub tilt_yaw_deg: f64,
     /// Swing: 슈터 설정 (sim controls와 동기화된다).
     pub shooter: launch::Settings,
+    /// FixedSwing: 사용자가 직접 고르는 임팩트 높이 구간 (예측 궤적이 없어 자동 선택 불가).
+    pub fixed_swing_height_band: pingpong_bot::robot::motion::SwingHeightBand,
 }
 
 impl Default for Draft {
@@ -33,6 +35,7 @@ impl Default for Draft {
             tilt_pitch_deg: 0.0,
             tilt_yaw_deg: 0.0,
             shooter: launch::Settings::default(),
+            fixed_swing_height_band: pingpong_bot::robot::motion::SwingHeightBand::Mid,
         };
     }
 }

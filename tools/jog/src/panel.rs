@@ -134,6 +134,7 @@ fn draw_motion(
                 Kind::Ik,
                 Kind::Pose,
                 Kind::Swing,
+                Kind::FixedSwing,
             ] {
                 ui.selectable_value(&mut app.draft.kind, kind, kind.label());
             }
@@ -200,6 +201,26 @@ fn draw_motion(
         }
         Kind::Swing => {
             draw_swing(ui, app, plan, plan_error);
+        }
+        Kind::FixedSwing => {
+            ui.label("임팩트 높이 구간 (실제 예측이 없어 직접 선택)");
+            ui.horizontal(|ui| {
+                ui.radio_value(
+                    &mut app.draft.fixed_swing_height_band,
+                    pingpong_bot::robot::motion::SwingHeightBand::Mid,
+                    "중간",
+                );
+                ui.radio_value(
+                    &mut app.draft.fixed_swing_height_band,
+                    pingpong_bot::robot::motion::SwingHeightBand::High,
+                    "높음",
+                );
+                ui.radio_value(
+                    &mut app.draft.fixed_swing_height_band,
+                    pingpong_bot::robot::motion::SwingHeightBand::ExtraHigh,
+                    "더높음",
+                );
+            });
         }
     }
 }
