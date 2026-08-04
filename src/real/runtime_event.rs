@@ -14,13 +14,13 @@ pub enum RuntimeEvent {
         position: Point3,
         speed: f64,
     },
-    /// 한 단계의 레일·라켓 자세 명령을 하드웨어에 전달했다.
+    /// 한 단계의 레일·손목 명령을 하드웨어에 전달했다.
     Commanded {
         track_seq: u64,
         stage: PredictionStage,
         target: Point3,
         rail_x: f64,
-        joints_rad: Vec<f64>,
+        wrist_rad: f64,
     },
     /// 하드웨어 오류로 제어 워커가 중단된다.
     Failed {

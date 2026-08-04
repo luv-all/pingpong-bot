@@ -197,7 +197,7 @@ pub fn run(
                         Err(error) => {
                             let now = Instant::now();
                             if now.duration_since(last_plan_warn) >= Duration::from_secs(1) {
-                                warn!(%error, "레일·라켓 자세 목표 선택 실패");
+                                warn!(%error, "레일·손목 목표 선택 실패");
                                 last_plan_warn = now;
                             }
                             continue;
@@ -213,15 +213,18 @@ pub fn run(
                             Ok(command) => command,
                             Err(_) => continue,
                         };
-                    match hardware.command_rail_and_racket(&command.trajectory) {
+                    match hardware.command_rail_and_racket(
+                        command.rail_x,
+                        command.wrist_rad,
+                        command.duration_secs,
+                    ) {
                         Ok(applied) => {
                             last_stage = Some(stage);
                             info!(
                                 ?stage,
                                 rail_applied_m = applied.rail_m,
-                                joints_applied_rad = ?applied.joints.values,
-                                desired_normal = ?command.desired_normal,
-                                "공통 레일·라켓 자세 명령"
+                                wrist_applied_rad = applied.wrist_rad,
+                                "공통 레일·손목 명령"
                             );
                         }
                         Err(error) => warn!(?error, "하드웨어 명령 실패"),

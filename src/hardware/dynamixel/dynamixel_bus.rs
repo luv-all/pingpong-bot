@@ -204,11 +204,6 @@ impl DynamixelBus {
     /// `motor_angle_limits_deg`가 더 좁으면 여기서 조용히 잘려 팔이 명령과 다른 곳에 선다.
     /// 200 Hz 스트리밍이라 스로틀한다.
     pub fn write_joints(&mut self, joints: &Joints) -> Result<(), HwError> {
-        self.write_joints_applied(joints).map(|_| ())
-    }
-
-    /// 전체 관절 Goal을 보내고 모터 한계 clamp·tick 양자화가 반영된 각도를 반환한다.
-    pub fn write_joints_applied(&mut self, joints: &Joints) -> Result<Joints, HwError> {
         let clamped: Vec<usize> = joints
             .values
             .iter()
@@ -228,43 +223,7 @@ impl DynamixelBus {
                 "모터 각도 한계로 잘림 — 계획한 자세에 못 선다 (플래너는 URDF 한계만 본다)"
             );
         }
-        let applied = self.quantize_joints(joints)?;
-        let ticks: Vec<i32> = applied
-            .values
-            .iter()
-            .enumerate()
-            .map(|(index, angle)| self.mapping.radians_to_ticks(index, *angle))
-            .collect();
-        self.write_raw_goal_ticks(&ticks, 0.0)?;
-        return Ok(applied);
-    }
-
-    /// 버스에 쓰지 않고 모터 한계 clamp·tick 양자화 결과만 계산한다.
-    pub fn quantize_joints(&self, joints: &Joints) -> Result<Joints, HwError> {
-        let joint_count = self.mapping.config.motor_ids.len();
-        if joints.values.len() != joint_count {
-            return Err(command_transport_error(
-                0.0,
-                joints.values.len(),
-                format!(
-                    "관절 수 불일치: got {} want {joint_count}",
-                    joints.values.len()
-                ),
-            ));
-        }
-        let ticks: Vec<i32> = joints
-            .values
-            .iter()
-            .enumerate()
-            .map(|(index, angle)| self.mapping.radians_to_ticks(index, *angle))
-            .collect();
-        return Ok(Joints {
-            values: ticks
-                .iter()
-                .enumerate()
-                .map(|(index, tick)| self.mapping.ticks_to_radians(index, *tick))
-                .collect(),
-        });
+        return self.write_joints_inner(joints);
     }
 
     /// 한 관절의 Goal Position만 보낸다.
@@ -335,6 +294,27 @@ impl DynamixelBus {
             }
         }
         return Ok(self.mapping.ticks_to_radians(joint_index, tick));
+    }
+
+    fn write_joints_inner(&mut self, joints: &Joints) -> Result<(), HwError> {
+        let joint_count = self.mapping.config.motor_ids.len();
+        if joints.values.len() != joint_count {
+            return Err(command_transport_error(
+                0.0,
+                joints.values.len(),
+                format!(
+                    "관절 수 불일치: got {} want {joint_count}",
+                    joints.values.len()
+                ),
+            ));
+        }
+        let ticks: Vec<i32> = joints
+            .values
+            .iter()
+            .enumerate()
+            .map(|(index, angle)| self.mapping.radians_to_ticks(index, *angle))
+            .collect();
+        self.write_raw_goal_ticks(&ticks, 0.0)
     }
 
     /// Position Control + PWM/Current Limit 최대 → (호출측에서 Torque ON).

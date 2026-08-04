@@ -150,7 +150,7 @@ impl Outcome {
     fn label(&self) -> String {
         let last = match &self.last {
             LastState::None => "없음".to_owned(),
-            LastState::Commanded => "레일·라켓 자세 명령".to_owned(),
+            LastState::Commanded => "레일·손목 명령".to_owned(),
             LastState::Failed(reason) => format!("실패 - {reason}"),
             LastState::TimedOut => "타임아웃 - 공이 오지 않음".to_owned(),
             LastState::Quit => "사용자 종료".to_owned(),
@@ -261,7 +261,7 @@ fn result_lines(event: &RuntimeEvent) -> Option<Vec<String>> {
             stage,
             target,
             rail_x,
-            joints_rad,
+            wrist_rad,
         } => Some(vec![
             format!("COMMAND track {track_seq} {stage:?}"),
             format!(
@@ -270,7 +270,11 @@ fn result_lines(event: &RuntimeEvent) -> Option<Vec<String>> {
                 f2(target.coords.y),
                 f2(target.coords.z)
             ),
-            format!("rail {}  joints {joints_rad:?}", f2(*rail_x)),
+            format!(
+                "rail {}  wrist {} deg",
+                f2(*rail_x),
+                f2(wrist_rad.to_degrees())
+            ),
         ]),
         RuntimeEvent::Failed { track_seq, reason } => {
             Some(vec![format!("FAILED track {track_seq:?}"), reason.clone()])
@@ -391,7 +395,7 @@ fn log_event(event: &RuntimeEvent) {
             stage,
             target,
             rail_x,
-            joints_rad,
+            wrist_rad,
         } => info!(
             track = track_seq,
             ?stage,
@@ -399,8 +403,8 @@ fn log_event(event: &RuntimeEvent) {
             target_y = f2(target.coords.y),
             target_z = f2(target.coords.z),
             rail_x = f2(*rail_x),
-            joints_rad = ?joints_rad,
-            "레일·라켓 자세 명령 전송"
+            wrist_deg = f2(wrist_rad.to_degrees()),
+            "레일·손목 명령 전송"
         ),
         RuntimeEvent::Failed { track_seq, reason } => {
             warn!(track = track_seq, reason, "실기 단순 제어 실패")
