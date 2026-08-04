@@ -183,20 +183,19 @@ pub enum PredictionStage {
     Refined,
 }
 
-/// 실기와 시뮬레이션이 함께 사용하는 직접 제어 손목축 인덱스.
-pub const DIRECT_WRIST_JOINT_INDEX: usize = 3;
-/// 정밀 예측에서 준비 자세보다 더 움직이는 손목 각도.
-pub const DIRECT_WRIST_STROKE_RAD: f64 = 15.0_f64.to_radians();
+/// 실기와 시뮬레이션이 함께 사용하는 라켓 수평 조준축.
+/// 4-DOF 논리 관절 1번은 Dynamixel ID 3에 대응한다.
+pub const DIRECT_AIM_JOINT_INDEX: usize = 1;
 pub const MIN_DIRECT_COMMAND_SECS: f64 = 0.05;
 pub const MAX_DIRECT_COMMAND_SECS: f64 = 0.30;
 
-/// 공 예측 한 건에서 계산된 레일·손목 직접 명령.
+/// 공 예측 한 건에서 계산된 레일·라켓 조준 직접 명령.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DirectControlCommand {
     pub stage: PredictionStage,
     pub target: HitTarget,
     pub rail_x: f64,
-    pub wrist_rad: f64,
+    pub aim_rad: f64,
     pub duration_secs: f64,
 }
 
@@ -206,53 +205,47 @@ pub struct DirectControlMeasurement {
     pub rail_commanded_m: f64,
     pub rail_measured_m: f64,
     pub rail_error_m: f64,
-    pub wrist_commanded_rad: f64,
-    pub wrist_measured_rad: f64,
-    pub wrist_error_rad: f64,
+    pub aim_commanded_rad: f64,
+    pub aim_measured_rad: f64,
+    pub aim_error_rad: f64,
 }
 
 impl DirectControlCommand {
     pub fn compare_with_pose(&self, pose: &Pose) -> Option<DirectControlMeasurement> {
-        return DirectControlMeasurement::from_commanded(self.rail_x, self.wrist_rad, pose);
+        return DirectControlMeasurement::from_commanded(self.rail_x, self.aim_rad, pose);
     }
 }
 
 impl DirectControlMeasurement {
     pub fn from_commanded(
         rail_commanded_m: f64,
-        wrist_commanded_rad: f64,
+        aim_commanded_rad: f64,
         pose: &Pose,
     ) -> Option<Self> {
-        let wrist_measured_rad = *pose.joints.values.get(DIRECT_WRIST_JOINT_INDEX)?;
+        let aim_measured_rad = *pose.joints.values.get(DIRECT_AIM_JOINT_INDEX)?;
         return Some(Self {
             rail_commanded_m,
             rail_measured_m: pose.rail_x,
             rail_error_m: rail_commanded_m - pose.rail_x,
-            wrist_commanded_rad,
-            wrist_measured_rad,
-            wrist_error_rad: wrist_commanded_rad - wrist_measured_rad,
+            aim_commanded_rad,
+            aim_measured_rad,
+            aim_error_rad: aim_commanded_rad - aim_measured_rad,
         });
     }
 }
 
-/// 전체 팔 궤적 대신 공의 x를 레일에, 예측 단계를 손목에 매핑하는 공통 제어기.
+/// 전체 팔 IK 대신 라켓 헤드 x를 공 x에 맞추고, 레일 위치를
+/// 단일 각도 함수에 넣어 상대편 끝선 중앙을 바라보게 하는 공통 제어기.
 /// 실제 장치와 GUI 시뮬레이션 모두 이 계산 결과를 각 하드웨어 어댑터에 적용한다.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DirectController {
     selector: HitTargetSelector,
-    ready_wrist_rad: f64,
 }
 
 impl DirectController {
-    pub fn new(y_min: f64, y_max: f64, ready_wrist_rad: f64) -> Result<Self, DirectControlError> {
-        if !ready_wrist_rad.is_finite() {
-            return Err(DirectControlError::InvalidReadyWrist);
-        }
+    pub fn new(y_min: f64, y_max: f64) -> Result<Self, DirectControlError> {
         let selector = HitTargetSelector::new(y_min, y_max).map_err(DirectControlError::Target)?;
-        return Ok(Self {
-            selector,
-            ready_wrist_rad,
-        });
+        return Ok(Self { selector });
     }
 
     pub fn select_target(
@@ -298,18 +291,8 @@ impl DirectController {
                 late_by_secs: -remaining_secs,
             });
         }
-        let rail_x = arm
-            .rail
-            .map_or(target.position.x, |rail| rail.clamp_x(target.position.x));
-        let wrist_requested_rad = match stage {
-            PredictionStage::Provisional => self.ready_wrist_rad,
-            PredictionStage::Refined => self.ready_wrist_rad + DIRECT_WRIST_STROKE_RAD,
-        };
-        let wrist_rad = arm
-            .joint_limit(DIRECT_WRIST_JOINT_INDEX)
-            .map_or(wrist_requested_rad, |limit| {
-                wrist_requested_rad.clamp(limit.min, limit.max)
-            });
+        let rail_x = rail_for_racket_head_x(arm, start, target.position.x)?;
+        let aim_rad = aim_angle_for_rail(arm, rail_x)?;
         let rail_distance_m = (rail_x - start.rail_x).abs();
         let rail_required_secs = arm.rail.map_or(0.0, |rail| {
             minimum_trapezoid_time(
@@ -318,14 +301,13 @@ impl DirectController {
                 crate::defaults::motion::RAIL_ACCEL_M_S2,
             )
         });
-        let wrist_current_rad = *start
+        let aim_current_rad = *start
             .joints
             .values
-            .get(DIRECT_WRIST_JOINT_INDEX)
-            .ok_or(DirectControlError::MissingWrist)?;
-        let wrist_required_secs =
-            (wrist_rad - wrist_current_rad).abs() / arm.max_joint_speed.max(1e-9);
-        let required_secs = rail_required_secs.max(wrist_required_secs);
+            .get(DIRECT_AIM_JOINT_INDEX)
+            .ok_or(DirectControlError::MissingAimJoint)?;
+        let aim_required_secs = (aim_rad - aim_current_rad).abs() / arm.max_joint_speed.max(1e-9);
+        let required_secs = rail_required_secs.max(aim_required_secs);
         if required_secs > remaining_secs {
             return Err(DirectControlError::InsufficientTime {
                 remaining_secs,
@@ -336,13 +318,52 @@ impl DirectController {
             stage,
             target,
             rail_x,
-            wrist_rad,
+            aim_rad,
             duration_secs: remaining_secs
                 .min(MAX_DIRECT_COMMAND_SECS)
                 .max(MIN_DIRECT_COMMAND_SECS.min(remaining_secs))
                 .max(required_secs),
         });
     }
+}
+
+/// 레일 위치에서 상대편 탁구대 끝선 중앙을 바라보는 수평 조준각.
+pub fn aim_angle_for_rail(arm: &Arm, rail_x: f64) -> Result<f64, DirectControlError> {
+    if !rail_x.is_finite() {
+        return Err(DirectControlError::InvalidRailPosition);
+    }
+    let mount_y = arm.rail.map_or(arm.base.y, |rail| rail.mount_y);
+    let dx = crate::constants::table::WIDTH_X * 0.5 - rail_x;
+    let dy = crate::constants::table::LENGTH_Y - mount_y;
+    let requested = dx.atan2(dy);
+    return Ok(arm
+        .joint_limit(DIRECT_AIM_JOINT_INDEX)
+        .map_or(requested, |limit| requested.clamp(limit.min, limit.max)));
+}
+
+/// 라켓 헤드의 실제 x가 공 x와 같아지도록 레일을 보정한다.
+/// 전체 IK는 쓰지 않고 `aim_angle_for_rail`과 FK 평행이동만 반복한다.
+fn rail_for_racket_head_x(arm: &Arm, start: &Pose, ball_x: f64) -> Result<f64, DirectControlError> {
+    if !ball_x.is_finite() {
+        return Err(DirectControlError::InvalidRailPosition);
+    }
+    let mut rail_x = arm.rail.map_or(ball_x, |rail| rail.clamp_x(ball_x));
+    for _ in 0..4 {
+        let mut joints = start.joints.clone();
+        let aim = joints
+            .values
+            .get_mut(DIRECT_AIM_JOINT_INDEX)
+            .ok_or(DirectControlError::MissingAimJoint)?;
+        *aim = aim_angle_for_rail(arm, rail_x)?;
+        let head = arm
+            .forward_kinematics_with_rail(rail_x, &joints)
+            .ok_or(DirectControlError::ForwardKinematics)?;
+        rail_x += ball_x - head.position.x;
+        if let Some(rail) = arm.rail {
+            rail_x = rail.clamp_x(rail_x);
+        }
+    }
+    return Ok(rail_x);
 }
 
 fn minimum_trapezoid_time(distance: f64, max_speed: f64, acceleration: f64) -> f64 {
@@ -552,17 +573,19 @@ pub enum TargetSelectionError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Error)]
 pub enum DirectControlError {
-    #[error("준비 손목 각도가 유효하지 않음")]
-    InvalidReadyWrist,
     #[error("예측 기준 경과 시간이 유효하지 않음")]
     InvalidElapsed,
     #[error("목표 시각이 {late_by_secs:.3}s 지남")]
     Expired { late_by_secs: f64 },
     #[error("목표 선택 실패: {0}")]
     Target(TargetSelectionError),
-    #[error("현재 포즈에 손목축이 없음")]
-    MissingWrist,
-    #[error("남은 시간 {remaining_secs:.3}s, 레일·손목에 필요한 최소 시간 {required_secs:.3}s")]
+    #[error("레일 또는 공 x 위치가 유효하지 않음")]
+    InvalidRailPosition,
+    #[error("현재 포즈에 라켓 수평 조준축이 없음")]
+    MissingAimJoint,
+    #[error("라켓 헤드 위치 계산 실패")]
+    ForwardKinematics,
+    #[error("남은 시간 {remaining_secs:.3}s, 레일·조준축에 필요한 최소 시간 {required_secs:.3}s")]
     InsufficientTime {
         remaining_secs: f64,
         required_secs: f64,
@@ -620,21 +643,21 @@ mod tests {
     }
 
     #[test]
-    fn direct_controller_maps_the_same_prediction_to_rail_and_wrist() {
+    fn direct_controller_aligns_racket_head_and_aims_at_opponent_end() {
         let robot = crate::defaults::robot().unwrap();
         let trajectory = BallTrajectory::new(
             vec![],
             vec![
-                TrajectorySample::new(Point3::new(0.2, 0.5, 0.4), Vector3::zeros(), 0.1),
-                TrajectorySample::new(Point3::new(0.4, 0.1, 0.2), Vector3::zeros(), 0.3),
+                TrajectorySample::new(Point3::new(0.2, 0.5, 0.4), Vector3::zeros(), 0.8),
+                TrajectorySample::new(Point3::new(0.4, 0.1, 0.2), Vector3::zeros(), 1.0),
             ],
             Instant::now(),
         )
         .unwrap();
-        let controller = DirectController::new(0.2, 0.4, -0.7).unwrap();
+        let controller = DirectController::new(0.2, 0.4).unwrap();
         let start = Pose::new(
-            0.3,
-            super::super::Joints::from_slice(&[0.0, 0.0, 0.0, -0.7]),
+            robot.arm.rail.as_ref().unwrap().default_x(),
+            robot.arm.default_joints.clone(),
         );
 
         let provisional = controller
@@ -643,7 +666,7 @@ mod tests {
                 &start,
                 &trajectory,
                 PredictionStage::Provisional,
-                0.05,
+                0.0,
             )
             .unwrap();
         let refined = controller
@@ -652,14 +675,34 @@ mod tests {
                 &start,
                 &trajectory,
                 PredictionStage::Refined,
-                0.05,
+                0.0,
             )
             .unwrap();
 
-        assert!((provisional.rail_x - 0.3).abs() < 1e-12);
-        assert!((provisional.wrist_rad + 0.7).abs() < 1e-12);
-        assert!((provisional.duration_secs - 0.15).abs() < 1e-12);
-        assert!((refined.wrist_rad - (-0.7 + DIRECT_WRIST_STROKE_RAD)).abs() < 1e-12);
+        assert!((provisional.rail_x - refined.rail_x).abs() < 1e-12);
+        assert!((provisional.aim_rad - refined.aim_rad).abs() < 1e-12);
+        let mut commanded = start.joints.clone();
+        commanded.values[DIRECT_AIM_JOINT_INDEX] = refined.aim_rad;
+        let racket = robot
+            .arm
+            .forward_kinematics_with_rail(refined.rail_x, &commanded)
+            .unwrap();
+        assert!((racket.position.x - refined.target.position.x).abs() < 1e-5);
+        let toward_far_center = Vector3::new(
+            crate::constants::table::WIDTH_X * 0.5 - racket.position.x,
+            crate::constants::table::LENGTH_Y - racket.position.y,
+            0.0,
+        )
+        .normalize();
+        let racket_facing_xy = Vector3::new(racket.normal.x, racket.normal.y, 0.0).normalize();
+        assert!(
+            racket_facing_xy.dot(&toward_far_center) > 0.99,
+            "라켓 수평 법선이 상대편 끝선 중앙을 향해야 함"
+        );
+        assert!(
+            refined.aim_rad > 0.0,
+            "왼쪽 공에서는 오른쪽 중앙을 향해야 함"
+        );
     }
 
     #[test]
@@ -672,24 +715,23 @@ mod tests {
                 time_secs: 0.2,
             },
             rail_x: 0.30,
-            wrist_rad: -0.40,
+            aim_rad: -0.10,
             duration_secs: 0.1,
         };
         let pose = Pose::new(
             0.27,
-            super::super::Joints::from_slice(&[0.0, 0.0, 0.0, -0.45]),
+            super::super::Joints::from_slice(&[0.0, -0.15, 0.0, -0.45]),
         );
         let measured = command.compare_with_pose(&pose).unwrap();
 
         assert!((measured.rail_error_m - 0.03).abs() < 1e-12);
-        assert!((measured.wrist_error_rad - 0.05).abs() < 1e-12);
+        assert!((measured.aim_error_rad - 0.05).abs() < 1e-12);
     }
 
     #[test]
     fn direct_controller_rejects_a_rail_target_that_cannot_arrive_in_time() {
         let robot = crate::defaults::robot().unwrap();
-        let ready = robot.arm.default_joints.values[DIRECT_WRIST_JOINT_INDEX];
-        let controller = DirectController::new(0.2, 0.4, ready).unwrap();
+        let controller = DirectController::new(0.2, 0.4).unwrap();
         let start = Pose::new(0.0, robot.arm.default_joints.clone());
         let target = HitTarget {
             position: Point3::new(1.0, 0.3, 0.2),

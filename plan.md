@@ -8,7 +8,7 @@
 - 구조와 실행법: [`README.md`](README.md)
 - 확정된 설계 결정과 이유: [`docs/decisions.md`](docs/decisions.md)
 - 남은 작업과 우선순위: [`TODO.md`](TODO.md)
-- 현재 레일·손목 제어: [`docs/two-stage-position-control.md`](docs/two-stage-position-control.md)
+- 현재 레일·라켓 조준 제어: [`docs/two-stage-position-control.md`](docs/two-stage-position-control.md)
 - 앱 기본값과 조립: [`src/defaults/`](src/defaults/)
 
 ## 유지하는 목표
@@ -26,7 +26,8 @@ BallTrajectory
     → real Hardware / GUI sim robot::State
 ```
 
-현재 실기 제어는 전체 스윙이 아니라 리니어 레일과 손목 ID 5의 2단계 장비
-시험이다. 명령 후에는 실제 적용값을 기준으로 레일·손목을 다시 읽어 수렴 여부를
+현재 실기 제어는 전체 스윙이 아니라 리니어 레일로 라켓 헤드 x를 공 x에
+맞추고 ID 3으로 상대편 끝선 중앙을 조준하는 2단계 제어다. 명령 후에는 실제
+적용값을 기준으로 레일·조준축을 다시 읽어 수렴 여부를
 판정한다. 다음 우선순위는 Windows 실물 장비 통합 검증과 보존 중인 구형
 `PositionController`·스윙 계획기의 향후 사용 여부 결정이다.

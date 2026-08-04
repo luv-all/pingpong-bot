@@ -11,7 +11,7 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 
 > A~J의 스윙·임팩트 결정은 보존 중인 계획 라이브러리와 시뮬레이션 진단 경로의
 > 설계 기록이다. 현재 활성 real·기본 GUI sim 제어는 전체 스윙을 호출하지 않으며,
-> [`two-stage-position-control.md`](two-stage-position-control.md)의 레일·손목
+> [`two-stage-position-control.md`](two-stage-position-control.md)의 레일·라켓 조준
 > `DirectController` 경로를 따른다.
 
 ---

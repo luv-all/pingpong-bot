@@ -2,8 +2,8 @@
 //!
 //! 시작할 때만 기존 센터 궤적으로 레일과 4축 Dynamixel을 기본 자세에 둔다.
 //! 이후 공 하나당 1차·2차 예측을 각각 한 번만 소비한다. 각 예측 위치의 x로
-//! 레일을 옮기고, 2차에서만 라켓을 잡은 마지막 관절에 작은 시험 동작을 준다.
-//! IK·스윙 계획·팔로스루·자동 복귀는 실행하지 않는다.
+//! 레일로 라켓 헤드 x를 공 x에 맞추고, 수평 조준축을 상대편 끝선 중앙으로 돌린다.
+//! IK·스윙 계획·팔로스루는 실행하지 않고, 공의 목표 도착 시각 후 중앙으로 복귀한다.
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -14,8 +14,7 @@ use pingpong_bot::error::{DomainError, HwError};
 use pingpong_bot::hardware::{AppliedRailRacketCommand, Hardware};
 use pingpong_bot::robot::Arm;
 use pingpong_bot::robot::control::{
-    DIRECT_WRIST_JOINT_INDEX, DirectControlCommand, DirectControlMeasurement, DirectController,
-    PredictionStage,
+    DirectControlCommand, DirectControlMeasurement, DirectController, PredictionStage,
 };
 use pingpong_bot::robot::motion::{self, Planner};
 use tracing::{debug, info, info_span, warn};
@@ -32,7 +31,7 @@ const VERIFY_TIMEOUT_AFTER_COMMAND: Duration = Duration::from_millis(500);
 const VERIFY_STABLE_SAMPLES: u8 = 2;
 const MAX_CONSECUTIVE_MISSES: u8 = 3;
 const RAIL_ERROR_WARN_M: f64 = 0.020;
-const WRIST_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
+const AIM_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
 
 #[derive(Default)]
 struct CommandLatch {
@@ -113,16 +112,9 @@ pub fn spawn(
                 return;
             }
         };
-        let ready_wrist = arm
-            .default_joints
-            .values
-            .get(DIRECT_WRIST_JOINT_INDEX)
-            .copied()
-            .or_else(|| pose.joints.values.get(DIRECT_WRIST_JOINT_INDEX).copied())
-            .unwrap_or(0.0);
         let window = motion::InterceptWindow::default();
-        let controller = DirectController::new(window.y_min, window.y_max, ready_wrist)
-            .expect("기본 레일·손목 제어 설정");
+        let controller = DirectController::new(window.y_min, window.y_max)
+            .expect("기본 레일·라켓 조준 제어 설정");
 
         if let Some(sim_tx) = &sim_tx {
             let _ = sim_tx.try_send(SimUpdate {
@@ -131,14 +123,12 @@ pub fn spawn(
             });
         }
         let _ = event_tx.send(RuntimeEvent::Ready { pose });
-        info!(
-            wrist_ready_rad = f2(ready_wrist),
-            "2단계 단순 제어 준비 — 공마다 레일 최대 2회, 손목축만 추가 제어"
-        );
+        info!("2단계 단순 제어 준비 — 라켓 헤드 x 정렬 + 상대편 끝선 조준");
 
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
         let mut pending_verification: Option<PendingVerification> = None;
+        let mut return_due_at: Option<Instant> = None;
         let mut consecutive_misses: u8 = 0;
 
         while !shutdown.is_down() {
@@ -155,7 +145,7 @@ pub fn spawn(
                         let _ = event_tx.send(RuntimeEvent::Failed {
                             track_seq: latch.track_seq,
                             reason: format!(
-                                "레일·손목 수렴 실패 {consecutive_misses}회 연속 — 제어 중단"
+                                "레일·조준축 수렴 실패 {consecutive_misses}회 연속 — 제어 중단"
                             ),
                         });
                         break;
@@ -163,14 +153,46 @@ pub fn spawn(
                 }
                 VerificationResult::Pending => {}
             }
-            let timeout = pending_verification
+            if pending_verification.is_none()
+                && return_due_at.is_some_and(|due_at| Instant::now() >= due_at)
+            {
+                return_due_at = None;
+                if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
+                    let reason = format!("제어 후 중앙 복귀 실패: {error}");
+                    warn!(%error, "제어 후 중앙 복귀 실패 — 제어를 중단한다");
+                    let _ = event_tx.send(RuntimeEvent::Failed {
+                        track_seq: latch.track_seq,
+                        reason,
+                    });
+                    break;
+                }
+                match hardware.read_pose() {
+                    Ok(pose) => {
+                        if let Some(sim_tx) = &sim_tx {
+                            let _ = sim_tx.try_send(SimUpdate {
+                                pose: Some(PoseMsg::from(&pose)),
+                                ..SimUpdate::default()
+                            });
+                        }
+                        info!(track_seq = latch.track_seq, "제어 후 중앙 복귀 완료");
+                    }
+                    Err(error) => warn!(%error, "중앙 복귀 후 포즈 읽기 실패"),
+                }
+            }
+            let now = Instant::now();
+            let mut timeout = pending_verification
                 .as_ref()
                 .map_or(RECV_TIMEOUT, |pending| {
                     pending
                         .next_check_at
-                        .saturating_duration_since(Instant::now())
+                        .saturating_duration_since(now)
                         .min(RECV_TIMEOUT)
                 });
+            if pending_verification.is_none()
+                && let Some(due_at) = return_due_at
+            {
+                timeout = timeout.min(due_at.saturating_duration_since(now));
+            }
             let request = match rx.recv_timeout(timeout) {
                 Ok(request) => request,
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -191,21 +213,25 @@ pub fn spawn(
                     continue;
                 }
             };
-            let command =
-                match controller.command(&arm, &start, &request.trajectory, request.stage, elapsed)
-                {
-                    Ok(command) => command,
-                    Err(error) => {
-                        debug!(track_seq = request.track_seq, %error, "레일·손목 명령 계산 생략");
-                        continue;
-                    }
-                };
+            let command = match controller.command(
+                &arm,
+                &start,
+                &request.trajectory,
+                request.stage,
+                elapsed,
+            ) {
+                Ok(command) => command,
+                Err(error) => {
+                    debug!(track_seq = request.track_seq, %error, "레일·라켓 조준 명령 계산 생략");
+                    continue;
+                }
+            };
             if let Some(previous) = pending_verification.take() {
                 log_verification(&previous, &start, "superseded", false);
             }
             let applied = match hardware.command_rail_and_racket(
                 command.rail_x,
-                command.wrist_rad,
+                command.aim_rad,
                 command.duration_secs,
             ) {
                 Ok(applied) => applied,
@@ -224,10 +250,17 @@ pub fn spawn(
                 stage: request.stage,
                 target: command.target.position,
                 rail_x: applied.rail_m,
-                wrist_rad: applied.wrist_rad,
+                aim_rad: applied.aim_rad,
             });
 
             let issued_at = Instant::now();
+            let remaining_until_target_secs = (command.target.time_secs - elapsed).max(0.0);
+            return_due_at = Some(
+                issued_at
+                    + Duration::from_secs_f64(
+                        remaining_until_target_secs.max(command.duration_secs),
+                    ),
+            );
             pending_verification = Some(PendingVerification {
                 track_seq: request.track_seq,
                 command,
@@ -248,11 +281,11 @@ pub fn spawn(
                 rail_requested_m = f4(command.rail_x),
                 rail_applied_m = f4(applied.rail_m),
                 rail_sent = applied.rail_sent,
-                wrist_requested_rad = f4(command.wrist_rad),
-                wrist_applied_rad = f4(applied.wrist_rad),
-                wrist_applied_deg = f2(applied.wrist_rad.to_degrees()),
+                aim_requested_rad = f4(command.aim_rad),
+                aim_applied_rad = f4(applied.aim_rad),
+                aim_applied_deg = f2(applied.aim_rad.to_degrees()),
                 duration_secs = f2(command.duration_secs),
-                "2단계 단순 제어 명령"
+                "2단계 라켓 헤드 정렬·조준 명령"
             );
         }
 
@@ -284,7 +317,7 @@ fn verify_due_command(
             warn!(
                 track_seq = verification.track_seq,
                 %error,
-                "명령 후 레일·손목 재측정 타임아웃"
+                "명령 후 레일·조준축 재측정 타임아웃"
             );
             pending.take();
             return VerificationResult::Missed;
@@ -293,13 +326,13 @@ fn verify_due_command(
     let verification = pending.as_mut().expect("시간이 된 명령 측정");
     let Some(measurement) = DirectControlMeasurement::from_commanded(
         verification.applied.rail_m,
-        verification.applied.wrist_rad,
+        verification.applied.aim_rad,
         &pose,
     ) else {
         warn!(
             track_seq = verification.track_seq,
             measured_joint_count = pose.joints.values.len(),
-            "명령 후 재측정에 손목축이 없음"
+            "명령 후 재측정에 라켓 조준축이 없음"
         );
         pending.take();
         return VerificationResult::Missed;
@@ -312,7 +345,7 @@ fn verify_due_command(
     }
 
     let within_tolerance = measurement.rail_error_m.abs() <= RAIL_ERROR_WARN_M
-        && measurement.wrist_error_rad.abs() <= WRIST_ERROR_WARN_RAD;
+        && measurement.aim_error_rad.abs() <= AIM_ERROR_WARN_RAD;
     if within_tolerance {
         verification.stable_samples = verification.stable_samples.saturating_add(1);
     } else {
@@ -333,8 +366,8 @@ fn verify_due_command(
         track_seq = verification.track_seq,
         stage = ?verification.command.stage,
         rail_error_m = f4(measurement.rail_error_m),
-        wrist_error_deg = f2(measurement.wrist_error_rad.to_degrees()),
-        "레일·손목 수렴 대기"
+        aim_error_deg = f2(measurement.aim_error_rad.to_degrees()),
+        "레일·조준축 수렴 대기"
     );
     return VerificationResult::Pending;
 }
@@ -347,30 +380,30 @@ fn log_verification(
 ) {
     let Some(measurement) = DirectControlMeasurement::from_commanded(
         verification.applied.rail_m,
-        verification.applied.wrist_rad,
+        verification.applied.aim_rad,
         pose,
     ) else {
         return;
     };
     let outside_tolerance = measurement.rail_error_m.abs() > RAIL_ERROR_WARN_M
-        || measurement.wrist_error_rad.abs() > WRIST_ERROR_WARN_RAD;
+        || measurement.aim_error_rad.abs() > AIM_ERROR_WARN_RAD;
     let log_measurement = || {
         (
             measurement.rail_commanded_m,
             measurement.rail_measured_m,
             measurement.rail_error_m,
-            measurement.wrist_commanded_rad.to_degrees(),
-            measurement.wrist_measured_rad.to_degrees(),
-            measurement.wrist_error_rad.to_degrees(),
+            measurement.aim_commanded_rad.to_degrees(),
+            measurement.aim_measured_rad.to_degrees(),
+            measurement.aim_error_rad.to_degrees(),
         )
     };
     let (
         rail_commanded_m,
         rail_measured_m,
         rail_error_m,
-        wrist_commanded_deg,
-        wrist_measured_deg,
-        wrist_error_deg,
+        aim_commanded_deg,
+        aim_measured_deg,
+        aim_error_deg,
     ) = log_measurement();
     if warning || outside_tolerance {
         warn!(
@@ -385,12 +418,12 @@ fn log_verification(
             rail_commanded_m = f4(rail_commanded_m),
             rail_measured_m = f4(rail_measured_m),
             rail_commanded_minus_measured_m = f4(rail_error_m),
-            wrist_commanded_rad = f4(measurement.wrist_commanded_rad),
-            wrist_measured_rad = f4(measurement.wrist_measured_rad),
-            wrist_commanded_minus_measured_rad = f4(measurement.wrist_error_rad),
-            wrist_commanded_deg = f2(wrist_commanded_deg),
-            wrist_measured_deg = f2(wrist_measured_deg),
-            wrist_commanded_minus_measured_deg = f2(wrist_error_deg),
+            aim_commanded_rad = f4(measurement.aim_commanded_rad),
+            aim_measured_rad = f4(measurement.aim_measured_rad),
+            aim_commanded_minus_measured_rad = f4(measurement.aim_error_rad),
+            aim_commanded_deg = f2(aim_commanded_deg),
+            aim_measured_deg = f2(aim_measured_deg),
+            aim_commanded_minus_measured_deg = f2(aim_error_deg),
             "명령 후 제어 수렴 실패"
         );
     } else {
@@ -406,18 +439,18 @@ fn log_verification(
             rail_commanded_m = f4(rail_commanded_m),
             rail_measured_m = f4(rail_measured_m),
             rail_commanded_minus_measured_m = f4(rail_error_m),
-            wrist_commanded_rad = f4(measurement.wrist_commanded_rad),
-            wrist_measured_rad = f4(measurement.wrist_measured_rad),
-            wrist_commanded_minus_measured_rad = f4(measurement.wrist_error_rad),
-            wrist_commanded_deg = f2(wrist_commanded_deg),
-            wrist_measured_deg = f2(wrist_measured_deg),
-            wrist_commanded_minus_measured_deg = f2(wrist_error_deg),
+            aim_commanded_rad = f4(measurement.aim_commanded_rad),
+            aim_measured_rad = f4(measurement.aim_measured_rad),
+            aim_commanded_minus_measured_rad = f4(measurement.aim_error_rad),
+            aim_commanded_deg = f2(aim_commanded_deg),
+            aim_measured_deg = f2(aim_measured_deg),
+            aim_commanded_minus_measured_deg = f2(aim_error_deg),
             "명령 후 제어 괴리 측정"
         );
     }
 }
 
-/// 시작 시에만 기존 전체축 센터 이동을 사용한다.
+/// 시작 시와 공 제어 후에 기존 전체축 센터 이동을 사용한다.
 fn move_to_center(hardware: &mut dyn Hardware, arm: &Arm) -> Result<(), MoveError> {
     let start = hardware.read_pose().map_err(MoveError::Hardware)?;
     let trajectory = Planner::return_to_center(arm, &start).map_err(MoveError::Plan)?;
@@ -500,19 +533,19 @@ mod tests {
                 time_secs: 0.2,
             },
             rail_x: 0.30,
-            wrist_rad: -0.40,
+            aim_rad: -0.40,
             duration_secs: 0.1,
         };
         let mut hardware = ReadCountingHardware {
             reads: 0,
-            pose: Pose::new(0.29, Joints::from_slice(&[0.0, 0.0, 0.0, -0.41])),
+            pose: Pose::new(0.29, Joints::from_slice(&[0.0, -0.41, 0.0, 0.0])),
         };
         let mut pending = Some(PendingVerification {
             track_seq: 7,
             command,
             applied: AppliedRailRacketCommand {
                 rail_m: 0.30,
-                wrist_rad: -0.40,
+                aim_rad: -0.40,
                 rail_sent: true,
             },
             issued_at: Instant::now() - Duration::from_millis(100),

@@ -12,9 +12,7 @@ use crate::estimator;
 use crate::estimator::BallTrajectory;
 use crate::estimator::Estimator;
 use crate::hardware::Hardware;
-use crate::robot::control::{
-    DIRECT_WRIST_JOINT_INDEX, DirectController, PredictionStability, PredictionStage,
-};
+use crate::robot::control::{DirectController, PredictionStability, PredictionStage};
 use crate::telemetry::Telemetry;
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
@@ -155,15 +153,8 @@ pub fn run(
     let slot = Arc::clone(&trajectories);
     let shutdown_control = Arc::clone(&shutdown);
     let arm = Arc::clone(&config.robot.arm);
-    let ready_wrist = arm
-        .default_joints
-        .values
-        .get(DIRECT_WRIST_JOINT_INDEX)
-        .copied()
-        .unwrap_or(0.0);
-    let controller =
-        DirectController::new(config.intercept.y_min, config.intercept.y_max, ready_wrist)
-            .map_err(|error| PipelineError::Configuration(error.to_string()))?;
+    let controller = DirectController::new(config.intercept.y_min, config.intercept.y_max)
+        .map_err(|error| PipelineError::Configuration(error.to_string()))?;
     let tick = Duration::from_secs_f64(1.0 / config.control_hz);
     handles.push((
         PipelineThread::Control,
@@ -197,7 +188,7 @@ pub fn run(
                         Err(error) => {
                             let now = Instant::now();
                             if now.duration_since(last_plan_warn) >= Duration::from_secs(1) {
-                                warn!(%error, "레일·손목 목표 선택 실패");
+                                warn!(%error, "레일·라켓 조준 목표 선택 실패");
                                 last_plan_warn = now;
                             }
                             continue;
@@ -215,7 +206,7 @@ pub fn run(
                         };
                     match hardware.command_rail_and_racket(
                         command.rail_x,
-                        command.wrist_rad,
+                        command.aim_rad,
                         command.duration_secs,
                     ) {
                         Ok(applied) => {
@@ -223,8 +214,8 @@ pub fn run(
                             info!(
                                 ?stage,
                                 rail_applied_m = applied.rail_m,
-                                wrist_applied_rad = applied.wrist_rad,
-                                "공통 레일·손목 명령"
+                                aim_applied_rad = applied.aim_rad,
+                                "공통 레일·라켓 조준 명령"
                             );
                         }
                         Err(error) => warn!(?error, "하드웨어 명령 실패"),

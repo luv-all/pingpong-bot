@@ -8,8 +8,8 @@ pub const MAX_INTERCEPT_SAMPLES: usize = 1_024;
 /// Magnus |ω| 클립 [rad/s].
 pub const MAGNUS_OMEGA_MAX: f64 = 80.0;
 
-/// 실기 AXL 레일 가속/감속 [m/s²] — `RailConfig::default().accel`과 맞춤.
-pub const RAIL_ACCEL_M_S2: f64 = 12.0;
+/// 실기 AXL 레일 가속/감속 [m/s²] — `RailConfig::default()`도 이 값을 쓴다.
+pub const RAIL_ACCEL_M_S2: f64 = 16.0;
 pub const POSITION_TOLERANCE_RAD_OR_M: f64 = 1e-3;
 pub const RACKET_SPEED_RATIO_TOLERANCE: f64 = 0.15;
 pub const RACKET_DIRECTION_TOLERANCE_DEG: f64 = 15.0;

@@ -222,7 +222,7 @@ impl Hardware for RealHardware {
     fn command_rail_and_racket(
         &mut self,
         rail_x: f64,
-        racket_joint_rad: f64,
+        aim_joint_rad: f64,
         duration_secs: f64,
     ) -> Result<AppliedRailRacketCommand, HwError> {
         self.reap_executor();
@@ -245,9 +245,9 @@ impl Hardware for RealHardware {
                 None => (0.0, false),
             }
         };
-        // 4-DOF 배선의 마지막 논리 관절은 라켓 손목(ID 5)이다. 이 호출은
-        // ID 1/2/3/4에 Goal Position을 보내지 않는다.
-        let applied_wrist_rad = self
+        // 4-DOF 논리 관절 1번은 라켓 수평 조준축(ID 3)이다.
+        // 다른 관절에는 Goal Position을 보내지 않는다.
+        let applied_aim_rad = self
             .bus
             .lock()
             .map_err(|_| HwError::CommandFailed {
@@ -255,10 +255,10 @@ impl Hardware for RealHardware {
                 joint_count: 1,
                 reason: "Dynamixel bus mutex poisoned".into(),
             })?
-            .write_joint(3, racket_joint_rad)?;
+            .write_joint(crate::robot::control::DIRECT_AIM_JOINT_INDEX, aim_joint_rad)?;
         return Ok(AppliedRailRacketCommand {
             rail_m: applied_rail_m,
-            wrist_rad: applied_wrist_rad,
+            aim_rad: applied_aim_rad,
             rail_sent,
         });
     }
@@ -280,9 +280,11 @@ impl Hardware for RealHardware {
         }
         if let Ok(mut bus) = self.bus.lock()
             && let Ok(joints) = bus.read_joints()
-            && let Some(wrist) = joints.values.get(3)
+            && let Some(aim) = joints
+                .values
+                .get(crate::robot::control::DIRECT_AIM_JOINT_INDEX)
         {
-            let _ = bus.write_joint(3, *wrist);
+            let _ = bus.write_joint(crate::robot::control::DIRECT_AIM_JOINT_INDEX, *aim);
         }
     }
 }
@@ -401,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_tracking_changes_only_rail_and_racket_joint() {
+    fn direct_tracking_changes_only_rail_and_aim_joint() {
         let config = DynamixelConfig {
             stream_hz: 500.0,
             ..DynamixelConfig::default()
@@ -414,15 +416,15 @@ mod tests {
             .command_rail_and_racket(0.35, -0.25, 0.1)
             .expect("tracking command");
         assert!((applied.rail_m - 0.35).abs() < 1e-9);
-        assert!((applied.wrist_rad - -0.25).abs() < 0.002);
+        assert!((applied.aim_rad - -0.25).abs() < 0.002);
         assert!(applied.rail_sent);
 
         let after = hardware.read_pose().expect("after");
         assert!((after.rail_x - 0.35).abs() < 1e-9);
-        for index in 0..3 {
+        for index in [0, 2, 3] {
             assert!((after.joints.values[index] - before.joints.values[index]).abs() < 0.002);
         }
-        assert!((after.joints.values[3] - -0.25).abs() < 0.002);
+        assert!((after.joints.values[1] - -0.25).abs() < 0.002);
     }
 
     #[test]

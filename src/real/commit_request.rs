@@ -5,7 +5,7 @@ use std::time::Instant;
 use pingpong_bot::estimator::BallTrajectory;
 use pingpong_bot::robot::control::PredictionStage;
 
-/// 최신 공 궤적을 이용해 레일과 손목의 한 단계를 갱신하라는 요청.
+/// 최신 공 궤적을 이용해 레일과 라켓 조준의 한 단계를 갱신하라는 요청.
 pub struct CommitRequest {
     /// EKF가 구분한 공 궤적 번호. 새 번호면 제어 단계 래치를 초기화한다.
     pub track_seq: u64,

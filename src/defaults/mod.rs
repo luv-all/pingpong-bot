@@ -112,6 +112,8 @@ mod tests {
         DynamixelConfig::default().validate().unwrap();
         RailConfig::default().validate().unwrap();
         let rail_config = RailConfig::default();
+        assert_eq!(rail_config.accel, RAIL_ACCEL_M_S2);
+        assert_eq!(rail_config.decel, RAIL_ACCEL_M_S2);
         let robot = robot().unwrap();
         let model_rail = robot.arm.rail.expect("기본 로봇 리니어 레일");
         assert_eq!(model_rail.x_min, rail_config.x_min_m);

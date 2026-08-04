@@ -13,7 +13,7 @@ use crate::estimator;
 use crate::estimator::Prediction;
 use crate::robot::Arm;
 use crate::robot::control::{
-    DIRECT_WRIST_JOINT_INDEX, DirectController, PredictionStability, PredictionStage,
+    DIRECT_AIM_JOINT_INDEX, DirectController, PredictionStability, PredictionStage,
     REFINED_MIN_OBSERVATION_SECS,
 };
 use crate::robot::motion;
@@ -115,6 +115,8 @@ pub struct SimWorld {
     /// 이번 비행이 발사된 `sim_time` — `park_if_out_of_play`의 최대 비행
     /// 시간 안전장치(`MAX_BALL_FLIGHT_SECS`)가 기준으로 삼는다.
     flight_started_at: f64,
+    /// 직접 제어 목표 시각 후 중앙 복귀를 시작할 sim 시각.
+    direct_return_at: Option<f64>,
     /// 뷰어·Status용 디버그 스냅샷 (실패 사유·궤적·한계).
     debug_snap: SimDebugSnapshot,
     /// [임시 진단] 마지막 틱의 `try_auto_swing` marker 스캔 소요 [s].
@@ -418,6 +420,7 @@ impl SimWorld {
             hard_fail_streak: 0,
             last_swing_attempt_at: f64::NEG_INFINITY,
             flight_started_at: 0.0,
+            direct_return_at: None,
             debug_snap: SimDebugSnapshot::default(),
             diag_marker_secs: 0.0,
             diag_predictions_secs: 0.0,
@@ -585,6 +588,7 @@ impl SimWorld {
         self.robot.step_commands(&self.arm, dt);
         let t_swing = std::time::Instant::now();
         self.try_auto_swing(dt);
+        self.try_direct_return_to_center();
         self.diag_auto_swing_secs = t_swing.elapsed().as_secs_f64();
         self.drive_arm_motors();
         self.apply_ball_aero_forces();
@@ -855,15 +859,7 @@ impl SimWorld {
         else {
             return;
         };
-        let ready_wrist = self
-            .arm
-            .default_joints
-            .values
-            .get(DIRECT_WRIST_JOINT_INDEX)
-            .copied()
-            .unwrap_or(0.0);
-        let Ok(controller) =
-            DirectController::new(self.intercept.y_min, self.intercept.y_max, ready_wrist)
+        let Ok(controller) = DirectController::new(self.intercept.y_min, self.intercept.y_max)
         else {
             return;
         };
@@ -884,14 +880,14 @@ impl SimWorld {
         }
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
         // 이 궤적은 현재 sim 상태에서 바로 표본화했으므로 기준시각 경과는 0이다.
-        // 목표 선택·레일 clamp·손목 단계·명령시간 계산은 실기 워커와 같은 코드다.
+        // 목표 선택·라켓 헤드 x 정렬·끝선 조준·명령시간 계산은 실기와 같은 코드다.
         let command = match controller.command_for_target(&self.arm, &start, target, stage, 0.0) {
             Ok(command) => command,
             Err(error) => {
                 self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
                 self.debug_snap.last_fail_text = Some(error.to_string());
                 if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
-                    warn!(shot = self.shot_seq, %error, "shot: 레일·손목 명령 계산 실패");
+                    warn!(shot = self.shot_seq, %error, "shot: 레일·라켓 조준 명령 계산 실패");
                 }
                 return;
             }
@@ -899,32 +895,56 @@ impl SimWorld {
         self.hard_fail_streak = 0;
         self.debug_snap.clear_fail_on_success();
         let mut targets = self.robot.targets().clone();
-        let Some(wrist) = targets.values.get_mut(DIRECT_WRIST_JOINT_INDEX) else {
+        let Some(aim) = targets.values.get_mut(DIRECT_AIM_JOINT_INDEX) else {
             warn!(
                 shot = self.shot_seq,
                 joint_count = targets.values.len(),
-                "shot: sim 손목축이 없어 명령 적용 실패"
+                "shot: sim 라켓 조준축이 없어 명령 적용 실패"
             );
             return;
         };
-        *wrist = command.wrist_rad;
+        *aim = command.aim_rad;
         self.robot.set_auto_return_to_center(false);
         self.robot
             .set_rail_target_in_secs(&self.arm, command.rail_x, command.duration_secs);
         self.robot.set_targets(targets);
+        self.direct_return_at = Some(self.sim_time + command.target.time_secs.max(0.0));
         info!(
             shot = self.shot_seq,
             stage = ?command.stage,
             duration_secs = command.duration_secs,
             rail_commanded_m = command.rail_x,
-            wrist_commanded_deg = command.wrist_rad.to_degrees(),
+            aim_commanded_deg = command.aim_rad.to_degrees(),
             target = ?command.target.position.coords,
             arrival_secs = command.target.time_secs,
-            "shot: 공통 레일·손목 직접 명령 commit"
+            "shot: 공통 레일·라켓 헤드 정렬·조준 명령 commit"
         );
         self.swing_committed = true;
         self.debug_snap.commit_phase = CommitPhase::Committed;
         self.position_refined = refined;
+    }
+
+    /// 공의 선택 목표 시각이 지나면 기존 센터 복귀 궤적을 시작한다.
+    /// 정밀 예측 명령이 나오면 `direct_return_at`을 최신 목표 시각으로 갱신한다.
+    fn try_direct_return_to_center(&mut self) {
+        let Some(return_at) = self.direct_return_at else {
+            return;
+        };
+        if self.sim_time < return_at || self.robot.is_swinging() {
+            return;
+        }
+        let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
+        match motion::Planner::return_to_center(&self.arm, &start) {
+            Ok(trajectory) => {
+                self.direct_return_at = None;
+                self.robot.replace_swing(trajectory);
+                info!(shot = self.shot_seq, "shot: 제어 후 중앙 복귀 시작");
+            }
+            Err(error) => {
+                self.direct_return_at = None;
+                warn!(shot = self.shot_seq, %error, "shot: 제어 후 중앙 복귀 계획 실패");
+            }
+        }
     }
 
     /// bang-bang(GUI 디버그) 커밋 경로 — `plan_bang_bang_swing`을 이 스레드
@@ -1099,6 +1119,7 @@ impl SimWorld {
         self.hard_fail_streak = 0;
         self.last_swing_attempt_at = f64::NEG_INFINITY;
         self.flight_started_at = self.sim_time;
+        self.direct_return_at = None;
         self.debug_snap.reset_for_new_flight();
         self.try_auto_swing(f64::from(self.integration_parameters.dt));
     }
@@ -1944,7 +1965,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_swing_on_shoot_moves_rail() {
+    fn direct_control_on_shoot_moves_rail() {
         let arm = test_robot();
         assert!(arm.arm.rail.is_some(), "테스트 arm은 리니어 포함");
         let mut world = SimWorld::new(arm);
@@ -1952,75 +1973,52 @@ mod tests {
         let settings = launch::Settings::default();
         let origin = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         world.shoot_ball(&settings);
-        assert!(
-            world.robot().is_swinging(),
-            "위치 제어는 발사 직후 미리 이동을 시작해야 함"
-        );
-        let mut farthest = origin.rail_x;
+        let mut max_displacement = 0.0_f64;
         for _ in 0..1_500 {
             world.step(1.0 / 1000.0, None);
-            farthest = farthest.max(world.robot().rail_x());
+            max_displacement = max_displacement.max((world.robot().rail_x() - origin.rail_x).abs());
         }
         assert!(
-            farthest > origin.rail_x + 0.2,
-            "레일이 공 위치 방향으로 이동해야 함 (max={farthest})"
+            world.swing_committed(),
+            "발사 후 직접 제어 명령이 적용돼야 함"
+        );
+        assert!(
+            max_displacement > 0.02,
+            "라켓 헤드 x를 공 x에 맞추려 레일이 이동해야 함 (distance={max_displacement})"
         );
     }
 
-    /// 실물 로봇은 모터 토크 한계 때문에 레일 한쪽 끝→반대쪽 끝처럼 급한
-    /// 이동을 못 만든다 — 매 스윙 뒤 항상 테이블 폭 중앙(레일 `default_x`,
-    /// 관절 `default_joints`)으로 복귀시켜 다음 스윙의 시작 조건을 일정하게
-    /// 유지해야 한다. `home_x`(레일 원점, x=0)는 부팅 시 대기 위치일 뿐 여기서
-    /// 말하는 중앙이 아니다. 스윙이 끝난 뒤 다음 공을 쏘지 않아도 로봇이
-    /// 저절로 복귀하는지 검증한다.
+    /// 직접 제어 목표 시각이 지난 뒤 레일과 관절이 중앙 준비 자세로
+    /// 복귀하는지 검증한다.
     #[test]
-    fn robot_returns_to_start_after_positioning_without_next_shot() {
+    fn direct_control_returns_to_center_after_target_time() {
         let arm = test_robot();
         let mut world = SimWorld::new(arm);
         world.set_use_ground_truth(true);
         let origin = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         world.shoot_ball(&launch::Settings::default());
 
-        let mut swing_started = false;
-        for _ in 0..800 {
+        let mut moved = false;
+        for _ in 0..2_000 {
             world.step(1.0 / 1000.0, None);
-            if world.robot().is_swinging() {
-                swing_started = true;
-                break;
+            if (world.robot().rail_x() - origin.rail_x).abs() > 0.02 {
+                moved = true;
             }
         }
-        assert!(swing_started, "스윙이 시작되어야 함");
-
-        // 타격 스윙이 끝나면 로봇이 곧바로 복귀 궤적을 이어서 시작하므로
-        // (`robot::State::step_toward_targets`), `is_swinging()`은 타격+팔로스루
-        // +복귀 전체를 하나의 연속 동작으로 본다 — "다 끝났다"는 신호는
-        // `is_swinging()`이 다시 false가 되는 순간 하나뿐이고, 그 시점에는
-        // 이미 중앙 복귀까지 끝나 있어야 한다.
-        let mut swing_ended = false;
-        for _ in 0..6_000 {
+        assert!(moved, "라켓 헤드를 공 x에 맞추기 위해 레일이 이동해야 함");
+        for _ in 0..5_000 {
             world.step(1.0 / 1000.0, None);
-            if !world.robot().is_swinging() {
-                swing_ended = true;
-                break;
-            }
         }
-        assert!(swing_ended, "타격+복귀가 끝나야 함");
-
-        let rail_x = world.robot().rail_x();
-        let joints_close = world
+        let joints_at_center = world
             .robot()
             .joints()
             .values
             .iter()
             .zip(origin.joints.values.iter())
-            .all(|(actual, expected)| (actual - expected).abs() < 1e-2);
+            .all(|(actual, center)| (actual - center).abs() < 1e-2);
         assert!(
-            (rail_x - origin.rail_x).abs() < 1e-2 && joints_close,
-            "위치 이동 뒤 출발 자세(rail={})로 복귀해야 함 \
-             (실제 rail={rail_x}, joints={:?}, origin={:?})",
-            origin.rail_x,
-            world.robot().joints().values,
-            origin.joints.values,
+            (world.robot().rail_x() - origin.rail_x).abs() < 1e-2 && joints_at_center,
+            "제어 후 중앙 준비 자세로 복귀해야 함"
         );
     }
 

@@ -843,7 +843,7 @@ fn kinematic_limits_ok(arm: &Arm, trajectory: &Trajectory) -> bool {
 /// 레일 가속도 한계 검사.
 ///
 /// 0.702 m 센터 이동을 0.36 s로 계획했던 실기 로그에서 잔차가
-/// 0.27 m 남았다. AXL과 같은 12 m/s²를 강제해 계획 자세와 실제
+/// 0.27 m 남았다. AXL과 같은 레일 가속도를 강제해 계획 자세와 실제
 /// 자세가 갈라지지 않게 한다.
 const RAIL_ACCEL_CHECK_ENABLED: bool = true;
 
@@ -883,7 +883,7 @@ fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'sta
     // **2026-07-31 재활성화.** 시간 하한(`min_swing_secs`)을 없애 늦은 스윙까지 허용하면서,
     // 레일을 몰아붙이는 궤적을 막을 게 이 검사밖에 남지 않았다 — 시간 게이트가 하던 암묵적
     // 보호를 물리 한계로 옮긴 것이다 (사용자 결정). 위 경고는 그대로 유효하다:
-    // `RAIL_ACCEL_M_S2 = 12.0`은 여전히 **미검증 placeholder**이고 실기 레일은 더 빠를
+    // `RAIL_ACCEL_M_S2 = 16.0`은 여전히 **벤치 검증 중인 값**이고 실기 레일은 더 빠를
     // 가능성이 높다. 커밋률이 떨어지면 값이 낮은 것이지 검사가 틀린 게 아니다 —
     // 벤치 스텝 응답으로 실측해 `RAIL_ACCEL_M_S2`를 갱신할 것.
     if RAIL_ACCEL_CHECK_ENABLED

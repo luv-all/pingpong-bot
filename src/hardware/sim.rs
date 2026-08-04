@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::error::HwError;
 use crate::hardware::{AppliedRailRacketCommand, Hardware};
-use crate::robot::control::DIRECT_WRIST_JOINT_INDEX;
+use crate::robot::control::DIRECT_AIM_JOINT_INDEX;
 use crate::robot::motion;
 use tracing::debug;
 
@@ -89,34 +89,34 @@ impl Hardware for SimHardware {
     fn command_rail_and_racket(
         &mut self,
         rail_x: f64,
-        racket_joint_rad: f64,
+        aim_joint_rad: f64,
         duration_secs: f64,
     ) -> Result<AppliedRailRacketCommand, HwError> {
-        if !rail_x.is_finite() || !racket_joint_rad.is_finite() || !duration_secs.is_finite() {
+        if !rail_x.is_finite() || !aim_joint_rad.is_finite() || !duration_secs.is_finite() {
             return Err(HwError::InvalidConfig {
-                reason: "sim 레일·손목 명령에 유효하지 않은 값이 있음".into(),
+                reason: "sim 레일·라켓 조준 명령에 유효하지 않은 값이 있음".into(),
             });
         }
         {
             let mut world = self.world.lock().expect("sim 월드");
             let applied_rail_m = world.arm.rail.map_or(rail_x, |rail| rail.clamp_x(rail_x));
-            let applied_wrist_rad = world
+            let applied_aim_rad = world
                 .arm
-                .joint_limit(DIRECT_WRIST_JOINT_INDEX)
-                .map_or(racket_joint_rad, |limit| {
-                    racket_joint_rad.clamp(limit.min, limit.max)
+                .joint_limit(DIRECT_AIM_JOINT_INDEX)
+                .map_or(aim_joint_rad, |limit| {
+                    aim_joint_rad.clamp(limit.min, limit.max)
                 });
             let mut targets = world.robot().targets().clone();
-            let Some(wrist) = targets.values.get_mut(DIRECT_WRIST_JOINT_INDEX) else {
+            let Some(aim) = targets.values.get_mut(DIRECT_AIM_JOINT_INDEX) else {
                 return Err(HwError::InvalidConfig {
                     reason: format!(
-                        "sim 로봇 관절 {}개에는 손목축 인덱스 {}가 없음",
+                        "sim 로봇 관절 {}개에는 라켓 조준축 인덱스 {}가 없음",
                         targets.values.len(),
-                        DIRECT_WRIST_JOINT_INDEX
+                        DIRECT_AIM_JOINT_INDEX
                     ),
                 });
             };
-            *wrist = applied_wrist_rad;
+            *aim = applied_aim_rad;
             let arm = Arc::clone(&world.arm);
             world
                 .robot_mut()
@@ -127,13 +127,13 @@ impl Hardware for SimHardware {
             debug!(
                 commands = self.command_count,
                 rail_commanded_m = applied_rail_m,
-                wrist_commanded_rad = applied_wrist_rad,
+                aim_commanded_rad = applied_aim_rad,
                 duration_secs,
-                "sim 레일·손목 직접 명령 적용"
+                "sim 레일·라켓 조준 직접 명령 적용"
             );
             return Ok(AppliedRailRacketCommand {
                 rail_m: applied_rail_m,
-                wrist_rad: applied_wrist_rad,
+                aim_rad: applied_aim_rad,
                 rail_sent: world.arm.rail.is_some(),
             });
         }

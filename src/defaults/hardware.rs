@@ -3,6 +3,8 @@
 use crate::hardware::dynamixel::{DynamixelConfig, MirrorSlave};
 use crate::hardware::rail::RailConfig;
 
+use super::motion::RAIL_ACCEL_M_S2;
+
 /// 실측 AXL 레일의 앱 좌표 범위 [m]. 로봇 IK와 실기 드라이버가 반드시 같은 값을 쓴다.
 pub const RAIL_X_MIN_M: f64 = 0.0;
 pub const RAIL_X_MAX_M: f64 = 1.41;
@@ -90,8 +92,8 @@ impl Default for RailConfig {
             x_min_m: RAIL_X_MIN_M,
             x_max_m: RAIL_X_MAX_M,
             vel: 5.0,
-            accel: 12.0,
-            decel: 12.0,
+            accel: RAIL_ACCEL_M_S2,
+            decel: RAIL_ACCEL_M_S2,
             min_vel: 0.001,
             max_vel: 5.0,
             pulse_out_method: 4,
