@@ -132,14 +132,14 @@ mod tests {
         assert_eq!(shared_robot().arm.joint_count(), 4);
     }
 
-    /// 커밋된 캘리브 SSOT로 만든 부피 마스크가 테이블을 살려두는지 — 리그를
-    /// 다시 캘리브했을 때 마스크가 테이블을 지워버리는 배치를 여기서 잡는다.
+    /// 커밋된 캘리브로 테이블 네 귀퉁이와 중앙이 화면 안에 드는지.
+    ///
+    /// 리그를 다시 캘리브했을 때 테이블이 화각을 벗어나는 배치를 여기서 잡는다. 벗어나면
+    /// 그 구석의 공은 두 대가 같이 못 보고, 삼각측량이 안 되는 사각이 생긴다.
     #[test]
-    fn committed_calibration_keeps_the_whole_table() {
+    fn committed_calibration_sees_the_whole_table() {
         use crate::Point3;
         use crate::constants::table;
-        use crate::vision::detect::Volume;
-        use opencv::prelude::*;
 
         let z = table::SURFACE_Z;
         let probes = [
@@ -152,16 +152,12 @@ mod tests {
 
         for id in [camera::Id(0), camera::Id(1)] {
             let cam = camera_params_for(id).unwrap();
-            let volume = Volume::from_calib(&cam).unwrap();
             for (name, x, y) in probes {
-                let Some(px) = cam.project_world(Point3::new(x, y, z)) else {
-                    panic!("cam{}: table {name} not in frame", id.0);
-                };
-                let keep: u8 = *volume
-                    .keep
-                    .at_2d(px.y.round() as i32, px.x.round() as i32)
-                    .unwrap();
-                assert_eq!(keep, 255, "cam{}: table {name} was masked out", id.0);
+                assert!(
+                    cam.project_world(Point3::new(x, y, z)).is_some(),
+                    "cam{}: 테이블 {name} 이 화각 밖이다",
+                    id.0
+                );
             }
         }
     }

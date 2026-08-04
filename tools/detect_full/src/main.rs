@@ -34,7 +34,6 @@ const DIMMED: f64 = 0.22;
 /// 본선과 같은 조립. 여기가 유일한 SSOT 라 툴과 런타임이 갈릴 수 없다.
 fn detector_for(params: &camera::Params) -> Result<Detector> {
     let layers: Vec<Box<dyn Layer>> = vec![
-        Box::new(detect::Volume::from_calib(params)?),
         Box::new(detect::Background::new(
             detect::background::HISTORY,
             detect::background::VAR_THRESHOLD,

@@ -3,9 +3,7 @@
 pub mod background;
 mod color;
 mod color_box;
-mod volume;
 
 pub use background::Background;
 pub use color::ColorPlane;
 pub use color_box::ColorBox;
-pub use volume::Volume;

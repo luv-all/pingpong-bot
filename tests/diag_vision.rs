@@ -98,14 +98,6 @@ fn vision_pipeline_on_a_clip() {
         frames += 1;
     }
 
-    for params in &calibration.cameras {
-        let volume = pingpong_bot::vision::detect::Volume::from_calib(params).expect("volume");
-        println!(
-            "cam{} 부피 keep {:.0}%",
-            params.camera_id.0,
-            volume.keep_ratio().expect("ratio")
-        );
-    }
     println!("clip={name} frames={frames} fps={fps:.1}");
     println!(
         "검출 cam0={} cam1={}  ({:.0}% / {:.0}%)",

@@ -7,7 +7,7 @@ mod pick;
 
 pub use colormask::{ColorSpace, ColormaskParams};
 pub use layer::Layer;
-pub use layers::{Background, ColorBox, ColorPlane, Volume, background};
+pub use layers::{Background, ColorBox, ColorPlane, background};
 pub use pick::{MIN_CIRCULARITY, Picker};
 
 use anyhow::Result;
@@ -46,13 +46,16 @@ impl Detector {
         };
     }
 
-    /// 본선 캐스케이드. 싼 것부터 — 부피는 정적 AND 라 가장 싸다.
+    /// 본선 캐스케이드.
     ///
     /// 이 조립이 SSOT 다. 실기 워커도 툴도 여기를 부른다. 레이어를 갈아끼울 땐 여기만
     /// 고치면 되고, 개수가 변해도 `detect-full` 은 그대로 돈다.
+    ///
+    /// 공간 레이어(비행 부피 밖 끄기)는 뺐다. 두 카메라가 테이블 끝에서 부피를 정면으로
+    /// 보고 있어서 화면이 곧 부피다 — 실측 keep 이 cam0 86 %, cam1 100 % 였다. 매 프레임
+    /// 풀프레임 AND 를 내고 아무것도 안 얻는다. 카메라를 옆으로 옮기면 다시 볼 값이 있다.
     pub fn for_camera(params: &camera::Params) -> Result<Self> {
         let layers: Vec<Box<dyn Layer>> = vec![
-            Box::new(Volume::from_calib(params)?),
             Box::new(Background::new(
                 background::HISTORY,
                 background::VAR_THRESHOLD,

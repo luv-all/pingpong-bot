@@ -331,37 +331,3 @@ fn does_the_committed_rig_cover_the_intercept_window() {
     }
     println!("2 = 삼각측량 가능, 1 이하 = 깊이 안 잡힘");
 }
-
-/// 부피 레이어가 지금 리그에서 실제로 뭘 지우나.
-#[test]
-#[ignore = "커밋된 캘리브 확인"]
-fn how_much_does_the_volume_layer_remove() {
-    use pingpong_bot::vision::detect::Volume;
-
-    let calibration = Calibration::load_json(&defaults::calibration_path()).expect("calibration");
-    for params in &calibration.cameras {
-        let volume = Volume::from_calib(params).expect("volume");
-        println!(
-            "cam{}  keep {:.1}%  (100 이면 아무것도 안 지운다)",
-            params.camera_id.0,
-            volume.keep_ratio().expect("ratio")
-        );
-        // 마스크 모양을 눈으로 — 어디를 지우는지 비율만으로는 모른다.
-        use opencv::prelude::MatTraitConst;
-        let (h, w) = (volume.keep.rows(), volume.keep.cols());
-        for row in 0..20 {
-            let y = row * (h - 1) / 19;
-            let line: String = (0..40)
-                .map(|col| {
-                    let x = col * (w - 1) / 39;
-                    if *volume.keep.at_2d::<u8>(y, x).expect("at") > 0 {
-                        '#'
-                    } else {
-                        '.'
-                    }
-                })
-                .collect();
-            println!("    {line}");
-        }
-    }
-}
