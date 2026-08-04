@@ -12,9 +12,9 @@ pub struct PreviewEvent {
     ///
     /// 프레임 밖 좌표도 그대로 담는다 (`project_world_unclipped`) — 잘라서 `None`으로
     /// 만들면 "예측이 없는 것"과 "화면 밖인 것"이 구분되지 않는다.
-    pub impact_pixel: Option<camera::Pixel>,
-    /// [`Self::impact_pixel`]이 이 프레임 밖인가.
-    pub impact_offscreen: bool,
+    pub target_pixel: Option<camera::Pixel>,
+    /// [`Self::target_pixel`]이 이 프레임 밖인가.
+    pub target_offscreen: bool,
     /// **필터를 거치지 않은** 생 삼각측량 점을 이 카메라로 되쏜 픽셀.
     ///
     /// 초록(검출)과 벌어진 거리가 곧 재투영 오차다 — 2D는 멀쩡한데 3D가 나쁜 경우를

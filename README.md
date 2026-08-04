@@ -20,11 +20,9 @@ BallTrajectory {
 }
 ```
 
-단, real 모션 제어는 아직 `CommitRequest { predictions: Vec<Prediction> }` → 기존 스윙
-플래너를 사용한다. 현재 연결은 과도기적으로
-`BallTrajectory → hit-plane 교차 어댑터 → Prediction`이다.
-`HitTargetSelector`와 `Target { position, arrival_time_secs }` 기반 위치 이동은
-[`TODO.md`](TODO.md) 2번의 다음 작업이다.
+real 제어는 `BallTrajectory → CommitRequest → DirectController` 경로로 목표와
+레일·손목 명령을 계산한다. 현재 실기 출력은 전체 스윙이 아니라 리니어
+레일과 손목 ID 5의 2단계 시험 명령이며, GUI sim도 같은 명령 계산을 쓴다.
 
 ---
 
@@ -110,7 +108,9 @@ cargo run -p pingpong-bot -- --mode sim --debug
 
 ### 실기 실행 순서
 
-실기는 **Windows 2단계** 환경을 기준으로 한다. 현재는 공을 한 번 친 뒤 센터 자세로 복귀해 다음 급구를 받는 방식이며, 결선 랠리는 아직 지원하지 않는다.
+실기는 **Windows 2단계** 환경을 기준으로 한다. 시작 시 선택적 홈 이동 후,
+공마다 레일을 최대 두 번 위치 제어하고 정밀 단계에서 손목만 15° 움직인다.
+전체 스윙·자동 복귀·결선 랠리는 아직 지원하지 않는다.
 
 실행 전 체크리스트:
 
@@ -281,11 +281,11 @@ cargo run -p jog -- --port COM8 --debug
 cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 ```
 
-### `--mode real` — 연속 급구 타격
+### `--mode real` — 손목·리니어 레일 2단계 제어
 
-공 하나를 받아 **스윙 한 번**을 커밋하고 센터로 복귀한 뒤 다음 급구를 받는다
-(결선 랠리는 아직).
-이벤트·결정·스레드 상세는 [`src/real/README.md`](src/real/README.md).
+공 궤적의 1차·정밀 목표 x로 레일을 이동하고, 정밀 단계에서 손목 ID 5를
+15° 시험 구동한다. 전체 스윙과 자동 복귀는 실행하지 않는다.
+스레드와 하드웨어 경계는 [`src/real/README.md`](src/real/README.md)에 정리돼 있다.
 
 ```bash
 # 리허설 — 실캠·검출·EKF·플래너까지 다 돌리고 모터·레일만 안 움직인다 (macOS에서도 됨)
@@ -299,17 +299,19 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 |--------|------|-----|
 | `--dry-run` | off | 모터·레일 정지. 나머지 체인은 그대로 |
 | `--preview` | on | 좌/우 검출 오버레이 창 (ESC·`q` 종료) |
-| `--sim` | on | 관전용 3D 창 (로봇·예측 도달점·스윙 재생) |
+| `--sim` | on | 관전용 3D 창 (공·선택 목표·시작 포즈 표시) |
 | `--home` | on | 시작 시 센터(ready) 자세로 이동 |
 | `--release-torque` | off | 종료 시 토크 해제. 기본은 켠 채로 둬서 팔이 안 주저앉게 한다 |
 | `--timeout-secs` | 60 | 공 대기 경고 간격. 초과해도 세션은 계속 |
 
-샷이 끝나면 ready 자세로 복귀해 다음 공을 기다린다. ESC·`q`로 세션을 종료한다.
+새 공은 `track_seq`로 구분하며, 공마다 1차·정밀 명령을 최대 한 번씩 보낸다.
+명령 완료 예상 시점 후 레일·손목을 다시 읽어 `commanded - measured`를
+로그로 남긴다(레일 20mm 또는 손목 3° 초과 시 `WARN`).
+ESC·`q`로 세션을 종료한다.
 
 카메라 2대(`data/calibration.json`)와 `data/colormask.json`이 있어야 한다.
-`Ekf`·`Calibration`·`Hardware`를 스레드별로 단독 소유하고 crossbeam 채널로만 잇는다 —
-`read_pose → plan_best → command`가 한 스레드 안에서만 일어나 계획과 전송 사이에 포즈가
-바뀔 수 없다.
+`Ekf`·`Calibration`·`Hardware`를 스레드별로 단독 소유하고 crossbeam 채널로만 잇는다.
+추정 워커는 최신 목표를 보내고 제어 워커만 하드웨어를 소유한다.
 
 ---
 

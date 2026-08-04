@@ -15,15 +15,15 @@ use super::PreviewEvent;
 
 /// 검출 마커 (BGR).
 const DETECTION_COLOR: Scalar = Scalar::new(64.0, 220.0, 64.0, 0.0);
-/// 예측 도달 위치 재투영 마커 — 검출과 헷갈리지 않게 다른 색·다른 크기.
-const IMPACT_COLOR: Scalar = Scalar::new(80.0, 80.0, 255.0, 0.0);
+/// 제어 목표 위치 재투영 마커 — 검출과 헷갈리지 않게 다른 색·다른 크기.
+const TARGET_COLOR: Scalar = Scalar::new(80.0, 80.0, 255.0, 0.0);
 /// 생 삼각측량 점 재투영 — 초록(검출)과 벌어진 만큼이 재투영 오차다.
 const RAW_COLOR: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
 const HUD_COLOR: Scalar = Scalar::new(0.0, 255.0, 255.0, 0.0);
-/// 샷이 끝난 뒤 고정으로 남기는 결과 줄 (커밋 요약·포기 사유).
+/// 최근 제어 명령이나 오류를 고정으로 남기는 결과 줄.
 const STICKY_COLOR: Scalar = Scalar::new(255.0, 200.0, 120.0, 0.0);
 const MARKER_RADIUS_PX: i32 = 12;
-const IMPACT_RADIUS_PX: i32 = 18;
+const TARGET_RADIUS_PX: i32 = 18;
 const MARKER_THICKNESS_PX: i32 = 2;
 
 /// 캠별 최신 프레임을 모아 한 창에 가로로 붙여 띄운다.
@@ -32,14 +32,14 @@ pub struct PreviewWindow {
     /// `camera::Id.0` → 마커까지 그려 넣은 프레임. 좌/우 순서 유지를 위해 BTreeMap.
     panels: BTreeMap<u8, Mat>,
     hud: Vec<String>,
-    /// 샷 결과 — 한 번 정해지면 창을 닫을 때까지 남는다.
+    /// 최근 제어 결과 — 다음 결과가 올 때까지 남는다.
     sticky: Vec<String>,
     /// `camera::Id.0` → **마지막으로 본** 예측 도달점 픽셀.
     ///
     /// 프레임마다 새로 그리므로 예측이 몇 프레임만 잡히면 마커가 번쩍하고 사라진다
     /// (30~120 fps에서는 눈에 안 띈다). 마지막 값을 붙들어 계속 그려서 "어디를 치려
     /// 했는지"가 화면에 남게 한다.
-    last_impact: BTreeMap<u8, camera::Pixel>,
+    last_target: BTreeMap<u8, camera::Pixel>,
 }
 
 impl PreviewWindow {
@@ -49,11 +49,11 @@ impl PreviewWindow {
             panels: BTreeMap::new(),
             hud: Vec::new(),
             sticky: Vec::new(),
-            last_impact: BTreeMap::new(),
+            last_target: BTreeMap::new(),
         };
     }
 
-    /// 샷 결과를 화면에 고정한다 (창을 닫을 때까지 남는다).
+    /// 최근 제어 결과를 화면에 고정한다.
     pub fn set_result(&mut self, lines: Vec<String>) {
         self.sticky = lines;
     }
@@ -70,16 +70,16 @@ impl PreviewWindow {
 
         // 빨강 = 예측 도달 위치. 화면 밖이면 가장자리로 끌어와 방향만 보여준다 —
         // 안 그리면 "예측이 없다"와 구분이 안 된다.
-        if let Some(pixel) = event.impact_pixel {
-            let pixel = if event.impact_offscreen {
+        if let Some(pixel) = event.target_pixel {
+            let pixel = if event.target_offscreen {
                 clamp_to_frame(pixel, &image)
             } else {
                 pixel
             };
-            self.last_impact.insert(camera_id.0, pixel);
+            self.last_target.insert(camera_id.0, pixel);
         }
-        if let Some(pixel) = self.last_impact.get(&camera_id.0).copied() {
-            draw_marker(&mut image, Some(pixel), IMPACT_RADIUS_PX, IMPACT_COLOR);
+        if let Some(pixel) = self.last_target.get(&camera_id.0).copied() {
+            draw_marker(&mut image, Some(pixel), TARGET_RADIUS_PX, TARGET_COLOR);
         }
 
         self.hud = event.hud;
@@ -123,7 +123,7 @@ impl PreviewWindow {
 
 /// 프레임 밖 좌표를 테두리 안쪽으로 끌어온다 (방향만 남긴다).
 fn clamp_to_frame(pixel: camera::Pixel, image: &Mat) -> camera::Pixel {
-    let margin = f64::from(IMPACT_RADIUS_PX);
+    let margin = f64::from(TARGET_RADIUS_PX);
     let max_x = (f64::from(image.cols()) - 1.0 - margin).max(margin);
     let max_y = (f64::from(image.rows()) - 1.0 - margin).max(margin);
     return camera::Pixel::new(pixel.x.clamp(margin, max_x), pixel.y.clamp(margin, max_y));

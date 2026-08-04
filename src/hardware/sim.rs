@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::error::HwError;
 use crate::hardware::Hardware;
+use crate::robot::control::DIRECT_WRIST_JOINT_INDEX;
 use crate::robot::motion;
 use tracing::debug;
 
@@ -83,6 +84,45 @@ impl Hardware for SimHardware {
         let world = self.world.lock().expect("sim 월드");
         let robot = world.robot();
         return Ok(robot::Pose::new(robot.rail_x(), robot.joints().clone()));
+    }
+
+    fn command_rail_and_racket(
+        &mut self,
+        rail_x: f64,
+        racket_joint_rad: f64,
+        duration_secs: f64,
+    ) -> Result<(), HwError> {
+        if !rail_x.is_finite() || !racket_joint_rad.is_finite() || !duration_secs.is_finite() {
+            return Err(HwError::InvalidConfig {
+                reason: "sim 레일·손목 명령에 유효하지 않은 값이 있음".into(),
+            });
+        }
+        {
+            let mut world = self.world.lock().expect("sim 월드");
+            let mut targets = world.robot().targets().clone();
+            let Some(wrist) = targets.values.get_mut(DIRECT_WRIST_JOINT_INDEX) else {
+                return Err(HwError::InvalidConfig {
+                    reason: format!(
+                        "sim 로봇 관절 {}개에는 손목축 인덱스 {}가 없음",
+                        targets.values.len(),
+                        DIRECT_WRIST_JOINT_INDEX
+                    ),
+                });
+            };
+            *wrist = racket_joint_rad;
+            world.robot_mut().set_rail_target(rail_x);
+            world.robot_mut().set_targets(targets);
+            world.mark_swing_committed();
+        }
+        self.command_count += 1;
+        debug!(
+            commands = self.command_count,
+            rail_commanded_m = rail_x,
+            wrist_commanded_rad = racket_joint_rad,
+            duration_secs,
+            "sim 레일·손목 직접 명령 적용"
+        );
+        return Ok(());
     }
 
     fn is_busy(&mut self) -> bool {

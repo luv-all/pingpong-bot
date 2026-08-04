@@ -1,4 +1,4 @@
-//! 추정 워커 — 삼각측량 → EKF → 접수 평면 예측 → 커밋 게이트.
+//! 추정 워커 — 삼각측량 → EKF → 목표 선택 → 1·2차 제어 요청.
 //!
 //! `Ekf`와 `Calibration`을 **단독 소유**한다. 로봇 포즈는 볼 수 없다 (제어 워커만 안다).
 
@@ -9,18 +9,18 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use pingpong_bot::camera;
 use pingpong_bot::camera::Calibration;
 use pingpong_bot::constants::table;
-use pingpong_bot::defaults::EstimatorParams;
 use pingpong_bot::detector;
-use pingpong_bot::estimator::{Ekf, Estimator, GateOutcome, Prediction, Triangulate};
-use pingpong_bot::robot::control::{HitTargetSelector, PredictionStability};
-use pingpong_bot::robot::motion::{InterceptWindow, Planner};
+use pingpong_bot::estimator::{Ekf, Estimator, GateOutcome, Triangulate};
+use pingpong_bot::robot::control::{
+    HitTarget, HitTargetSelector, PredictionStability, PredictionStage,
+};
+use pingpong_bot::robot::motion::InterceptWindow;
 use tracing::{debug, info_span};
 
 use super::ball_receding::{BallReceding, MIN_DELTA_Y, MIN_SAMPLES};
 use super::fmt::f2;
 use super::{
-    CommitRequest, ControlStatus, Decision, PreviewEvent, ShotEvent, Shutdown, SimUpdate, Throttle,
-    VisionEvent, decide,
+    CommitRequest, PreviewEvent, RuntimeEvent, Shutdown, SimUpdate, Throttle, VisionEvent,
 };
 
 /// 카메라당 보관할 관측 수 — `Triangulate::synced`가 보간에 쓸 앞뒤 프레임.
@@ -111,10 +111,9 @@ pub fn spawn(
     intercept: InterceptWindow,
     commit_tx: Sender<CommitRequest>,
     commit_evict_rx: Receiver<CommitRequest>,
-    status_rx: Receiver<ControlStatus>,
     preview_tx: Option<Sender<PreviewEvent>>,
     sim_tx: Option<Sender<SimUpdate>>,
-    event_tx: Sender<ShotEvent>,
+    event_tx: Sender<RuntimeEvent>,
     shutdown: Shutdown,
 ) -> JoinHandle<EstimatorStats> {
     return thread::spawn(move || {
@@ -136,35 +135,16 @@ pub fn spawn(
         // 작아지고, 과신한 게이트가 멀쩡한 새 측정을 거부한다.
         let mut last_sync: Option<Instant> = None;
         let required = calibration.min_cameras_for_triangulation();
-        let planes = intercept.hit_planes();
         let selector =
             HitTargetSelector::new(intercept.y_min, intercept.y_max).expect("기본 목표 선택 구간");
         let mut prediction_stability = PredictionStability::default();
-        let mut accepting = false;
-        let mut shot_seq: u64 = 0;
+        let mut track_seq: u64 = 1;
         let mut receding = BallReceding::new(MIN_DELTA_Y, MIN_SAMPLES);
         let mut announced_track = false;
-        let mut last_decision: Option<Decision> = None;
+        let mut last_stage: Option<PredictionStage> = None;
         let mut progress = Throttle::new(PROGRESS_PERIOD);
 
         while !shutdown.is_down() {
-            while let Ok(status) = status_rx.try_recv() {
-                match status {
-                    ControlStatus::Ready { shot_seq: seq } => {
-                        accepting = true;
-                        shot_seq = seq;
-                        announced_track = false;
-                        last_decision = None;
-                        receding.reset();
-                        ekf.reset();
-                        prediction_stability.reset();
-                    }
-                    ControlStatus::Recovering { .. } => {
-                        accepting = false;
-                    }
-                }
-            }
-
             let event = match rx.recv_timeout(RECV_TIMEOUT) {
                 Ok(event) => event,
                 Err(RecvTimeoutError::Timeout) => continue,
@@ -240,18 +220,22 @@ pub fn spawn(
 
             let mut ball_y = ekf.position().map(|position| position.coords.y);
 
-            // 공 y가 로봇에서 멀어지면(증가) 새 급구 루프 — EKF를 새로 시드한다.
-            if accepting
-                && let Some(y) = ball_y
+            // 공 y가 로봇에서 멀어지면(증가) 다음 공으로 보고 EKF와 단계 상태를 초기화한다.
+            if let Some(y) = ball_y
                 && receding.observe(y)
             {
                 ekf.reset();
                 prediction_stability.reset();
                 announced_track = false;
-                last_decision = None;
+                last_stage = None;
                 receding.reset();
+                track_seq = track_seq.saturating_add(1);
                 ball_y = None;
-                debug!(shot = shot_seq, y = f2(y), "공 y 증가 — EKF 리셋 (새 루프)");
+                debug!(
+                    track = track_seq,
+                    y = f2(y),
+                    "공 y 증가 — 새 궤적으로 초기화"
+                );
             }
 
             let tracking = ekf.is_tracking();
@@ -262,35 +246,35 @@ pub fn spawn(
             if tracking && !announced_track {
                 announced_track = true;
                 if let (Some(position), Some(velocity)) = (ekf.position(), ekf.velocity()) {
-                    let _ = event_tx.send(ShotEvent::Tracking {
-                        shot_seq,
+                    let _ = event_tx.send(RuntimeEvent::Tracking {
+                        track_seq,
                         position,
                         speed: velocity.norm(),
                     });
                 }
             }
 
-            let predictions: Vec<Prediction> = if tracking {
-                planes
-                    .iter()
-                    .filter_map(|plane| ekf.predict_to(*plane))
-                    .collect()
-            } else {
-                Vec::new()
-            };
             let trajectory = tracking.then(|| ekf.trajectory()).flatten();
-
-            // 대표 후보의 리드타임으로 도달점 불확실성을 낸다 — 리드가 길수록 σ_v가 크게 실린다.
-            let impact_sigma = display_candidate(&predictions).and_then(|prediction| {
-                let (sp, sv) = (ekf.position_sigma()?, ekf.velocity_sigma()?);
-                Some(sp.hypot(sv * prediction.time_to_impact_secs))
+            let selected = trajectory
+                .as_ref()
+                .and_then(|trajectory| selector.select(trajectory).ok());
+            let stage = selected.map(|target| {
+                let observed_span_secs = trajectory
+                    .as_ref()
+                    .and_then(|trajectory| trajectory.observed.first())
+                    .map(|sample| -sample.time_secs)
+                    .unwrap_or(0.0);
+                prediction_stability.observe(target.position, observed_span_secs)
             });
-            let decision = decide(tracking, ball_y, &predictions, impact_sigma);
-            // 게이트가 **바뀔 때만** 찍는다 — "왜 안 쳤나"를 로그만으로 되짚을 수 있게.
-            // 매 틱 찍으면 초당 수백 줄이라 쓸 수 없다.
-            if last_decision != Some(decision) {
-                last_decision = Some(decision);
-                log_transition(&ekf, decision, &predictions);
+
+            // 선택 목표의 리드타임으로 예측 불확실성을 표시한다. 제어 게이트로 쓰지는 않는다.
+            let target_sigma = selected.and_then(|target| {
+                let (sp, sv) = (ekf.position_sigma()?, ekf.velocity_sigma()?);
+                Some(sp.hypot(sv * target.time_secs))
+            });
+            if stage != last_stage {
+                last_stage = stage;
+                debug!(track = track_seq, ?stage, "2단계 제어 상태 변경");
             }
             if progress.ready() {
                 debug!(
@@ -298,45 +282,26 @@ pub fn spawn(
                     accepted = stats.accepted,
                     rejected = stats.rejected,
                     tracking,
-                    accepting,
-                    shot = shot_seq,
-                    decision = ?decision,
+                    track = track_seq,
+                    ?stage,
                     "추정 진척"
                 );
             }
 
-            // 화면·sim에 보여줄 대표 후보 — 커밋 창 안의 첫 후보, 없으면 가장 이른 것.
-            let shown = display_candidate(&predictions);
-
-            // 물리 안전 검사는 제어 플래너에 남기고, 위치 이동을 시작시키던
-            // 예측 불확실성 게이트만 제거한다. 속도가 추정되어 정상 추적이
-            // 성립하면 1차 목표를 보내고, 0.25 s·10 cm 수렴 후 정밀 목표로 올린다.
-            let position_ready = tracking && accepting;
-            if position_ready {
-                if let Some(trajectory) = trajectory {
-                    let observed_span_secs = trajectory
-                        .observed
-                        .first()
-                        .map(|sample| -sample.time_secs)
-                        .unwrap_or(0.0);
-                    if let Ok(target) = selector.select(&trajectory) {
-                        let stage =
-                            prediction_stability.observe(target.position, observed_span_secs);
-                        let request = CommitRequest {
-                            trajectory,
-                            stage,
-                            ball_y: ball_y.unwrap_or(f64::NAN),
-                            at: Instant::now(),
-                        };
-                        send_latest_commit(&commit_tx, &commit_evict_rx, request, &mut stats);
-                    }
-                }
+            if let (Some(trajectory), Some(stage)) = (trajectory, stage) {
+                let request = CommitRequest {
+                    track_seq,
+                    trajectory,
+                    stage,
+                    at: Instant::now(),
+                };
+                send_latest_commit(&commit_tx, &commit_evict_rx, request, &mut stats);
             }
 
             if let Some(sim_tx) = &sim_tx {
                 let _ = sim_tx.try_send(SimUpdate {
                     ball: ekf.position(),
-                    impact: shown.map(|prediction| prediction.impact_position),
+                    target: selected.map(|target| target.position),
                     ..SimUpdate::default()
                 });
             }
@@ -351,10 +316,10 @@ pub fn spawn(
                     .filter(|(_, at)| at.elapsed() <= RAW_MARKER_TTL)
                     .zip(params)
                     .and_then(|((point, _), params)| params.project_world_unclipped(point));
-                let impact_pixel = shown.zip(params).and_then(|(prediction, params)| {
-                    params.project_world_unclipped(prediction.impact_position)
-                });
-                let impact_offscreen = impact_pixel.is_some_and(|pixel| {
+                let target_pixel = selected
+                    .zip(params)
+                    .and_then(|(target, params)| params.project_world_unclipped(target.position));
+                let target_offscreen = target_pixel.is_some_and(|pixel| {
                     params.is_some_and(|params| {
                         pixel.x < 0.0
                             || pixel.y < 0.0
@@ -364,17 +329,18 @@ pub fn spawn(
                 });
                 let hud = hud_lines(
                     &ekf,
-                    &decision,
-                    shown.as_ref(),
-                    impact_offscreen,
+                    tracking,
+                    stage,
+                    selected.as_ref(),
+                    target_offscreen,
                     stats.reprojection_samples.last().copied(),
-                    impact_sigma,
+                    target_sigma,
                 );
                 let preview = PreviewEvent {
                     frame: event.frame,
                     pixel: event.pixel,
-                    impact_pixel,
-                    impact_offscreen,
+                    target_pixel,
+                    target_offscreen,
                     raw_pixel,
                     hud,
                 };
@@ -437,11 +403,11 @@ mod tests {
     use pingpong_bot::estimator::BallTrajectory;
     use pingpong_bot::robot::control::PredictionStage;
 
-    fn request(ball_y: f64) -> CommitRequest {
+    fn request(track_seq: u64) -> CommitRequest {
         return CommitRequest {
+            track_seq,
             trajectory: BallTrajectory::new(Vec::new(), Vec::new(), Instant::now()).unwrap(),
             stage: PredictionStage::Provisional,
-            ball_y,
             at: Instant::now(),
         };
     }
@@ -460,9 +426,9 @@ mod tests {
     fn full_commit_queue_keeps_latest_request() {
         let (tx, rx) = crossbeam_channel::bounded(1);
         let mut stats = EstimatorStats::default();
-        send_latest_commit(&tx, &rx, request(1.0), &mut stats);
-        send_latest_commit(&tx, &rx, request(2.0), &mut stats);
-        assert_eq!(rx.recv().unwrap().ball_y, 2.0);
+        send_latest_commit(&tx, &rx, request(1), &mut stats);
+        send_latest_commit(&tx, &rx, request(2), &mut stats);
+        assert_eq!(rx.recv().unwrap().track_seq, 2);
     }
 }
 
@@ -587,61 +553,23 @@ fn reprojection_error_px(
     return worst;
 }
 
-/// 게이트가 바뀐 순간의 스냅샷. 커밋까지 못 간 샷을 로그만으로 진단하는 근거다.
-fn log_transition(ekf: &Ekf, decision: Decision, predictions: &[Prediction]) {
-    let (tti_min, tti_max) = predictions
-        .iter()
-        .map(|prediction| prediction.time_to_impact_secs)
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), t| {
-            (lo.min(t), hi.max(t))
-        });
-    let position = ekf.position();
-    debug!(
-        decision = ?decision,
-        candidates = predictions.len(),
-        tti_min = (!predictions.is_empty()).then(|| f2(tti_min)),
-        tti_max = (!predictions.is_empty()).then(|| f2(tti_max)),
-        ball_x = position.map(|p| f2(p.coords.x)),
-        ball_y = position.map(|p| f2(p.coords.y)),
-        ball_z = position.map(|p| f2(p.coords.z)),
-        speed = ekf.velocity().map(|v| f2(v.norm())),
-        "real shot: 게이트 전이"
-    );
-}
-
-/// 화면에 대표로 보여줄 후보 — 커밋 창 안의 첫 후보, 없으면 tti가 가장 이른 것.
-///
-/// `plan_best`가 실제로 고르는 후보(점수 순)와 반드시 같지는 않다 — 어디를 칠 셈인지
-/// 가늠하는 표시일 뿐이다.
-fn display_candidate(predictions: &[Prediction]) -> Option<Prediction> {
-    return predictions
-        .iter()
-        .find(|prediction| Planner::in_commit_window(prediction.time_to_impact_secs))
-        .or_else(|| {
-            predictions.iter().min_by(|a, b| {
-                a.time_to_impact_secs
-                    .partial_cmp(&b.time_to_impact_secs)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        })
-        .copied();
-}
-
 /// HUD 문자열은 **ASCII만** 쓴다 — Hershey 폰트가 유니코드를 못 그린다 (한글은 `??????`).
-/// 한글 사유는 `ShotEvent` 로그로만 나간다.
 fn hud_lines(
     ekf: &Ekf,
-    decision: &Decision,
-    shown: Option<&Prediction>,
-    impact_offscreen: bool,
+    tracking: bool,
+    stage: Option<PredictionStage>,
+    target: Option<&HitTarget>,
+    target_offscreen: bool,
     reprojection_px: Option<f64>,
-    impact_sigma: Option<f64>,
+    target_sigma: Option<f64>,
 ) -> Vec<String> {
-    let state = match decision {
-        Decision::Attempt => "ATTEMPT plan request".to_owned(),
-        Decision::Wait(reason) => reason.label().to_owned(),
+    let state = match (tracking, stage) {
+        (false, _) => "WAIT no track",
+        (true, None) => "WAIT no target",
+        (true, Some(PredictionStage::Provisional)) => "CONTROL provisional",
+        (true, Some(PredictionStage::Refined)) => "CONTROL refined",
     };
-    let mut lines = vec![state];
+    let mut lines = vec![state.to_owned()];
     if let Some(position) = ekf.position() {
         let speed = ekf.velocity().map(|v| v.norm()).unwrap_or(0.0);
         lines.push(format!(
@@ -649,31 +577,27 @@ fn hud_lines(
             position.coords.x, position.coords.y, position.coords.z, speed
         ));
     }
-    if let Some(prediction) = shown {
-        let offscreen = if impact_offscreen {
+    if let Some(target) = target {
+        let offscreen = if target_offscreen {
             "  [OFF-FRAME]"
         } else {
             ""
         };
         lines.push(format!(
-            "impact x{:+.2} y{:+.2} z{:+.2}  tti {:.2}s{offscreen}",
-            prediction.impact_position.coords.x,
-            prediction.impact_position.coords.y,
-            prediction.impact_position.coords.z,
-            prediction.time_to_impact_secs
+            "target x{:+.2} y{:+.2} z{:+.2}  eta {:.2}s{offscreen}",
+            target.position.coords.x,
+            target.position.coords.y,
+            target.position.coords.z,
+            target.time_secs
         ));
     } else {
-        lines.push("impact none".to_owned());
+        lines.push("target none".to_owned());
     }
     if let Some(d2) = ekf.last_gate_d2() {
         lines.push(format!("gate   d2 {d2:.1}  reject {}", ekf.reject_streak()));
     }
-    if let Some(sigma) = impact_sigma {
-        lines.push(format!(
-            "sigma  {:.0} cm (limit {:.0})",
-            sigma * 100.0,
-            EstimatorParams::default().max_impact_sigma * 100.0
-        ));
+    if let Some(sigma) = target_sigma {
+        lines.push(format!("sigma  {:.0} cm", sigma * 100.0));
     }
     // 3D 복원 품질 — 초록(검출)과 흰 원(생 삼각측량 재투영)이 벌어진 픽셀 거리.
     if let Some(px) = reprojection_px {

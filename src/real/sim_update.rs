@@ -6,7 +6,6 @@
 
 use pingpong_bot::Point3;
 use pingpong_bot::robot;
-use pingpong_bot::robot::motion;
 use serde::{Deserialize, Serialize};
 
 /// 직렬화용 3D 점.
@@ -55,92 +54,18 @@ impl From<&PoseMsg> for robot::Pose {
     }
 }
 
-/// 커밋된 스윙 — sim 창이 그대로 재생한다.
-///
-/// `motion::Trajectory` 전체를 직렬화하는 대신 재생에 필요한 knot만 옮긴다
-/// (도메인 타입에 serde를 얹지 않으려는 것 — 숫자 SSOT는 `defaults`다).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SwingMsg {
-    pub start: PoseMsg,
-    pub impact: PoseMsg,
-    pub follow_through: PoseMsg,
-    pub start_velocity: Vec<f64>,
-    pub impact_velocity: Vec<f64>,
-    pub follow_through_velocity: Vec<f64>,
-    /// 임팩트 knot 각가속도 — sim 재생이 원본 궤적과 같으려면 같이 옮겨야 한다.
-    pub impact_acceleration: Vec<f64>,
-    pub impact_time_secs: f64,
-    pub duration_secs: f64,
-    pub rail_start_velocity: f64,
-    pub rail_end_velocity: f64,
-    pub follow_through_rail_velocity: f64,
-}
-
-impl SwingMsg {
-    pub fn from_trajectory(trajectory: &motion::Trajectory) -> Self {
-        return Self {
-            start: PoseMsg {
-                rail_x: trajectory.rail.start,
-                joints: trajectory.start.values.clone(),
-            },
-            impact: PoseMsg {
-                rail_x: trajectory.rail.end,
-                joints: trajectory.end.values.clone(),
-            },
-            follow_through: PoseMsg {
-                rail_x: trajectory.follow_through_rail_x,
-                joints: trajectory.follow_through.values.clone(),
-            },
-            start_velocity: trajectory.start_velocity.clone(),
-            impact_velocity: trajectory.end_velocity.clone(),
-            follow_through_velocity: trajectory.follow_through_velocity.clone(),
-            impact_acceleration: trajectory.impact_acceleration.clone(),
-            impact_time_secs: trajectory.impact_time_secs,
-            duration_secs: trajectory.duration_secs,
-            rail_start_velocity: trajectory.rail.start_velocity,
-            rail_end_velocity: trajectory.rail.end_velocity,
-            follow_through_rail_velocity: trajectory.follow_through_rail_velocity,
-        };
-    }
-
-    pub fn to_trajectory(&self) -> motion::Trajectory {
-        return motion::Trajectory::with_follow_through(
-            robot::Joints::from_slice(&self.start.joints),
-            robot::Joints::from_slice(&self.impact.joints),
-            robot::Joints::from_slice(&self.follow_through.joints),
-            self.start_velocity.clone(),
-            self.impact_velocity.clone(),
-            self.follow_through_velocity.clone(),
-            self.impact_acceleration.clone(),
-            self.impact_time_secs,
-            self.duration_secs,
-            motion::Rail {
-                start: self.start.rail_x,
-                end: self.impact.rail_x,
-                start_velocity: self.rail_start_velocity,
-                end_velocity: self.rail_end_velocity,
-            },
-            self.follow_through.rail_x,
-            self.follow_through_rail_velocity,
-        );
-    }
-}
-
 /// sim 창 한 프레임 갱신. 필드는 전부 선택적 — 준 것만 바꾼다.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SimUpdate {
     /// EKF가 추정한 공 위치 — 주황 공.
     #[serde(default)]
     pub ball: Option<Point3>,
-    /// 예측 도달 위치 — 하늘색 공 (`spawn_ghost`. 알파는 렌더에 반영되지 않는다).
+    /// 현재 선택한 제어 목표 위치 — 하늘색 공.
     #[serde(default)]
-    pub impact: Option<Point3>,
+    pub target: Option<Point3>,
     /// 실기에서 읽은 로봇 포즈.
     #[serde(default)]
     pub pose: Option<PoseMsg>,
-    /// 커밋된 스윙 — 받으면 sim이 재생한다.
-    #[serde(default)]
-    pub swing: Option<SwingMsg>,
 }
 
 impl SimUpdate {
@@ -160,63 +85,23 @@ impl SimUpdate {
 mod tests {
     use super::*;
 
-    fn trajectory() -> motion::Trajectory {
-        return motion::Trajectory::with_follow_through(
-            robot::Joints::from_slice(&[0.0, 0.1, 0.2, 0.3]),
-            robot::Joints::from_slice(&[0.4, 0.5, 0.6, 0.7]),
-            robot::Joints::from_slice(&[0.44, 0.55, 0.66, 0.77]),
-            vec![0.0; 4],
-            vec![1.0, 1.1, 1.2, 1.3],
-            vec![0.0; 4],
-            vec![0.5, 0.6, 0.7, 0.8],
-            0.30,
-            0.36,
-            motion::Rail {
-                start: 0.2,
-                end: 0.5,
-                start_velocity: 0.0,
-                end_velocity: 0.4,
-            },
-            0.52,
-            0.0,
-        );
-    }
-
     #[test]
-    fn swing_round_trips_through_json() {
-        let original = trajectory();
-        let line = SimUpdate {
-            swing: Some(SwingMsg::from_trajectory(&original)),
-            ..SimUpdate::default()
-        }
-        .to_line();
-
-        let back = SimUpdate::parse_line(&line)
-            .expect("parse")
-            .swing
-            .expect("swing")
-            .to_trajectory();
-
-        assert_eq!(back, original, "재생용 궤적이 원본과 같아야 한다");
-    }
-
-    #[test]
-    fn ball_and_impact_round_trip() {
+    fn ball_and_target_round_trip() {
         let line = SimUpdate {
             ball: Some(Point3::new(0.7, 1.4, 0.95)),
-            impact: Some(Point3::new(0.68, 0.2, 0.86)),
+            target: Some(Point3::new(0.68, 0.2, 0.86)),
             ..SimUpdate::default()
         }
         .to_line();
 
         let back = SimUpdate::parse_line(&line).expect("parse");
         assert!((back.ball.expect("ball").x - 0.7).abs() < 1e-9);
-        assert!((back.impact.expect("impact").y - 0.2).abs() < 1e-9);
+        assert!((back.target.expect("target").y - 0.2).abs() < 1e-9);
     }
 
     #[test]
     fn hide_clears_everything() {
         let back = SimUpdate::parse_line("hide").expect("parse");
-        assert!(back.ball.is_none() && back.impact.is_none() && back.swing.is_none());
+        assert!(back.ball.is_none() && back.target.is_none() && back.pose.is_none());
     }
 }

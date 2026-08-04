@@ -13,18 +13,13 @@ use tracing::{debug, error};
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::AxlRail;
 use super::rail::RailConfig;
-use crate::defaults;
 use crate::error::HwError;
 use crate::hardware::Hardware;
-use crate::robot::Arm;
 use crate::robot::motion;
 
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
     bus: Arc<Mutex<DynamixelBus>>,
-    /// 레일 dry-run·RNEA 디버그용 Arm 핸들 (스윙 실행 자체는 Goal Position만 씀).
-    #[allow(dead_code)]
-    arm: Arc<Arm>,
     /// `None`이면 `rail_x = 0` (레일 비활성). executor와 pose 읽기가 공유.
     rail: Arc<Mutex<Option<AxlRail>>>,
     busy: Arc<AtomicBool>,
@@ -38,48 +33,24 @@ pub struct RealHardware {
 
 impl RealHardware {
     /// 실제 시리얼 포트를 열고 motion profile과 torque를 설정한다.
-    pub fn new(
-        config: DynamixelConfig,
-        rail: Option<RailConfig>,
-        arm: Arc<Arm>,
-    ) -> Result<Self, HwError> {
+    pub fn new(config: DynamixelConfig, rail: Option<RailConfig>) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::open(config)?;
         bus.configure_position_mode_max_effort()?;
         bus.enable_torque(true)?;
         // 실포트: is_dry_run = false → AXL 실개방
-        return Self::from_bus(bus, stream_hz, rail, false, arm);
+        return Self::from_bus(bus, stream_hz, rail, false);
     }
 
     /// 포트를 열지 않지만 실제 좌표 변환·리밋·executor 경로를 그대로 사용한다.
     pub fn dry_run(config: DynamixelConfig, rail: Option<RailConfig>) -> Result<Self, HwError> {
-        return Self::dry_run_with_arm(
-            config,
-            rail,
-            Arc::new(
-                (*defaults::urdf_4dof()
-                    .map_err(|e| HwError::InvalidConfig {
-                        reason: e.to_string(),
-                    })?
-                    .arm)
-                    .clone(),
-            ),
-        );
-    }
-
-    /// dry-run + 명시적 Arm (RNEA FF 테스트용).
-    pub fn dry_run_with_arm(
-        config: DynamixelConfig,
-        rail: Option<RailConfig>,
-        arm: Arc<Arm>,
-    ) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::dry_run(config).map_err(|e| HwError::InvalidConfig {
             reason: e.to_string(),
         })?;
         bus.configure_position_mode_max_effort()?;
         bus.enable_torque(true)?;
-        return Self::from_bus(bus, stream_hz, rail, true, arm);
+        return Self::from_bus(bus, stream_hz, rail, true);
     }
 
     fn from_bus(
@@ -87,7 +58,6 @@ impl RealHardware {
         stream_hz: f64,
         rail: Option<RailConfig>,
         is_dry_run: bool,
-        arm: Arc<Arm>,
     ) -> Result<Self, HwError> {
         let rail = match rail.filter(|config| config.enabled) {
             None => {
@@ -129,7 +99,6 @@ impl RealHardware {
         };
         return Ok(Self {
             bus: Arc::new(Mutex::new(bus)),
-            arm,
             rail: Arc::new(Mutex::new(rail)),
             busy: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
@@ -156,7 +125,7 @@ impl RealHardware {
         if let Some(handle) = self.executor.take()
             && handle.join().is_err()
         {
-            error!("Dynamixel swing executor 패닉");
+            error!("Dynamixel 궤적 executor 패닉");
         }
     }
 }
@@ -165,7 +134,7 @@ impl Hardware for RealHardware {
     fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
         self.reap_executor();
         if self.busy.swap(true, Ordering::AcqRel) {
-            debug!("Dynamixel 스윙 실행 중 — 중복 명령 무시");
+            debug!("Dynamixel 궤적 실행 중 — 중복 명령 무시");
             return Ok(());
         }
 
@@ -187,7 +156,7 @@ impl Hardware for RealHardware {
                     rail_target,
                     rail_duration,
                     error = %error,
-                    "AXL 레일 이동 시작 실패 — 스윙 중단"
+                    "AXL 레일 이동 시작 실패 — 궤적 중단"
                 );
                 busy.store(false, Ordering::Release);
                 return;
@@ -209,13 +178,13 @@ impl Hardware for RealHardware {
                             error!(
                                 sample_time,
                                 error = %error,
-                                "Dynamixel goal position 전송 실패 — 스윙 중단"
+                                "Dynamixel goal position 전송 실패 — 궤적 중단"
                             );
                             false
                         }
                     },
                     Err(_) => {
-                        error!(sample_time, "Dynamixel bus mutex poisoned — 스윙 중단");
+                        error!(sample_time, "Dynamixel bus mutex poisoned — 궤적 중단");
                         false
                     }
                 };
@@ -355,9 +324,8 @@ mod tests {
         bus.configure_position_mode_max_effort()
             .expect("position mode");
         bus.enable_torque(true).expect("torque");
-        let arm = Arc::new((*crate::defaults::urdf_4dof().expect("urdf").arm).clone());
-        let mut hardware = RealHardware::from_bus(bus, stream_hz, Some(test_rail()), false, arm)
-            .expect("hardware");
+        let mut hardware =
+            RealHardware::from_bus(bus, stream_hz, Some(test_rail()), false).expect("hardware");
         assert_eq!(hardware.read_pose().expect("pose").rail_x, 0.0);
     }
 

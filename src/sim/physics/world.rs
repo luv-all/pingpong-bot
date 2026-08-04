@@ -12,7 +12,9 @@ use crate::error::DomainError;
 use crate::estimator;
 use crate::estimator::Prediction;
 use crate::robot::Arm;
-use crate::robot::control::{HitTargetSelector, PositionController, REFINED_MIN_OBSERVATION_SECS};
+use crate::robot::control::{
+    DIRECT_WRIST_JOINT_INDEX, DirectController, PredictionStage, REFINED_MIN_OBSERVATION_SECS,
+};
 use crate::robot::motion;
 use crate::robot::motion::InterceptWindow;
 use rapier3d::prelude::*;
@@ -829,7 +831,6 @@ impl SimWorld {
             return;
         }
         self.last_swing_attempt_at = self.sim_time;
-        let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
         let position = self.ball_position();
         let velocity = self.ball_velocity();
         let omega = self.ball_angular_velocity();
@@ -844,40 +845,64 @@ impl SimWorld {
         else {
             return;
         };
-        let Ok(selector) = HitTargetSelector::new(self.intercept.y_min, self.intercept.y_max)
+        let ready_wrist = self
+            .arm
+            .default_joints
+            .values
+            .get(DIRECT_WRIST_JOINT_INDEX)
+            .copied()
+            .unwrap_or(0.0);
+        let Ok(controller) =
+            DirectController::new(self.intercept.y_min, self.intercept.y_max, ready_wrist)
         else {
             return;
         };
-        let planned =
-            match PositionController::plan_best(&self.arm, &start, &ball_trajectory, &selector) {
-                Ok(planned) => planned,
-                Err(error) => {
-                    self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
-                    self.debug_snap.last_fail_text = Some(error.to_string());
-                    if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
-                        warn!(shot = self.shot_seq, %error, "shot: 최적 목표 위치 계획 실패");
-                    }
-                    return;
+        let refined = self.sim_time - self.flight_started_at >= REFINED_MIN_OBSERVATION_SECS;
+        let stage = if refined {
+            PredictionStage::Refined
+        } else {
+            PredictionStage::Provisional
+        };
+        // 이 궤적은 현재 sim 상태에서 바로 표본화했으므로 기준시각 경과는 0이다.
+        // 목표 선택·레일 clamp·손목 단계·명령시간 계산은 실기 워커와 같은 코드다.
+        let command = match controller.command(&self.arm, &ball_trajectory, stage, 0.0) {
+            Ok(command) => command,
+            Err(error) => {
+                self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
+                self.debug_snap.last_fail_text = Some(error.to_string());
+                if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
+                    warn!(shot = self.shot_seq, %error, "shot: 레일·손목 명령 계산 실패");
                 }
-            };
+                return;
+            }
+        };
         self.hard_fail_streak = 0;
         self.debug_snap.clear_fail_on_success();
-        let trajectory = planned.trajectory;
-        self.debug_snap.set_committed_path(&self.arm, &trajectory);
-        let refined = self.sim_time - self.flight_started_at >= REFINED_MIN_OBSERVATION_SECS;
+        let mut targets = self.robot.targets().clone();
+        let Some(wrist) = targets.values.get_mut(DIRECT_WRIST_JOINT_INDEX) else {
+            warn!(
+                shot = self.shot_seq,
+                joint_count = targets.values.len(),
+                "shot: sim 손목축이 없어 명령 적용 실패"
+            );
+            return;
+        };
+        *wrist = command.wrist_rad;
+        self.robot.set_auto_return_to_center(false);
+        self.robot.set_rail_target(command.rail_x);
+        self.robot.set_targets(targets);
         info!(
             shot = self.shot_seq,
-            stage = if refined { "refined" } else { "provisional" },
-            duration_secs = trajectory.duration_secs,
-            rail_end = trajectory.rail.end,
-            target = ?planned.target.position.coords,
-            arrival_secs = planned.target.time_secs,
-            peak_joint_speed = trajectory.peak_joint_speed(),
-            "shot: 최적 목표 위치 이동 commit"
+            stage = ?command.stage,
+            duration_secs = command.duration_secs,
+            rail_commanded_m = command.rail_x,
+            wrist_commanded_deg = command.wrist_rad.to_degrees(),
+            target = ?command.target.position.coords,
+            arrival_secs = command.target.time_secs,
+            "shot: 공통 레일·손목 직접 명령 commit"
         );
-        self.robot.set_auto_return_to_center(false);
-        self.robot.replace_motion_and_return(trajectory, start);
         self.swing_committed = true;
+        self.debug_snap.commit_phase = CommitPhase::Committed;
         self.position_refined = refined;
     }
 

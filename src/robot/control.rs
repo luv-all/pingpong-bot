@@ -183,6 +183,106 @@ pub enum PredictionStage {
     Refined,
 }
 
+/// 실기와 시뮬레이션이 함께 사용하는 직접 제어 손목축 인덱스.
+pub const DIRECT_WRIST_JOINT_INDEX: usize = 3;
+/// 정밀 예측에서 준비 자세보다 더 움직이는 손목 각도.
+pub const DIRECT_WRIST_STROKE_RAD: f64 = 15.0_f64.to_radians();
+pub const MIN_DIRECT_COMMAND_SECS: f64 = 0.05;
+pub const MAX_DIRECT_COMMAND_SECS: f64 = 0.30;
+
+/// 공 예측 한 건에서 계산된 레일·손목 직접 명령.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DirectControlCommand {
+    pub stage: PredictionStage,
+    pub target: HitTarget,
+    pub rail_x: f64,
+    pub wrist_rad: f64,
+    pub duration_secs: f64,
+}
+
+/// 명령 뒤 읽은 실제 위치와의 차이(`commanded - measured`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DirectControlMeasurement {
+    pub rail_commanded_m: f64,
+    pub rail_measured_m: f64,
+    pub rail_error_m: f64,
+    pub wrist_commanded_rad: f64,
+    pub wrist_measured_rad: f64,
+    pub wrist_error_rad: f64,
+}
+
+impl DirectControlCommand {
+    pub fn compare_with_pose(&self, pose: &Pose) -> Option<DirectControlMeasurement> {
+        let wrist_measured_rad = *pose.joints.values.get(DIRECT_WRIST_JOINT_INDEX)?;
+        return Some(DirectControlMeasurement {
+            rail_commanded_m: self.rail_x,
+            rail_measured_m: pose.rail_x,
+            rail_error_m: self.rail_x - pose.rail_x,
+            wrist_commanded_rad: self.wrist_rad,
+            wrist_measured_rad,
+            wrist_error_rad: self.wrist_rad - wrist_measured_rad,
+        });
+    }
+}
+
+/// 전체 팔 궤적 대신 공의 x를 레일에, 예측 단계를 손목에 매핑하는 공통 제어기.
+/// 실제 장치와 GUI 시뮬레이션 모두 이 계산 결과를 각 하드웨어 어댑터에 적용한다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DirectController {
+    selector: HitTargetSelector,
+    ready_wrist_rad: f64,
+}
+
+impl DirectController {
+    pub fn new(y_min: f64, y_max: f64, ready_wrist_rad: f64) -> Result<Self, DirectControlError> {
+        if !ready_wrist_rad.is_finite() {
+            return Err(DirectControlError::InvalidReadyWrist);
+        }
+        let selector = HitTargetSelector::new(y_min, y_max).map_err(DirectControlError::Target)?;
+        return Ok(Self {
+            selector,
+            ready_wrist_rad,
+        });
+    }
+
+    /// `elapsed_secs`는 예측 기준 시각부터 명령 계산까지 흐른 시간이다.
+    pub fn command(
+        &self,
+        arm: &Arm,
+        trajectory: &BallTrajectory,
+        stage: PredictionStage,
+        elapsed_secs: f64,
+    ) -> Result<DirectControlCommand, DirectControlError> {
+        if !elapsed_secs.is_finite() || elapsed_secs < 0.0 {
+            return Err(DirectControlError::InvalidElapsed);
+        }
+        let target = self
+            .selector
+            .select(trajectory)
+            .map_err(DirectControlError::Target)?;
+        let remaining_secs = target.time_secs - elapsed_secs;
+        if !remaining_secs.is_finite() || remaining_secs <= 0.0 {
+            return Err(DirectControlError::Expired {
+                late_by_secs: -remaining_secs,
+            });
+        }
+        let rail_x = arm
+            .rail
+            .map_or(target.position.x, |rail| rail.clamp_x(target.position.x));
+        let wrist_rad = match stage {
+            PredictionStage::Provisional => self.ready_wrist_rad,
+            PredictionStage::Refined => self.ready_wrist_rad + DIRECT_WRIST_STROKE_RAD,
+        };
+        return Ok(DirectControlCommand {
+            stage,
+            target,
+            rail_x,
+            wrist_rad,
+            duration_secs: remaining_secs.clamp(MIN_DIRECT_COMMAND_SECS, MAX_DIRECT_COMMAND_SECS),
+        });
+    }
+}
+
 /// 한 프레임만 우연히 맞은 예측을 정밀 단계로 착각하지 않도록
 /// 최근 목표를 누적한다.
 #[derive(Debug, Default)]
@@ -377,6 +477,18 @@ pub enum TargetSelectionError {
     OutsideWindow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Error)]
+pub enum DirectControlError {
+    #[error("준비 손목 각도가 유효하지 않음")]
+    InvalidReadyWrist,
+    #[error("예측 기준 경과 시간이 유효하지 않음")]
+    InvalidElapsed,
+    #[error("목표 시각이 {late_by_secs:.3}s 지남")]
+    Expired { late_by_secs: f64 },
+    #[error("목표 선택 실패: {0}")]
+    Target(TargetSelectionError),
+}
+
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum PositionControlError {
     #[error("목표 위치 또는 도착 시간이 유효하지 않음")]
@@ -425,6 +537,56 @@ mod tests {
         assert!((selected.position.y - 0.3).abs() < 1e-12);
         assert!((selected.incoming_velocity.x - 2.0).abs() < 1e-12);
         assert!((selected.time_secs - 0.2).abs() < 1e-12);
+    }
+
+    #[test]
+    fn direct_controller_maps_the_same_prediction_to_rail_and_wrist() {
+        let robot = crate::defaults::robot().unwrap();
+        let trajectory = BallTrajectory::new(
+            vec![],
+            vec![
+                TrajectorySample::new(Point3::new(0.2, 0.5, 0.4), Vector3::zeros(), 0.1),
+                TrajectorySample::new(Point3::new(0.4, 0.1, 0.2), Vector3::zeros(), 0.3),
+            ],
+            Instant::now(),
+        )
+        .unwrap();
+        let controller = DirectController::new(0.2, 0.4, -0.7).unwrap();
+
+        let provisional = controller
+            .command(&robot.arm, &trajectory, PredictionStage::Provisional, 0.05)
+            .unwrap();
+        let refined = controller
+            .command(&robot.arm, &trajectory, PredictionStage::Refined, 0.05)
+            .unwrap();
+
+        assert!((provisional.rail_x - 0.3).abs() < 1e-12);
+        assert!((provisional.wrist_rad + 0.7).abs() < 1e-12);
+        assert!((provisional.duration_secs - 0.15).abs() < 1e-12);
+        assert!((refined.wrist_rad - (-0.7 + DIRECT_WRIST_STROKE_RAD)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn direct_measurement_is_commanded_minus_measured() {
+        let command = DirectControlCommand {
+            stage: PredictionStage::Refined,
+            target: HitTarget {
+                position: Point3::new(0.3, 0.3, 0.2),
+                incoming_velocity: Vector3::zeros(),
+                time_secs: 0.2,
+            },
+            rail_x: 0.30,
+            wrist_rad: -0.40,
+            duration_secs: 0.1,
+        };
+        let pose = Pose::new(
+            0.27,
+            super::super::Joints::from_slice(&[0.0, 0.0, 0.0, -0.45]),
+        );
+        let measured = command.compare_with_pose(&pose).unwrap();
+
+        assert!((measured.rail_error_m - 0.03).abs() < 1e-12);
+        assert!((measured.wrist_error_rad - 0.05).abs() < 1e-12);
     }
 
     #[test]

@@ -5,16 +5,13 @@ use std::time::Instant;
 use pingpong_bot::estimator::BallTrajectory;
 use pingpong_bot::robot::control::PredictionStage;
 
-/// "지금 이 공 궤적에서 최적 목표 위치를 계획해 보라"는 요청.
-///
-/// 제어 워커는 `trajectory.reference_time + target.time_secs`를 절대 만료
-/// 시각으로 사용한다. `BallTrajectory`에 타격점은 포함하지 않는다.
+/// 최신 공 궤적을 이용해 레일과 손목의 한 단계를 갱신하라는 요청.
 pub struct CommitRequest {
+    /// EKF가 구분한 공 궤적 번호. 새 번호면 제어 단계 래치를 초기화한다.
+    pub track_seq: u64,
     pub trajectory: BallTrajectory,
     /// 초기 목표인지, 0.25 s 관측·10 cm 수렴을 통과한 정밀 목표인지.
     pub stage: PredictionStage,
-    /// 요청 시점의 공 y [m] — 로그용.
-    pub ball_y: f64,
     /// 예측을 만든 시각.
     pub at: Instant,
 }

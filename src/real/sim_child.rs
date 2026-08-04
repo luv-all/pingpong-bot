@@ -6,8 +6,8 @@
 //! 무엇을 하려는지 그대로 비춰 보기만 한다.
 //!
 //! - **주황** 공 = EKF 추정 공 위치
-//! - **하늘색** 공 = 예측 도달 위치 (접수 평면 교차)
-//! - 로봇 = 실기에서 읽은 포즈. 커밋되면 그 궤적을 재생한다
+//! - **하늘색** 공 = 현재 선택한 제어 목표 위치
+//! - 로봇 = 실기에서 읽은 시작 포즈
 //!
 //! 구분은 **색**이다. `ball::Visual::spawn_ghost`가 알파 0.38을 주지만 렌더러가 알파를
 //! 블렌딩하지 않아 둘 다 불투명하게 보인다 — "반투명 고스트"로 읽지 말 것.
@@ -82,7 +82,7 @@ fn stdin_loop(
     let mut lines = BufReader::new(stdin.lock()).lines();
     // 창만 봐서는 "안 그린 것"과 "안 온 것"을 구분할 수 없다 — 받은 걸 주기적으로 찍는다.
     let mut progress = Throttle::new(PROGRESS_PERIOD);
-    let (mut received, mut with_impact) = (0_u64, 0_u64);
+    let (mut received, mut with_target) = (0_u64, 0_u64);
 
     while !stop.load(Ordering::Relaxed) {
         let Some(Ok(line)) = lines.next() else {
@@ -95,13 +95,13 @@ fn stdin_loop(
         match SimUpdate::parse_line(text) {
             Ok(update) => {
                 received += 1;
-                if update.impact.is_some() {
-                    with_impact += 1;
+                if update.target.is_some() {
+                    with_target += 1;
                 }
                 if progress.ready() {
                     info!(
                         received,
-                        with_impact,
+                        with_target,
                         ball = update.ball.is_some(),
                         "sim: 수신"
                     );
@@ -111,26 +111,21 @@ fn stdin_loop(
             Err(error) => warn!(%error, text, "sim stdin 파싱 실패"),
         }
     }
-    info!(received, with_impact, "sim: stdin 종료");
+    info!(received, with_target, "sim: stdin 종료");
 }
 
 /// 준 필드만 반영한다.
 ///
-/// 제어 워커는 pose·swing만 담은 메시지를 보내고 추정 워커는 ball·impact만 담는다 —
+/// 제어 워커는 pose를 보내고 추정 워커는 ball·target을 보낸다 —
 /// 없는 필드를 `None`으로 덮어쓰면 서로가 서로를 지운다.
 fn apply(ball: &ball::Handle, ghost: &ball::Handle, robot: &gui_robot::Handle, update: SimUpdate) {
     if update.ball.is_some() {
         ball.set_position(update.ball);
     }
-    if update.impact.is_some() {
-        ghost.set_position(update.impact);
+    if update.target.is_some() {
+        ghost.set_position(update.target);
     }
-    // 스윙 재생 중에는 포즈를 덮어쓰지 않는다 — 재생이 끊긴다.
-    if let Some(swing) = &update.swing {
-        robot.play(swing.to_trajectory());
-    } else if let Some(pose) = &update.pose
-        && !robot.is_busy()
-    {
+    if let Some(pose) = &update.pose {
         robot.set_pose(pose.into());
     }
 }

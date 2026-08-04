@@ -1,4 +1,4 @@
-//! `--mode real` 연속 급구 진입점 — 조립 · 메인 루프 · 요약.
+//! `--mode real` 손목·리니어 레일 제어 진입점 — 조립 · 메인 루프 · 요약.
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -22,8 +22,8 @@ use super::camera_worker::{self, CameraStats};
 use super::estimator_worker::{self, EstimatorStats};
 use super::fmt::{f2, f2_slice};
 use super::{
-    ControlStatus, Options, PacedSource, PreviewEvent, PreviewWindow, ShotEvent, ShutdownGuard,
-    control_worker, shutdown_channel, sim_host,
+    Options, PacedSource, PreviewEvent, PreviewWindow, RuntimeEvent, ShutdownGuard, control_worker,
+    shutdown_channel, sim_host,
 };
 
 /// 카메라 → 추정 버퍼. 실시간이라 크게 잡을 이유가 없다 (밀리면 어차피 버린다).
@@ -33,16 +33,14 @@ const SIM_CAPACITY: usize = 2;
 /// 프리뷰가 없을 때 메인 루프 tick.
 const IDLE_TICK: Duration = Duration::from_millis(5);
 
-/// 연속 급구: 스윙 완주·센터 복귀 후 다음 공을 다시 친다.
-///
-/// 종료는 ESC·`q`(preview) 또는 제어 워커 `Done`(치명 실패·셧다운).  
-/// `Committed` / `Infeasible`로 프로세스를 끝내지 않는다.
+/// 추정한 목표 x로 레일을 이동하고 정밀 단계에서 손목을 시험 구동한다.
+/// 종료는 ESC·`q`(preview) 또는 제어 워커 `Done`이다.
 pub fn run(args: &Args) -> Result<()> {
     let options = Options::from_args(args);
     let robot = robot().context("defaults::robot")?;
     let arm = Arc::clone(&robot.arm);
 
-    let hardware = open_hardware(&options, &arm)?;
+    let hardware = open_hardware(&options)?;
     let calibration = load_calibration()?;
     let sources = open_cameras(&options)?;
     ensure!(
@@ -58,7 +56,6 @@ pub fn run(args: &Args) -> Result<()> {
     // 제어 워커가 계획 중일 때는 이전 요청을 버리고 최신 한 건만 남긴다.
     let (commit_tx, commit_rx) = bounded(1);
     let commit_evict_rx = commit_rx.clone();
-    let (status_tx, status_rx) = unbounded::<ControlStatus>();
     let (event_tx, event_rx) = unbounded();
     let (preview_tx, preview_rx) = if options.preview {
         let (tx, rx) = bounded(PREVIEW_CAPACITY);
@@ -101,7 +98,6 @@ pub fn run(args: &Args) -> Result<()> {
         InterceptWindow::default(),
         commit_tx,
         commit_evict_rx,
-        status_rx,
         preview_tx,
         sim_tx.clone(),
         event_tx.clone(),
@@ -112,7 +108,6 @@ pub fn run(args: &Args) -> Result<()> {
         Arc::clone(&arm),
         options.home,
         commit_rx,
-        status_tx,
         sim_tx,
         event_tx,
         shutdown,
@@ -136,16 +131,16 @@ pub fn run(args: &Args) -> Result<()> {
     return Ok(());
 }
 
-/// 세션 요약용 — 마지막 주목 이벤트 + 본 샷 수.
+/// 세션 요약용 — 추적한 공과 보낸 제어 명령 수.
 struct Outcome {
-    shots_seen: u64,
-    last: LastShot,
+    tracks_seen: u64,
+    commands_sent: u64,
+    last: LastState,
 }
 
-enum LastShot {
+enum LastState {
     None,
-    Committed,
-    Infeasible(String),
+    Commanded,
     Failed(String),
     TimedOut,
     Quit,
@@ -154,21 +149,23 @@ enum LastShot {
 impl Outcome {
     fn label(&self) -> String {
         let last = match &self.last {
-            LastShot::None => "없음".to_owned(),
-            LastShot::Committed => "커밋".to_owned(),
-            LastShot::Infeasible(reason) => format!("포기 - {reason}"),
-            LastShot::Failed(reason) => format!("실패 - {reason}"),
-            LastShot::TimedOut => "타임아웃 - 공이 오지 않음".to_owned(),
-            LastShot::Quit => "사용자 종료".to_owned(),
+            LastState::None => "없음".to_owned(),
+            LastState::Commanded => "레일·손목 명령".to_owned(),
+            LastState::Failed(reason) => format!("실패 - {reason}"),
+            LastState::TimedOut => "타임아웃 - 공이 오지 않음".to_owned(),
+            LastState::Quit => "사용자 종료".to_owned(),
         };
-        return format!("shots={} last={last}", self.shots_seen);
+        return format!(
+            "tracks={} commands={} last={last}",
+            self.tracks_seen, self.commands_sent
+        );
     }
 }
 
-/// 샷 이벤트를 찍고 프리뷰를 돌린다. 세션은 ESC/`q` 또는 제어 `Done`까지 유지.
+/// 런타임 이벤트를 찍고 프리뷰를 돌린다.
 fn main_loop(
     options: &Options,
-    event_rx: &Receiver<ShotEvent>,
+    event_rx: &Receiver<RuntimeEvent>,
     preview_rx: Option<Receiver<PreviewEvent>>,
     guard: ShutdownGuard,
 ) -> Outcome {
@@ -176,8 +173,9 @@ fn main_loop(
     let mut guard = Some(guard);
     let mut wait_deadline = Instant::now() + Duration::from_secs_f64(options.timeout_secs);
     let mut outcome = Outcome {
-        shots_seen: 0,
-        last: LastShot::None,
+        tracks_seen: 0,
+        commands_sent: 0,
+        last: LastState::None,
     };
     let mut timed_out_warned = false;
 
@@ -191,20 +189,23 @@ fn main_loop(
                 preview.set_result(lines);
             }
             match &event {
-                ShotEvent::Armed { shot_seq, .. } => {
-                    outcome.shots_seen = (*shot_seq).max(outcome.shots_seen);
+                RuntimeEvent::Ready { .. } => {
                     wait_deadline = Instant::now() + Duration::from_secs_f64(options.timeout_secs);
                     timed_out_warned = false;
                 }
-                ShotEvent::Committed { .. } => outcome.last = LastShot::Committed,
-                ShotEvent::Infeasible { reason, .. } => {
-                    outcome.last = LastShot::Infeasible(reason.clone());
+                RuntimeEvent::Tracking { track_seq, .. } => {
+                    outcome.tracks_seen = outcome.tracks_seen.max(*track_seq);
+                    wait_deadline = Instant::now() + Duration::from_secs_f64(options.timeout_secs);
+                    timed_out_warned = false;
                 }
-                ShotEvent::Failed { reason, .. } => {
-                    outcome.last = LastShot::Failed(reason.clone());
+                RuntimeEvent::Commanded { .. } => {
+                    outcome.commands_sent += 1;
+                    outcome.last = LastState::Commanded;
                 }
-                ShotEvent::Done => control_done = true,
-                _ => {}
+                RuntimeEvent::Failed { reason, .. } => {
+                    outcome.last = LastState::Failed(reason.clone());
+                }
+                RuntimeEvent::Done => control_done = true,
             }
         }
 
@@ -218,9 +219,9 @@ fn main_loop(
         if !timed_out_warned && Instant::now() >= wait_deadline {
             warn!(
                 timeout_secs = f2(options.timeout_secs),
-                "공을 기다리다 시간 초과 — 세션은 유지 (다음 Armed에서 재장전)"
+                "공을 기다리다 시간 초과 — 세션은 유지"
             );
-            outcome.last = LastShot::TimedOut;
+            outcome.last = LastState::TimedOut;
             timed_out_warned = true;
         }
 
@@ -232,7 +233,7 @@ fn main_loop(
                     }
                 }
                 if preview.show() {
-                    outcome.last = LastShot::Quit;
+                    outcome.last = LastState::Quit;
                     break outcome;
                 }
             }
@@ -252,46 +253,37 @@ fn main_loop(
     return result;
 }
 
-/// 샷 결과 HUD (ASCII — Hershey 폰트 제약). 최신 샷으로 덮어쓴다.
-fn result_lines(event: &ShotEvent) -> Option<Vec<String>> {
+/// 최근 제어 결과 HUD (ASCII — Hershey 폰트 제약).
+fn result_lines(event: &RuntimeEvent) -> Option<Vec<String>> {
     return match event {
-        ShotEvent::Committed {
-            shot_seq,
-            time_to_impact_secs,
-            duration_secs,
-            impact,
-            rail_start,
-            rail_end,
-            peak_joint_speed,
+        RuntimeEvent::Commanded {
+            track_seq,
+            stage,
+            target,
+            rail_x,
+            wrist_rad,
         } => Some(vec![
-            format!("COMMITTED shot {shot_seq}"),
+            format!("COMMAND track {track_seq} {stage:?}"),
             format!(
-                "impact x{} y{} z{}  tti {}s",
-                f2(impact.coords.x),
-                f2(impact.coords.y),
-                f2(impact.coords.z),
-                f2(*time_to_impact_secs)
+                "target x{} y{} z{}",
+                f2(target.coords.x),
+                f2(target.coords.y),
+                f2(target.coords.z)
             ),
             format!(
-                "swing  {}s  rail {} -> {}  peak {} rad/s",
-                f2(*duration_secs),
-                f2(*rail_start),
-                f2(*rail_end),
-                f2(*peak_joint_speed)
+                "rail {}  wrist {} deg",
+                f2(*rail_x),
+                f2(wrist_rad.to_degrees())
             ),
         ]),
-        ShotEvent::Infeasible { shot_seq, reason } => Some(vec![
-            format!("ABANDONED shot {shot_seq} - infeasible"),
-            reason.clone(),
-        ]),
-        ShotEvent::Failed { shot_seq, reason } => {
-            Some(vec![format!("FAILED shot {shot_seq}"), reason.clone()])
+        RuntimeEvent::Failed { track_seq, reason } => {
+            Some(vec![format!("FAILED track {track_seq:?}"), reason.clone()])
         }
         _ => None,
     };
 }
 
-fn open_hardware(options: &Options, arm: &Arc<pingpong_bot::robot::Arm>) -> Result<RealHardware> {
+fn open_hardware(options: &Options) -> Result<RealHardware> {
     let mut dxl = DynamixelConfig::default();
     if let Some(port) = &options.dxl_port {
         dxl.port = port.clone();
@@ -306,9 +298,9 @@ fn open_hardware(options: &Options, arm: &Arc<pingpong_bot::robot::Arm>) -> Resu
         "real 하드웨어 (mirror ID1↔ID2)"
     );
     let hardware = if options.dry_run {
-        RealHardware::dry_run_with_arm(dxl, Some(rail), Arc::clone(arm))
+        RealHardware::dry_run(dxl, Some(rail))
     } else {
-        RealHardware::new(dxl, Some(rail), Arc::clone(arm))
+        RealHardware::new(dxl, Some(rail))
     };
     return hardware.context("하드웨어 초기화");
 }
@@ -334,7 +326,7 @@ type OpenedCameras = Vec<(
 /// 라이브 캠, 또는 `--clip`이면 녹화 클립.
 ///
 /// 클립은 **녹화 당시 fps로 페이싱**해서 재생한다 ([`PacedSource`]) — 그래야 계획 스로틀·
-/// 커밋 신선도·하드웨어 `stream_hz` 같은 벽시계 로직이 라이브와 같은 조건에서 돈다.
+/// 요청 신선도·하드웨어 `stream_hz` 같은 벽시계 로직이 라이브와 같은 조건에서 돈다.
 fn open_cameras(options: &Options) -> Result<OpenedCameras> {
     let cams = CamCliArgs {
         cam: DEFAULT_STEREO_CAM_ROLES.to_vec(),
@@ -379,59 +371,45 @@ fn open_cameras(options: &Options) -> Result<OpenedCameras> {
         .collect());
 }
 
-fn log_event(event: &ShotEvent) {
+fn log_event(event: &RuntimeEvent) {
     match event {
-        ShotEvent::Armed { shot_seq, pose } => info!(
-            shot = shot_seq,
+        RuntimeEvent::Ready { pose } => info!(
             rail_x = f2(pose.rail_x),
             joints = f2_slice(&pose.joints.values),
-            "real shot: armed"
+            "실기 단순 제어 준비"
         ),
-        ShotEvent::Tracking {
-            shot_seq,
+        RuntimeEvent::Tracking {
+            track_seq,
             position,
             speed,
         } => info!(
-            shot = shot_seq,
+            track = track_seq,
             x = f2(position.coords.x),
             y = f2(position.coords.y),
             z = f2(position.coords.z),
             speed = f2(*speed),
-            "real shot: track"
+            "공 궤적 추적 시작"
         ),
-        ShotEvent::Committed {
-            shot_seq,
-            time_to_impact_secs,
-            duration_secs,
-            impact,
-            rail_start,
-            rail_end,
-            peak_joint_speed,
+        RuntimeEvent::Commanded {
+            track_seq,
+            stage,
+            target,
+            rail_x,
+            wrist_rad,
         } => info!(
-            shot = shot_seq,
-            duration_secs = f2(*duration_secs),
-            rail_start = f2(*rail_start),
-            rail_end = f2(*rail_end),
-            impact_x = f2(impact.coords.x),
-            impact_y = f2(impact.coords.y),
-            impact_z = f2(impact.coords.z),
-            tti = f2(*time_to_impact_secs),
-            peak_joint_speed = f2(*peak_joint_speed),
-            "real shot: swing commit"
+            track = track_seq,
+            ?stage,
+            target_x = f2(target.coords.x),
+            target_y = f2(target.coords.y),
+            target_z = f2(target.coords.z),
+            rail_x = f2(*rail_x),
+            wrist_deg = f2(wrist_rad.to_degrees()),
+            "레일·손목 명령 전송"
         ),
-        ShotEvent::Infeasible { shot_seq, reason } => {
-            info!(
-                shot = shot_seq,
-                reason, "real shot: 포기 — 관절·토크 한계 (모터 보호)"
-            )
+        RuntimeEvent::Failed { track_seq, reason } => {
+            warn!(track = track_seq, reason, "실기 단순 제어 실패")
         }
-        ShotEvent::PlanFailed { shot_seq, reason } => {
-            tracing::debug!(shot = shot_seq, reason, "real shot: 계획 실패")
-        }
-        ShotEvent::Failed { shot_seq, reason } => {
-            warn!(shot = shot_seq, reason, "real shot: 실패")
-        }
-        ShotEvent::Done => {}
+        RuntimeEvent::Done => {}
     }
 }
 

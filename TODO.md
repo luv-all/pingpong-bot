@@ -6,13 +6,14 @@
 ## 현재 상태 (2026-08-01)
 
 - **1.1~1.3 핵심 구현 완료:** `N×7` 규약, 채택 관측 버퍼, 미래 궤적 샘플링.
-- **1.4 제어 전환 완료:** real `CommitRequest`와 공통 파이프라인이
-  `BallTrajectory`를 전달한다.
-- **2번 위치 이동 구현:** `HitTargetSelector`, `Target`, `PositionController`를
-  real·sim이 공유하며, 실행 가능한 후보 중 도착 시간 여유가 큰 위치를 고른다.
-- **2단계 예측 제어 완료:** 추적 성립 즉시 1차 위치로 이동하고,
-  관측 0.25초·최근 3회 10 cm 수렴 후 정밀 위치로 진행 중 재계획한다.
-- 현재 호환 경로는 `BallTrajectory → 평면 교차 어댑터 → Prediction → 기존 스윙`이다.
+- **1.4 제어 전환 완료:** real `CommitRequest`가 `BallTrajectory`와
+  `Provisional | Refined` 단계를 전달한다.
+- **레일·손목 공통 제어 완료:** `DirectController`를 real·GUI sim이
+  공유해 목표 선택, 레일 clamp, 손목 각, 명령 시간을 같이 계산한다.
+- **2단계 예측 제어 완료:** 추적 성립 즉시 1차 레일 위치로 이동하고,
+  관측 0.25초·최근 3회 10cm 수렴 후 정밀 레일 위치와 손목 +15°를 명령한다.
+- **실기 오차 계측 완료:** 명령 후 레일·손목을 재측정해
+  `commanded - measured`를 로그로 남긴다.
 - `fly_07/08/09` 검출·삼각측량·EKF 예측 진단 통과. 단, 이것은 아직
   `Target → 위치 이동`까지의 통합 테스트가 아니다.
 - 궤적 관련 라이브러리 테스트 **46개 통과**. 전체 workspace는
@@ -227,8 +228,8 @@ PositionController (우선) / HitController (후속)
 - [ ] 임팩트 시점 목표 관절 속도 계산 제거
 - [ ] 백스윙·임팩트 knot·팔로스루 궤적 제거
 - [ ] `plan_best`, `plan_swing`, `plan_bang_bang` 등 스윙 전용 플래너 제거
-- [ ] `Committed`, `InfeasibleSwing`, 샷 래치 등 스윙 전용 상태·이벤트 정리
-- [ ] 프리뷰·시뮬레이션 HUD의 타격점·스윙 전용 표시 제거
+- [x] real의 `Committed`, `Infeasible`, `PlanFailed`, `Recovering` 상태·이벤트 정리
+- [x] real 프리뷰·관전 메시지의 스윙 재생·임팩트 명칭 제거
 - [ ] 사용하지 않는 타입·설정값·테스트·문서 제거
 
 ### 2.6 완료 기준
