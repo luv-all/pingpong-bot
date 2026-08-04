@@ -29,7 +29,7 @@ pub const FIXED_IMPACT_MIN_DURATION_SECS: f64 = 0.25;
 /// 라켓 면 법선 방향의 짧은 임팩트 전진 거리 [m].
 pub const FIXED_IMPACT_PUSH_DISTANCE_M: f64 = 0.050;
 /// 임팩트 순간 목표 라켓 선속도 [m/s].
-pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 0.90;
+pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 1.80;
 
 impl Default for InterceptWindow {
     fn default() -> Self {

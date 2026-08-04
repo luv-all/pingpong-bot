@@ -554,7 +554,10 @@ pub fn plan_fixed_impact_push_in(
         .iter()
         .map(|value| value.abs())
         .fold(0.0_f64, f64::max);
-    let velocity_limit = arm.max_joint_speed * 0.8;
+    // `arm.max_joint_speed` 자체가 이미 Dynamixel 무부하 속도를 실기용으로
+    // 디레이트한 상한이다. 여기서 다시 0.8을 곱하면 이중 디레이트가 되므로,
+    // 발사기 최대 출력 시험에서는 모델이 허용하는 상한 전체를 사용한다.
+    let velocity_limit = arm.max_joint_speed;
     if peak > velocity_limit && velocity_limit > 0.0 {
         let scale = velocity_limit / peak;
         for velocity in &mut impact_velocity {
@@ -1124,6 +1127,11 @@ mod tests {
         )
         .expect("impact velocity");
         let forward_speed = impact_velocity.dot(&impact.normal);
+        let impact_joint_peak = trajectory
+            .end_velocity
+            .iter()
+            .map(|speed| speed.abs())
+            .fold(0.0_f64, f64::max);
 
         let expected_duration = FIXED_IMPACT_MIN_DURATION_SECS
             + defaults::ControlParams::default().swing_follow_through_secs;
@@ -1137,6 +1145,10 @@ mod tests {
         assert!(
             forward_speed > 0.10,
             "라켓이 공을 밀 만큼의 전진 속도를 가져야 함: {forward_speed:.3}m/s"
+        );
+        assert!(
+            impact_joint_peak > arm.max_joint_speed * 0.8,
+            "최대 출력 시험은 예전 이중 80% 상한을 넘어야 함: {impact_joint_peak:.3}rad/s"
         );
         assert!(
             (impact.position - before.position).dot(&before.normal) > 0.01,
