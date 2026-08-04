@@ -13,7 +13,8 @@ use crate::estimator;
 use crate::estimator::Prediction;
 use crate::robot::Arm;
 use crate::robot::control::{
-    DIRECT_WRIST_JOINT_INDEX, DirectController, PredictionStage, REFINED_MIN_OBSERVATION_SECS,
+    DIRECT_WRIST_JOINT_INDEX, DirectController, PredictionStability, PredictionStage,
+    REFINED_MIN_OBSERVATION_SECS,
 };
 use crate::robot::motion;
 use crate::robot::motion::InterceptWindow;
@@ -95,6 +96,8 @@ pub struct SimWorld {
     swing_committed: bool,
     /// 1차 이동 후 0.25 s 시점의 정밀 목표로 재계획했는지.
     position_refined: bool,
+    /// 실기와 같은 최근 목표 수렴 조건으로 1차→정밀 단계를 올린다.
+    direct_prediction_stability: PredictionStability,
     /// 이번 비행에서 스윙을 포기했는지 (도달 불능·너무 늦음). commit 없이 손 뗌.
     swing_abandoned: bool,
     /// 발사마다 증가 — 터미널 샷 로그 상관용.
@@ -404,6 +407,7 @@ impl SimWorld {
             use_bang_bang_swing: false,
             swing_committed: false,
             position_refined: false,
+            direct_prediction_stability: PredictionStability::default(),
             swing_abandoned: false,
             shot_seq: 0,
             hard_fail_streak: 0,
@@ -752,7 +756,8 @@ impl SimWorld {
             && !self.position_refined
             && self.sim_time - self.flight_started_at >= REFINED_MIN_OBSERVATION_SECS;
         if self.swing_abandoned
-            || (self.swing_committed && !refine_due)
+            || (self.swing_committed && self.position_refined)
+            || (self.use_bang_bang_swing && self.swing_committed)
             || (self.robot.is_swinging() && !refine_due)
         {
             if let Some(prediction) = marker {
@@ -857,15 +862,25 @@ impl SimWorld {
         else {
             return;
         };
-        let refined = self.sim_time - self.flight_started_at >= REFINED_MIN_OBSERVATION_SECS;
-        let stage = if refined {
-            PredictionStage::Refined
-        } else {
-            PredictionStage::Provisional
+        let observed_span_secs = self.sim_time - self.flight_started_at;
+        let target = match controller.select_target(&ball_trajectory) {
+            Ok(target) => target,
+            Err(error) => {
+                debug!(shot = self.shot_seq, %error, "shot: 공통 목표 선택 대기");
+                return;
+            }
         };
+        let stage = self
+            .direct_prediction_stability
+            .observe(target.position, observed_span_secs);
+        let refined = stage == PredictionStage::Refined;
+        if self.swing_committed && !refined {
+            return;
+        }
+        let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
         // 이 궤적은 현재 sim 상태에서 바로 표본화했으므로 기준시각 경과는 0이다.
         // 목표 선택·레일 clamp·손목 단계·명령시간 계산은 실기 워커와 같은 코드다.
-        let command = match controller.command(&self.arm, &ball_trajectory, stage, 0.0) {
+        let command = match controller.command_for_target(&self.arm, &start, target, stage, 0.0) {
             Ok(command) => command,
             Err(error) => {
                 self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
@@ -889,7 +904,8 @@ impl SimWorld {
         };
         *wrist = command.wrist_rad;
         self.robot.set_auto_return_to_center(false);
-        self.robot.set_rail_target(command.rail_x);
+        self.robot
+            .set_rail_target_in_secs(&self.arm, command.rail_x, command.duration_secs);
         self.robot.set_targets(targets);
         info!(
             shot = self.shot_seq,
@@ -1073,6 +1089,7 @@ impl SimWorld {
         self.bang_bang_worker.cancel_inflight();
         self.swing_committed = false;
         self.position_refined = false;
+        self.direct_prediction_stability.reset();
         self.swing_abandoned = false;
         self.hard_fail_streak = 0;
         self.last_swing_attempt_at = f64::NEG_INFINITY;

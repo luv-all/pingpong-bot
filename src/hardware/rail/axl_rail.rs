@@ -77,21 +77,32 @@ impl AxlRail {
         return Ok(normalize_m(self.config.board_to_domain_abs(board_m)));
     }
 
-    /// 궤적 시작 시 한 번만 레일을 이동한다. 속도는 `|Δx|/duration` (램프 무시).
+    /// 가속·감속 램프를 포함해 `duration_secs`에 도착할 속도를 계산한다.
     pub fn command_abs_in_secs(&mut self, x: f64, duration_secs: f64) -> Result<f64, HwError> {
+        let prepare_started = std::time::Instant::now();
+        #[cfg(all(windows, feature = "real"))]
+        if let RailKind::Live(live) = &mut self.kind {
+            // 이전 1차 이동을 먼저 정지한 후의 실제 위치로 속도를 다시 계산한다.
+            live.stop_if_moving(self.config.axis)?;
+        }
+        let usable_duration =
+            (duration_secs - prepare_started.elapsed().as_secs_f64()).max(f64::EPSILON);
         let domain_m = normalize_m(self.config.clamp_m(x));
         let current_m = self.read_x_m()?;
         let distance_m = (domain_m - current_m).abs();
-        if distance_m <= 1e-9 || duration_secs <= f64::EPSILON {
+        if distance_m <= 1e-9 || usable_duration <= f64::EPSILON {
             return self.set_domain_position(domain_m);
         }
 
-        let vel = (distance_m / duration_secs).clamp(self.config.min_vel, self.config.max_vel);
+        let accel = self.config.accel.min(self.config.decel);
+        let vel = velocity_for_distance_duration(distance_m, usable_duration, accel)
+            .clamp(self.config.min_vel, self.config.max_vel);
         info!(
             current_m,
             target_m = domain_m,
             velocity_m_s = vel,
             duration_secs,
+            usable_duration_secs = usable_duration,
             "AXL 레일 이동 명령"
         );
         match &mut self.kind {
@@ -155,6 +166,23 @@ impl AxlRail {
             RailKind::Live(live) => live.wait_idle(self.config.axis),
         }
     }
+
+    /// 진행 중인 레일 이동을 부드럽게 정지시킨다.
+    pub fn stop(&mut self) -> Result<(), HwError> {
+        match &mut self.kind {
+            RailKind::DryRun { .. } => Ok(()),
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => live.stop(self.config.axis),
+        }
+    }
+}
+
+fn velocity_for_distance_duration(distance: f64, duration: f64, acceleration: f64) -> f64 {
+    let discriminant = duration * duration - 4.0 * distance / acceleration;
+    if discriminant <= 0.0 {
+        return f64::INFINITY;
+    }
+    return 0.5 * acceleration * (duration - discriminant.sqrt());
 }
 
 fn normalize_m(x: f64) -> f64 {
@@ -171,11 +199,11 @@ fn validate_config(config: &RailConfig) -> Result<(), HwError> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::AxlRail;
+    use super::{AxlRail, velocity_for_distance_duration};
     use crate::hardware::rail::RailConfig;
 
     #[test]
-    fn command_abs_in_secs_uses_distance_over_duration() {
+    fn command_abs_in_secs_reaches_requested_target() {
         let cfg = RailConfig {
             enabled: true,
             dll_path: PathBuf::from("unused.dll"),
@@ -190,6 +218,16 @@ mod tests {
         let commanded = rail.command_abs_in_secs(0.2, 0.4).unwrap();
         assert_eq!(commanded, 0.2);
         assert_eq!(rail.read_x_m().unwrap(), 0.2);
+    }
+
+    #[test]
+    fn duration_velocity_includes_acceleration_and_deceleration() {
+        let distance = 0.2;
+        let duration = 0.4;
+        let acceleration = 12.0;
+        let velocity = velocity_for_distance_duration(distance, duration, acceleration);
+        let resulting_duration = distance / velocity + velocity / acceleration;
+        assert!((resulting_duration - duration).abs() < 1e-12);
     }
 
     #[test]

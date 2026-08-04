@@ -2,6 +2,15 @@ use crate::error::HwError;
 use crate::robot;
 use crate::robot::motion;
 
+/// 하드웨어 한계·양자화까지 반영해 실제 장치에 적용된 직접 명령.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AppliedRailRacketCommand {
+    pub rail_m: f64,
+    pub wrist_rad: f64,
+    /// 레일이 비활성인 경우 `false`다.
+    pub rail_sent: bool,
+}
+
 /// 로봇 팔과 리니어 레일 구동 인터페이스.
 pub trait Hardware: Send {
     fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError>;
@@ -16,7 +25,7 @@ pub trait Hardware: Send {
         _rail_x: f64,
         _racket_joint_rad: f64,
         _duration_secs: f64,
-    ) -> Result<(), HwError> {
+    ) -> Result<AppliedRailRacketCommand, HwError> {
         return Err(HwError::InvalidConfig {
             reason: "레일+라켓 단순 추종을 지원하지 않는 하드웨어입니다".into(),
         });

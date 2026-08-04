@@ -231,7 +231,7 @@ impl DynamixelBus {
     /// 2단계 제어 시험에서는 팔 전체를 다시 명령하지 않고 라켓을 잡은 마지막
     /// 관절만 움직여야 한다. 전체 SyncWrite를 재사용하면 나머지 관절도 매 프레임
     /// 제어 대상이 되므로 별도 단일축 경로를 둔다.
-    pub fn write_joint(&mut self, joint_index: usize, angle_rad: f64) -> Result<(), HwError> {
+    pub fn write_joint(&mut self, joint_index: usize, angle_rad: f64) -> Result<f64, HwError> {
         let joint_count = self.mapping.config.motor_ids.len();
         let Some(&motor_id) = self.mapping.config.motor_ids.get(joint_index) else {
             return Err(command_transport_error(
@@ -293,7 +293,7 @@ impl DynamixelBus {
                 })?;
             }
         }
-        return Ok(());
+        return Ok(self.mapping.ticks_to_radians(joint_index, tick));
     }
 
     fn write_joints_inner(&mut self, joints: &Joints) -> Result<(), HwError> {

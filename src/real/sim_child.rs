@@ -24,10 +24,7 @@ use pingpong_bot::sim::physics::world::SimWorld;
 use pingpong_bot::sim::session::SimRuntimeControls;
 use tracing::{info, warn};
 
-use super::{SimUpdate, Throttle};
-
-/// 수신 진척 로그 주기.
-const PROGRESS_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
+use super::SimUpdate;
 
 /// kiss3d 블로킹 실행. 부모가 죽으면 stdin EOF로 같이 내려간다.
 pub fn run() -> Result<()> {
@@ -80,9 +77,8 @@ fn stdin_loop(
 ) {
     let stdin = std::io::stdin();
     let mut lines = BufReader::new(stdin.lock()).lines();
-    // 창만 봐서는 "안 그린 것"과 "안 온 것"을 구분할 수 없다 — 받은 걸 주기적으로 찍는다.
-    let mut progress = Throttle::new(PROGRESS_PERIOD);
     let (mut received, mut with_target) = (0_u64, 0_u64);
+    let mut last_ball_present: Option<bool> = None;
 
     while !stop.load(Ordering::Relaxed) {
         let Some(Ok(line)) = lines.next() else {
@@ -98,12 +94,12 @@ fn stdin_loop(
                 if update.target.is_some() {
                     with_target += 1;
                 }
-                if progress.ready() {
+                if let Some(ball_present) = ball_transition(&mut last_ball_present, &update) {
                     info!(
                         received,
                         with_target,
-                        ball = update.ball.is_some(),
-                        "sim: 수신"
+                        ball = ball_present,
+                        "sim: 공 감지 상태 변경"
                     );
                 }
                 apply(&ball, &ghost, &robot, update);
@@ -112,6 +108,20 @@ fn stdin_loop(
         }
     }
     info!(received, with_target, "sim: stdin 종료");
+}
+
+/// `pose` 전용 패킷의 `ball=None`은 "공 없음"이 아니라 "공 필드 미전송"이다.
+/// 추정 패킷에서 감지 상태가 실제로 바뀐 경우만 새 값을 반환한다.
+fn ball_transition(last: &mut Option<bool>, update: &SimUpdate) -> Option<bool> {
+    if update.pose.is_some() {
+        return None;
+    }
+    let current = update.ball.is_some();
+    if *last == Some(current) {
+        return None;
+    }
+    *last = Some(current);
+    return Some(current);
 }
 
 /// 준 필드만 반영한다.
@@ -127,5 +137,37 @@ fn apply(ball: &ball::Handle, ghost: &ball::Handle, robot: &gui_robot::Handle, u
     }
     if let Some(pose) = &update.pose {
         robot.set_pose(pose.into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::real::PoseMsg;
+    use pingpong_bot::Point3;
+
+    #[test]
+    fn ball_log_is_emitted_only_when_detection_state_changes() {
+        let mut last = None;
+        let no_ball = SimUpdate::default();
+        assert_eq!(ball_transition(&mut last, &no_ball), Some(false));
+        assert_eq!(ball_transition(&mut last, &no_ball), None);
+
+        let ball = SimUpdate {
+            ball: Some(Point3::new(0.1, 0.2, 0.3)),
+            ..SimUpdate::default()
+        };
+        assert_eq!(ball_transition(&mut last, &ball), Some(true));
+        assert_eq!(ball_transition(&mut last, &ball), None);
+
+        let pose_only = SimUpdate {
+            pose: Some(PoseMsg {
+                rail_x: 0.0,
+                joints: vec![0.0; 4],
+            }),
+            ..SimUpdate::default()
+        };
+        assert_eq!(ball_transition(&mut last, &pose_only), None);
+        assert_eq!(last, Some(true));
     }
 }

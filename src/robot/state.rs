@@ -13,6 +13,8 @@ pub struct State {
     rail_x: f64,
     /// 리니어 목표 x [m]
     rail_target: f64,
+    /// 직접 명령이 지정한 순항 속도. `None`이면 모델 최대 속도.
+    rail_speed_limit: Option<f64>,
     /// 리니어 레일 현재 속도 [m/s] — `RAIL_ACCEL_M_S2` 가속 제한 적분 상태.
     ///
     /// 속도만 제한하면(예전 동작) 레일이 한 틱 만에 정지→최고속으로 뛰는데,
@@ -36,6 +38,7 @@ impl State {
         return Self {
             rail_x,
             rail_target: rail_x,
+            rail_speed_limit: None,
             rail_vel: 0.0,
             targets: initial.clone(),
             angles: initial,
@@ -60,6 +63,7 @@ impl State {
         self.return_pose_after_motion = None;
         self.rail_x = pose.rail_x;
         self.rail_target = pose.rail_x;
+        self.rail_speed_limit = None;
         self.rail_vel = 0.0;
         self.angles = pose.joints.clone();
         self.targets = pose.joints;
@@ -112,6 +116,21 @@ impl State {
     /// 설정된 목표를 향해 `rail.max_speed`·`RAIL_ACCEL_M_S2`로 접근한다.
     pub fn set_rail_target(&mut self, rail_x: f64) {
         self.rail_target = rail_x;
+        self.rail_speed_limit = None;
+    }
+
+    /// 실기 AXL과 같이 가속·감속을 포함해 지정 시간에 도착하도록 직접 목표를 건다.
+    pub fn set_rail_target_in_secs(&mut self, arm: &Arm, rail_x: f64, duration_secs: f64) {
+        self.rail_target = rail_x;
+        let distance = (rail_x - self.rail_x).abs();
+        let acceleration = crate::defaults::motion::RAIL_ACCEL_M_S2;
+        let discriminant = duration_secs * duration_secs - 4.0 * distance / acceleration;
+        let velocity = if discriminant <= 0.0 {
+            f64::INFINITY
+        } else {
+            0.5 * acceleration * (duration_secs - discriminant.sqrt())
+        };
+        self.rail_speed_limit = arm.rail.map(|rail| velocity.min(rail.max_speed));
     }
 
     /// quintic 스윙 궤적을 시작한다 (이미 스윙 중이면 무시).
@@ -230,12 +249,14 @@ impl State {
         }
         let accel = crate::defaults::motion::RAIL_ACCEL_M_S2;
         let brake_speed = (2.0 * accel * diff.abs()).sqrt();
-        let desired_vel = diff.signum() * rail.max_speed.min(brake_speed);
+        let speed_limit = self.rail_speed_limit.unwrap_or(rail.max_speed);
+        let desired_vel = diff.signum() * speed_limit.min(rail.max_speed).min(brake_speed);
         self.rail_vel += (desired_vel - self.rail_vel).clamp(-accel * dt, accel * dt);
         let step = self.rail_vel * dt;
         if step.abs() >= diff.abs() {
             self.rail_x = self.rail_target;
             self.rail_vel = 0.0;
+            self.rail_speed_limit = None;
         } else {
             self.rail_x += step;
         }
@@ -531,6 +552,27 @@ mod tests {
             state.rail_x() <= goal + 1e-9,
             "오버슛: {} > {goal}",
             state.rail_x()
+        );
+    }
+
+    #[test]
+    fn direct_rail_command_arrives_near_requested_duration() {
+        const DT: f64 = 1.0 / 1000.0;
+        let arm = crate::defaults::primitive_4dof().expect("arm").arm;
+        let mut state = arm.initial_state();
+        let goal = state.rail_x() + 0.20;
+        let requested_secs = 0.40;
+        state.set_rail_target_in_secs(&arm, goal, requested_secs);
+
+        let mut elapsed = 0.0;
+        while (state.rail_x() - goal).abs() > 1e-9 && elapsed < 1.0 {
+            state.step_commands(&arm, DT);
+            elapsed += DT;
+        }
+
+        assert!(
+            (elapsed - requested_secs).abs() <= 0.01,
+            "elapsed={elapsed}"
         );
     }
 

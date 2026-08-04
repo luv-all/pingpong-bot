@@ -213,14 +213,24 @@ pub struct DirectControlMeasurement {
 
 impl DirectControlCommand {
     pub fn compare_with_pose(&self, pose: &Pose) -> Option<DirectControlMeasurement> {
+        return DirectControlMeasurement::from_commanded(self.rail_x, self.wrist_rad, pose);
+    }
+}
+
+impl DirectControlMeasurement {
+    pub fn from_commanded(
+        rail_commanded_m: f64,
+        wrist_commanded_rad: f64,
+        pose: &Pose,
+    ) -> Option<Self> {
         let wrist_measured_rad = *pose.joints.values.get(DIRECT_WRIST_JOINT_INDEX)?;
-        return Some(DirectControlMeasurement {
-            rail_commanded_m: self.rail_x,
+        return Some(Self {
+            rail_commanded_m,
             rail_measured_m: pose.rail_x,
-            rail_error_m: self.rail_x - pose.rail_x,
-            wrist_commanded_rad: self.wrist_rad,
+            rail_error_m: rail_commanded_m - pose.rail_x,
+            wrist_commanded_rad,
             wrist_measured_rad,
-            wrist_error_rad: self.wrist_rad - wrist_measured_rad,
+            wrist_error_rad: wrist_commanded_rad - wrist_measured_rad,
         });
     }
 }
@@ -245,10 +255,21 @@ impl DirectController {
         });
     }
 
+    pub fn select_target(
+        &self,
+        trajectory: &BallTrajectory,
+    ) -> Result<HitTarget, DirectControlError> {
+        return self
+            .selector
+            .select(trajectory)
+            .map_err(DirectControlError::Target);
+    }
+
     /// `elapsed_secs`는 예측 기준 시각부터 명령 계산까지 흐른 시간이다.
     pub fn command(
         &self,
         arm: &Arm,
+        start: &Pose,
         trajectory: &BallTrajectory,
         stage: PredictionStage,
         elapsed_secs: f64,
@@ -256,10 +277,21 @@ impl DirectController {
         if !elapsed_secs.is_finite() || elapsed_secs < 0.0 {
             return Err(DirectControlError::InvalidElapsed);
         }
-        let target = self
-            .selector
-            .select(trajectory)
-            .map_err(DirectControlError::Target)?;
+        let target = self.select_target(trajectory)?;
+        return self.command_for_target(arm, start, target, stage, elapsed_secs);
+    }
+
+    pub fn command_for_target(
+        &self,
+        arm: &Arm,
+        start: &Pose,
+        target: HitTarget,
+        stage: PredictionStage,
+        elapsed_secs: f64,
+    ) -> Result<DirectControlCommand, DirectControlError> {
+        if !elapsed_secs.is_finite() || elapsed_secs < 0.0 {
+            return Err(DirectControlError::InvalidElapsed);
+        }
         let remaining_secs = target.time_secs - elapsed_secs;
         if !remaining_secs.is_finite() || remaining_secs <= 0.0 {
             return Err(DirectControlError::Expired {
@@ -269,18 +301,59 @@ impl DirectController {
         let rail_x = arm
             .rail
             .map_or(target.position.x, |rail| rail.clamp_x(target.position.x));
-        let wrist_rad = match stage {
+        let wrist_requested_rad = match stage {
             PredictionStage::Provisional => self.ready_wrist_rad,
             PredictionStage::Refined => self.ready_wrist_rad + DIRECT_WRIST_STROKE_RAD,
         };
+        let wrist_rad = arm
+            .joint_limit(DIRECT_WRIST_JOINT_INDEX)
+            .map_or(wrist_requested_rad, |limit| {
+                wrist_requested_rad.clamp(limit.min, limit.max)
+            });
+        let rail_distance_m = (rail_x - start.rail_x).abs();
+        let rail_required_secs = arm.rail.map_or(0.0, |rail| {
+            minimum_trapezoid_time(
+                rail_distance_m,
+                rail.max_speed,
+                crate::defaults::motion::RAIL_ACCEL_M_S2,
+            )
+        });
+        let wrist_current_rad = *start
+            .joints
+            .values
+            .get(DIRECT_WRIST_JOINT_INDEX)
+            .ok_or(DirectControlError::MissingWrist)?;
+        let wrist_required_secs =
+            (wrist_rad - wrist_current_rad).abs() / arm.max_joint_speed.max(1e-9);
+        let required_secs = rail_required_secs.max(wrist_required_secs);
+        if required_secs > remaining_secs {
+            return Err(DirectControlError::InsufficientTime {
+                remaining_secs,
+                required_secs,
+            });
+        }
         return Ok(DirectControlCommand {
             stage,
             target,
             rail_x,
             wrist_rad,
-            duration_secs: remaining_secs.clamp(MIN_DIRECT_COMMAND_SECS, MAX_DIRECT_COMMAND_SECS),
+            duration_secs: remaining_secs
+                .min(MAX_DIRECT_COMMAND_SECS)
+                .max(MIN_DIRECT_COMMAND_SECS.min(remaining_secs))
+                .max(required_secs),
         });
     }
+}
+
+fn minimum_trapezoid_time(distance: f64, max_speed: f64, acceleration: f64) -> f64 {
+    if distance <= 0.0 {
+        return 0.0;
+    }
+    let ramp_distance = max_speed * max_speed / acceleration;
+    if distance <= ramp_distance {
+        return 2.0 * (distance / acceleration).sqrt();
+    }
+    return 2.0 * max_speed / acceleration + (distance - ramp_distance) / max_speed;
 }
 
 /// 한 프레임만 우연히 맞은 예측을 정밀 단계로 착각하지 않도록
@@ -487,6 +560,13 @@ pub enum DirectControlError {
     Expired { late_by_secs: f64 },
     #[error("목표 선택 실패: {0}")]
     Target(TargetSelectionError),
+    #[error("현재 포즈에 손목축이 없음")]
+    MissingWrist,
+    #[error("남은 시간 {remaining_secs:.3}s, 레일·손목에 필요한 최소 시간 {required_secs:.3}s")]
+    InsufficientTime {
+        remaining_secs: f64,
+        required_secs: f64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -552,12 +632,28 @@ mod tests {
         )
         .unwrap();
         let controller = DirectController::new(0.2, 0.4, -0.7).unwrap();
+        let start = Pose::new(
+            0.3,
+            super::super::Joints::from_slice(&[0.0, 0.0, 0.0, -0.7]),
+        );
 
         let provisional = controller
-            .command(&robot.arm, &trajectory, PredictionStage::Provisional, 0.05)
+            .command(
+                &robot.arm,
+                &start,
+                &trajectory,
+                PredictionStage::Provisional,
+                0.05,
+            )
             .unwrap();
         let refined = controller
-            .command(&robot.arm, &trajectory, PredictionStage::Refined, 0.05)
+            .command(
+                &robot.arm,
+                &start,
+                &trajectory,
+                PredictionStage::Refined,
+                0.05,
+            )
             .unwrap();
 
         assert!((provisional.rail_x - 0.3).abs() < 1e-12);
@@ -587,6 +683,31 @@ mod tests {
 
         assert!((measured.rail_error_m - 0.03).abs() < 1e-12);
         assert!((measured.wrist_error_rad - 0.05).abs() < 1e-12);
+    }
+
+    #[test]
+    fn direct_controller_rejects_a_rail_target_that_cannot_arrive_in_time() {
+        let robot = crate::defaults::robot().unwrap();
+        let ready = robot.arm.default_joints.values[DIRECT_WRIST_JOINT_INDEX];
+        let controller = DirectController::new(0.2, 0.4, ready).unwrap();
+        let start = Pose::new(0.0, robot.arm.default_joints.clone());
+        let target = HitTarget {
+            position: Point3::new(1.0, 0.3, 0.2),
+            incoming_velocity: Vector3::zeros(),
+            time_secs: 0.05,
+        };
+
+        let error = controller
+            .command_for_target(
+                &robot.arm,
+                &start,
+                target,
+                PredictionStage::Provisional,
+                0.0,
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, DirectControlError::InsufficientTime { .. }));
     }
 
     #[test]

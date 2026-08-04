@@ -12,8 +12,10 @@ use crate::estimator;
 use crate::estimator::BallTrajectory;
 use crate::estimator::Estimator;
 use crate::hardware::Hardware;
-use crate::robot::control::{HitTargetSelector, PositionControlError, PositionController};
-use crate::telemetry::{Telemetry, TelemetryEvent};
+use crate::robot::control::{
+    DIRECT_WRIST_JOINT_INDEX, DirectController, PredictionStability, PredictionStage,
+};
+use crate::telemetry::Telemetry;
 use crossbeam_channel::bounded;
 use crossbeam_queue::ArrayQueue;
 use tracing::{info, info_span, warn};
@@ -28,7 +30,7 @@ pub fn run(
     mut estimator: Box<dyn Estimator>,
     mut hardware: Box<dyn Hardware>,
     config: PipelineConfig,
-    telemetry: Arc<dyn Telemetry>,
+    _telemetry: Arc<dyn Telemetry>,
 ) -> Result<(), PipelineError> {
     let (observation_tx, observation_rx) =
         bounded::<detector::Observation>(OBSERVATION_CHANNEL_CAPACITY);
@@ -151,23 +153,28 @@ pub fn run(
     ));
 
     let slot = Arc::clone(&trajectories);
-    let telemetry_control = Arc::clone(&telemetry);
     let shutdown_control = Arc::clone(&shutdown);
     let arm = Arc::clone(&config.robot.arm);
-    let selector = HitTargetSelector::new(config.intercept.y_min, config.intercept.y_max)
-        .map_err(|error| PipelineError::Configuration(error.to_string()))?;
+    let ready_wrist = arm
+        .default_joints
+        .values
+        .get(DIRECT_WRIST_JOINT_INDEX)
+        .copied()
+        .unwrap_or(0.0);
+    let controller =
+        DirectController::new(config.intercept.y_min, config.intercept.y_max, ready_wrist)
+            .map_err(|error| PipelineError::Configuration(error.to_string()))?;
     let tick = Duration::from_secs_f64(1.0 / config.control_hz);
     handles.push((
         PipelineThread::Control,
         thread::spawn(move || {
             let mut last_plan_warn = Instant::now() - Duration::from_secs(10);
+            let mut stability = PredictionStability::default();
+            let mut last_stage: Option<PredictionStage> = None;
+            let mut last_observed_span = 0.0;
             loop {
                 if let Some(ball_trajectory) = slot.pop() {
                     let _span = info_span!("control").entered();
-                    if hardware.is_busy() {
-                        // 이전 위치 이동이 끝나기 전에는 새 명령을 보내지 않는다.
-                        continue;
-                    }
                     let start = match hardware.read_pose() {
                         Ok(pose) => pose,
                         Err(error) => {
@@ -175,29 +182,52 @@ pub fn run(
                             continue;
                         }
                     };
-                    match PositionController::plan_best(&arm, &start, &ball_trajectory, &selector) {
-                        Ok(planned) => {
-                            let trajectory = planned.trajectory;
-                            telemetry_control.log(TelemetryEvent::SwingCommand(trajectory.clone()));
-                            if let Err(error) = hardware.command(&trajectory) {
-                                warn!(
-                                    ?error,
-                                    duration_secs = trajectory.duration_secs,
-                                    "하드웨어 명령 실패"
-                                );
-                            }
-                        }
-                        Err(
-                            PositionControlError::Stale { .. }
-                            | PositionControlError::InsufficientTime { .. },
-                        ) => {}
+                    let observed_span = ball_trajectory
+                        .observed
+                        .first()
+                        .map(|sample| -sample.time_secs)
+                        .unwrap_or(0.0);
+                    if observed_span + 1e-6 < last_observed_span {
+                        stability.reset();
+                        last_stage = None;
+                    }
+                    last_observed_span = observed_span;
+                    let target = match controller.select_target(&ball_trajectory) {
+                        Ok(target) => target,
                         Err(error) => {
                             let now = Instant::now();
                             if now.duration_since(last_plan_warn) >= Duration::from_secs(1) {
-                                warn!(%error, "목표 위치 계획 실패");
+                                warn!(%error, "레일·손목 목표 선택 실패");
                                 last_plan_warn = now;
                             }
+                            continue;
                         }
+                    };
+                    let stage = stability.observe(target.position, observed_span);
+                    if last_stage == Some(stage) {
+                        continue;
+                    }
+                    let elapsed = ball_trajectory.reference_time.elapsed().as_secs_f64();
+                    let command =
+                        match controller.command_for_target(&arm, &start, target, stage, elapsed) {
+                            Ok(command) => command,
+                            Err(_) => continue,
+                        };
+                    match hardware.command_rail_and_racket(
+                        command.rail_x,
+                        command.wrist_rad,
+                        command.duration_secs,
+                    ) {
+                        Ok(applied) => {
+                            last_stage = Some(stage);
+                            info!(
+                                ?stage,
+                                rail_applied_m = applied.rail_m,
+                                wrist_applied_rad = applied.wrist_rad,
+                                "공통 레일·손목 명령"
+                            );
+                        }
+                        Err(error) => warn!(?error, "하드웨어 명령 실패"),
                     }
                 }
 

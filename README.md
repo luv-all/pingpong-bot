@@ -305,8 +305,9 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 | `--timeout-secs` | 60 | 공 대기 경고 간격. 초과해도 세션은 계속 |
 
 새 공은 `track_seq`로 구분하며, 공마다 1차·정밀 명령을 최대 한 번씩 보낸다.
-명령 완료 예상 시점 후 레일·손목을 다시 읽어 `commanded - measured`를
-로그로 남긴다(레일 20mm 또는 손목 3° 초과 시 `WARN`).
+명령 예상 도착 시점부터 레일·손목을 20ms 간격으로 다시 읽어,
+허용치 안에 2회 연속 들어와야 수렴으로 인정한다. 로그는 요청값, 실제 적용값,
+실측값을 분리하며 레일 20mm 또는 손목 3° 초과 시 `WARN`을 남긴다.
 ESC·`q`로 세션을 종료한다.
 
 카메라 2대(`data/calibration.json`)와 `data/colormask.json`이 있어야 한다.

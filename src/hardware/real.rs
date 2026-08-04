@@ -14,7 +14,7 @@ use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::AxlRail;
 use super::rail::RailConfig;
 use crate::error::HwError;
-use crate::hardware::Hardware;
+use crate::hardware::{AppliedRailRacketCommand, Hardware};
 use crate::robot::motion;
 
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
@@ -26,9 +26,6 @@ pub struct RealHardware {
     cancel: Arc<AtomicBool>,
     executor: Option<JoinHandle<()>>,
     stream_hz: f64,
-    /// 2단계 제어 중 마지막으로 보낸 레일 목표. 손목만 갱신할 때 진행 중인
-    /// 레일을 매번 정지·재시작하지 않기 위한 중복 억제값이다.
-    direct_rail_target: Option<f64>,
 }
 
 impl RealHardware {
@@ -104,7 +101,6 @@ impl RealHardware {
             cancel: Arc::new(AtomicBool::new(false)),
             executor: None,
             stream_hz,
-            direct_rail_target: None,
         });
     }
 
@@ -228,7 +224,7 @@ impl Hardware for RealHardware {
         rail_x: f64,
         racket_joint_rad: f64,
         duration_secs: f64,
-    ) -> Result<(), HwError> {
+    ) -> Result<AppliedRailRacketCommand, HwError> {
         self.reap_executor();
         if self.busy.load(Ordering::Acquire) {
             return Err(HwError::CommandFailed {
@@ -238,23 +234,21 @@ impl Hardware for RealHardware {
             });
         }
 
-        if self
-            .direct_rail_target
-            .is_none_or(|last| (last - rail_x).abs() >= 0.01)
-        {
+        let (applied_rail_m, rail_sent) = {
             let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
                 duration_secs,
                 joint_count: 1,
                 reason: "레일 mutex poisoned".into(),
             })?;
-            if let Some(rail) = rail.as_mut() {
-                rail.command_abs_in_secs(rail_x, duration_secs)?;
+            match rail.as_mut() {
+                Some(rail) => (rail.command_abs_in_secs(rail_x, duration_secs)?, true),
+                None => (0.0, false),
             }
-            self.direct_rail_target = Some(rail_x);
-        }
+        };
         // 4-DOF 배선의 마지막 논리 관절은 라켓 손목(ID 5)이다. 이 호출은
         // ID 1/2/3/4에 Goal Position을 보내지 않는다.
-        self.bus
+        let applied_wrist_rad = self
+            .bus
             .lock()
             .map_err(|_| HwError::CommandFailed {
                 duration_secs,
@@ -262,7 +256,11 @@ impl Hardware for RealHardware {
                 reason: "Dynamixel bus mutex poisoned".into(),
             })?
             .write_joint(3, racket_joint_rad)?;
-        return Ok(());
+        return Ok(AppliedRailRacketCommand {
+            rail_m: applied_rail_m,
+            wrist_rad: applied_wrist_rad,
+            rail_sent,
+        });
     }
 
     fn is_busy(&mut self) -> bool {
@@ -274,6 +272,18 @@ impl Hardware for RealHardware {
         // executor 루프가 매 틱 이 플래그를 보고 빠져나오며 `busy`를 내린다.
         // `Drop`이 쓰는 것과 같은 경로다.
         self.cancel.store(true, Ordering::Release);
+        if let Ok(mut rail) = self.rail.lock()
+            && let Some(rail) = rail.as_mut()
+            && let Err(error) = rail.stop()
+        {
+            error!(%error, "AXL 레일 안전 정지 실패");
+        }
+        if let Ok(mut bus) = self.bus.lock()
+            && let Ok(joints) = bus.read_joints()
+            && let Some(wrist) = joints.values.get(3)
+        {
+            let _ = bus.write_joint(3, *wrist);
+        }
     }
 }
 
@@ -400,9 +410,12 @@ mod tests {
             RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
         let before = hardware.read_pose().expect("before");
 
-        hardware
+        let applied = hardware
             .command_rail_and_racket(0.35, -0.25, 0.1)
             .expect("tracking command");
+        assert!((applied.rail_m - 0.35).abs() < 1e-9);
+        assert!((applied.wrist_rad - -0.25).abs() < 0.002);
+        assert!(applied.rail_sent);
 
         let after = hardware.read_pose().expect("after");
         assert!((after.rail_x - 0.35).abs() < 1e-9);

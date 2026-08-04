@@ -7,7 +7,7 @@ use crate::robot;
 use std::sync::{Arc, Mutex};
 
 use crate::error::HwError;
-use crate::hardware::Hardware;
+use crate::hardware::{AppliedRailRacketCommand, Hardware};
 use crate::robot::control::DIRECT_WRIST_JOINT_INDEX;
 use crate::robot::motion;
 use tracing::debug;
@@ -91,7 +91,7 @@ impl Hardware for SimHardware {
         rail_x: f64,
         racket_joint_rad: f64,
         duration_secs: f64,
-    ) -> Result<(), HwError> {
+    ) -> Result<AppliedRailRacketCommand, HwError> {
         if !rail_x.is_finite() || !racket_joint_rad.is_finite() || !duration_secs.is_finite() {
             return Err(HwError::InvalidConfig {
                 reason: "sim 레일·손목 명령에 유효하지 않은 값이 있음".into(),
@@ -99,6 +99,13 @@ impl Hardware for SimHardware {
         }
         {
             let mut world = self.world.lock().expect("sim 월드");
+            let applied_rail_m = world.arm.rail.map_or(rail_x, |rail| rail.clamp_x(rail_x));
+            let applied_wrist_rad = world
+                .arm
+                .joint_limit(DIRECT_WRIST_JOINT_INDEX)
+                .map_or(racket_joint_rad, |limit| {
+                    racket_joint_rad.clamp(limit.min, limit.max)
+                });
             let mut targets = world.robot().targets().clone();
             let Some(wrist) = targets.values.get_mut(DIRECT_WRIST_JOINT_INDEX) else {
                 return Err(HwError::InvalidConfig {
@@ -109,25 +116,38 @@ impl Hardware for SimHardware {
                     ),
                 });
             };
-            *wrist = racket_joint_rad;
-            world.robot_mut().set_rail_target(rail_x);
+            *wrist = applied_wrist_rad;
+            let arm = Arc::clone(&world.arm);
+            world
+                .robot_mut()
+                .set_rail_target_in_secs(&arm, applied_rail_m, duration_secs);
             world.robot_mut().set_targets(targets);
             world.mark_swing_committed();
+            self.command_count += 1;
+            debug!(
+                commands = self.command_count,
+                rail_commanded_m = applied_rail_m,
+                wrist_commanded_rad = applied_wrist_rad,
+                duration_secs,
+                "sim 레일·손목 직접 명령 적용"
+            );
+            return Ok(AppliedRailRacketCommand {
+                rail_m: applied_rail_m,
+                wrist_rad: applied_wrist_rad,
+                rail_sent: world.arm.rail.is_some(),
+            });
         }
-        self.command_count += 1;
-        debug!(
-            commands = self.command_count,
-            rail_commanded_m = rail_x,
-            wrist_commanded_rad = racket_joint_rad,
-            duration_secs,
-            "sim 레일·손목 직접 명령 적용"
-        );
-        return Ok(());
     }
 
     fn is_busy(&mut self) -> bool {
         let world = self.world.lock().expect("sim 월드");
         // ground truth 타격 중이면 control이 plan_swing을 돌리지 않게 한다
         return world.use_ground_truth() || world.swing_committed() || world.robot().is_swinging();
+    }
+
+    fn cancel(&mut self) {
+        let mut world = self.world.lock().expect("sim 월드");
+        let pose = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
+        world.robot_mut().snap_to_pose(pose);
     }
 }

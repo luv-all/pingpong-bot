@@ -8,7 +8,7 @@ mod sim;
 #[cfg(feature = "real")]
 mod real;
 
-pub use hardware::Hardware;
+pub use hardware::{AppliedRailRacketCommand, Hardware};
 pub use rail::AxlRail;
 pub use sim::SimHardware;
 
