@@ -294,7 +294,12 @@ impl SimWorld {
         let mut multibody_joint_set = MultibodyJointSet::new();
 
         // 제어 DOF = Arm. URDF default(예: 3축)로 초기화하면 plan_swing과 어긋난다.
-        let robot = arm.initial_state();
+        // 실기의 기본 `--home` 시작과 맞춰 sim도 레일 중앙·준비 관절에서 시작한다.
+        let initial_rail_x = arm
+            .rail
+            .as_ref()
+            .map_or(arm.base.coords.x, |rail| rail.default_x());
+        let robot = robot::State::new(arm.default_joints.clone(), initial_rail_x);
 
         let table_z = (table::SURFACE_Z - table::HALF_THICKNESS) as f32;
         let table_cx = (table::WIDTH_X * 0.5) as f32;
@@ -1363,6 +1368,17 @@ mod tests {
         }
         assert_eq!(world.ball_state, crate::sim::physics::BallState::Parked);
         assert!((world.ball_position().y - y0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn sim_starts_at_center_ready_pose() {
+        let robot = test_robot();
+        let center_rail_x = robot.arm.rail.as_ref().expect("레일").default_x();
+        let ready_joints = robot.arm.default_joints.clone();
+        let world = SimWorld::new(robot);
+
+        assert!((world.robot().rail_x() - center_rail_x).abs() < 1e-12);
+        assert_eq!(world.robot().joints(), &ready_joints);
     }
 
     /// 주차 중 마운트 이동은 팔을 **강체로** 옮긴다 — 관절각 불변, EE는 이동량만큼.

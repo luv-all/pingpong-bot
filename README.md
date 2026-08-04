@@ -87,6 +87,7 @@ cargo run -p pingpong-bot -- --debug
 ```
 
 실행하면 Rapier 디지털 트윈(탁구대·공·로봇) + kiss3d/egui 뷰어가 뜬다.  
+로봇은 레일 중앙과 준비 관절 자세에서 시작한다.
 슈터 GUI로 발사하면 기본 경로는 월드 ground-truth 궤적을
 `DirectController`에 넣어 레일·손목 2단계 명령을 계산한다.
 

@@ -92,7 +92,14 @@ pub fn spawn(
         let _span = info_span!("control").entered();
 
         if home && let Err(error) = move_to_center(hardware.as_mut(), &arm) {
-            warn!(%error, "초기 센터 이동 실패 — 현재 자세에서 2단계 제어를 시작한다");
+            let reason = format!("초기 중앙 준비 자세 이동 실패: {error}");
+            warn!(%error, "초기 센터 이동 실패 — 제어를 시작하지 않는다");
+            let _ = event_tx.send(RuntimeEvent::Failed {
+                track_seq: None,
+                reason,
+            });
+            let _ = event_tx.send(RuntimeEvent::Done);
+            return;
         }
 
         let pose = match hardware.read_pose() {
