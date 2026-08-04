@@ -87,7 +87,8 @@ cargo run -p pingpong-bot -- --debug
 ```
 
 실행하면 Rapier 디지털 트윈(탁구대·공·로봇) + kiss3d/egui 뷰어가 뜬다.  
-슈터 GUI로 발사하고, 기본은 월드 ground-truth로 스윙을 커밋한다.
+슈터 GUI로 발사하면 기본 경로는 월드 ground-truth 궤적을
+`DirectController`에 넣어 레일·손목 2단계 명령을 계산한다.
 
 ### 시뮬레이션 사용법
 
@@ -95,16 +96,19 @@ cargo run -p pingpong-bot -- --debug
 # 기본 GUI sim
 cargo run -p pingpong-bot
 
-# 스윙 계획·포기 사유까지 자세한 로그
+# 목표 선택·단계 판정·명령 실패까지 자세한 로그
 cargo run -p pingpong-bot -- --mode sim --debug
 ```
 
 1. 좌측 **Shooter** 패널에서 위치·조준·속도·스핀을 조정한다.
 2. **Shoot**로 현재 조건을 발사하거나 **Random**으로 무작위 조건을 만든다.
-3. 우측 **Status**에서 스윙 커밋·포기 사유를 확인한다. **View → Debug overlays**에서 예측 탄도, 타점, 관절 한계, 토크 HUD를 켤 수 있다.
+3. 우측 **Status**에서 직접 제어 명령과 실패 사유를 확인한다. **View → Debug overlays**는 예측 탄도와 보존 중인 계획기 진단값을 표시한다.
 4. **Park**는 공을 회수한다. 마우스 드래그/스크롤은 시점 회전/줌이다.
 
-자동 회귀 평가는 **Eval**에서 `Block` 또는 `Alternating`을 고른 뒤 **Run 30**으로 실행한다. 기본 sim은 카메라 추정값이 아닌 월드 ground-truth로 스윙을 커밋한다.
+기본 sim은 카메라 추정값이 아닌 월드 ground-truth로 `BallTrajectory`를 만들지만,
+그 뒤의 목표 선택·단계 판정·레일·손목 명령 계산은 실기와 같은 코드를 쓴다.
+**Eval**과 bang-bang 스윙 토글은 보존 중인 시뮬레이션 진단 기능이며 현재 실기
+직접 제어 경로에는 대응하지 않는다.
 
 ### 실기 실행 순서
 
@@ -318,9 +322,10 @@ ESC·`q`로 세션을 종료한다.
 
 ## 아키텍처
 
-도메인 핫패스는 모드 공통. `sim`/`real`은 **프레임·하드웨어만** 갈아 끼우고,
-`pipeline`이 스레드·채널로 돌린다. GUI sim 엔트리(`main`)는 뷰어 + `SimSession`이고,
-월드 안 ground-truth 스윙이 기본이다.
+현재 활성 제어의 공통 경계는 `BallTrajectory → DirectController → Hardware`다.
+`sim`과 `real`은 같은 목표 선택·단계 판정·명령 시간 계산을 사용한다. 실기는
+`Hardware::command_rail_and_racket`으로 전송하고 GUI sim은 `robot::State`의
+레일·손목 목표에 적용한다. GUI sim 엔트리(`main`)는 뷰어와 `SimSession`을 함께 실행한다.
 
 ### 도메인
 
@@ -339,18 +344,19 @@ flowchart TB
     camera["<b>camera</b><br/>calib · tri · io"]
     detector["<b>detector</b><br/>appearance · fuse · motion"]
     estimator["<b>estimator</b><br/>EKF · measure"]
-    planner["<b>planner</b><br/>swing · impact · collision"]
-    hardware["<b>hardware</b><br/>Sim / Real · rail"]
-    camera --> detector --> estimator --> planner --> hardware
+    target["<b>target</b><br/>BallTrajectory · 목표 선택"]
+    control["<b>control</b><br/>DirectController · 단계 판정"]
+    hardware["<b>apply</b><br/>RealHardware / sim State"]
+    camera --> detector --> estimator --> target --> control --> hardware
   end
 
   robot["<b>robot</b><br/>build · urdf · FK/IK"]
   defaults -.-> hot
   defaults -.-> robot
-  robot -.->|기구학| planner
+  robot -.->|한계·현재 포즈| control
 
   sim -->|가상 프레임| camera
-  sim -->|SimHardware| hardware
+  sim -->|robot::State| hardware
   real -.->|실 프레임| camera
   real -.->|RealHardware| hardware
 
@@ -377,26 +383,28 @@ flowchart LR
   ctrlT["Control × 1"]
   actuator["Hardware"]
 
-  frames --> camT -->|"Observation"| estT -->|"BallTrajectory<br/>(현재 real은 Prediction 어댑터)"| ctrlT --> actuator
+  frames --> camT -->|"Observation"| estT -->|"BallTrajectory / CommitRequest"| ctrlT --> actuator
 ```
 
-실기(`--mode real`)는 [`src/real/`](src/real/)이 돌린다 — 연속 급구 타격 전용이고,
+실기(`--mode real`)는 [`src/real/`](src/real/)이 돌린다. 현재는 공마다 레일과
+손목 ID 5에 1차·정밀 명령을 최대 한 번씩 보내는 장비 응답 시험 경로다.
 상태를 스레드별로 단독 소유하며 crossbeam 채널로만 잇는다
 ([`src/real/README.md`](src/real/README.md)).
-[`src/pipeline/`](src/pipeline/)은 랠리를 전제로 먼저 써 둔 골격이라 **아직 호출부가 없다**.
+[`src/pipeline/`](src/pipeline/)도 `DirectController`를 사용하도록 맞춰져 있지만
+**현재 호출부는 없다**.
 
 ```mermaid
 flowchart LR
   subgraph simSide ["sim — 뷰어 엔트리"]
     viewer["Viewer · 메인"]
     physics["Physics 스레드 · 1 kHz"]
-    simHw["SimHardware"]
+    simHw["robot::State"]
     viewer -.-> physics
-    physics -->|"ground-truth 스윙"| simHw
+    physics -->|"공통 직접 제어 명령"| simHw
     simHw --> physics
   end
 
-  subgraph realSide ["real — 연속 급구 타격"]
+  subgraph realSide ["real — 레일·손목 2단계 시험"]
     realCamera["UVC × 2"]
     realWorkers["src/real 워커<br/>cam × 2 · 추정 · 제어"]
     realHw["RealHardware"]
@@ -418,12 +426,12 @@ src/
   camera/       calib/ · tri/ · io/
   detector/     appearance/ · scoring/ · motion/ · spatial/
   estimator/    ekf · ballistics · measure/
-  planner/      swing/ · impact · collision
+  planner/      보존 중인 스윙·임팩트·충돌 계획 라이브러리 (현재 직접 제어에서 미사용)
   robot/        build/ · urdf/ · Arm · state
   sim/          physics/ · session/ · gui/
-  real/         실기 연속 급구 타격 런타임 (bin 전용 · README.md)
+  real/         실기 레일·손목 2단계 제어 런타임 (bin 전용 · README.md)
   hardware/     rail/ · SimHardware · RealHardware
-  pipeline/     카메라→추정→제어 오케스트레이션 (랠리 전제 · 호출부 없음)
+  pipeline/     카메라→추정→DirectController 골격 (현재 호출부 없음)
   telemetry/
   main.rs       CLI · sim 뷰어 / real 스모크
 
@@ -452,7 +460,8 @@ cargo run -p pingpong-bot
 
 - 좌표계: **Z-up**, 원점 = 탁구대 로봇쪽 꼭짓점. +X 너비 · +Y 길이 · 테이블면 `z ≈ 0.76 m`
 - 로봇 `y ≈ 0`, 슈터 `+y`. 공은 주차 → GUI 발사 → 이탈 시 회수
-- 기본 `use_ground_truth = true` (월드가 타격 계획). EKF control은 라이브러리·테스트 경로
+- 기본 `use_ground_truth = true` (월드 상태로 궤적 생성 후 공통 `DirectController` 실행)
+- `use_ground_truth = false`인 EKF 제어와 기존 전체 스윙 계획기는 라이브러리·진단 경로
 - 뷰어: kiss3d 3D + egui 슈터 패널 (단일 창)
 
 구현 디테일은 `src/sim/` · 회귀는 `cargo test -p pingpong-bot --lib sim::`.
@@ -514,12 +523,12 @@ cargo build -p pingpong-bot --release
 | workspace · Rapier 트윈 · kiss3d/egui | ✅ |
 | `src/defaults` 앱 기본값 SSOT (TOML 없음) | ✅ |
 | `Robot` / URDF · `defaults::robot()` | ✅ |
-| Z-up · 동적 인터셉트 · quintic 스윙 | ✅ |
+| Z-up · 동적 인터셉트 · quintic 스윙 라이브러리 | ✅ 보존 중(현재 직접 제어에서 미사용) |
 | 삼각측량 · ChArUco · 탁구대 8점 PnP | ✅ |
 | fuse 검출 · measure_* → defaults 스니펫 | ✅ |
 | EKF (sim 기본은 ground truth) | ✅ |
 | Dynamixel 4축 · AXL 레일 · `jog` | ✅ (Windows 재검증) |
-| real 풀 비전 파이프라인 | ✅ 연속 급구 (결선 랠리는 미지원) |
+| real 비전→레일·손목 2단계 제어 | ✅ 코드 완료, Windows 실물 재검증 필요 |
 
 **로드맵:** [`TODO.md`](TODO.md) · [`docs/decisions.md`](docs/decisions.md)
 

@@ -7,13 +7,18 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 
 관련 공식(유지): `required_racket_velocity` — \(v_{out}, n, e \rightarrow v_r\) (`planner/impact.rs`).
 
-마지막 정리: **2026-07-17** (단일 크레이트·동적 인터셉트·competition=4-dof 체인·OpenCV 필수).
+마지막 정리: **2026-08-04**.
+
+> A~J의 스윙·임팩트 결정은 보존 중인 계획 라이브러리와 시뮬레이션 진단 경로의
+> 설계 기록이다. 현재 활성 real·기본 GUI sim 제어는 전체 스윙을 호출하지 않으며,
+> [`two-stage-position-control.md`](two-stage-position-control.md)의 레일·손목
+> `DirectController` 경로를 따른다.
 
 ---
 
 ## 한 줄로 보기
 
-| | 지금 하는 일 |
+| | 보존 중인 계획기 설계 |
 |--|-------------|
 | **A** | 어디로 공을 보낼지 — 상대 코트 중앙 바운드 |
 | **B** | 스윙 속도 0으로 포기하지 않음 · commit 창 |
@@ -231,10 +236,12 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 ## 열린 과제 (TODO와 맞출 것)
 
 - `BallTrajectory` 반환 타입·EKF 관측 버퍼·미래 샘플러는 구현 완료.
-- real `CommitRequest.predictions: Vec<Prediction>`은 아직 남아 있음.
-- 다음 경계는 `BallTrajectory → HitTargetSelector → Target → PositionController`.
-- 제어 경로의 `Prediction` / `HitPlane` / `Impact` 제거는 위치 이동
-  통합 테스트 후에 진행.
+- real `CommitRequest`는 `BallTrajectory`, `track_seq`, `Provisional | Refined`를 전달한다.
+- 현재 활성 경계는 `BallTrajectory → HitTargetSelector → DirectController →
+  Hardware::command_rail_and_racket`이다.
+- real과 GUI sim은 같은 직접 제어 계산을 사용한다. `PositionController`와 기존
+  스윙·임팩트 계획기는 보존 중이지만 활성 직접 제어 경로에서는 호출하지 않는다.
+- 실물 장비에서 requested/applied/measured와 수렴·안전 중단을 최종 검증해야 한다.
 - 구름 공 / 포기 조건 명문화 (위 I)
 - EKF 타격 스모크 → C2 승격
 - A4 \(e\)·마찰·drag 실측값으로 constants 갱신

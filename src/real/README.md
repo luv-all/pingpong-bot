@@ -66,10 +66,17 @@ flowchart LR
 
 - 레일: commanded, measured, commanded-minus-measured를 m 단위 소수점 4자리로 기록
 - 손목: 같은 세 값을 rad·deg 둘 다 기록
-- 명령: requested와 하드웨어 clamp·틱 양자화 후 applied를 분리
+- 로그 필드의 commanded는 하드웨어가 반환한 applied이며, 제어기의 requested는 별도 기록
 - 정밀 명령으로 덮어쓴 1차 명령: `superseded`로 당시 실측값 보존
 - 레일 오차 20mm 또는 손목 오차 3° 초과: `WARN`
 - 허용치 이내: `INFO`
+
+### 관전 창 공 상태 로그
+
+관전용 자식 프로세스의 `ball=false`/`ball=true` 로그는 매 패킷마다 나오지 않는다.
+첫 추정 패킷의 상태를 한 번 기록한 뒤 실제 감지 상태가 `false ↔ true`로 바뀔
+때만 다시 기록한다. 제어 워커가 보내는 포즈 전용 패킷의 `ball=None`은 공이
+사라졌다는 뜻이 아니라 해당 필드를 보내지 않았다는 뜻이므로 상태를 바꾸지 않는다.
 
 ## 하드웨어 경계
 
@@ -88,7 +95,7 @@ flowchart LR
 
 - `Ready`: 하드웨어 초기화와 선택적 홈 이동 완료
 - `Tracking`: 새 공의 위치·속도 추정 시작
-- `Commanded`: 레일·손목 명령 전송 완료
+- `Commanded`: 레일·손목 명령 전송 완료(하드웨어가 반환한 실제 적용값 포함)
 - `Failed`: 하드웨어 오류
 - `Done`: 제어 워커 종료
 
