@@ -193,9 +193,7 @@ fn cameras(reviewed: &Reviewed, clip: &camera::ResolvedStereoOffline) -> Result<
         .seek_frame(contract.frame as u64)
         .map_err(anyhow::Error::msg)?;
 
-    let (past, future) = reviewed.observed_split(contract.frame);
-    let actual_past = track::clip_to_mount(&past);
-    let actual_future = track::clip_to_mount(&future);
+    let actual_past = track::clip_to_mount(&reviewed.observed_to(contract.frame));
     let filtered = track::clip_to_mount(&reviewed.measured_to(contract.frame));
     let committed = track::clip_to_mount(
         &reviewed
@@ -220,7 +218,6 @@ fn cameras(reviewed: &Reviewed, clip: &camera::ResolvedStereoOffline) -> Result<
             params,
             &overlay::Tracks {
                 actual_past: &actual_past,
-                actual_future: &actual_future,
                 filtered: &filtered,
                 committed: &committed,
             },

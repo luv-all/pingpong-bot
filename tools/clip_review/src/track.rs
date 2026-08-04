@@ -139,19 +139,31 @@ impl Reviewed {
         return frame as f64 / self.fps;
     }
 
-    /// 생 궤적을 현재 프레임 기준 (지금까지, 이후)로 나눈다.
-    ///
-    /// 오프라인 재생이라 미래를 **이미 안다** — 커밋 예측이 이후로 어디로 갔는지와 나란히
-    /// 보려면 있어야 한다. 다만 과거와 같은 굵기로 그리면 "지금 아는 것"과 구분이 안 되므로
-    /// 나눠서 넘긴다. 경계 한 점은 양쪽에 다 들어간다 (선이 끊겨 보이지 않게).
-    pub fn observed_split(&self, frame: usize) -> (Vec<Point3>, Vec<Point3>) {
+    /// 생 궤적을 `frame` 까지. 아직 안 온 구간은 안 그린다 — 재생인데 미래가 미리 보이면
+    /// 무엇이 "지금 아는 것"인지 구분이 안 된다.
+    pub fn observed_to(&self, frame: usize) -> Vec<Point3> {
         let cut = self.observed.partition_point(|o| o.frame <= frame);
-        let past: Vec<Point3> = self.observed[..cut].iter().map(|o| o.point).collect();
-        let future: Vec<Point3> = self.observed[cut.saturating_sub(1)..]
+        return self.observed[..cut].iter().map(|o| o.point).collect();
+    }
+
+    /// 재생을 끝낼 프레임 — 추적하던 샷이 끝나는 자리.
+    ///
+    /// 클립은 라켓에 맞고 되돌아가는 것까지 녹화돼 있는데 그 뒤는 볼 게 없다. 계약이 선
+    /// 트랙(`seq`)이 살아 있는 마지막 프레임까지만 튼다. 계약이 없으면 클립 끝까지.
+    pub fn last_frame(&self) -> usize {
+        let end = self.frames.len().saturating_sub(1);
+        let Some(contract) = &self.contract else {
+            return end;
+        };
+        return self.frames[..=end.min(self.frames.len() - 1)]
             .iter()
-            .map(|o| o.point)
-            .collect();
-        return (past, future);
+            .enumerate()
+            .filter(|(index, state)| {
+                *index >= contract.frame && state.seq == contract.latest.seq && state.tracking
+            })
+            .map(|(index, _)| index)
+            .next_back()
+            .unwrap_or(end);
     }
 
     /// 계약의 `measured`를 `frame` 시각까지 자른 것.

@@ -188,11 +188,12 @@ fn run(args: &Args) -> Result<()> {
     // 프리롤은 공이 아직 없다 — 여기까지는 1배속으로 지나간다.
     let first_ball = reviewed.observed.first().map(|o| o.frame);
     println!(
-        "frames={} observed={} ({:.0}% 삼각측량) fps={fps:.1} 첫 공={}",
+        "frames={} observed={} ({:.0}% 삼각측량) fps={fps:.1} 첫 공={}  재생 0~{}",
         reviewed.len(),
         reviewed.observed.len(),
         100.0 * reviewed.observed.len() as f64 / reviewed.len() as f64,
-        first_ball.map_or("없음".to_owned(), |f| f.to_string())
+        first_ball.map_or("없음".to_owned(), |f| f.to_string()),
+        reviewed.last_frame()
     );
     let score = Score::of(&reviewed);
     score.print(
@@ -220,7 +221,9 @@ fn run(args: &Args) -> Result<()> {
     let speed = args.speed.max(1e-3);
     let slow_wait_ms = ((1000.0 / fps / speed).round() as i32).max(1);
     let live_wait_ms = ((1000.0 / fps).round() as i32).max(1);
-    let mut index = args.start.min(reviewed.len() - 1);
+    // 샷이 끝나면 멈춘다. 그 뒤는 되돌아가는 공이라 볼 게 없다.
+    let last_frame = reviewed.last_frame();
+    let mut index = args.start.min(last_frame);
     let mut paused = false;
     let mut printed: Option<usize> = None;
     // 실제 궤적은 pass 1이 클립을 통째로 훑어 **이미 다 안다**. 커밋 예측이 이후로 어디로
@@ -234,7 +237,7 @@ fn run(args: &Args) -> Result<()> {
             let last = index.saturating_sub(1);
             match Step::of(highgui::wait_key_ex(0)?, &mut paused) {
                 Step::Quit => break,
-                Step::Delta(delta) => index = shift(last, delta, reviewed.len()),
+                Step::Delta(delta) => index = shift(last, delta, last_frame + 1),
                 Step::Home => index = 0,
                 _ => index = last,
             }
@@ -243,9 +246,7 @@ fn run(args: &Args) -> Result<()> {
         let state = &reviewed.frames[index];
         // 그리는 건 로봇 마운트까지만 — 그 뒤는 로봇이 이미 지나친 자리다. 예측 자체는
         // 여전히 끝까지 적분한다 (평면 통과·MISS 계산에 필요하다).
-        let (past, future) = reviewed.observed_split(index);
-        let actual_past = track::clip_to_mount(&past);
-        let actual_future = track::clip_to_mount(&future);
+        let actual_past = track::clip_to_mount(&reviewed.observed_to(index));
         // 아래 둘은 제어로 나가는 Trajectory 그 자체에서 뽑는다. 툴이 따로 모은 상태로
         // 그리면 계약이 무엇을 담고 있는지가 아니라 툴이 무엇을 봤는지를 보게 된다.
         // 트리거 전에는 계약이 없어 둘 다 비어 있다 — 그때는 제어도 아무것도 못 받는다.
@@ -285,7 +286,6 @@ fn run(args: &Args) -> Result<()> {
                 &params[slot],
                 &overlay::Tracks {
                     actual_past: &actual_past,
-                    actual_future: &actual_future,
                     filtered: &filtered,
                     committed: &committed,
                 },
@@ -310,7 +310,6 @@ fn run(args: &Args) -> Result<()> {
                 ekf: state.filtered.map(|s| s.position.into()),
                 raw: state.observed.map(|o| o.point.into()),
                 observed: actual_past.iter().copied().map(Into::into).collect(),
-                observed_future: actual_future.iter().copied().map(Into::into).collect(),
                 filtered: filtered.iter().copied().map(Into::into).collect(),
                 committed: committed.iter().copied().map(Into::into).collect(),
             };
@@ -329,12 +328,12 @@ fn run(args: &Args) -> Result<()> {
         let key = highgui::wait_key_ex(wait)?;
         match Step::of(key, &mut paused) {
             Step::Quit => break,
-            Step::Delta(delta) => index = shift(index, delta, reviewed.len()),
+            Step::Delta(delta) => index = shift(index, delta, last_frame + 1),
             Step::Home => index = 0,
             Step::Stay => {}
             Step::Advance => {
                 // 끝에 닿으면 **멈춰 선다**. 자동 종료는 `q`/ESC로만.
-                if index + 1 >= reviewed.len() {
+                if index + 1 > last_frame {
                     paused = true;
                 } else {
                     index += 1;

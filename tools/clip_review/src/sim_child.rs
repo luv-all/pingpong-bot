@@ -25,9 +25,6 @@ use crate::msg::SceneMsg;
 /// 실제 궤적, 지금까지 — 초록, 굵게.
 const OBSERVED_RGBA: [f32; 4] = [0.20, 1.0, 0.20, 1.0];
 const OBSERVED_WIDTH: f32 = 4.0;
-/// 실제 궤적, 아직 안 온 구간 — 같은 색을 죽여서.
-const FUTURE_RGBA: [f32; 4] = [0.10, 0.42, 0.10, 1.0];
-const FUTURE_WIDTH: f32 = 2.0;
 /// EKF 가 보정한 궤적 — 하늘색. 초록과 나란히 놓여야 필터가 무엇을 폈는지 보인다.
 const FILTERED_RGBA: [f32; 4] = [0.0, 0.78, 1.0, 1.0];
 const FILTERED_WIDTH: f32 = 3.0;
@@ -37,9 +34,7 @@ const COMMITTED_WIDTH: f32 = 4.0;
 
 pub fn run() -> Result<()> {
     let shutdown = SimRuntimeControls::new_shutdown();
-    let observed =
-        trail::Handle::new(OBSERVED_RGBA, OBSERVED_WIDTH).labelled("raw 삼각측량 (지금까지)");
-    let future = trail::Handle::new(FUTURE_RGBA, FUTURE_WIDTH).labelled("raw 삼각측량 (앞으로)");
+    let observed = trail::Handle::new(OBSERVED_RGBA, OBSERVED_WIDTH).labelled("raw 삼각측량");
     let filtered =
         trail::Handle::new(FILTERED_RGBA, FILTERED_WIDTH).labelled("적합 궤적 (measured)");
     let committed =
@@ -49,7 +44,6 @@ pub fn run() -> Result<()> {
         .title("clip-review sim")
         .with_ball()
         .with_ghost_ball()
-        .with_trail(future.clone())
         .with_trail(observed.clone())
         .with_trail(filtered.clone())
         .with_trail(committed.clone())
@@ -59,7 +53,7 @@ pub fn run() -> Result<()> {
 
     let stop = Arc::clone(&shutdown);
     thread::spawn(move || {
-        stdin_loop(ball, ghost, observed, future, filtered, committed, stop);
+        stdin_loop(ball, ghost, observed, filtered, committed, stop);
     });
 
     scene
@@ -73,7 +67,6 @@ fn stdin_loop(
     ball: ball::Handle,
     ghost: ball::Handle,
     observed: trail::Handle,
-    future: trail::Handle,
     filtered: trail::Handle,
     committed: trail::Handle,
     stop: Arc<AtomicBool>,
@@ -93,7 +86,6 @@ fn stdin_loop(
                 ball.set_position(msg.ekf.map(Into::into));
                 ghost.set_position(msg.raw.map(Into::into));
                 observed.set_points(SceneMsg::points(&msg.observed));
-                future.set_points(SceneMsg::points(&msg.observed_future));
                 filtered.set_points(SceneMsg::points(&msg.filtered));
                 committed.set_points(SceneMsg::points(&msg.committed));
             }

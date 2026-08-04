@@ -18,11 +18,8 @@ use opencv::prelude::*;
 use pingpong_bot::Point3;
 use pingpong_bot::camera::{self, Preview};
 
-/// 실제 궤적, 지금까지 — 초록, 굵게.
+/// 생 삼각측량, 지금까지 — 초록, 굵게.
 const ACTUAL_PAST: Scalar = Scalar::new(60.0, 255.0, 60.0, 0.0);
-/// 실제 궤적, 아직 안 온 구간 — 같은 색을 죽여서. 오프라인 재생이라 미래를 이미 알지만,
-/// 과거와 같은 굵기로 그리면 "지금 아는 것"과 구분이 안 된다.
-const ACTUAL_FUTURE: Scalar = Scalar::new(30.0, 110.0, 30.0, 0.0);
 /// EKF 가 보정한 궤적 — 하늘색. 초록(생 삼각측량) 바로 옆에 그려져야 필터가 얼마나
 /// 흔들리는 입력을 폈는지 보인다.
 const FILTERED: Scalar = Scalar::new(255.0, 200.0, 0.0, 0.0);
@@ -39,8 +36,6 @@ const EKF: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
 pub struct Tracks<'a> {
     /// 생 삼각측량, 현재 프레임까지 — 필터를 안 거친 것.
     pub actual_past: &'a [Point3],
-    /// 생 삼각측량, 현재 프레임 이후 (pass 1이 이미 알고 있다).
-    pub actual_future: &'a [Point3],
     /// EKF 가 보정한 궤적 (`Trajectory::measured`), 현재 프레임까지.
     pub filtered: &'a [Point3],
     /// 커밋 순간에 얼린 예측. 커밋 전이면 비어 있다.
@@ -60,7 +55,6 @@ pub fn draw(
     let mut img = frame.try_clone()?;
 
     // 덜 중요한 것부터 — 겹치면 나중에 그린 게 위로 온다.
-    Preview::draw_world_track(&mut img, params, tracks.actual_future, ACTUAL_FUTURE, 1)?;
     Preview::draw_world_track(&mut img, params, tracks.actual_past, ACTUAL_PAST, 3)?;
     Preview::draw_world_track(&mut img, params, tracks.filtered, FILTERED, 2)?;
     Preview::draw_world_track(&mut img, params, tracks.committed, COMMITTED, 3)?;
