@@ -48,7 +48,7 @@ impl State {
         };
     }
 
-    /// 스윙이 끝나면 테이블 중앙으로 자동 복귀할지 (메인 랠리 sim용).
+    /// 스윙이 끝나면 실기 보정 준비 위치로 자동 복귀할지 (메인 랠리 sim용).
     pub fn set_auto_return_to_center(&mut self, enabled: bool) {
         self.auto_return_to_center = enabled;
     }
@@ -386,7 +386,7 @@ impl State {
     /// 목표 관절각을 `max_speed` [rad/s]로 추종한다 (궤적 없을 때 폴백).
     ///
     /// 스윙(타격이든 복귀든)이 끝나는 순간 중앙 포즈(관절 `default_joints`,
-    /// 레일 `default_x` = 테이블 폭 중앙)가 아니면 곧바로 복귀 궤적을 이어서
+    /// 레일 `default_x` = 실기 보정 준비 위치)가 아니면 곧바로 복귀 궤적을 이어서
     /// 시작한다 — 실물 로봇은 모터 토크 한계 때문에 끝에서 끝으로 급하게 못
     /// 움직이므로, 매번 중앙으로 되돌아온 상태에서 다음 스윙을 시작해야 한다.
     pub fn step_toward_targets(&mut self, arm: &Arm, dt: f64) {
@@ -429,7 +429,7 @@ impl State {
     }
 
     /// 레일·관절이 이미 중앙 포즈(`Arm::default_joints`, `LinearRail::default_x`
-    /// = 테이블 폭 중앙) 근처인지. `LinearRail::home_x`(레일 원점, x=0)는
+    /// = 실기 보정 준비 위치) 근처인지. `LinearRail::home_x`(레일 원점, x=0)는
     /// 부팅 시 "대기 위치"일 뿐 여기서 말하는 중앙이 아니다.
     fn is_at_center(&self, arm: &Arm) -> bool {
         const RAIL_EPSILON_M: f64 = 1e-3;

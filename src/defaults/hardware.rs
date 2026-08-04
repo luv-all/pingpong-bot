@@ -8,6 +8,8 @@ use super::motion::RAIL_ACCEL_M_S2;
 /// 실측 AXL 레일의 앱 좌표 범위 [m]. 로봇 IK와 실기 드라이버가 반드시 같은 값을 쓴다.
 pub const RAIL_X_MIN_M: f64 = 0.0;
 pub const RAIL_X_MAX_M: f64 = 1.41;
+/// 실기에서 눈으로 맞춘 레일 중앙 준비 위치 [m].
+pub const RAIL_READY_X_M: f64 = 0.76;
 
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.

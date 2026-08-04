@@ -15,7 +15,7 @@ use crate::constants::geometry;
 use crate::defaults::dxl_limits::{
     DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, joint_reflected_inertias_4dof, joint_torque_limits_4dof,
 };
-use crate::defaults::hardware::{RAIL_X_MAX_M, RAIL_X_MIN_M};
+use crate::defaults::hardware::{RAIL_READY_X_M, RAIL_X_MAX_M, RAIL_X_MIN_M};
 use crate::robot::{
     Arm, JointLimit, Joints, LinkInertial, MountPreset, RailFrame, Robot, RobotBuildError,
     RobotBuilder, SerialChain, SerialJoint,
@@ -167,7 +167,14 @@ pub fn primitive_4dof_with_mount(mount_y: f64, mount_z: f64) -> Result<Robot, Ro
 
     let built = Arm::builder()
         .base_xyz(0.0, mount_y, mount_z)
-        .linear_rail(mount_y, mount_z, RAIL_X_MIN_M, RAIL_X_MAX_M, RAIL_MAX_SPEED)
+        .linear_rail(
+            mount_y,
+            mount_z,
+            RAIL_X_MIN_M,
+            RAIL_X_MAX_M,
+            RAIL_READY_X_M,
+            RAIL_MAX_SPEED,
+        )
         .serial_chain(
             chain,
             vec![

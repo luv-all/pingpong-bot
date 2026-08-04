@@ -85,7 +85,7 @@ aim_commanded_minus_measured_rad
 GUI 시뮬레이션은 같은 명령의 레일·조준 목표와 시간을 `robot::State`에 적용한다.
 별도의 generic pipeline에서 쓰는 `SimHardware`도 같은 `Hardware` 경계를 구현한다.
 최신 선택 목표의 도착 시각이 지나면 실기와 GUI sim 모두 기존
-`Planner::return_to_center`로 레일 중앙·준비 관절 자세에 복귀한다.
+`Planner::return_to_center`로 실기 보정 레일 준비 위치(0.760 m)·준비 관절 자세에 복귀한다.
 
 ## 현재 제외한 기능
 

@@ -296,7 +296,7 @@ impl SimWorld {
         let mut multibody_joint_set = MultibodyJointSet::new();
 
         // 제어 DOF = Arm. URDF default(예: 3축)로 초기화하면 plan_swing과 어긋난다.
-        // 실기의 기본 `--home` 시작과 맞춰 sim도 레일 중앙·준비 관절에서 시작한다.
+        // 실기의 기본 `--home` 시작과 맞춰 sim도 보정 준비 위치·준비 관절에서 시작한다.
         let initial_rail_x = arm
             .rail
             .as_ref()
@@ -2403,7 +2403,7 @@ mod tests {
     #[ignore = "measured rail_frame mount (base z 0.935) needs mount_search retune for mount_y — owned by swing tuning; see defaults::rail_frame doc comment"]
     fn random_shot_grid_still_swings_when_robot_starts_from_center() {
         // 실제 GUI 재현: 첫 샷이 끝나면 로봇이 (레일 0이 아니라) 테이블
-        // 중앙(`default_x()`)으로 복귀해 있다. 이후 Random Shoot이 쏘는
+        // 보정 준비 위치(`default_x()`)로 복귀해 있다. 이후 Random Shoot이 쏘는
         // 격자 코너들이, 로봇이 그 중앙 위치에서 시작해도
         // (1) 스윙·접수하거나 (2) 도달 불능이면 명시적으로 포기해야 한다.
         // 금지: 공만 날아가고 commit/abandon 없이 팔이 아무 결정도 안 함.
@@ -3390,7 +3390,7 @@ mod tests {
                 crate::defaults::PhysicsParams::default(),
             );
             world.set_use_ground_truth(true);
-            // WP9와 동일하게 매 샷 전 레일을 테이블 중앙으로 리셋한다.
+            // WP9와 동일하게 매 샷 전 레일을 보정 준비 위치로 리셋한다.
             if let Some(rail) = arm.rail {
                 *world.robot_mut() =
                     crate::robot::State::new(arm.default_joints.clone(), rail.default_x());
