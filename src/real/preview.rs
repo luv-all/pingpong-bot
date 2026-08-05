@@ -14,6 +14,7 @@ use tracing::warn;
 
 use super::ControlStateSnapshot;
 use super::PreviewEvent;
+use super::TestZone;
 
 /// 검출 마커 (BGR).
 const DETECTION_COLOR: Scalar = Scalar::new(64.0, 220.0, 64.0, 0.0);
@@ -30,7 +31,7 @@ const MARKER_THICKNESS_PX: i32 = 2;
 
 /// 상태 패널 — 고정 크기, `--preview` 모자이크 우상단.
 const STATE_PANEL_W: i32 = 250;
-const STATE_PANEL_H: i32 = 110;
+const STATE_PANEL_H: i32 = 150;
 const STATE_PANEL_MARGIN_PX: i32 = 14;
 const STATE_NODE_W: i32 = 80;
 const STATE_NODE_H: i32 = 32;
@@ -56,6 +57,8 @@ pub struct PreviewWindow {
     last_target: BTreeMap<u8, camera::Pixel>,
     /// 최근 제어 상태 — 다음 상태가 올 때까지 남는다.
     control_state: Option<ControlStateSnapshot>,
+    /// 현재 테스트 존과 그 준비 레일 x — 상태 패널이 소비한다.
+    current_zone: Option<(TestZone, f64)>,
 }
 
 impl PreviewWindow {
@@ -67,6 +70,7 @@ impl PreviewWindow {
             sticky: Vec::new(),
             last_target: BTreeMap::new(),
             control_state: None,
+            current_zone: None,
         };
     }
 
@@ -78,6 +82,11 @@ impl PreviewWindow {
     /// 최근 제어 상태를 화면에 반영한다.
     pub fn set_control_state(&mut self, state: ControlStateSnapshot) {
         self.control_state = Some(state);
+    }
+
+    /// 현재 테스트 존과 그 준비 레일 x를 화면에 반영한다.
+    pub fn set_zone(&mut self, zone: TestZone, home_rail_x: f64) {
+        self.current_zone = Some((zone, home_rail_x));
     }
 
     /// 프레임 1장을 받아 마커를 그려 보관한다. 프레임은 여기서 소비된다.
@@ -112,16 +121,16 @@ impl PreviewWindow {
         self.panels.insert(camera_id.0, image);
     }
 
-    /// 창을 갱신한다. 반환 `true` = 사용자가 종료(ESC/`q`)를 눌렀다.
-    pub fn show(&mut self) -> bool {
+    /// 창을 갱신한다. 반환값은 highgui 키 입력 그대로 — 호출측이 Quit/Key를 처리한다.
+    pub fn show(&mut self) -> PreviewAction {
         if self.panels.is_empty() {
-            return false;
+            return PreviewAction::Continue;
         }
         return match self.render() {
-            Ok(action) => action == PreviewAction::Quit,
+            Ok(action) => action,
             Err(error) => {
                 warn!(%error, "프리뷰 렌더 실패");
-                false
+                PreviewAction::Continue
             }
         };
     }
@@ -140,7 +149,7 @@ impl PreviewWindow {
             camera::Preview::draw_help_lines(&mut mosaic, &self.sticky, STICKY_COLOR)?;
         }
         if let Some(state) = &self.control_state {
-            draw_control_state_panel(&mut mosaic, state)?;
+            draw_control_state_panel(&mut mosaic, state, self.current_zone)?;
         }
         return Ok(camera::Preview::show_bgr(&self.window, &mosaic, 1)?.action);
     }
@@ -170,7 +179,11 @@ fn draw_marker(image: &mut Mat, pixel: Option<camera::Pixel>, radius: i32, color
 }
 
 /// `IDLE`/`ALIGN` 두 노드 다이어그램을 모자이크 우상단에 그린다.
-fn draw_control_state_panel(image: &mut Mat, state: &ControlStateSnapshot) -> opencv::Result<()> {
+fn draw_control_state_panel(
+    image: &mut Mat,
+    state: &ControlStateSnapshot,
+    zone: Option<(TestZone, f64)>,
+) -> opencv::Result<()> {
     let panel_x = image.cols() - STATE_PANEL_W - STATE_PANEL_MARGIN_PX;
     let panel_y = STATE_PANEL_MARGIN_PX;
     camera::Preview::draw_rect_px(
@@ -265,6 +278,26 @@ fn draw_control_state_panel(image: &mut Mat, state: &ControlStateSnapshot) -> op
             1,
         )?;
     }
+
+    if let Some((zone, home_rail_x)) = zone {
+        let zone_line = format!("ZONE {}  x={home_rail_x:.3}", zone.label());
+        camera::Preview::draw_text_at_px(
+            image,
+            camera::Pixel::new(f64::from(panel_x + 14), f64::from(panel_y + 116)),
+            &zone_line,
+            0.42,
+            STATE_ACTIVE_COLOR,
+            1,
+        )?;
+    }
+    camera::Preview::draw_text_at_px(
+        image,
+        camera::Pixel::new(f64::from(panel_x + 14), f64::from(panel_y + 134)),
+        "1/2/3 zone  w wait  r reset",
+        0.35,
+        STATE_IDLE_COLOR,
+        1,
+    )?;
     return Ok(());
 }
 
@@ -273,6 +306,14 @@ mod tests {
     use super::*;
     use opencv::core::Vec3b;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn set_zone_stores_the_current_zone_and_home_x() {
+        let mut window = PreviewWindow::new("test");
+        assert!(window.current_zone.is_none());
+        window.set_zone(TestZone::Right, 1.34);
+        assert_eq!(window.current_zone, Some((TestZone::Right, 1.34)));
+    }
 
     fn idle_pixel(img: &Mat) -> Vec3b {
         return *img.at_2d::<Vec3b>(64, 290).unwrap();
@@ -288,7 +329,7 @@ mod tests {
             .unwrap()
             .to_mat()
             .unwrap();
-        draw_control_state_panel(&mut img, &ControlStateSnapshot::Idle).unwrap();
+        draw_control_state_panel(&mut img, &ControlStateSnapshot::Idle, None).unwrap();
         assert_eq!(idle_pixel(&img), Vec3b::from([20, 150, 235]));
         assert_eq!(struck_pixel(&img), Vec3b::from([120, 110, 100]));
     }
@@ -305,7 +346,7 @@ mod tests {
             rail_commanded_m: 0.30,
             aim_commanded_rad: -0.40,
         };
-        draw_control_state_panel(&mut img, &state).unwrap();
+        draw_control_state_panel(&mut img, &state, None).unwrap();
         assert_eq!(idle_pixel(&img), Vec3b::from([120, 110, 100]));
         assert_eq!(struck_pixel(&img), Vec3b::from([20, 150, 235]));
     }

@@ -55,6 +55,7 @@ pub use dxl_limits::{
     joint_reflected_inertias_4dof_array, joint_torque_limits_4dof, joint_torque_limits_4dof_array,
     reflected_inertia,
 };
+pub use hardware::RAIL_ZONE_SAFETY_MARGIN_RATIO;
 pub use impact::ImpactParams;
 pub use estimator::EstimatorParams;
 pub use motion::{
