@@ -1364,9 +1364,11 @@ mod tests {
         assert!((impact.position.z - ball.z).abs() < 2e-3);
         assert!((impact.position.coords - ball.coords).norm() < 2e-3);
         assert!(impact.normal.dot(&toward_opponent) > 0.90);
+        let forward_distance =
+            (impact.position.coords - windup_pose.position.coords).dot(&impact.normal);
         assert!(
-            (impact.position.coords - windup_pose.position.coords).dot(&impact.normal) > 0.05,
-            "백스윙에서 임팩트까지 상대편 방향으로 펴져야 함"
+            forward_distance > DETECTION_WINDUP_DISTANCE_M * 0.85,
+            "설정한 감김 거리만큼 상대편 방향으로 펴져야 함: {forward_distance:.4}m"
         );
     }
 

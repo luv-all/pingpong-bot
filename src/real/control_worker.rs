@@ -59,8 +59,8 @@ impl CommandLatch {
         }
     }
 
-    /// 이 공은 이미 쳤다 — 이후 같은 track_seq의 모든 단계를 latch가 영구히 막는다.
-    fn mark_struck(&mut self) {
+    /// 이 공의 처리가 끝났다 — 성공·계획 생략 모두 같은 track의 재시도를 막는다.
+    fn mark_finished(&mut self) {
         self.provisional_sent = true;
         self.refined_sent = true;
     }
@@ -312,11 +312,16 @@ pub fn spawn(
             ) {
                 Ok(sequence) => sequence,
                 Err(error) => {
+                    // 공 하나의 늦거나 불가능한 예측은 하드웨어 고장이 아니다. 같은
+                    // track의 매 프레임을 다시 계획하지 않도록 막고 다음 공을 기다린다.
+                    latch.mark_finished();
                     let _ = event_tx.send(RuntimeEvent::Failed {
                         track_seq: Some(request.track_seq),
-                        reason: format!("높이 정렬 백스윙·임팩트 계획 실패: {error}"),
+                        reason: format!(
+                            "이번 공 건너뜀 — 높이 정렬 백스윙·임팩트 계획 실패: {error}"
+                        ),
                     });
-                    break;
+                    continue;
                 }
             };
             let windup_aim = sequence
@@ -370,8 +375,7 @@ pub fn spawn(
                 aim_rad: applied.aim_rad,
             });
 
-            let return_due_at =
-                issued_at + Duration::from_secs_f64(sequence.impact.duration_secs);
+            let return_due_at = issued_at + Duration::from_secs_f64(sequence.impact.duration_secs);
             state = BallControlState::Struck {
                 track_seq: request.track_seq,
                 return_due_at,
@@ -382,7 +386,7 @@ pub fn spawn(
                 },
             };
             // 한 공은 최대 한 번만 친다 — Idle 복귀 후에도 같은 track_seq는 latch가 영구히 막는다.
-            latch.mark_struck();
+            latch.mark_finished();
             pending_verification = None;
             let _ = event_tx.send(RuntimeEvent::ControlState {
                 state: ControlStateSnapshot::Struck {
@@ -735,7 +739,7 @@ mod tests {
         let mut latch = CommandLatch::default();
         assert!(latch.should_send(3, PredictionStage::Provisional));
         latch.mark_sent(PredictionStage::Provisional);
-        latch.mark_struck();
+        latch.mark_finished();
         assert!(!latch.should_send(3, PredictionStage::Provisional));
         assert!(!latch.should_send(3, PredictionStage::Refined));
 
