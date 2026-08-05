@@ -503,12 +503,26 @@ fn best_scored_prediction(
 /// 레일 속도/가속/토크 한계(`kinematic_limit_violation`·`peak_torque_utilization`)를 만족할 때까지
 /// 소요 시간을 점진적으로 늘려가며 찾는다.
 pub fn plan_return_to_center(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
-    let center_joints = arm.default_joints.clone();
     let center_rail_x = arm
         .rail
         .as_ref()
         .map(|rail| rail.default_x())
         .unwrap_or(start.rail_x);
+    return plan_return_to_center_at(arm, start, center_rail_x);
+}
+
+/// [`plan_return_to_center`]과 같은 중립 자세를, 목표 레일 x만 호출측이 고른
+/// 값으로 계획한다 — 좌/센터/우 존 테스트 컨트롤이 준비 위치를 바꿀 때 쓴다.
+pub fn plan_return_to_center_at(
+    arm: &Arm,
+    start: &robot::Pose,
+    rail_x: f64,
+) -> Result<Trajectory, DomainError> {
+    let center_joints = arm.default_joints.clone();
+    let center_rail_x = arm
+        .rail
+        .as_ref()
+        .map_or(start.rail_x, |rail| rail.clamp_x(rail_x));
     return plan_move_to(arm, start, center_joints, center_rail_x);
 }
 
@@ -1511,6 +1525,20 @@ mod tests {
             forward_distance > DETECTION_WINDUP_DISTANCE_M * 0.85,
             "설정한 감김 거리만큼 상대편 방향으로 펴져야 함: {forward_distance:.4}m"
         );
+    }
+
+    #[test]
+    fn return_to_center_at_targets_the_given_rail_x() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let rail = arm.rail.expect("rail 있는 로봇");
+        let start = robot::Pose::new(rail.default_x(), arm.default_joints.clone());
+
+        let moved =
+            plan_return_to_center_at(arm, &start, rail.x_min).expect("return to center at x_min");
+
+        assert!((moved.follow_through_rail_x - rail.x_min).abs() < 1e-9);
+        assert_eq!(moved.follow_through, arm.default_joints);
     }
 
     #[test]

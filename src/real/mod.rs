@@ -36,6 +36,7 @@ mod shutdown;
 mod sim_child;
 mod sim_host;
 mod sim_update;
+mod test_control;
 mod throttle;
 mod vision_event;
 
@@ -47,6 +48,7 @@ pub use preview_event::PreviewEvent;
 pub use runtime_event::{ControlStateSnapshot, RuntimeEvent};
 pub use shutdown::{Shutdown, ShutdownGuard, shutdown_channel};
 pub use sim_update::{PoseMsg, SimUpdate};
+pub use test_control::{TestControl, TestZone};
 pub use throttle::Throttle;
 pub use vision_event::VisionEvent;
 
