@@ -730,6 +730,16 @@ fn initialize_pose_attempt(
         }
         if Instant::now() >= settle_deadline {
             hardware.log_joint_diagnostics();
+            let (worst_joint_index, worst_joint_error_rad) = joint_errors
+                .iter()
+                .enumerate()
+                .max_by(|(_, left), (_, right)| {
+                    left.abs()
+                        .partial_cmp(&right.abs())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map_or((0, 0.0), |(index, error)| (index, *error));
+            let worst_motor_id = mapping.config().motor_ids[worst_joint_index];
             warn!(
                 rail_commanded_m = f4(ready_rail_x),
                 rail_measured_m = f4(pose.rail_x),
@@ -737,7 +747,10 @@ fn initialize_pose_attempt(
                 joints_commanded = %format!("{:?}", ready_joints.values),
                 joints_measured = %format!("{:?}", pose.joints.values),
                 joints_commanded_minus_measured = %format!("{joint_errors:?}"),
-                "시작 팔 자세 실측 수렴 실패 — 관절 부호·영점 보정 필요"
+                worst_joint_index,
+                worst_motor_id,
+                worst_joint_error_deg = worst_joint_error_rad.to_degrees(),
+                "시작 팔 자세 실측 수렴 실패 — 모터별 Torque·Error·Goal·Present 진단 확인"
             );
             if allow_motor_recovery && max_joint_error_rad >= STARTUP_RECOVERY_MIN_ERROR_RAD {
                 match hardware.recover_joint_control() {
@@ -754,6 +767,8 @@ fn initialize_pose_attempt(
             }
             return Err(MoveError::StartupAlignmentTimeout {
                 max_joint_error_rad,
+                worst_joint_index,
+                worst_motor_id,
             });
         }
         thread::sleep(VERIFY_POLL_PERIOD);
@@ -895,7 +910,11 @@ fn plan_neutral_return_segments(
 pub(super) enum MoveError {
     Hardware(HwError),
     Plan(DomainError),
-    StartupAlignmentTimeout { max_joint_error_rad: f64 },
+    StartupAlignmentTimeout {
+        max_joint_error_rad: f64,
+        worst_joint_index: usize,
+        worst_motor_id: u8,
+    },
 }
 
 impl std::fmt::Display for MoveError {
@@ -905,10 +924,12 @@ impl std::fmt::Display for MoveError {
             Self::Plan(error) => write!(f, "{error}"),
             Self::StartupAlignmentTimeout {
                 max_joint_error_rad,
+                worst_joint_index,
+                worst_motor_id,
             } => write!(
                 f,
-                "시작 팔 자세가 10초 안에 수렴하지 않음: 최대 관절 오차 {:+.2}°",
-                max_joint_error_rad.to_degrees()
+                "시작 팔 자세가 10초 안에 수렴하지 않음: j{worst_joint_index} / Dynamixel ID {worst_motor_id}, 최대 관절 오차 {:+.2}°. 충돌 후 혼 위치·링크 체결 및 해당 ID의 Torque/Error 진단을 확인하세요",
+                max_joint_error_rad.to_degrees(),
             ),
         };
     }

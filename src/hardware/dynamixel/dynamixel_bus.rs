@@ -212,42 +212,52 @@ impl DynamixelBus {
             BusBackend::Real(real) => {
                 const HARDWARE_ERROR_STATUS_ADDRESS: u8 = 70;
                 let config = self.mapping.config.clone();
-                let ids = config.bus_ids();
-                let torque = read_u8s(real, &ids, config.addr_torque_enable, &config);
-                let errors = read_u8s(real, &ids, HARDWARE_ERROR_STATUS_ADDRESS, &config);
-                let goals = read_u32s(real, &ids, config.addr_goal_position, &config);
-                let present = read_u32s(real, &ids, config.addr_present_position, &config);
-                let (Some(torque), Some(errors), Some(goals), Some(present)) =
-                    (torque, errors, goals, present)
-                else {
-                    warn!(ids = ?ids, "Dynamixel 관절 상태 진단 읽기 실패");
-                    return;
-                };
-                for index in 0..ids.len() {
-                    let id = ids[index];
-                    let error = errors[index];
-                    let goal_tick = goals[index];
-                    let present_tick = present[index];
-                    let tick_error = i64::from(goal_tick) - i64::from(present_tick);
-                    if torque[index] == 0 || error != 0 || tick_error.abs() > 20 {
+                for id in config.bus_ids() {
+                    // 미러 slave 하나가 응답하지 않아도 나머지 관절의 원인을 볼 수
+                    // 있도록 SyncRead를 ID별로 수행한다.
+                    let torque = read_u8(real, id, config.addr_torque_enable, &config);
+                    let error = read_u8(real, id, HARDWARE_ERROR_STATUS_ADDRESS, &config);
+                    let goal_tick = read_u32(real, id, config.addr_goal_position, &config);
+                    let present_tick = read_u32(real, id, config.addr_present_position, &config);
+                    let tick_error = goal_tick
+                        .zip(present_tick)
+                        .map(|(goal, present)| i64::from(goal) - i64::from(present));
+                    if torque.is_none()
+                        || error.is_none()
+                        || goal_tick.is_none()
+                        || present_tick.is_none()
+                    {
                         warn!(
                             id,
-                            torque_enabled = torque[index],
+                            torque_enabled = ?torque,
+                            hardware_error_status = ?error,
+                            goal_tick = ?goal_tick,
+                            present_tick = ?present_tick,
+                            "Dynamixel 관절 진단 일부 읽기 실패 — 해당 ID 배선·전원·통신 확인"
+                        );
+                    } else if torque == Some(0)
+                        || error.is_some_and(|status| status != 0)
+                        || tick_error.is_some_and(|ticks| ticks.abs() > 20)
+                    {
+                        let error = error.unwrap_or_default();
+                        warn!(
+                            id,
+                            torque_enabled = ?torque,
                             hardware_error_status = error,
                             hardware_error = hardware_error_labels(error),
-                            goal_tick,
-                            present_tick,
-                            goal_minus_present_tick = tick_error,
+                            goal_tick = ?goal_tick,
+                            present_tick = ?present_tick,
+                            goal_minus_present_tick = ?tick_error,
                             "Dynamixel 관절 이상 진단"
                         );
                     } else {
                         info!(
                             id,
-                            torque_enabled = torque[index],
-                            hardware_error_status = error,
-                            goal_tick,
-                            present_tick,
-                            goal_minus_present_tick = tick_error,
+                            torque_enabled = ?torque,
+                            hardware_error_status = ?error,
+                            goal_tick = ?goal_tick,
+                            present_tick = ?present_tick,
+                            goal_minus_present_tick = ?tick_error,
                             "Dynamixel 관절 정상 진단"
                         );
                     }
@@ -265,19 +275,27 @@ impl DynamixelBus {
             BusBackend::Real(real) => {
                 const HARDWARE_ERROR_STATUS_ADDRESS: u8 = 70;
                 let config = self.mapping.config.clone();
-                let ids = config.bus_ids();
-                let torque = read_u8s(real, &ids, config.addr_torque_enable, &config)
-                    .ok_or_else(|| read_transport_error("Torque Enable 진단 읽기 실패"))?;
-                let errors = read_u8s(real, &ids, HARDWARE_ERROR_STATUS_ADDRESS, &config)
-                    .ok_or_else(|| read_transport_error("Hardware Error Status 읽기 실패"))?;
-                let recover_ids: Vec<u8> = ids
-                    .iter()
-                    .enumerate()
-                    // 큰 위치 오차만으로 재부팅하지 않는다. 토크가 살아 있는데 안
-                    // 움직이는 경우는 기계 걸림일 수 있어 재시도가 위험하다.
-                    .filter(|(index, _)| torque[*index] == 0 || errors[*index] != 0)
-                    .map(|(_, id)| *id)
-                    .collect();
+                let mut recover_ids = Vec::new();
+                for id in config.bus_ids() {
+                    let torque = read_u8(real, id, config.addr_torque_enable, &config);
+                    let error = read_u8(real, id, HARDWARE_ERROR_STATUS_ADDRESS, &config);
+                    match (torque, error) {
+                        (Some(torque), Some(error)) if torque == 0 || error != 0 => {
+                            recover_ids.push(id);
+                        }
+                        (None, None) => warn!(
+                            id,
+                            "Dynamixel 자동 복구 진단 불가 — 무응답 ID는 강제 구동하지 않음"
+                        ),
+                        (torque, error) if torque.is_none() || error.is_none() => warn!(
+                            id,
+                            torque_enabled = ?torque,
+                            hardware_error_status = ?error,
+                            "Dynamixel 자동 복구 진단 일부 실패 — 해당 ID는 강제 구동하지 않음"
+                        ),
+                        _ => {}
+                    }
+                }
                 if recover_ids.is_empty() {
                     return Ok(false);
                 }
@@ -733,6 +751,12 @@ fn read_u8s(
         .collect();
 }
 
+/// 한 ID의 1바이트 레지스터를 읽는다. 다른 ID의 통신 장애에 영향받지 않는다.
+#[cfg(feature = "real")]
+fn read_u8(real: &mut RealBackend, id: u8, address: u8, config: &DynamixelConfig) -> Option<u8> {
+    return read_u8s(real, &[id], address, config)?.into_iter().next();
+}
+
 /// EEPROM 2바이트 레지스터를 모든 id에서 읽는다. 실패하면 `None`.
 #[cfg(feature = "real")]
 fn read_u16s(
@@ -782,6 +806,12 @@ fn read_u32s(
             Some(u32::from_le_bytes(value))
         })
         .collect();
+}
+
+/// 한 ID의 4바이트 레지스터를 읽는다. 다른 ID의 통신 장애에 영향받지 않는다.
+#[cfg(feature = "real")]
+fn read_u32(real: &mut RealBackend, id: u8, address: u8, config: &DynamixelConfig) -> Option<u32> {
+    return read_u32s(real, &[id], address, config)?.into_iter().next();
 }
 
 #[cfg(feature = "real")]
