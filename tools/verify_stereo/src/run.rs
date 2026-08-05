@@ -17,12 +17,11 @@ use pingpong_bot::camera;
 use pingpong_bot::camera::{
     Calibration, Frame, FrameSource, Preview, PreviewAction, WorldGridParams,
 };
-use pingpong_bot::defaults::EstimatorParams;
 use pingpong_bot::defaults::calibration_path;
 use pingpong_bot::defaults::detector_for;
-use pingpong_bot::detector::Detector;
-use pingpong_bot::estimator;
-use pingpong_bot::estimator::GateOutcome;
+use pingpong_bot::vision::Detector;
+use pingpong_bot::defaults::vision::fit as fit_params;
+use pingpong_bot::vision::{Fit, Outcome, triggers};
 
 use crate::args::Args;
 use crate::msg::BallMsg;
@@ -141,11 +140,20 @@ pub fn run_opencv(args: &Args) -> Result<()> {
     let mut freeze_frames: Option<Vec<Frame>> = None;
 
     // 검출이 튀어도 궤적이 끊기지 않게 하는 게이팅 필터. `e`로 끄면 생값만 본다.
-    let gate = EstimatorParams::default();
-    let mut ekf = estimator::Ekf::default();
+    //
+    // 트리거는 이 툴이 안 쓴다 (예측 궤적을 안 그린다). 뭐든 하나는 있어야 해서 네트로 둔다.
+    let mut ekf = Fit::new(
+        &calibration,
+        Box::new(triggers::PlaneCrossing {
+            y: pingpong_bot::constants::table::LENGTH_Y * 0.5,
+        }),
+    );
+    let mut epoch: Option<std::time::Instant> = None;
     let mut ekf_enabled = true;
+    let mut last_px: Option<f64> = None;
+    let mut rejected_this_frame = false;
     let mut rejected_total: u64 = 0;
-    let mut resets_total: u64 = 0;
+    let mut seeds_total: u64 = 0;
 
     println!(
         "verify-stereo — cal={} cams={:?} sim={}",
@@ -214,7 +222,22 @@ pub fn run_opencv(args: &Args) -> Result<()> {
             }
 
             if show_detect {
-                if let Some(p) = detectors[i].detect(frame) {
+                let found = detectors[i].detect(frame, None)?;
+                // 동결 중에는 같은 프레임이 반복되므로 필터를 돌리지 않는다.
+                if ekf_enabled && !frozen {
+                    let base = *epoch.get_or_insert(frame.timestamp);
+                    let t = frame.timestamp.saturating_duration_since(base);
+                    match ekf.observe(id, found, t) {
+                        Outcome::Rejected { px } => {
+                            rejected_total += 1;
+                            rejected_this_frame = true;
+                            last_px = Some(px);
+                        }
+                        Outcome::Seeded => seeds_total += 1,
+                        Outcome::Accepted | Outcome::Idle => {}
+                    }
+                }
+                if let Some(p) = found.map(|candidate| candidate.pixel) {
                     hits.push((id, p));
                     Preview::draw_circle_px(
                         &mut panel,
@@ -234,28 +257,14 @@ pub fn run_opencv(args: &Args) -> Result<()> {
             panels.push((panel, id));
         }
 
-        let world = estimator::Triangulate::pixels(&hits, &calibration);
+        let world = camera::Triangulate::pixels(&hits, &calibration);
         let rmse = world.and_then(|w| reproj_rmse(w, &hits, &calibration));
 
-        // 동결 중에는 같은 프레임이 반복되므로 필터를 돌리지 않는다.
-        let outcome = match (ekf_enabled, frozen, world) {
-            (true, false, Some(w)) => {
-                let sync_time = frames
-                    .iter()
-                    .map(|f| f.timestamp)
-                    .max()
-                    .unwrap_or_else(std::time::Instant::now);
-                Some(ekf.update_position(w, sync_time))
-            }
-            _ => None,
-        };
-        match outcome {
-            Some(GateOutcome::Rejected) => rejected_total += 1,
-            Some(GateOutcome::Reset) => resets_total += 1,
-            _ => {}
-        }
-        let filtered = if ekf_enabled { ekf.position() } else { None };
-        let rejected = outcome == Some(GateOutcome::Rejected);
+        let state = ekf_enabled
+            .then(|| ekf.measured().last().copied())
+            .flatten();
+        let filtered = state.map(|s| s.position);
+        let rejected = std::mem::take(&mut rejected_this_frame);
 
         if let Some(stdin) = &mut sim_stdin {
             send_ball(stdin, world, filtered);
@@ -329,20 +338,22 @@ pub fn run_opencv(args: &Args) -> Result<()> {
                 None if ekf_enabled => "ekf=—".into(),
                 None => "ekf=off".into(),
             };
-            let speed = match ekf.velocity() {
-                Some(v) => format!("|v|={:.1}m/s", v.norm()),
+            let speed = match state {
+                Some(s) => format!("|v|={:.1}m/s", s.velocity.norm()),
                 None => "|v|=—".into(),
             };
-            let d2 = match ekf.last_gate_d2() {
-                Some(d) => format!("d2={d:.1}/{:.1}", gate.gate_chi2),
+            let d2 = match last_px {
+                Some(d) => format!(
+                    "resid={d:.1}/{:.1}px",
+                    fit_params::OUTLIER_SIGMA * fit_params::SIGMA_PX
+                ),
                 None => "d2=—".into(),
             };
             let lines = [
                 format!("VERIFY hits={}/2 {xyz} {rmse_s}", hits.len()),
                 format!(
-                    "{ekf_xyz} {speed} {d2} streak={}/{} rej={rejected_total} reset={resets_total}",
-                    ekf.reject_streak(),
-                    gate.gate_reject_limit
+                    "{ekf_xyz} {speed} {d2} seq={} seeds={seeds_total} rej={rejected_total}",
+                    ekf.seq()
                 ),
                 format!(
                     "grid={} detect={} freeze={}  xy={:.2} z={:.2} L{}",
@@ -376,7 +387,7 @@ pub fn run_opencv(args: &Args) -> Result<()> {
                     show_detect = !show_detect;
                 } else if k == i32::from(b'e') || k == i32::from(b'E') {
                     ekf_enabled = !ekf_enabled;
-                    ekf.reset();
+                    ekf.drop_track();
                 } else if k == i32::from(b' ') {
                     frozen = !frozen;
                     if !frozen {

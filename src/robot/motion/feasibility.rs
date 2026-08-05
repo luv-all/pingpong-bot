@@ -1,6 +1,6 @@
 //! 마운트 튜닝용 임팩트 실현 가능성.
 
-use crate::estimator::Prediction;
+use crate::robot::motion::Prediction;
 use crate::robot::{self, Arm};
 
 use super::impact_candidate::best_impact_candidate;

@@ -5,6 +5,7 @@ mod builder;
 use crate::sim::gui::ball;
 use crate::sim::gui::robot;
 use crate::sim::gui::shooter;
+use crate::sim::gui::trail;
 
 pub use builder::SceneLayersBuilder;
 
@@ -17,6 +18,8 @@ pub struct SceneLayers {
     pub ghost: Option<ball::Handle>,
     pub robot: Option<robot::Handle>,
     pub shooter: Option<shooter::Handle>,
+    /// 궤적 폴리라인 — 개수 제한 없음. 렌더 루프가 순서대로 그린다.
+    pub trails: Vec<trail::Handle>,
 }
 
 impl SceneLayers {

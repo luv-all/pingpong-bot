@@ -31,6 +31,13 @@ pub struct Params {
     pub rotation: nalgebra::Matrix3<f64>,
     /// 월드 -> 카메라 평행이동: `X_cam = R X_world + t`
     pub translation: Vector3<f64>,
+    /// 이 캘리브의 재투영 RMSE [px]. 없으면 안 잰 것이다.
+    ///
+    /// 필터가 관측 노이즈 R을 정하는 데 쓴다. 검출이 아무리 정확해도 캘리브가 4 px 틀어져
+    /// 있으면 그 카메라의 픽셀은 4 px 만큼 못 믿는다 — R이 그걸 모르면 게이트가 그 카메라를
+    /// 통째로 거부한다.
+    #[serde(default)]
+    pub reprojection_rmse_px: Option<f64>,
 }
 
 impl Params {
@@ -104,6 +111,7 @@ impl Params {
             dist: Vec::new(),
             rotation,
             translation,
+            reprojection_rmse_px: None,
         };
     }
 
@@ -198,6 +206,7 @@ mod tests {
             dist: Vec::new(),
             rotation: nalgebra::Matrix3::identity(),
             translation: Vector3::zeros(),
+            reprojection_rmse_px: None,
         };
 
         // 광축 앞 중앙 -> 주점. 두 함수 모두 같은 값.

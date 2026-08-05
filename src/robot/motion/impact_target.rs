@@ -3,7 +3,7 @@
 use nalgebra::Vector3;
 
 use crate::error::DomainError;
-use crate::estimator::Prediction;
+use crate::robot::motion::Prediction;
 use crate::robot::{self, Arm};
 
 use super::impact_candidate::{ImpactCandidate, best_impact_candidate};

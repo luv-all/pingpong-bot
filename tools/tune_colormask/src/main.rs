@@ -18,7 +18,9 @@ use pingpong_bot::camera::{
     self, FrameSource, ImageDirSource, PixelPickMouse, Preview, PreviewAction,
 };
 use pingpong_bot::defaults::colormask_path;
-use pingpong_bot::detector::{ColorSpace, load_colormask_set_or_empty, save_colormask_set};
+use pingpong_bot::vision::detect::colormask::{
+    ColorSpace, load_colormask_set_or_empty, save_colormask_set,
+};
 
 use channel_range::ChannelRange;
 use cli::Args;

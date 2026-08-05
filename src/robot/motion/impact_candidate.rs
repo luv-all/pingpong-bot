@@ -4,8 +4,8 @@ use nalgebra::Vector3;
 
 use crate::defaults;
 use crate::error::SwingPlanError;
-use crate::estimator::Impact;
-use crate::estimator::Prediction;
+use crate::robot::motion::Impact;
+use crate::robot::motion::Prediction;
 use crate::robot::{self, Arm, Joints};
 
 /// `hint`를 어깨/팔꿈치 한계 구간 중점 기준으로 반사한 대안 시드들을
@@ -218,8 +218,8 @@ mod tests {
 
     use super::*;
     use crate::constants::table;
-    use crate::estimator::Prediction;
     use crate::robot::motion::InterceptWindow;
+    use crate::robot::motion::Prediction;
 
     /// WP2b 계측 — **같은 타점**의 IK 시드끼리 필요 라켓속도 `v_r`이 얼마나
     /// 다른가.

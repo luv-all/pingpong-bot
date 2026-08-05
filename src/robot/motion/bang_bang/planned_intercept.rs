@@ -1,7 +1,7 @@
 //! 선택된 예측 + bang-bang 궤적.
 
 use crate::error::{DomainError, SwingPlanError};
-use crate::estimator::Prediction;
+use crate::robot::motion::Prediction;
 use crate::robot::{self, Arm};
 
 use super::super::physics::in_swing_commit_window;

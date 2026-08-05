@@ -6,7 +6,7 @@ use opencv::prelude::*;
 
 use super::candidate::Candidate;
 use crate::camera::Frame;
-use crate::defaults::vision::MOTION_DIFF_THRESH;
+use crate::defaults::detector::MOTION_DIFF_THRESH;
 
 /// 연속 프레임 absdiff → 이진 마스크. soft motion score에 쓴다.
 pub struct MotionPrior {

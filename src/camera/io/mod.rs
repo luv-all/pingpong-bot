@@ -20,8 +20,8 @@ pub use preview::{
     FittedBgr, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, PixelPickMouse, PreviewAction,
     ShowBgrResult, WorldGridParams, apply_grid_key, arrow_delta, destroy_window,
     display_fit_bounds, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines,
-    draw_pixel_loupe, draw_rect_px, draw_text_at_px, draw_world_grid, draw_world_velocity,
-    fit_bgr_downscale, hstack_bgr, show_bgr, unscale_xy,
+    draw_pixel_loupe, draw_rect_px, draw_text_at_px, draw_world_grid, draw_world_track,
+    draw_world_velocity, fit_bgr_downscale, hstack_bgr, show_bgr, unscale_xy,
 };
 pub use rig::CamRigConfig;
 pub use sim::SimCamera;

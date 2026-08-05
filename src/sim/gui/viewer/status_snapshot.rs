@@ -1,7 +1,7 @@
 //! 패널 Status 창 스냅샷.
 
 use crate::defaults;
-use crate::estimator::Prediction;
+use crate::robot::motion::Prediction;
 use crate::sim::gui::debug::CommitPhase;
 use crate::sim::physics;
 use crate::sim::physics::world::SimWorld;

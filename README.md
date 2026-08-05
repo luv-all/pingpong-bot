@@ -497,6 +497,7 @@ cargo run -p pingpong-bot
 | `verify-stereo` | [verify_stereo](tools/verify_stereo/README.md) — 스테레오 격자·공 3D·sim |
 | `tune-colormask` | [tune_colormask](tools/tune_colormask/README.md) |
 | `detect-full` | [detect_full](tools/detect_full/README.md) — fuse + ROI |
+| `clip-review` | [clip_review](tools/clip_review/README.md) — 0.1x 재생, 실제 궤적 vs 예측 궤적 |
 | `measure-restitution` | [measure_restitution](tools/measure_restitution/README.md) |
 | `measure-friction` | [measure_friction](tools/measure_friction/README.md) |
 | `jog` | [jog](tools/jog/README.md) — 관절·레일 REPL |

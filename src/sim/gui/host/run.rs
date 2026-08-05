@@ -15,6 +15,40 @@ use crate::sim::gui::ball;
 use crate::sim::gui::robot;
 use crate::sim::gui::shooter;
 
+fn vec3(p: crate::Point3) -> Vec3 {
+    return Vec3::new(p.x as f32, p.y as f32, p.z as f32);
+}
+
+/// 좌상단 범례. 궤적 색 그대로 칠한 사각형 + 이름.
+fn draw_legend(ctx: &kiss3d::egui::Context, entries: &[(&str, Color)]) {
+    use kiss3d::egui;
+
+    // 라벨에 한글이 올 수 있다. egui 기본 폰트엔 글리프가 없어서 네모로 나온다.
+    super::super::viewer::ensure_korean_fonts(ctx);
+    egui::Area::new("trail-legend".into())
+        .anchor(egui::Align2::LEFT_TOP, egui::vec2(12.0, 12.0))
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                for (label, color) in entries {
+                    ui.horizontal(|ui| {
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(18.0, 4.0), egui::Sense::hover());
+                        ui.painter().rect_filled(
+                            rect,
+                            1.0,
+                            egui::Color32::from_rgb(
+                                (color.r * 255.0) as u8,
+                                (color.g * 255.0) as u8,
+                                (color.b * 255.0) as u8,
+                            ),
+                        );
+                        ui.label(*label);
+                    });
+                }
+            });
+        });
+}
+
 pub(crate) fn run_scene_host(options: SceneHostOptions) -> Result<(), String> {
     if options.enable_panel {
         let world = options
@@ -131,6 +165,25 @@ async fn run_lightweight(options: SceneHostOptions) -> Result<(), String> {
             if let Some(guard) = lock_world_for_frame(world) {
                 visual.sync_from_world(&guard, options.urdf.as_deref());
             }
+        }
+        // 선은 노드가 아니라 프레임 단위 draw call이다 — 매 프레임 다시 그려야 남는다.
+        for trail in &options.layers.trails {
+            let points = trail.points();
+            let (color, width) = (trail.color(), trail.width());
+            for pair in points.windows(2) {
+                window.draw_line(vec3(pair[0]), vec3(pair[1]), color, width, false);
+            }
+        }
+        // 이름 붙은 궤적이 하나라도 있으면 범례를 띄운다. 색은 궤적 자신이 들고 있어서
+        // 범례와 실제 선이 어긋날 수가 없다.
+        let legend: Vec<(&str, Color)> = options
+            .layers
+            .trails
+            .iter()
+            .filter_map(|trail| Some((trail.label()?, trail.color())))
+            .collect();
+        if !legend.is_empty() {
+            window.draw_ui(|ctx| draw_legend(ctx, &legend));
         }
         if let Some(hook) = &options.ui_hook {
             window.draw_ui(|ctx| {

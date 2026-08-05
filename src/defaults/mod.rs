@@ -15,7 +15,7 @@
 //! | [`impact`] | `ImpactParams` |
 //! | [`estimator`] | `EstimatorParams` |
 //! | [`robot`] | URDF·primitive (`Result`) |
-//! | [`vision`] | Scorer/Roi + [`detector_for`] |
+//! | [`vision`] | 튜너블 + 캐스케이드·picker·트리거 조립, colormask/calib 로드 |
 //! | [`calib`] | Cam* / Charuco / Rig |
 //! | [`hardware`] | DynamixelConfig / RailConfig |
 //! | [`dxl_limits`] | derate·속도·토크 배열 |
@@ -27,10 +27,11 @@
 
 pub mod calib;
 mod control;
+pub mod detector;
 pub mod dxl_limits;
-mod estimator;
 mod hardware;
 mod impact;
+mod estimator;
 pub mod motion;
 mod physics;
 mod robot;
@@ -40,12 +41,12 @@ pub mod vision;
 
 pub use calib::{
     CHARUCO_MARKER_LENGTH_M, CHARUCO_SQUARE_LENGTH_M, CHARUCO_SQUARES_X, CHARUCO_SQUARES_Y,
-    DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME, DEFAULT_CLIPS_DIR,
-    DEFAULT_COLORMASK_PATH, DEFAULT_DATA_DIR, DEFAULT_FOV_Y_DEG, DEFAULT_STEREO_CAM_ROLES,
-    DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS, DEFAULT_STREAM_HEIGHT,
-    DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH, LEFT_CAMERA_ID, LEFT_DEVICE, MAX_REPROJ_RMSE_PX,
-    MIN_CHARUCO_CORNERS, RIGHT_CAMERA_ID, RIGHT_DEVICE, calibration_path, calibration_pending_path,
-    colormask_path, ensure_parent_dir,
+    CURRENT_RIG_CLIPS, DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME,
+    DEFAULT_CLIPS_DIR, DEFAULT_COLORMASK_PATH, DEFAULT_DATA_DIR, DEFAULT_FOV_Y_DEG,
+    DEFAULT_STEREO_CAM_ROLES, DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
+    DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH, LEFT_CAMERA_ID,
+    LEFT_DEVICE, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, RIGHT_CAMERA_ID, RIGHT_DEVICE,
+    calibration_path, calibration_pending_path, colormask_path, ensure_parent_dir,
 };
 pub use control::ControlParams;
 pub use dxl_limits::{
@@ -54,8 +55,8 @@ pub use dxl_limits::{
     joint_reflected_inertias_4dof_array, joint_torque_limits_4dof, joint_torque_limits_4dof_array,
     reflected_inertia,
 };
-pub use estimator::EstimatorParams;
 pub use impact::ImpactParams;
+pub use estimator::EstimatorParams;
 pub use motion::{
     COARSE_TRACK_JOINT_FRACTION, JACOBIAN_DAMPING, JDOT_STEP, MAGNUS_OMEGA_MAX,
     MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
@@ -84,8 +85,7 @@ pub use sim_motor::{
     JOINT_EFFECTIVE_INERTIA_4DOF, SIM_MOTOR_BANDWIDTH_RAD_S, SIM_MOTOR_JOINTS, SimMotorParams,
 };
 pub use vision::{
-    MOTION_DIFF_THRESH, MOTION_WEIGHT, PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, camera_params_for,
-    colormask_for, detector_for,
+    PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, camera_params_for, colormask_for, detector_for,
 };
 
 #[cfg(test)]
@@ -93,7 +93,6 @@ mod tests {
     use super::*;
     use crate::camera;
     use crate::defaults::colormask_for;
-    use crate::detector::{RoiParams, ScorerParams};
     use crate::hardware::dynamixel::DynamixelConfig;
     use crate::hardware::rail::RailConfig;
     use crate::robot::motion::InterceptWindow;
@@ -105,10 +104,6 @@ mod tests {
         ImpactParams::default().validate().unwrap();
         EstimatorParams::default().validate().unwrap();
         InterceptWindow::default().validate().unwrap();
-        ScorerParams::default().validate().unwrap();
-        colormask_for(camera::Id(0)).unwrap().validate().unwrap();
-        colormask_for(camera::Id(1)).unwrap().validate().unwrap();
-        RoiParams::default().validate().unwrap();
         DynamixelConfig::default().validate().unwrap();
         RailConfig::default().validate().unwrap();
         let rail_config = RailConfig::default();
@@ -127,19 +122,33 @@ mod tests {
         assert!((ImpactParams::default().max_return_speed - 6.0).abs() < 1e-12);
     }
 
+    /// 커밋된 색 마스크가 읽히고 유효한가.
+    ///
+    /// `presets_validate` 와 나눠 둔다 — 이건 코드가 아니라 **리그 산출물**을 검사하므로,
+    /// 카메라를 옮기면 정당하게 빨개진다. 그때 `tune-colormask` 로 다시 잡으라는 신호다.
+    #[test]
+    fn committed_colormask_is_valid() {
+        for id in [camera::Id(0), camera::Id(1)] {
+            let params = colormask_for(id).unwrap_or_else(|error| {
+                panic!("cam{}: {error:#} — tune-colormask 로 다시 잡을 것", id.0)
+            });
+            params.validate().unwrap();
+        }
+    }
+
     #[test]
     fn shared_robot_is_4dof() {
         assert_eq!(shared_robot().arm.joint_count(), 4);
     }
 
-    /// 커밋된 캘리브 SSOT로 만든 바닥 마스크가 테이블을 살려두는지 — 리그를
-    /// 다시 캘리브했을 때 마스크가 테이블을 지워버리는 배치를 여기서 잡는다.
+    /// 커밋된 캘리브로 테이블 네 귀퉁이와 중앙이 화면 안에 드는지.
+    ///
+    /// 리그를 다시 캘리브했을 때 테이블이 화각을 벗어나는 배치를 여기서 잡는다. 벗어나면
+    /// 그 구석의 공은 두 대가 같이 못 보고, 삼각측량이 안 되는 사각이 생긴다.
     #[test]
-    fn committed_calibration_keeps_the_whole_table() {
+    fn committed_calibration_sees_the_whole_table() {
         use crate::Point3;
         use crate::constants::table;
-        use crate::detector::FloorEdgeMask;
-        use opencv::prelude::*;
 
         let z = table::SURFACE_Z;
         let probes = [
@@ -152,16 +161,12 @@ mod tests {
 
         for id in [camera::Id(0), camera::Id(1)] {
             let cam = camera_params_for(id).unwrap();
-            let mask = FloorEdgeMask::from_params(&cam).unwrap();
             for (name, x, y) in probes {
-                let Some(px) = cam.project_world(Point3::new(x, y, z)) else {
-                    panic!("cam{}: table {name} not in frame", id.0);
-                };
-                let keep: u8 = *mask
-                    .keep
-                    .at_2d(px.y.round() as i32, px.x.round() as i32)
-                    .unwrap();
-                assert_eq!(keep, 255, "cam{}: table {name} was masked out", id.0);
+                assert!(
+                    cam.project_world(Point3::new(x, y, z)).is_some(),
+                    "cam{}: 테이블 {name} 이 화각 밖이다",
+                    id.0
+                );
             }
         }
     }

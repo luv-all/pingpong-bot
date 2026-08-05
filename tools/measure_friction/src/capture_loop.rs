@@ -9,12 +9,12 @@ use opencv::prelude::*;
 use pingpong_bot::camera;
 use pingpong_bot::camera::{Calibration, FrameSource, Preview, PreviewAction, StereoOfflineArgs};
 use pingpong_bot::defaults::detector_for;
-use pingpong_bot::detector::Detector;
-use pingpong_bot::estimator;
+use pingpong_bot::physics;
+use pingpong_bot::vision::Detector;
 
 pub struct CaptureResult {
-    pub traj: Vec<estimator::TrajPoint>,
-    pub rolls: Vec<estimator::RollEvent>,
+    pub traj: Vec<physics::TrajPoint>,
+    pub rolls: Vec<physics::RollEvent>,
     pub mu: Option<f64>,
 }
 
@@ -87,7 +87,9 @@ pub fn run_capture(
                 frame0_ts = Some(frame.timestamp);
             }
             let cam_id = camera::Id(i as u8);
-            let pixel = detectors[i].detect(&frame);
+            let pixel = detectors[i]
+                .detect(&frame, None)?
+                .map(|candidate| candidate.pixel);
             let mut panel = frame
                 .image
                 .try_clone()
@@ -116,16 +118,16 @@ pub fn run_capture(
                 0.0
             }
         };
-        if let Some(pos) = estimator::Triangulate::pixels(&hits, &calibration) {
-            traj.push(estimator::TrajPoint {
+        if let Some(pos) = camera::Triangulate::pixels(&hits, &calibration) {
+            traj.push(physics::TrajPoint {
                 t: sync_t,
                 pos,
                 pixels: hits.clone(),
             });
         }
 
-        let rolls = estimator::TrajAnalysis::detect_rolls(&traj);
-        let mu_mean = estimator::TrajAnalysis::mean_roll_mu(&rolls);
+        let rolls = physics::TrajAnalysis::detect_rolls(&traj);
+        let mu_mean = physics::TrajAnalysis::mean_roll_mu(&rolls);
 
         if let Some(ev) = rolls.last() {
             for (i, panel) in panels.iter_mut().enumerate() {
@@ -178,9 +180,9 @@ pub fn run_capture(
         Preview::destroy_window(window);
     }
 
-    let rolls = estimator::TrajAnalysis::detect_rolls(&traj);
+    let rolls = physics::TrajAnalysis::detect_rolls(&traj);
     return Ok(CaptureResult {
-        mu: estimator::TrajAnalysis::mean_roll_mu(&rolls),
+        mu: physics::TrajAnalysis::mean_roll_mu(&rolls),
         traj,
         rolls,
     });

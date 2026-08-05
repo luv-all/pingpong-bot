@@ -19,8 +19,8 @@
 use nalgebra::Vector3;
 
 use pingpong_bot::defaults;
-use pingpong_bot::estimator::Impact;
 use pingpong_bot::robot::State as RobotState;
+use pingpong_bot::robot::motion::Impact;
 use pingpong_bot::sim::eval::{
     LaunchParams as EvalLaunchParams, LiveObserver, Mode as EvalMode, Protocol, Zone,
 };

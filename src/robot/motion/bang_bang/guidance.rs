@@ -54,10 +54,10 @@ use crate::defaults::motion::{
     RAIL_ACCEL_M_S2, TIME_TO_GO_BIAS,
 };
 use crate::error::{DomainError, SwingPlanError};
-use crate::estimator::Prediction;
 use crate::robot::Arm;
 use crate::robot::collision::{clamp_above_table, table_penetration};
 use crate::robot::dynamics::{bias_torques_into, mass_matrix_into};
+use crate::robot::motion::Prediction;
 use crate::robot::{self, Joints};
 
 use super::racket_guidance_scratch::RacketGuidanceScratch;
@@ -624,9 +624,9 @@ fn bang_bang_accel_to(x: f64, v: f64, target_v: f64, a_max: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::constants::table;
-    use crate::estimator::Prediction;
     use crate::robot::Arm;
     use crate::robot::dynamics::{MassMatrixScratch, RneaScratch, mass_matrix_into};
+    use crate::robot::motion::Prediction;
     use crate::sim::physics;
 
     /// 피처 브랜치가 실기 관절속도(~2.88 rad/s)로 검증한 마운트.
@@ -2429,7 +2429,7 @@ mod tests {
         let start = arm.initial_state();
         let start_pose = robot::Pose::new(start.rail_x(), start.joints().clone());
 
-        use crate::estimator::HitPlane;
+        use crate::robot::motion::HitPlane;
 
         use crate::sim::launch;
         use crate::sim::physics::SimWorld;

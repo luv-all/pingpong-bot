@@ -2,7 +2,7 @@
 
 use anyhow::{Result, ensure};
 
-use crate::estimator::HitPlane;
+use crate::robot::motion::HitPlane;
 
 use crate::defaults::MAX_INTERCEPT_SAMPLES;
 
