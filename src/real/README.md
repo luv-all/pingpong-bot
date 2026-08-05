@@ -70,6 +70,11 @@ flowchart LR
 같은 계산을 사용한다. 실기는 명령 후 엔코더를 읽고, 시뮬레이션은
 같은 명령을 `robot::State`의 레일·조준 목표에 적용한다.
 
+> **주의 (2026-08-05):** 아래 7~8번(재측정 수렴 판정·3회 연속 실패 시 중단)은
+> 현재 실기 `spawn()` 루프에서 발동하지 않는다 — `pending_verification`이
+> 유닛 테스트 밖에서는 채워지지 않는다. 상세:
+> `docs/superpowers/specs/2026-08-05-control-worker-state-machine-design.md`.
+
 ### 제어 괴리 로그
 
 - 레일: commanded, measured, commanded-minus-measured를 m 단위 소수점 4자리로 기록
