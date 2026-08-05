@@ -34,8 +34,10 @@ const RAIL_ERROR_WARN_M: f64 = 0.020;
 const AIM_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
 const STARTUP_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
 // 3° 허용치는 모터가 아직 이동 중인 2.5° 오차를 0.35초 만에
-// "수렴"으로 판정했다. 1° 안에 들어와야 실측 라켓 오차가 약 7 mm 이하다.
-const STARTUP_JOINT_TOLERANCE_RAD: f64 = 1.0_f64.to_radians();
+// "수렴"으로 판정했다. 반대로 1°는 하드웨어 오류 없이 1.84°에서 안정된
+// ID 4를 10초 타임아웃으로 막았다. 실기 추종 편차를 반영해 2°를 쓰되,
+// 아래 연속 샘플 조건으로 이동 중 조기 통과를 막는다.
+const STARTUP_JOINT_TOLERANCE_RAD: f64 = 2.0_f64.to_radians();
 const STARTUP_TRIM_DELAY: Duration = Duration::from_secs(1);
 const STARTUP_MAX_TRIM_ATTEMPTS: u8 = 2;
 const STARTUP_MAX_TRIM_STEP_RAD: f64 = 5.0_f64.to_radians();
