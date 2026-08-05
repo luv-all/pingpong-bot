@@ -213,7 +213,11 @@ fn main_loop(
                     outcome.commands_sent += 1;
                     outcome.last = LastState::Commanded;
                 }
-                RuntimeEvent::ControlState { .. } => {}
+                RuntimeEvent::ControlState { state } => {
+                    if let Some(preview) = &mut preview {
+                        preview.set_control_state(*state);
+                    }
+                }
                 RuntimeEvent::Failed { reason, .. } => {
                     outcome.last = LastState::Failed(reason.clone());
                 }
