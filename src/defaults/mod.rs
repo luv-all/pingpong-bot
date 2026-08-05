@@ -58,7 +58,6 @@ pub use dxl_limits::{
 pub use estimator::EstimatorParams;
 pub use hardware::RAIL_ZONE_SAFETY_MARGIN_RATIO;
 pub use impact::ImpactParams;
-pub use impact::ImpactParams;
 pub use motion::{
     COARSE_TRACK_JOINT_FRACTION, JACOBIAN_DAMPING, JDOT_STEP, MAGNUS_OMEGA_MAX,
     MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
