@@ -26,6 +26,16 @@ pub const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
 
 /// 발사기 반복 시험용 고정 푸시가 한계를 지키며 임팩트를 만들 최소 시간.
 pub const FIXED_IMPACT_MIN_DURATION_SECS: f64 = 0.25;
+/// 공이 없을 때 기존 임팩트 자세보다 뒤에서 대기할 거리 [m].
+pub const READY_PREWIND_DISTANCE_M: f64 = 0.060;
+/// 공이 없을 때 미리 맞춰 둘 대표 라켓 중심 높이 [m].
+pub const READY_RACKET_HEIGHT_M: f64 = 1.050;
+/// 기본 인터셉트 구간 중앙의 준비 타격 y [m].
+pub const READY_RACKET_Y_M: f64 = 0.215;
+/// 공 검출 후 공 높이에서 유지할 임팩트 자세 기준 백스윙 거리 [m].
+pub const DETECTION_WINDUP_DISTANCE_M: f64 = 0.060;
+/// 검출 직후 추가 백스윙의 첫 시도 시간 [s].
+pub const DETECTION_WINDUP_MIN_DURATION_SECS: f64 = 0.120;
 /// 라켓 면 법선 방향의 짧은 임팩트 전진 거리 [m].
 pub const FIXED_IMPACT_PUSH_DISTANCE_M: f64 = 0.050;
 /// 임팩트 순간 목표 라켓 선속도 [m/s].

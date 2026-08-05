@@ -85,6 +85,19 @@ impl Planner {
         return physics::plan_return_to_center(arm, start);
     }
 
+    pub fn ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
+        return physics::plan_ready_prewind(arm, start);
+    }
+
+    pub fn aligned_impact_sequence(
+        arm: &Arm,
+        start: &robot::Pose,
+        ball: crate::Point3,
+        time_to_impact_secs: f64,
+    ) -> Result<physics::AlignedImpactSequence, DomainError> {
+        return physics::plan_aligned_impact_sequence(arm, start, ball, time_to_impact_secs);
+    }
+
     /// 발사기 반복 시험용 짧은 고정 임팩트 푸시.
     pub fn fixed_impact_push(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
         return physics::plan_fixed_impact_push(arm, start);

@@ -291,12 +291,6 @@ impl DirectController {
                 late_by_secs: -remaining_secs,
             });
         }
-        if remaining_secs < crate::defaults::motion::FIXED_IMPACT_MIN_DURATION_SECS {
-            return Err(DirectControlError::InsufficientTime {
-                remaining_secs,
-                required_secs: crate::defaults::motion::FIXED_IMPACT_MIN_DURATION_SECS,
-            });
-        }
         let rail_x = rail_for_racket_head_x(arm, start, target.position.x)?;
         let aim_rad = aim_angle_for_rail(arm, rail_x)?;
         let rail_distance_m = (rail_x - start.rail_x).abs();
@@ -756,6 +750,35 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, DirectControlError::InsufficientTime { .. }));
+    }
+
+    #[test]
+    fn direct_controller_does_not_reserve_fixed_impact_minimum() {
+        let robot = crate::defaults::robot().unwrap();
+        let controller = DirectController::new(0.2, 0.4).unwrap();
+        let rail_x = robot.arm.rail.expect("rail").default_x();
+        let start = Pose::new(rail_x, robot.arm.default_joints.clone());
+        let racket = robot
+            .arm
+            .forward_kinematics_with_rail(start.rail_x, &start.joints)
+            .expect("FK");
+        let target = HitTarget {
+            position: Point3::new(racket.position.x, 0.3, racket.position.z),
+            incoming_velocity: Vector3::zeros(),
+            time_secs: 0.20,
+        };
+
+        let command = controller
+            .command_for_target(
+                &robot.arm,
+                &start,
+                target,
+                PredictionStage::Provisional,
+                0.0,
+            )
+            .expect("0.25초보다 짧아도 레일·조준이 가능하면 허용");
+
+        assert!(command.target.time_secs < crate::defaults::motion::FIXED_IMPACT_MIN_DURATION_SECS);
     }
 
     #[test]

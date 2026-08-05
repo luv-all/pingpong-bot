@@ -117,8 +117,10 @@ pub struct SimWorld {
     /// 시간 안전장치(`MAX_BALL_FLIGHT_SECS`)가 기준으로 삼는다.
     flight_started_at: f64,
     /// 관절 푸시 시작 sim 시각과 공 도착까지 남은 임팩트 시간.
-    direct_strike_at: Option<(f64, f64)>,
-    /// 고정 임팩트 푸시 완료 후 중앙 복귀를 시작할 sim 시각.
+    direct_strike_at: Option<(f64, crate::Point3, f64)>,
+    /// 검출 직후 백스윙이 끝나면 이어서 실행할 공 높이 정렬 임팩트.
+    direct_impact_after_windup: Option<motion::Trajectory>,
+    /// 높이 정렬 임팩트 완료 후 감긴 준비 자세 복귀를 시작할 sim 시각.
     direct_return_at: Option<f64>,
     /// 뷰어·Status용 디버그 스냅샷 (실패 사유·궤적·한계).
     debug_snap: SimDebugSnapshot,
@@ -424,6 +426,7 @@ impl SimWorld {
             last_swing_attempt_at: f64::NEG_INFINITY,
             flight_started_at: 0.0,
             direct_strike_at: None,
+            direct_impact_after_windup: None,
             direct_return_at: None,
             debug_snap: SimDebugSnapshot::default(),
             diag_marker_secs: 0.0,
@@ -433,6 +436,13 @@ impl SimWorld {
             diag_debug_snap_secs: 0.0,
             bang_bang_worker: super::bang_bang_worker::BangBangWorker::new(),
         };
+        let initial = robot::Pose::new(world.robot.rail_x(), world.robot.joints().clone());
+        if let Ok(ready) = motion::Planner::ready_prewind(&world.arm, &initial) {
+            world.robot.snap_to_pose(robot::Pose::new(
+                ready.follow_through_rail_x,
+                ready.follow_through,
+            ));
+        }
         world.sync_shooter_pose(&default_shooter);
         return world;
     }
@@ -592,7 +602,8 @@ impl SimWorld {
         self.robot.step_commands(&self.arm, dt);
         let t_swing = std::time::Instant::now();
         self.try_auto_swing(dt);
-        self.try_direct_fixed_impact();
+        self.try_direct_aligned_impact();
+        self.try_direct_impact_after_windup();
         self.try_direct_return_to_center();
         self.diag_auto_swing_secs = t_swing.elapsed().as_secs_f64();
         self.drive_arm_motors();
@@ -913,7 +924,12 @@ impl SimWorld {
         self.robot
             .set_rail_target_in_secs(&self.arm, command.rail_x, command.duration_secs);
         self.robot.set_targets(targets);
-        self.direct_strike_at = Some((self.sim_time, command.target.time_secs));
+        self.direct_strike_at = Some((
+            self.sim_time,
+            command.target.position,
+            command.target.time_secs,
+        ));
+        self.direct_impact_after_windup = None;
         self.direct_return_at = None;
         info!(
             shot = self.shot_seq,
@@ -930,44 +946,67 @@ impl SimWorld {
         self.position_refined = refined;
     }
 
-    /// 레일·조준과 거의 동시에 관절 푸시를 시작하고 공 도착 시각에 임팩트한다.
-    fn try_direct_fixed_impact(&mut self) {
-        let Some((strike_at, impact_duration_secs)) = self.direct_strike_at else {
+    /// 레일 정렬과 함께 감긴 자세의 높이를 맞추고 공 도착 시각에 임팩트한다.
+    fn try_direct_aligned_impact(&mut self) {
+        let Some((strike_at, ball, impact_duration_secs)) = self.direct_strike_at else {
             return;
         };
         if self.sim_time < strike_at || self.robot.is_swinging() {
             return;
         }
-        let mut push_joints = self.robot.joints().clone();
-        if let (Some(aim), Some(target_aim)) = (
-            push_joints.values.get_mut(DIRECT_AIM_JOINT_INDEX),
-            self.robot.targets().values.get(DIRECT_AIM_JOINT_INDEX),
+        let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
+        match motion::Planner::aligned_impact_sequence(
+            &self.arm,
+            &start,
+            ball,
+            impact_duration_secs,
         ) {
-            *aim = *target_aim;
-        }
-        let start = robot::Pose::new(self.robot.rail_x(), push_joints);
-        match motion::Planner::fixed_impact_push_in(&self.arm, &start, impact_duration_secs) {
-            Ok(trajectory) => {
+            Ok(sequence) => {
                 self.direct_strike_at = None;
-                self.direct_return_at = Some(self.sim_time + trajectory.duration_secs);
-                self.robot.replace_joint_swing(trajectory.clone());
+                self.direct_impact_after_windup = Some(sequence.impact.clone());
+                self.robot.set_rail_target_in_secs(
+                    &self.arm,
+                    sequence.impact_pose.rail_x,
+                    impact_duration_secs,
+                );
+                self.robot.replace_joint_swing(sequence.windup.clone());
                 info!(
                     shot = self.shot_seq,
-                    impact_time_secs = trajectory.impact_time_secs,
-                    duration_secs = trajectory.duration_secs,
-                    impact_joint_velocity = ?trajectory.end_velocity,
-                    "shot: 레일·조준과 관절 임팩트 동시 시작"
+                    windup_duration_secs = sequence.windup.duration_secs,
+                    impact_height_m = ball.z,
+                    normal_error = sequence.normal_error,
+                    "shot: 검출 직후 6cm 감김 유지·높이 정렬 시작"
                 );
             }
             Err(error) => {
                 self.direct_strike_at = None;
                 self.direct_return_at = Some(self.sim_time);
-                warn!(shot = self.shot_seq, %error, "shot: 고정 임팩트 푸시 계획 실패");
+                self.debug_snap.last_fail_text = Some(error.to_string());
+                warn!(shot = self.shot_seq, %error, "shot: 백스윙·높이 정렬 임팩트 계획 실패");
             }
         }
     }
 
-    /// 고정 임팩트 푸시가 끝나면 기존 센터 복귀 궤적을 시작한다.
+    /// 감긴 자세의 높이 정렬이 끝난 직후 공 도착 시각에 맞춘 전진 임팩트를 시작한다.
+    fn try_direct_impact_after_windup(&mut self) {
+        if self.robot.is_swinging() {
+            return;
+        }
+        let Some(impact) = self.direct_impact_after_windup.take() else {
+            return;
+        };
+        self.direct_return_at = Some(self.sim_time + impact.duration_secs);
+        self.robot.replace_joint_swing(impact.clone());
+        info!(
+            shot = self.shot_seq,
+            impact_time_secs = impact.impact_time_secs,
+            duration_secs = impact.duration_secs,
+            impact_joint_velocity = ?impact.end_velocity,
+            "shot: 백스윙 완료 · 공 높이 정렬 임팩트 시작"
+        );
+    }
+
+    /// 높이 정렬 임팩트가 끝나면 감긴 중앙 준비 자세로 복귀한다.
     fn try_direct_return_to_center(&mut self) {
         let Some(return_at) = self.direct_return_at else {
             return;
@@ -976,7 +1015,7 @@ impl SimWorld {
             return;
         }
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        match motion::Planner::return_to_center(&self.arm, &start) {
+        match motion::Planner::ready_prewind(&self.arm, &start) {
             Ok(trajectory) => {
                 self.direct_return_at = None;
                 self.robot.replace_swing(trajectory);
@@ -1163,6 +1202,7 @@ impl SimWorld {
         self.flight_started_at = self.sim_time;
         self.direct_return_at = None;
         self.direct_strike_at = None;
+        self.direct_impact_after_windup = None;
         self.debug_snap.reset_for_new_flight();
         self.try_auto_swing(f64::from(self.integration_parameters.dt));
     }
@@ -2008,7 +2048,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_control_on_shoot_moves_rail() {
+    fn direct_control_on_shoot_moves_rail_to_centered_ball() {
         let arm = test_robot();
         assert!(arm.arm.rail.is_some(), "테스트 arm은 리니어 포함");
         let mut world = SimWorld::new(arm);
@@ -2027,12 +2067,12 @@ mod tests {
         );
         assert!(
             max_displacement > 0.02,
-            "라켓 헤드 x를 공 x에 맞추려 레일이 이동해야 함 (distance={max_displacement})"
+            "0.710m 준비 위치에서 라켓 헤드 x를 중앙 공에 맞추도록 레일이 움직여야 함 (distance={max_displacement})"
         );
     }
 
     #[test]
-    fn direct_control_runs_fixed_impact_before_return() {
+    fn direct_control_runs_aligned_impact_before_return() {
         let mut world = SimWorld::new(test_robot());
         world.set_use_ground_truth(true);
         world.shoot_ball(&launch::Settings::default());
@@ -2050,7 +2090,7 @@ mod tests {
         }
         assert!(
             impact_started,
-            "중앙 복귀 전에 고정 임팩트 푸시가 실행돼야 함"
+            "준비 자세 복귀 전에 높이 정렬 임팩트가 실행돼야 함"
         );
     }
 
@@ -2067,11 +2107,18 @@ mod tests {
         let mut moved = false;
         for _ in 0..2_000 {
             world.step(1.0 / 1000.0, None);
-            if (world.robot().rail_x() - origin.rail_x).abs() > 0.02 {
+            if world
+                .robot()
+                .joints()
+                .values
+                .iter()
+                .zip(origin.joints.values.iter())
+                .any(|(actual, ready)| (actual - ready).abs() > 0.02)
+            {
                 moved = true;
             }
         }
-        assert!(moved, "라켓 헤드를 공 x에 맞추기 위해 레일이 이동해야 함");
+        assert!(moved, "추가 백스윙과 임팩트로 관절이 움직여야 함");
         for _ in 0..5_000 {
             world.step(1.0 / 1000.0, None);
         }
@@ -3209,8 +3256,14 @@ mod tests {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(13);
+        let full_gui_random = std::env::var_os("FULL_GUI_RANDOM").is_some();
         for k in 0..rounds {
-            shots.push((format!("rand{k}"), defaults.randomized_aim(&mut rng)));
+            let settings = if full_gui_random {
+                defaults.randomized(&mut rng)
+            } else {
+                defaults.randomized_aim(&mut rng)
+            };
+            shots.push((format!("rand{k}"), settings));
         }
 
         let (mut committed, mut abandoned, mut neither, mut contacted) = (0, 0, 0, 0);
@@ -3242,6 +3295,17 @@ mod tests {
             }
             if did_contact {
                 contacted += 1;
+            } else {
+                println!(
+                    "  [{label}] 접촉 실패 — lateral={:+.3} yaw={:+.3} speed={:.3} height={:+.3} top={:+.1} side={:+.1} last_fail={:?}",
+                    settings.lateral_offset_m,
+                    settings.yaw_deg,
+                    settings.speed_mps,
+                    settings.height_offset_m,
+                    settings.topspin_rad_s,
+                    settings.sidespin_rad_s,
+                    world.debug_snap.last_fail_text
+                );
             }
             if did_swing {
                 committed += 1;

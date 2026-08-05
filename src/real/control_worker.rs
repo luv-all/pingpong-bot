@@ -1,9 +1,10 @@
-//! 실물 2단계 단순 제어 워커.
+//! 실물 2단계 정렬과 백스윙·임팩트 제어 워커.
 //!
-//! `run`이 워커 시작 전에 레일과 4축 Dynamixel을 기본 자세에 둔다.
+//! `run`이 워커 시작 전에 레일과 4축 Dynamixel을 감긴 준비 자세에 둔다.
 //! 이후 공 하나당 1차·2차 예측을 각각 한 번만 소비한다. 각 예측 위치의 x로
 //! 레일로 라켓 헤드 x를 공 x에 맞추고, 수평 조준축을 상대편 끝선 중앙으로 돌린다.
-//! IK·스윙 계획·팔로스루는 실행하지 않고, 공의 목표 도착 시각 후 중앙으로 복귀한다.
+//! 검출 후 감김을 유지하며 공 높이를 맞추고, 공 도착 시 상대편을 향해 펴지는 임팩트와
+//! 팔로스루를 실행한 뒤 같은 준비 자세로 복귀한다.
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -301,9 +302,33 @@ pub fn spawn(
             if let Some(previous) = pending_verification.take() {
                 log_verification(&previous, &start, "superseded", false);
             }
+            let issued_at = Instant::now();
+            let remaining_until_target_secs = (command.target.time_secs - elapsed).max(0.0);
+            let sequence = match Planner::aligned_impact_sequence(
+                &arm,
+                &start,
+                command.target.position,
+                remaining_until_target_secs,
+            ) {
+                Ok(sequence) => sequence,
+                Err(error) => {
+                    let _ = event_tx.send(RuntimeEvent::Failed {
+                        track_seq: Some(request.track_seq),
+                        reason: format!("높이 정렬 백스윙·임팩트 계획 실패: {error}"),
+                    });
+                    break;
+                }
+            };
+            let windup_aim = sequence
+                .windup
+                .end
+                .values
+                .get(pingpong_bot::robot::control::DIRECT_AIM_JOINT_INDEX)
+                .copied()
+                .unwrap_or(command.aim_rad);
             let applied = match hardware.command_rail_and_racket(
-                command.rail_x,
-                command.aim_rad,
+                sequence.impact_pose.rail_x,
+                windup_aim,
                 command.duration_secs,
             ) {
                 Ok(applied) => applied,
@@ -315,8 +340,28 @@ pub fn spawn(
                     break;
                 }
             };
+            if let Err(error) = hardware.command_joints(&sequence.windup) {
+                let _ = event_tx.send(RuntimeEvent::Failed {
+                    track_seq: Some(request.track_seq),
+                    reason: format!("검출 직후 감긴 자세 높이 정렬 실패: {error}"),
+                });
+                break;
+            }
+            while hardware.is_busy() && !shutdown.is_down() {
+                thread::sleep(BUSY_POLL);
+            }
+            if shutdown.is_down() {
+                break;
+            }
+            if let Err(error) = hardware.command_joints(&sequence.impact) {
+                let _ = event_tx.send(RuntimeEvent::Failed {
+                    track_seq: Some(request.track_seq),
+                    reason: format!("높이 정렬 임팩트 실행 실패: {error}"),
+                });
+                break;
+            }
             latch.mark_sent(request.stage);
-            last_command = Some(Instant::now());
+            last_command = Some(issued_at);
             let _ = event_tx.send(RuntimeEvent::Commanded {
                 track_seq: request.track_seq,
                 stage: request.stage,
@@ -325,43 +370,15 @@ pub fn spawn(
                 aim_rad: applied.aim_rad,
             });
 
-            let issued_at = Instant::now();
-            let remaining_until_target_secs = (command.target.time_secs - elapsed).max(0.0);
-            let mut push_joints = start.joints.clone();
-            if let Some(aim) = push_joints
-                .values
-                .get_mut(pingpong_bot::robot::control::DIRECT_AIM_JOINT_INDEX)
-            {
-                *aim = applied.aim_rad;
-            }
-            let push_start = pingpong_bot::robot::Pose::new(applied.rail_m, push_joints);
-            let trajectory =
-                match Planner::fixed_impact_push_in(&arm, &push_start, remaining_until_target_secs)
-                {
-                    Ok(trajectory) => trajectory,
-                    Err(error) => {
-                        let _ = event_tx.send(RuntimeEvent::Failed {
-                            track_seq: Some(request.track_seq),
-                            reason: format!("동시 고정 임팩트 계획 실패: {error}"),
-                        });
-                        break;
-                    }
-                };
-            if let Err(error) = hardware.command_joints(&trajectory) {
-                let _ = event_tx.send(RuntimeEvent::Failed {
-                    track_seq: Some(request.track_seq),
-                    reason: format!("동시 고정 임팩트 실행 실패: {error}"),
-                });
-                break;
-            }
-            let return_due_at = issued_at + Duration::from_secs_f64(trajectory.duration_secs);
+            let return_due_at =
+                issued_at + Duration::from_secs_f64(sequence.impact.duration_secs);
             state = BallControlState::Struck {
                 track_seq: request.track_seq,
                 return_due_at,
                 measurement: PendingImpactMeasurement {
                     track_seq: request.track_seq,
                     rail_commanded_m: applied.rail_m,
-                    joints_commanded: trajectory.follow_through.clone(),
+                    joints_commanded: sequence.impact.follow_through.clone(),
                 },
             };
             // 한 공은 최대 한 번만 친다 — Idle 복귀 후에도 같은 track_seq는 latch가 영구히 막는다.
@@ -381,17 +398,20 @@ pub fn spawn(
                 prediction_x = f2(command.target.position.x),
                 prediction_y = f2(command.target.position.y),
                 prediction_z = f2(command.target.position.z),
-                rail_requested_m = f4(command.rail_x),
+                rail_requested_m = f4(sequence.impact_pose.rail_x),
                 rail_applied_m = f4(applied.rail_m),
                 rail_sent = applied.rail_sent,
-                aim_requested_rad = f4(command.aim_rad),
+                aim_requested_rad = f4(windup_aim),
                 aim_applied_rad = f4(applied.aim_rad),
                 aim_applied_deg = f2(applied.aim_rad.to_degrees()),
                 duration_secs = f2(command.duration_secs),
-                impact_time_secs = f4(trajectory.impact_time_secs),
-                total_impact_motion_secs = f4(trajectory.duration_secs),
-                impact_joint_velocity = %format!("{:?}", trajectory.end_velocity),
-                "레일·조준과 관절 임팩트 동시 시작"
+                windup_duration_secs = f4(sequence.windup.duration_secs),
+                impact_time_secs = f4(sequence.impact.impact_time_secs),
+                total_impact_motion_secs = f4(sequence.impact.duration_secs),
+                impact_height_m = f4(command.target.position.z),
+                racket_normal_error = f4(sequence.normal_error),
+                impact_joint_velocity = %format!("{:?}", sequence.impact.end_velocity),
+                "감긴 자세 높이 정렬 완료 · 임팩트 시작"
             );
         }
 
@@ -573,15 +593,15 @@ pub(super) fn initialize_pose(
             "시작 자세 초기화 전 실측"
         );
     }
-    let trajectory = Planner::return_to_center(arm, &measured).map_err(MoveError::Plan)?;
+    let trajectory = Planner::ready_prewind(arm, &measured).map_err(MoveError::Plan)?;
+    let ready_joints = trajectory.follow_through.clone();
     hardware.command(&trajectory).map_err(MoveError::Hardware)?;
     while hardware.is_busy() {
         thread::sleep(BUSY_POLL);
     }
     let after = hardware.read_pose().map_err(MoveError::Hardware)?;
     if let Some(rail) = arm.rail {
-        let joint_errors: Vec<f64> = arm
-            .default_joints
+        let joint_errors: Vec<f64> = ready_joints
             .values
             .iter()
             .zip(&after.joints.values)
@@ -591,7 +611,7 @@ pub(super) fn initialize_pose(
             rail_commanded_m = f4(rail.default_x()),
             rail_measured_m = f4(after.rail_x),
             rail_commanded_minus_measured_m = f4(rail.default_x() - after.rail_x),
-            joints_commanded = %format!("{:?}", arm.default_joints.values),
+            joints_commanded = %format!("{:?}", ready_joints.values),
             joints_measured = %format!("{:?}", after.joints.values),
             joints_commanded_minus_measured = %format!("{joint_errors:?}"),
             "시작 자세 초기화 후 실측"
@@ -603,7 +623,7 @@ pub(super) fn initialize_pose(
 /// 시작 자세 초기화와 공 제어 후 복귀에 같은 전체축 이동을 사용한다.
 fn move_to_center(hardware: &mut dyn Hardware, arm: &Arm) -> Result<(), MoveError> {
     let start = hardware.read_pose().map_err(MoveError::Hardware)?;
-    let trajectory = Planner::return_to_center(arm, &start).map_err(MoveError::Plan)?;
+    let trajectory = Planner::ready_prewind(arm, &start).map_err(MoveError::Plan)?;
     hardware.command(&trajectory).map_err(MoveError::Hardware)?;
     while hardware.is_busy() {
         thread::sleep(BUSY_POLL);
@@ -682,9 +702,11 @@ mod tests {
         };
 
         let initialized = initialize_pose(&mut hardware, &robot.arm).expect("initialize");
+        let start = Pose::new(rail.x_min, Joints::from_slice(&[0.0; 4]));
+        let expected = Planner::ready_prewind(&robot.arm, &start).expect("ready prewind");
 
         assert!((initialized.rail_x - rail.default_x()).abs() < 1e-12);
-        assert_eq!(initialized.joints, robot.arm.default_joints);
+        assert_eq!(initialized.joints, expected.follow_through);
     }
 
     #[test]

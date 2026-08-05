@@ -6,8 +6,10 @@ use crate::Point3;
 use crate::constants::table;
 use crate::defaults;
 use crate::defaults::motion::{
+    DETECTION_WINDUP_DISTANCE_M, DETECTION_WINDUP_MIN_DURATION_SECS,
     FIXED_IMPACT_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_DISTANCE_M, FIXED_IMPACT_PUSH_SPEED_M_S,
-    RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
+    READY_PREWIND_DISTANCE_M, READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH,
+    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
@@ -507,6 +509,188 @@ pub fn plan_return_to_center(arm: &Arm, start: &robot::Pose) -> Result<Trajector
         .map(|rail| rail.default_x())
         .unwrap_or(start.rail_x);
     return plan_move_to(arm, start, center_joints, center_rail_x);
+}
+
+/// 공이 없을 때 사용할 살짝 감긴 준비 자세로 이동한다.
+pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
+    let hint_rail_x = arm
+        .rail
+        .as_ref()
+        .map(|rail| rail.default_x())
+        .unwrap_or(start.rail_x);
+    let canonical_target = Point3::new(
+        table::WIDTH_X * 0.5,
+        READY_RACKET_Y_M,
+        READY_RACKET_HEIGHT_M,
+    );
+    let canonical_normal = Vector3::new(0.0, 1.0, 0.0);
+    let hint = robot::Pose::new(hint_rail_x, arm.default_joints.clone());
+    let (canonical_pose, _) = arm
+        .inverse_pose_with_rail_best_normal(
+            canonical_target,
+            canonical_normal,
+            &hint,
+            robot::IkSearch::Global,
+        )
+        .map_err(DomainError::InfeasibleSwing)?;
+    let canonical = arm
+        .forward_kinematics_with_rail(canonical_pose.rail_x, &canonical_pose.joints)
+        .ok_or_else(|| {
+            DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: canonical_target.x,
+                target_y: canonical_target.y,
+                target_z: canonical_target.z,
+            })
+        })?;
+    let target =
+        Point3::from(canonical.position.coords - canonical.normal * READY_PREWIND_DISTANCE_M);
+    let ready_joints = match arm.rail {
+        Some(rail) => arm.inverse_kinematics_with_rail(
+            &rail,
+            hint_rail_x,
+            target,
+            Some(&canonical_pose.joints),
+        ),
+        None => arm.inverse_kinematics_near(target, Some(&canonical_pose.joints)),
+    }
+    .map_err(DomainError::InfeasibleSwing)?;
+    return plan_move_to(arm, start, ready_joints, hint_rail_x);
+}
+
+/// 검출 직후 백스윙과 공 도착 시 임팩트 궤적.
+#[derive(Debug, Clone)]
+pub struct AlignedImpactSequence {
+    pub windup: Trajectory,
+    pub impact: Trajectory,
+    pub impact_pose: robot::Pose,
+    pub normal_error: f64,
+}
+
+/// 공 높이와 상대편 끝선 중앙 조준을 동시에 만족하는 백스윙→임팩트를 만든다.
+pub fn plan_aligned_impact_sequence(
+    arm: &Arm,
+    start: &robot::Pose,
+    ball: Point3,
+    time_to_impact_secs: f64,
+) -> Result<AlignedImpactSequence, DomainError> {
+    let target_normal =
+        Vector3::new(table::WIDTH_X * 0.5 - ball.x, table::LENGTH_Y - ball.y, 0.0).normalize();
+    let hint_rail = arm
+        .rail
+        .as_ref()
+        .map_or(start.rail_x, |rail| rail.clamp_x(ball.x));
+    // 같은 라켓 방향 해가 여러 개일 때 현재 준비 자세와 가까운 팔 모양을 고른다.
+    // 기본 관절값을 힌트로 쓰면 타격 직전에 다른 IK 가지로 넘어가며 팔이 다시
+    // 뒤로 말릴 수 있다.
+    let hint = robot::Pose::new(hint_rail, start.joints.clone());
+    let (impact_pose, normal_error) = arm
+        .inverse_pose_with_rail_best_normal(ball, target_normal, &hint, robot::IkSearch::Global)
+        .map_err(DomainError::InfeasibleSwing)?;
+    let achieved = arm
+        .forward_kinematics_with_rail(impact_pose.rail_x, &impact_pose.joints)
+        .ok_or_else(|| {
+            DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: ball.x,
+                target_y: ball.y,
+                target_z: ball.z,
+            })
+        })?;
+    let windup_target =
+        Point3::from(achieved.position.coords - achieved.normal * DETECTION_WINDUP_DISTANCE_M);
+    let windup_joints = match arm.rail {
+        Some(rail) => arm.inverse_kinematics_with_rail(
+            &rail,
+            impact_pose.rail_x,
+            windup_target,
+            Some(&impact_pose.joints),
+        ),
+        None => arm.inverse_kinematics_near(windup_target, Some(&impact_pose.joints)),
+    }
+    .map_err(DomainError::InfeasibleSwing)?;
+
+    // AXL은 별도 직접 명령으로 병렬 이동하므로 여기서는 관절 백스윙만 계획한다.
+    // 전진 임팩트에 예전 고정 푸시 최소시간(0.25s)을 미리 예약하지 않는다.
+    // 백스윙이 가능한지만 판단하고, 끝난 뒤 공 도착까지 실제로 남은 시간을
+    // 그대로 임팩트 궤적에 사용한다.
+    let max_windup_secs = time_to_impact_secs - defaults::MIN_TIME_TO_GO_SECS;
+    if max_windup_secs < DETECTION_WINDUP_MIN_DURATION_SECS {
+        return Err(DomainError::InfeasibleSwing(
+            SwingPlanError::InsufficientTime {
+                time_to_impact_secs,
+                min_swing_secs: DETECTION_WINDUP_MIN_DURATION_SECS + defaults::MIN_TIME_TO_GO_SECS,
+            },
+        ));
+    }
+    let mut candidate_duration = DETECTION_WINDUP_MIN_DURATION_SECS;
+    let mut windup = None;
+    let mut last_error = None;
+    while candidate_duration <= max_windup_secs + f64::EPSILON {
+        match build_feasible_trajectory(
+            arm,
+            &start.joints,
+            windup_joints.clone(),
+            vec![0.0; start.joints.values.len()],
+            vec![0.0; windup_joints.values.len()],
+            candidate_duration,
+            Rail::fixed(impact_pose.rail_x),
+        ) {
+            Ok(candidate) if candidate.duration_secs <= max_windup_secs + f64::EPSILON => {
+                windup = Some(candidate);
+                break;
+            }
+            Ok(_) => break,
+            Err(error) => last_error = Some(error),
+        }
+        candidate_duration += 0.020;
+    }
+    let windup = windup.ok_or_else(|| {
+        DomainError::InfeasibleSwing(last_error.unwrap_or(SwingPlanError::InsufficientTime {
+            time_to_impact_secs,
+            min_swing_secs: DETECTION_WINDUP_MIN_DURATION_SECS + defaults::MIN_TIME_TO_GO_SECS,
+        }))
+    })?;
+    let impact_duration_secs = time_to_impact_secs - windup.duration_secs;
+    if impact_duration_secs <= defaults::MIN_TIME_TO_GO_SECS {
+        return Err(DomainError::InfeasibleSwing(
+            SwingPlanError::InsufficientTime {
+                time_to_impact_secs,
+                min_swing_secs: windup.duration_secs + defaults::MIN_TIME_TO_GO_SECS,
+            },
+        ));
+    }
+
+    let (_, mut impact_velocity) = arm
+        .linear_velocities_for_racket_velocity(
+            &impact_pose,
+            achieved.normal * FIXED_IMPACT_PUSH_SPEED_M_S,
+        )
+        .map_err(DomainError::InfeasibleSwing)?;
+    let peak = impact_velocity
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max);
+    if peak > arm.max_joint_speed && arm.max_joint_speed > 0.0 {
+        let scale = arm.max_joint_speed / peak;
+        for velocity in &mut impact_velocity {
+            *velocity *= scale;
+        }
+    }
+    let impact = build_feasible_trajectory(
+        arm,
+        &windup_joints,
+        impact_pose.joints.clone(),
+        vec![0.0; windup_joints.values.len()],
+        impact_velocity,
+        impact_duration_secs,
+        Rail::fixed(impact_pose.rail_x),
+    )
+    .map_err(DomainError::InfeasibleSwing)?;
+    return Ok(AlignedImpactSequence {
+        windup,
+        impact,
+        impact_pose,
+        normal_error,
+    });
 }
 
 /// 발사기 반복 시험용 고정 임팩트 푸시.
@@ -1171,6 +1355,77 @@ mod tests {
                 - defaults::ControlParams::default().swing_follow_through_secs)
                 .abs()
                 < 1e-9
+        );
+    }
+
+    #[test]
+    fn aligned_sequence_winds_back_then_hits_ball_height_facing_opponent() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let start = robot::Pose::new(
+            arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+            arm.default_joints.clone(),
+        );
+        let ball = Point3::new(table::WIDTH_X * 0.5, 0.215, 0.95);
+        let sequence =
+            plan_aligned_impact_sequence(arm, &start, ball, 1.0).expect("aligned windup impact");
+        let windup_pose = arm
+            .forward_kinematics_with_rail(sequence.impact_pose.rail_x, &sequence.windup.end)
+            .expect("windup FK");
+        let impact = arm
+            .forward_kinematics_with_rail(sequence.impact_pose.rail_x, &sequence.impact_pose.joints)
+            .expect("impact FK");
+        let toward_opponent =
+            Vector3::new(table::WIDTH_X * 0.5 - ball.x, table::LENGTH_Y - ball.y, 0.0).normalize();
+
+        assert!((impact.position.z - ball.z).abs() < 2e-3);
+        assert!((impact.position.coords - ball.coords).norm() < 2e-3);
+        assert!(impact.normal.dot(&toward_opponent) > 0.90);
+        assert!(
+            (impact.position.coords - windup_pose.position.coords).dot(&impact.normal) > 0.05,
+            "백스윙에서 임팩트까지 상대편 방향으로 펴져야 함"
+        );
+    }
+
+    #[test]
+    fn ready_prewind_starts_near_launcher_height_facing_opponent() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let start = robot::Pose::new(
+            arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+            arm.default_joints.clone(),
+        );
+        let ready = plan_ready_prewind(arm, &start).expect("ready prewind");
+        let racket = arm
+            .forward_kinematics_with_rail(ready.follow_through_rail_x, &ready.follow_through)
+            .expect("ready FK");
+
+        assert!((racket.position.z - READY_RACKET_HEIGHT_M).abs() < 2e-3);
+        assert!(racket.normal.dot(&Vector3::new(0.0, 1.0, 0.0)) > 0.90);
+    }
+
+    #[test]
+    fn aligned_sequence_does_not_reserve_old_quarter_second_impact_minimum() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let initial = robot::Pose::new(
+            arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+            arm.default_joints.clone(),
+        );
+        let ready = plan_ready_prewind(arm, &initial).expect("ready prewind");
+        let start = robot::Pose::new(ready.follow_through_rail_x, ready.follow_through);
+        let ball = Point3::new(
+            table::WIDTH_X * 0.5,
+            READY_RACKET_Y_M,
+            READY_RACKET_HEIGHT_M,
+        );
+
+        let sequence = plan_aligned_impact_sequence(arm, &start, ball, 0.40)
+            .expect("0.25초 임팩트 예약 없이 계획");
+
+        assert!(sequence.impact.impact_time_secs < FIXED_IMPACT_MIN_DURATION_SECS);
+        assert!(
+            (sequence.windup.duration_secs + sequence.impact.impact_time_secs - 0.40).abs() < 1e-9
         );
     }
 
