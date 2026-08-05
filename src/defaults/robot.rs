@@ -84,7 +84,11 @@ pub const RAIL_MAX_SPEED: f64 = 11.25;
 /// 대각을 바꾼다), `robot::tests::default_arm_produces_racket_pose`(재산출 값에서는
 /// 라켓이 베이스보다 아래로 내려온다 — 임팩트 대역에 가까워지므로 정상이지만
 /// 그 단정문이 실패한다), 그리고 `mount_search`로 `mount_y` 재스윕.
-pub const READY_JOINTS_4DOF: [f64; 4] = [0.5067, 0.0, -0.2054, -0.6925];
+/// **2026-08-05 실기 동기화.** 라켓 최하단 15.5 cm·장축 8°가
+/// 실측과 일치한 두 번의 안정 도달값을 평균했다. 예전 계획기 최적화값을
+/// 계속 명령하면 실물은 항상 약 1–2.5° 다른 자세에 멈춰 sim·real
+/// 시작 자세가 어긋났다. 이 값은 기본 자세에서 그 괴리를 없앤다.
+pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
 
 /// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·바닥 기준).
 ///
@@ -524,19 +528,13 @@ mod tests {
     /// 2026-08-05 버니어 실측(손잡이 끝이 로봇 쪽으로 8°)을 라켓
     /// 장착 변환의 회귀 기준으로 고정한다.
     #[test]
-    fn measured_racket_mount_matches_bench_geometry() {
+    fn ready_racket_mount_matches_bench_geometry() {
         let robot = urdf_4dof().expect("4-dof");
         let arm = robot.arm.as_ref();
-        let measured = Joints::from_slice(&[
-            0.5276893910326605,
-            -0.0015339807878856412,
-            -0.16566992509164924,
-            -0.6856894121848816,
-        ]);
         let rail_x = arm.rail.as_ref().map_or(0.705, |rail| rail.default_x());
         let pose = arm
-            .forward_kinematics_with_rail(rail_x, &measured)
-            .expect("measured FK");
+            .forward_kinematics_with_rail(rail_x, &arm.default_joints)
+            .expect("ready FK");
         let [w, x, y, z] = pose.orientation;
         let rotation = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(w, x, y, z));
         let axis_x = rotation * Vector3::x();
