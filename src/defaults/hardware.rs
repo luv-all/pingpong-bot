@@ -51,8 +51,9 @@ impl Default for DynamixelConfig {
             current_limit_max_by_id: vec![(1, 1941), (2, 1941), (3, 1941)],
             profile_acceleration: 0,
             profile_velocity: 0,
-            comm_retries: 5,
-            comm_retry_delay_ms: 20,
+            // 모터 구동 중 노이즈로 발생하는 일시적 timeout/checksum 오류를 흡수한다.
+            comm_retries: 8,
+            comm_retry_delay_ms: 30,
             stream_hz: 200.0,
             joint_signs: vec![-1, -1, 1, 1],
             joint_offsets_rad: vec![0.0; 4],

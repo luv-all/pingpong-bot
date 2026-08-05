@@ -648,19 +648,54 @@ impl DynamixelBus {
             #[cfg(feature = "real")]
             BusBackend::Real(real) => {
                 let ids = self.mapping.config.motor_ids.clone();
-                real.sync_read_with_retry(
+                let address = self.mapping.config.addr_present_position;
+                let retries = self.mapping.config.comm_retries;
+                let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
+                let raw_positions = match real.sync_read_with_retry(
                     &ids,
-                    self.mapping.config.addr_present_position,
+                    address,
                     4,
-                    self.mapping.config.comm_retries,
-                    self.mapping.config.comm_retry_delay_ms,
-                )
-                .map_err(|error| {
-                    read_transport_error(format!(
-                        "Present Position sync_read 실패 (addr={}, ids={ids:?}): {error}",
-                        self.mapping.config.addr_present_position
-                    ))
-                })?
+                    retries,
+                    retry_delay_ms,
+                ) {
+                    Ok(raw) => raw,
+                    Err(group_error) => {
+                        // 전체 SyncRead는 한 ID의 응답만 깨져도 전부 실패한다.
+                        // 모터가 움직일 때의 일시적 Checksum/timeout은 ID별 읽기로
+                        // 격리해 정상 응답 모터까지 함께 버리지 않는다.
+                        warn!(
+                            ids = ?ids,
+                            error = %group_error,
+                            "Present Position 전체 SyncRead 실패 — ID별 읽기로 복구 시도"
+                        );
+                        let mut recovered = Vec::with_capacity(ids.len());
+                        for id in &ids {
+                            let mut one = real
+                                .sync_read_with_retry(
+                                    &[*id],
+                                    address,
+                                    4,
+                                    retries,
+                                    retry_delay_ms,
+                                )
+                                .map_err(|error| {
+                                    read_transport_error(format!(
+                                        "Present Position ID별 sync_read 실패 (addr={address}, id={id}, \
+                                         group_error={group_error}): {error}"
+                                    ))
+                                })?;
+                            let bytes = one.pop().ok_or_else(|| {
+                                read_transport_error(format!(
+                                    "Present Position ID별 sync_read 빈 응답 (addr={address}, id={id})"
+                                ))
+                            })?;
+                            recovered.push(bytes);
+                        }
+                        info!(ids = ?ids, "Present Position ID별 읽기로 통신 복구");
+                        recovered
+                    }
+                };
+                raw_positions
                 .into_iter()
                 .map(|bytes| {
                     let raw: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
