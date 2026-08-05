@@ -57,6 +57,12 @@ impl CommandLatch {
             PredictionStage::Refined => self.refined_sent = true,
         }
     }
+
+    /// 이 공은 이미 쳤다 — 이후 같은 track_seq의 모든 단계를 latch가 영구히 막는다.
+    fn mark_struck(&mut self) {
+        self.provisional_sent = true;
+        self.refined_sent = true;
+    }
 }
 
 /// 임팩트 완주 후 실측 비교용 — 복귀 직전에 로그로 남긴다.
@@ -150,6 +156,9 @@ pub fn spawn(
             });
         }
         let _ = event_tx.send(RuntimeEvent::Ready { pose });
+        let _ = event_tx.send(RuntimeEvent::ControlState {
+            state: ControlStateSnapshot::Idle,
+        });
         info!("2단계 단순 제어 준비 — 라켓 헤드 x 정렬 + 상대편 끝선 조준");
 
         let mut latch = CommandLatch::default();
@@ -345,20 +354,23 @@ pub fn spawn(
                 });
                 break;
             }
+            let return_due_at = issued_at + Duration::from_secs_f64(trajectory.duration_secs);
             state = BallControlState::Struck {
                 track_seq: request.track_seq,
-                return_due_at: issued_at + Duration::from_secs_f64(trajectory.duration_secs),
+                return_due_at,
                 measurement: PendingImpactMeasurement {
                     track_seq: request.track_seq,
                     rail_commanded_m: applied.rail_m,
                     joints_commanded: trajectory.follow_through.clone(),
                 },
             };
+            // 한 공은 최대 한 번만 친다 — Idle 복귀 후에도 같은 track_seq는 latch가 영구히 막는다.
+            latch.mark_struck();
             pending_verification = None;
             let _ = event_tx.send(RuntimeEvent::ControlState {
                 state: ControlStateSnapshot::Struck {
                     track_seq: request.track_seq,
-                    return_due_at: issued_at + Duration::from_secs_f64(trajectory.duration_secs),
+                    return_due_at,
                     rail_commanded_m: applied.rail_m,
                     aim_commanded_rad: applied.aim_rad,
                 },
@@ -694,6 +706,18 @@ mod tests {
         assert!(latch.should_send(1, PredictionStage::Provisional));
         latch.mark_sent(PredictionStage::Provisional);
         assert!(latch.should_send(2, PredictionStage::Provisional));
+    }
+
+    #[test]
+    fn struck_track_is_permanently_blocked_even_after_returning_to_idle() {
+        let mut latch = CommandLatch::default();
+        assert!(latch.should_send(3, PredictionStage::Provisional));
+        latch.mark_sent(PredictionStage::Provisional);
+        latch.mark_struck();
+        assert!(!latch.should_send(3, PredictionStage::Provisional));
+        assert!(!latch.should_send(3, PredictionStage::Refined));
+
+        assert!(latch.should_send(4, PredictionStage::Provisional));
     }
 
     #[test]

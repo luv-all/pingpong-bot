@@ -211,15 +211,19 @@ sim의 직접 제어 경로에서는 호출하지 않는다. 선택적 `--home` 
 - [ ] **`PendingVerification` 경로가 실기 루프에서 도달 불가 — 2026-08-05 확인, 미해결.**
   `pending_verification`은 선언 시 `None`, 명령 직후 재설정 `None` 외에는 실제
   `spawn()` 루프에서 `Some(...)`으로 대입되지 않는다 — 유닛 테스트가 직접
-  구성해 `verify_due_command`를 호출할 때만 그 경로가 실행된다. 즉 아래
+  구성해 `verify_due_command`를 호출할 때만 그 경로가 실행된다. 즉 `src/real/README.md`의
   "제어 괴리 로그"·"제어 워커" 섹션이 완료로 적은 재측정 수렴 판정·3회 연속
   실패 시 중단은 현재 실기에서 발동하지 않는다. 부활·제거 결정은 보류.
   `docs/superpowers/specs/2026-08-05-control-worker-state-machine-design.md` 참고.
-- [ ] **`struck_track_seq`가 `Refined` 단계 명령을 사실상 막는다 — 2026-08-05 확인, 미해결.**
+- [x] **한 공에 스윙은 최대 한 번 — 확정된 의도, 2026-08-05 latch로 명시화.**
   명령이 하나 성공하면 단계와 무관하게 그 `track_seq`의 이후 요청을 전부
-  건너뛴다. `Provisional`이 거의 즉시 도착하므로 `Refined`(0.25초 관측 후)는
-  도착 전에 이미 막힌다 — "공마다 Provisional·Refined를 최대 한 번씩
-  보낸다"는 아래 설명과 어긋난다. 의도한 동작인지 확인 필요.
+  막는다. 리팩터 중 `BallControlState::Idle` 복귀 후 이 차단이 풀리는 틈이
+  잠깐 생겼었는데, `CommandLatch::mark_struck()`을 추가해 latch가
+  track_seq당 영구히 막도록 고쳤다(`src/real/control_worker.rs`).
+  `Provisional`이 거의 즉시 도착하므로 `Refined`(0.25초 관측 후)는 도착
+  전에 이미 막히는 것도 확정된 동작이다 — 사용자 확인: 일단 친 공은 다시
+  스윙하지 않는다(핑퐁에 재시도 없음). `src/real/README.md:14`도 이에
+  맞춰 갱신함.
 
 ---
 
