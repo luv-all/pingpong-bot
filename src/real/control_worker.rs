@@ -59,6 +59,37 @@ impl CommandLatch {
     }
 }
 
+/// 임팩트 완주 후 실측 비교용 — 복귀 직전에 로그로 남긴다.
+struct PendingImpactMeasurement {
+    track_seq: u64,
+    rail_commanded_m: f64,
+    joints_commanded: pingpong_bot::robot::Joints,
+}
+
+/// 현재 공 하나의 처리 상태.
+///
+/// `Struck`의 세 필드는 항상 함께 만들어지고 함께 사라진다 — 예전에는 별도
+/// `Option` 세 개(`struck_track_seq`, `return_due_at`,
+/// `pending_impact_measurement`)로 표현해 그 불변식이 관례로만 유지됐다.
+enum BallControlState {
+    Idle,
+    Struck {
+        track_seq: u64,
+        return_due_at: Instant,
+        measurement: PendingImpactMeasurement,
+    },
+}
+
+impl BallControlState {
+    /// 이 상태가 주어진 `track_seq`의 추가 명령을 막는가.
+    fn blocks(&self, track_seq: u64) -> bool {
+        return matches!(
+            self,
+            BallControlState::Struck { track_seq: struck, .. } if *struck == track_seq
+        );
+    }
+}
+
 struct PendingVerification {
     track_seq: u64,
     command: DirectControlCommand,
@@ -688,5 +719,27 @@ mod tests {
 
         assert_eq!(hardware.reads, 2);
         assert!(pending.is_none());
+    }
+
+    #[test]
+    fn idle_blocks_nothing() {
+        let state = BallControlState::Idle;
+        assert!(!state.blocks(1));
+        assert!(!state.blocks(999));
+    }
+
+    #[test]
+    fn struck_blocks_only_its_own_track() {
+        let state = BallControlState::Struck {
+            track_seq: 5,
+            return_due_at: Instant::now(),
+            measurement: PendingImpactMeasurement {
+                track_seq: 5,
+                rail_commanded_m: 0.30,
+                joints_commanded: Joints::from_slice(&[0.0; 4]),
+            },
+        };
+        assert!(state.blocks(5));
+        assert!(!state.blocks(6));
     }
 }
