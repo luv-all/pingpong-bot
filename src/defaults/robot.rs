@@ -32,7 +32,7 @@ pub const RAIL_MAX_SPEED: f64 = 11.25;
 /// 자세의 도달성이 아니라 *휴지 자세 → 임팩트 자세* 관절공간 이동에
 /// 걸리는 시간이다(2026-07-23 2차 조사, `.omc/research/
 /// known-regressions-realistic-joint-speed.md` §1). 재보정된 관절속도
-/// (~2.88 rad/s, [`DYNAMIXEL_MAX_JOINT_SPEED_RAD_S`]) 아래서 quintic 소요시간은
+/// (~5.18 rad/s, [`DYNAMIXEL_MAX_JOINT_SPEED_RAD_S`]) 아래서 quintic 소요시간은
 /// **가장 많이 움직이는 한 관절**이 결정하므로, 휴지 자세는 "중립적으로
 /// 보이는" 곳이 아니라 *실제로 마주칠 임팩트 자세들까지의 최악 이동거리가
 /// 최소*인 곳이어야 한다.

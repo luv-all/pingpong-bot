@@ -561,8 +561,8 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 /// 함께 푼 뒤 정지→정지 궤적 검사를 통과시킨다. 임팩트 속도와 공 도착 시각은 이
 /// 기초 정렬 모드에서 사용하지 않는다. 공 중심과 라켓 중심을 겹치지 않도록
 /// `공 반지름 + 라켓 반두께` 만큼 법선 반대쪽에 라켓 중심을 둔다.
-/// 공이 닿는 지점은 블레이드 중심보다 3 cm 아래라서, 라켓 중심은
-/// 공 중심보다 3 cm 위로 올린다.
+/// 공이 닿는 지점은 블레이드 중심보다 1.5 cm 아래라서, 라켓 중심은
+/// 공 중심보다 1.5 cm 위로 올린다.
 pub fn plan_ball_alignment(
     arm: &Arm,
     start: &robot::Pose,
@@ -1413,7 +1413,7 @@ mod tests {
     use crate::robot::motion::Prediction;
 
     fn sample_three_dof_arm() -> Arm {
-        // 피처 브랜치가 실기 관절속도(~2.88 rad/s)로 검증한 마운트
+        // 피처 브랜치가 실기 관절속도(~5.18 rad/s)로 검증한 마운트
         // (BASE_Y=-0.02, height=0.05). main의 rail_frame(0.20/0.20)은
         // tools/shot_tune 재튜닝 전까지 시뮬 통합 테스트에서만 쓴다.
         let mount_z = table::SURFACE_Z + 0.05;
@@ -1589,7 +1589,7 @@ mod tests {
                 * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z);
         assert!(
             (contact - ball.coords).norm() < 2e-3,
-            "라켓 중심보다 3cm 아래 접촉점이 공 중심에 닿아야 함: contact={contact:?} ball={:?}",
+            "라켓 중심보다 1.5cm 아래 접촉점이 공 중심에 닿아야 함: contact={contact:?} ball={:?}",
             ball.coords
         );
         assert!(
@@ -1884,7 +1884,7 @@ mod tests {
         // 않으며, (3) 궤적이 토크 한계에 걸려 있음을 검증한다.
         //
         // 관절 속도 상한도 `Arm::competition()`이 `16.0`(근거 없는 리터럴) 대신
-        // 실기 Dynamixel 스펙 기반 `DYNAMIXEL_MAX_JOINT_SPEED_RAD_S`(~2.88 rad/s,
+        // 실기 Dynamixel 스펙 기반 `DYNAMIXEL_MAX_JOINT_SPEED_RAD_S`(~5.18 rad/s,
         // `.omc/research/dynamixel-specs.md`)를 쓰도록 바뀌면서 이 시나리오는
         // 토크뿐 아니라 관절 속도로도 스로틀된다 — 두 제약이 겹쳐 `along`이
         // 이전보다 더 낮아진다(관측값 ≈0.173). 임계값을 그만큼 낮춘다: 여전히

@@ -303,6 +303,7 @@ mod tests {
             dll_path: PathBuf::from("unused.dll"),
             pulses_per_meter: 1000,
             reverse: true,
+            board_zero_domain_m: 0.2,
             x_min_m: 0.0,
             x_max_m: 0.4,
             vel: 0.2,
@@ -316,7 +317,7 @@ mod tests {
         let commanded = rail.move_abs_m(0.25).unwrap();
         assert_eq!(commanded, 0.25);
         assert_eq!(rail.read_x_m().unwrap(), 0.25);
-        // reverse=true이면 AXL 보드 중앙 0이 도메인 중점 0.2에 대응한다.
+        // reverse=true이면 AXL 보드 0이 명시한 도메인 원점 0.2에 대응한다.
         assert_eq!(rail.read_board_x_m().unwrap(), -0.05);
         let commanded = rail.move_rel_m(0.05).unwrap();
         assert_eq!(commanded, 0.3);
