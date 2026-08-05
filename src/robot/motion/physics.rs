@@ -555,11 +555,12 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
     return plan_move_to(arm, start, ready_pose.joints, hint_rail_x);
 }
 
-/// 타격 속도 없이 라켓 중심을 공의 예측 위치에 정렬한다.
+/// 타격 속도 없이 라켓 면 중앙을 공의 예측 위치에 정렬한다.
 ///
 /// 라켓 면 법선은 현재 공 위치에서 상대 네트의 수평 중앙을 향한다. 위치와 방향을
 /// 함께 푼 뒤 정지→정지 궤적 검사를 통과시킨다. 임팩트 속도와 공 도착 시각은 이
-/// 기초 정렬 모드에서 사용하지 않는다.
+/// 기초 정렬 모드에서 사용하지 않는다. 공 중심과 라켓 중심을 겹치지 않도록
+/// `공 반지름 + 라켓 반두께` 만큼 법선 반대쪽에 라켓 중심을 둔다.
 pub fn plan_ball_alignment(
     arm: &Arm,
     start: &robot::Pose,
@@ -575,13 +576,20 @@ pub fn plan_ball_alignment(
     } else {
         Vector3::y()
     };
+    let contact_offset = crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z;
+    let racket_center = Point3::from(ball.coords - target_normal * contact_offset);
     let hint_rail_x = arm
         .rail
         .as_ref()
-        .map_or(start.rail_x, |rail| rail.clamp_x(ball.x));
+        .map_or(start.rail_x, |rail| rail.clamp_x(racket_center.x));
     let hint = robot::Pose::new(hint_rail_x, start.joints.clone());
     let (aligned_pose, _) = arm
-        .inverse_pose_with_rail_best_normal(ball, target_normal, &hint, robot::IkSearch::Global)
+        .inverse_pose_with_rail_best_normal(
+            racket_center,
+            target_normal,
+            &hint,
+            robot::IkSearch::Global,
+        )
         .map_err(DomainError::InfeasibleSwing)?;
     let reached = arm
         .forward_kinematics_with_rail(aligned_pose.rail_x, &aligned_pose.joints)
@@ -1559,7 +1567,6 @@ mod tests {
             )
             .expect("alignment FK");
 
-        assert!((reached.position.coords - ball.coords).norm() < 2e-3);
         let toward_net = Vector3::new(
             table::WIDTH_X * 0.5 - ball.x,
             table::LENGTH_Y * 0.5 - ball.y,
@@ -1570,6 +1577,14 @@ mod tests {
             reached.normal.dot(&toward_net) > 0.90,
             "라켓 면이 상대 네트 중앙을 향해야 함: normal={:?}",
             reached.normal
+        );
+        let contact = reached.position.coords
+            + reached.normal
+                * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z);
+        assert!(
+            (contact - ball.coords).norm() < 2e-3,
+            "라켓 면 중앙 접촉점이 공 중심에 닿아야 함: contact={contact:?} ball={:?}",
+            ball.coords
         );
         assert!(
             alignment

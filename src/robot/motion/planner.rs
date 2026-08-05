@@ -99,7 +99,8 @@ impl Planner {
         return physics::plan_ready_prewind(arm, start);
     }
 
-    /// 타격 없이 라켓 중심을 공 위치에 정지 정렬한다.
+    /// 타격 없이 라켓 면 중앙을 공 위치에 정지 정렬한다.
+    /// 라켓 중심은 공 반지름+라켓 반두께만큼 뒤에 둔다.
     pub fn ball_alignment(
         arm: &Arm,
         start: &robot::Pose,
