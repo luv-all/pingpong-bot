@@ -224,6 +224,23 @@ sim의 직접 제어 경로에서는 호출하지 않는다. 선택적 `--home` 
   전에 이미 막히는 것도 확정된 동작이다 — 사용자 확인: 일단 친 공은 다시
   스윙하지 않는다(핑퐁에 재시도 없음). `src/real/README.md:14`도 이에
   맞춰 갱신함.
+- [ ] **vision control integration — `main`의 새 비전 스택을 제어 경로에 연결.**
+  `main`이 `detector`/`estimator`(재귀 EKF)를 전부 지우고 `vision::Fit`
+  (배치 Gauss-Newton 곡선 피팅) + `vision::Trajectory` 계약으로 새로 짰다
+  (2026-08-05 merge). 지금 `control_worker.rs`·`estimator_worker.rs`는
+  옛 `estimator::Ekf`/`detector::Detector` 스택 위에 그대로 얹혀 있고,
+  이번 merge는 그 스택을 `defaults::estimator`/`defaults::detector`로
+  이름만 분리해 나란히 살려 둔 것 — 통합은 보류했다. 작업 범위:
+  1. `estimator_worker.rs`를 `Ekf` 대신 `vision::Fit`으로 갈아끼운다.
+  2. `CommitRequest`가 나르는 타입을 `estimator::BallTrajectory`에서
+     `vision::Trajectory`로 바꾸고, `robot::control.rs`(`DirectController`,
+     `HitTargetSelector`)의 필드 접근을 거기 맞춘다.
+  3. `PredictionStage::{Provisional, Refined}` 게이팅을 다시 설계한다 —
+     지금은 "관측 구간 길이"(옛 EKF의 점진적 관측 누적)로 판단하는데,
+     `vision::Fit`은 배치 피팅(`Outcome::{Seeded,Accepted,Rejected,Idle}`)이라
+     그대로 옮겨지지 않는다.
+  끝나면 `src/detector/`·`src/estimator/`·`defaults::detector`·
+  `defaults::estimator`를 통째로 지운다.
 
 ---
 
