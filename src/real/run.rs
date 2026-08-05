@@ -14,7 +14,7 @@ use pingpong_bot::hardware::RealHardware;
 use pingpong_bot::hardware::dynamixel::DynamixelConfig;
 use pingpong_bot::hardware::rail::RailConfig;
 use pingpong_bot::robot::motion::InterceptWindow;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::cli::Args;
 
@@ -213,6 +213,7 @@ fn main_loop(
                     outcome.commands_sent += 1;
                     outcome.last = LastState::Commanded;
                 }
+                RuntimeEvent::ControlState { .. } => {}
                 RuntimeEvent::Failed { reason, .. } => {
                     outcome.last = LastState::Failed(reason.clone());
                 }
@@ -413,6 +414,7 @@ fn log_event(event: &RuntimeEvent) {
             aim_deg = f2(aim_rad.to_degrees()),
             "레일·라켓 조준 명령 전송"
         ),
+        RuntimeEvent::ControlState { state } => debug!(?state, "제어 상태 전이"),
         RuntimeEvent::Failed { track_seq, reason } => {
             warn!(track = track_seq, reason, "실기 단순 제어 실패")
         }

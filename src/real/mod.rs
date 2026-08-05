@@ -45,7 +45,7 @@ pub use options::Options;
 pub use paced_source::PacedSource;
 pub use preview::PreviewWindow;
 pub use preview_event::PreviewEvent;
-pub use runtime_event::RuntimeEvent;
+pub use runtime_event::{ControlStateSnapshot, RuntimeEvent};
 pub use shutdown::{Shutdown, ShutdownGuard, shutdown_channel};
 pub use sim_update::{PoseMsg, SimUpdate};
 pub use throttle::Throttle;

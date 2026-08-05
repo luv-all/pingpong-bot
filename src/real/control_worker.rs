@@ -20,7 +20,7 @@ use pingpong_bot::robot::motion::{self, Planner};
 use tracing::{debug, info, info_span, warn};
 
 use super::fmt::{f2, f4};
-use super::{CommitRequest, PoseMsg, RuntimeEvent, Shutdown, SimUpdate};
+use super::{CommitRequest, ControlStateSnapshot, PoseMsg, RuntimeEvent, Shutdown, SimUpdate};
 
 const MAX_REQUEST_AGE_SECS: f64 = 0.050;
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
@@ -232,6 +232,9 @@ pub fn spawn(
                     Err(error) => warn!(%error, "중앙 복귀 후 포즈 읽기 실패"),
                 }
                 state = BallControlState::Idle;
+                let _ = event_tx.send(RuntimeEvent::ControlState {
+                    state: ControlStateSnapshot::Idle,
+                });
             }
             let now = Instant::now();
             let mut timeout = pending_verification
@@ -352,6 +355,14 @@ pub fn spawn(
                 },
             };
             pending_verification = None;
+            let _ = event_tx.send(RuntimeEvent::ControlState {
+                state: ControlStateSnapshot::Struck {
+                    track_seq: request.track_seq,
+                    return_due_at: issued_at + Duration::from_secs_f64(trajectory.duration_secs),
+                    rail_commanded_m: applied.rail_m,
+                    aim_commanded_rad: applied.aim_rad,
+                },
+            });
 
             info!(
                 stage = ?request.stage,

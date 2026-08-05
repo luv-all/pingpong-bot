@@ -1,8 +1,22 @@
 //! 실기 워커가 메인 스레드에 보내는 현재 제어 상태.
 
+use std::time::Instant;
+
 use pingpong_bot::Point3;
 use pingpong_bot::robot;
 use pingpong_bot::robot::control::PredictionStage;
+
+/// 프리뷰 상태 패널이 그릴 현재 공 처리 상태 스냅샷.
+#[derive(Debug, Clone, Copy)]
+pub enum ControlStateSnapshot {
+    Idle,
+    Struck {
+        track_seq: u64,
+        return_due_at: Instant,
+        rail_commanded_m: f64,
+        aim_commanded_rad: f64,
+    },
+}
 
 /// 라켓 헤드·레일 단순 제어 런타임 이벤트.
 pub enum RuntimeEvent {
@@ -22,6 +36,8 @@ pub enum RuntimeEvent {
         rail_x: f64,
         aim_rad: f64,
     },
+    /// 현재 공 처리 상태가 바뀌었다 — 프리뷰 상태 패널이 소비한다.
+    ControlState { state: ControlStateSnapshot },
     /// 하드웨어 오류로 제어 워커가 중단된다.
     Failed {
         track_seq: Option<u64>,
