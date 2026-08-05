@@ -5,6 +5,8 @@ use std::time::Instant;
 use pingpong_bot::Point3;
 use pingpong_bot::robot;
 
+use super::TestZone;
+
 /// 프리뷰 상태 패널이 그릴 현재 공 처리 상태 스냅샷.
 #[derive(Debug, Clone, Copy)]
 pub enum ControlStateSnapshot {
@@ -36,6 +38,9 @@ pub enum RuntimeEvent {
     },
     /// 현재 공 처리 상태가 바뀌었다 — 프리뷰 상태 패널이 소비한다.
     ControlState { state: ControlStateSnapshot },
+    /// 준비 자세 레일 x가 존 선택으로 바뀌었거나, 수동 컨트롤로 재적용됐다.
+    /// 프리뷰 상태 패널이 소비한다.
+    TestZoneChanged { zone: TestZone, home_rail_x: f64 },
     /// 현재 공의 계획 생략 또는 하드웨어 오류. 계획 생략은 다음 공을 계속 처리한다.
     Failed {
         track_seq: Option<u64>,

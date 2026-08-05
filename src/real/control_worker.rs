@@ -19,7 +19,10 @@ use pingpong_bot::vision::State as VisionState;
 use tracing::{debug, info, info_span, warn};
 
 use super::fmt::{f2, f4};
-use super::{CommitRequest, ControlStateSnapshot, PoseMsg, RuntimeEvent, Shutdown, SimUpdate};
+use super::{
+    CommitRequest, ControlStateSnapshot, PoseMsg, RuntimeEvent, Shutdown, SimUpdate, TestControl,
+    TestZone,
+};
 
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
@@ -164,6 +167,7 @@ pub fn spawn(
     mut hardware: Box<dyn Hardware>,
     arm: Arc<Arm>,
     rx: Receiver<CommitRequest>,
+    test_control_rx: Receiver<TestControl>,
     sim_tx: Option<Sender<SimUpdate>>,
     event_tx: Sender<RuntimeEvent>,
     shutdown: Shutdown,
@@ -183,6 +187,8 @@ pub fn spawn(
             }
         };
         let window = motion::InterceptWindow::default();
+        let mut home_rail_x = arm.rail.map(|rail| rail.default_x()).unwrap_or(pose.rail_x);
+        let mut current_zone = TestZone::Center;
 
         if let Some(sim_tx) = &sim_tx {
             let _ = sim_tx.try_send(SimUpdate {
@@ -194,6 +200,10 @@ pub fn spawn(
         let _ = event_tx.send(RuntimeEvent::ControlState {
             state: ControlStateSnapshot::Idle,
         });
+        let _ = event_tx.send(RuntimeEvent::TestZoneChanged {
+            zone: current_zone,
+            home_rail_x,
+        });
         info!("공 위치·방향 정렬 준비 — 스윙 없이 목표 자세로 이동");
 
         let mut latch = CommandLatch::default();
@@ -201,8 +211,59 @@ pub fn spawn(
         let mut pending_verification: Option<PendingVerification> = None;
         let mut state = BallControlState::Idle;
         let mut consecutive_misses: u8 = 0;
+        let mut pending_test_control: Option<TestControl> = None;
 
-        while !shutdown.is_down() {
+        'control: while !shutdown.is_down() {
+            while let Ok(control) = test_control_rx.try_recv() {
+                match control {
+                    TestControl::ResetPosition => {
+                        pending_test_control = None;
+                        if hardware.is_busy() {
+                            hardware.cancel();
+                            while hardware.is_busy() && !shutdown.is_down() {
+                                thread::sleep(BUSY_POLL);
+                            }
+                        }
+                        if shutdown.is_down() {
+                            break 'control;
+                        }
+                        pending_verification = None;
+                        match apply_test_control(
+                            TestControl::ResetPosition,
+                            hardware.as_mut(),
+                            &arm,
+                            &mut home_rail_x,
+                            &mut current_zone,
+                            &mut latch,
+                            &mut state,
+                            sim_tx.as_ref(),
+                            &event_tx,
+                        ) {
+                            Ok(()) => {}
+                            Err(MoveError::Hardware(error)) => {
+                                let _ = event_tx.send(RuntimeEvent::Failed {
+                                    track_seq: latch.track_seq,
+                                    reason: format!("수동 리셋 중 하드웨어 오류: {error}"),
+                                });
+                                break 'control;
+                            }
+                            Err(error @ MoveError::Plan(_))
+                            | Err(error @ MoveError::StartupAlignmentTimeout { .. }) => {
+                                warn!(%error, "수동 리셋 중 준비 자세 계획 실패 — 세션은 유지");
+                                let _ = event_tx.send(RuntimeEvent::Failed {
+                                    track_seq: latch.track_seq,
+                                    reason: format!("수동 리셋 중 준비 자세 계획 실패: {error}"),
+                                });
+                                state = BallControlState::Idle;
+                                let _ = event_tx.send(RuntimeEvent::ControlState {
+                                    state: ControlStateSnapshot::Idle,
+                                });
+                            }
+                        }
+                    }
+                    other => pending_test_control = Some(other),
+                }
+            }
             match verify_due_command(
                 hardware.as_mut(),
                 &mut pending_verification,
@@ -230,7 +291,41 @@ pub fn spawn(
                 }
                 BallControlState::Idle => false,
             };
-            if pending_verification.is_none() && due_for_return && !hardware.is_busy() {
+            let idle_ready = pending_verification.is_none() && !hardware.is_busy();
+            if idle_ready && let Some(control) = pending_test_control.take() {
+                match apply_test_control(
+                    control,
+                    hardware.as_mut(),
+                    &arm,
+                    &mut home_rail_x,
+                    &mut current_zone,
+                    &mut latch,
+                    &mut state,
+                    sim_tx.as_ref(),
+                    &event_tx,
+                ) {
+                    Ok(()) => {}
+                    Err(MoveError::Hardware(error)) => {
+                        let _ = event_tx.send(RuntimeEvent::Failed {
+                            track_seq: latch.track_seq,
+                            reason: format!("테스트 컨트롤 적용 중 하드웨어 오류: {error}"),
+                        });
+                        break;
+                    }
+                    Err(error @ MoveError::Plan(_))
+                    | Err(error @ MoveError::StartupAlignmentTimeout { .. }) => {
+                        warn!(%error, "테스트 컨트롤 적용 중 준비 자세 계획 실패 — 세션은 유지");
+                        let _ = event_tx.send(RuntimeEvent::Failed {
+                            track_seq: latch.track_seq,
+                            reason: format!("테스트 컨트롤 적용 중 준비 자세 계획 실패: {error}"),
+                        });
+                        state = BallControlState::Idle;
+                        let _ = event_tx.send(RuntimeEvent::ControlState {
+                            state: ControlStateSnapshot::Idle,
+                        });
+                    }
+                }
+            } else if idle_ready && due_for_return {
                 if let BallControlState::Aligning { measurement, .. } = &state {
                     match hardware.read_pose() {
                         Ok(measured) => {
@@ -256,7 +351,7 @@ pub fn spawn(
                         Err(error) => warn!(%error, "공 위치·높이 정렬 완료 후 포즈 읽기 실패"),
                     }
                 }
-                if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
+                if let Err(error) = move_to_ready(hardware.as_mut(), &arm, home_rail_x) {
                     let reason = format!("제어 후 중앙 복귀 실패 — 현재 자세 유지: {error}");
                     warn!(%error, "안전한 중앙 복귀 궤적 없음 — 명령하지 않고 다음 공을 기다린다");
                     let fatal_hardware_error = matches!(error, MoveError::Hardware(_));
@@ -609,12 +704,13 @@ fn initialize_pose_attempt(
     }
     // 전원이 꺼진 동안 손으로 팔을 움직였을 수 있다. 현재 자세에서 중립 자세로
     // 곧장 가는 경로가 테이블을 스치면 상승 중간 자세를 거치는 안전 복귀를 쓴다.
-    let trajectories = plan_neutral_return_segments(arm, &measured).map_err(MoveError::Plan)?;
     let ready_joints = arm.default_joints.clone();
     let ready_rail_x = arm
         .rail
         .as_ref()
         .map_or(measured.rail_x, |rail| rail.default_x());
+    let trajectories =
+        plan_neutral_return_segments(arm, &measured, ready_rail_x).map_err(MoveError::Plan)?;
     let mapping = MotorMapping::new(DynamixelConfig::default()).map_err(|error| {
         MoveError::Hardware(HwError::InvalidConfig {
             reason: error.to_string(),
@@ -808,10 +904,11 @@ fn initialize_pose_attempt(
     return Ok(after);
 }
 
-/// 시작 자세 초기화와 공 제어 후 복귀에 같은 전체축 이동을 사용한다.
-fn move_to_center(hardware: &mut dyn Hardware, arm: &Arm) -> Result<(), MoveError> {
+/// 시작 자세 초기화와 공 제어 후 복귀·수동 테스트 컨트롤이 같은 전체축 이동을 쓴다.
+fn move_to_ready(hardware: &mut dyn Hardware, arm: &Arm, rail_x: f64) -> Result<(), MoveError> {
     let start = hardware.read_pose().map_err(MoveError::Hardware)?;
-    let trajectories = plan_neutral_return_segments(arm, &start).map_err(MoveError::Plan)?;
+    let trajectories =
+        plan_neutral_return_segments(arm, &start, rail_x).map_err(MoveError::Plan)?;
     if trajectories.len() > 1 {
         info!(
             segments = trajectories.len(),
@@ -827,13 +924,62 @@ fn move_to_center(hardware: &mut dyn Hardware, arm: &Arm) -> Result<(), MoveErro
     return Ok(());
 }
 
+/// 존 변경(있다면) → 준비 자세 이동 → latch·상태 초기화 → 이벤트 발행까지 한 번에 한다.
+/// `Wait`/`SetZone`은 idle일 때만 호출부가 부르고, `ResetPosition`은 즉시 부른다.
+fn apply_test_control(
+    control: TestControl,
+    hardware: &mut dyn Hardware,
+    arm: &Arm,
+    home_rail_x: &mut f64,
+    current_zone: &mut TestZone,
+    latch: &mut CommandLatch,
+    state: &mut BallControlState,
+    sim_tx: Option<&Sender<SimUpdate>>,
+    event_tx: &Sender<RuntimeEvent>,
+) -> Result<(), MoveError> {
+    if let TestControl::SetZone(zone) = control
+        && let Some(rail) = arm.rail
+    {
+        *current_zone = zone;
+        *home_rail_x = zone.rail_x(rail);
+    }
+    move_to_ready(hardware, arm, *home_rail_x)?;
+    *latch = CommandLatch::default();
+    *state = BallControlState::Idle;
+    if let Ok(pose) = hardware.read_pose()
+        && let Some(sim_tx) = sim_tx
+    {
+        let _ = sim_tx.try_send(SimUpdate {
+            pose: Some(PoseMsg::from(&pose)),
+            ..SimUpdate::default()
+        });
+    }
+    info!(
+        control = ?control,
+        zone = ?current_zone,
+        home_rail_x = f4(*home_rail_x),
+        "테스트 컨트롤 적용 — 준비 자세 복귀"
+    );
+    let _ = event_tx.send(RuntimeEvent::ControlState {
+        state: ControlStateSnapshot::Idle,
+    });
+    let _ = event_tx.send(RuntimeEvent::TestZoneChanged {
+        zone: *current_zone,
+        home_rail_x: *home_rail_x,
+    });
+    return Ok(());
+}
+
 /// 직접 복귀가 테이블을 스치면 안전한 상승 중간 자세를 거치는 2구간을 찾는다.
-/// 모든 구간은 실행 전에 속도·토크·테이블 충돌 검사를 통과해야 한다.
+/// 모든 구간은 실행 전에 속도·토크·테이블 충돌 검사를 통과해야 한다. 목표
+/// 레일 x는 호출측이 고른다 — 시작 자세 초기화는 항상 `rail.default_x()`를,
+/// 수동 테스트 컨트롤은 존 선택에 따른 값을 넘긴다.
 fn plan_neutral_return_segments(
     arm: &Arm,
     start: &pingpong_bot::robot::Pose,
+    rail_x: f64,
 ) -> Result<Vec<pingpong_bot::robot::motion::Trajectory>, DomainError> {
-    match Planner::return_to_center(arm, start) {
+    match Planner::return_to_center_at(arm, start, rail_x) {
         Ok(direct) => return Ok(vec![direct]),
         Err(error) => {
             if !matches!(
@@ -890,7 +1036,7 @@ fn plan_neutral_return_segments(
         };
         let lifted_pose =
             pingpong_bot::robot::Pose::new(lift.follow_through_rail_x, lift.follow_through.clone());
-        match Planner::return_to_center(arm, &lifted_pose) {
+        match Planner::return_to_center_at(arm, &lifted_pose, rail_x) {
             Ok(ready) => return Ok(vec![lift, ready]),
             Err(error) => last_error = Some(error),
         }
@@ -1031,13 +1177,14 @@ mod tests {
     #[test]
     fn logged_follow_through_pose_has_a_safe_ready_return() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
         // 2026-08-05 실기 로그에서 직접 복귀가 테이블을 2mm 관통했던 실측 자세.
         let start = Pose::new(
             1.258_578,
             Joints::from_slice(&[1.264_000_169, -0.423_378_697, 0.115_048_559, -0.550_699_103]),
         );
 
-        let segments = plan_neutral_return_segments(&robot.arm, &start)
+        let segments = plan_neutral_return_segments(&robot.arm, &start, rail.default_x())
             .expect("직접 또는 상승 중간 자세를 거쳐 안전하게 복귀");
         assert!(!segments.is_empty());
         assert!(segments.len() <= 2);
@@ -1151,5 +1298,93 @@ mod tests {
         };
         assert!(state.blocks(5));
         assert!(!state.blocks(6));
+    }
+
+    #[test]
+    fn apply_test_control_set_zone_moves_home_clears_latch_and_emits_zone_event() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let mut hardware = PoseApplyingHardware {
+            pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
+        };
+        let mut latch = CommandLatch::default();
+        latch.should_send(9);
+        latch.mark_finished();
+        let mut state = BallControlState::Aligning {
+            track_seq: 9,
+            return_due_at: Instant::now(),
+            measurement: PendingAlignmentMeasurement {
+                track_seq: 9,
+                rail_commanded_m: rail.default_x(),
+                joints_commanded: robot.arm.default_joints.clone(),
+            },
+        };
+        let mut home_rail_x = rail.default_x();
+        let mut current_zone = TestZone::Center;
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+
+        apply_test_control(
+            TestControl::SetZone(TestZone::Left),
+            &mut hardware,
+            &robot.arm,
+            &mut home_rail_x,
+            &mut current_zone,
+            &mut latch,
+            &mut state,
+            None,
+            &event_tx,
+        )
+        .expect("apply set zone");
+
+        assert_eq!(current_zone, TestZone::Left);
+        assert!((home_rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-9);
+        assert!(matches!(state, BallControlState::Idle));
+        assert!(latch.should_send(9));
+        assert!((hardware.pose.rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-6);
+
+        let events: Vec<_> = event_rx.try_iter().collect();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::ControlState {
+                state: ControlStateSnapshot::Idle
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::TestZoneChanged {
+                zone: TestZone::Left,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn apply_test_control_wait_keeps_current_zone() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let mut hardware = PoseApplyingHardware {
+            pose: Pose::new(rail.x_max, robot.arm.default_joints.clone()),
+        };
+        let mut latch = CommandLatch::default();
+        let mut state = BallControlState::Idle;
+        let mut home_rail_x = rail.x_max;
+        let mut current_zone = TestZone::Right;
+        let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+
+        apply_test_control(
+            TestControl::Wait,
+            &mut hardware,
+            &robot.arm,
+            &mut home_rail_x,
+            &mut current_zone,
+            &mut latch,
+            &mut state,
+            None,
+            &event_tx,
+        )
+        .expect("apply wait");
+
+        assert_eq!(current_zone, TestZone::Right);
+        assert!((home_rail_x - rail.x_max).abs() < 1e-9);
     }
 }

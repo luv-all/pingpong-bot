@@ -67,6 +67,8 @@ pub fn run(args: &Args) -> Result<()> {
     let (commit_tx, commit_rx) = bounded(1);
     let commit_evict_rx = commit_rx.clone();
     let (event_tx, event_rx) = unbounded();
+    // Task 4가 실제 키 입력으로 채운다 — 지금은 컴파일 유지용.
+    let (_test_control_tx, test_control_rx) = unbounded();
     let (preview_tx, preview_rx) = if options.preview {
         let (tx, rx) = bounded(PREVIEW_CAPACITY);
         (Some(tx), Some(rx))
@@ -116,6 +118,7 @@ pub fn run(args: &Args) -> Result<()> {
         Box::new(hardware),
         Arc::clone(&arm),
         commit_rx,
+        test_control_rx,
         sim_tx,
         event_tx,
         shutdown,
@@ -215,6 +218,7 @@ fn main_loop(
                         preview.set_control_state(*state);
                     }
                 }
+                RuntimeEvent::TestZoneChanged { .. } => {}
                 RuntimeEvent::Failed { reason, .. } => {
                     outcome.last = LastState::Failed(reason.clone());
                 }
@@ -413,6 +417,7 @@ fn log_event(event: &RuntimeEvent) {
             "레일·라켓 조준 명령 전송"
         ),
         RuntimeEvent::ControlState { state } => debug!(?state, "제어 상태 전이"),
+        RuntimeEvent::TestZoneChanged { .. } => {}
         RuntimeEvent::Failed { track_seq, reason } => {
             warn!(track = track_seq, reason, "실기 단순 제어 실패")
         }
