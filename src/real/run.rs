@@ -5,8 +5,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
-use crossbeam_channel::{Receiver, bounded, unbounded};
-use pingpong_bot::camera::{Calibration, CamCliArgs, CamStreamArgs, StereoOfflineArgs};
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+use pingpong_bot::camera::{Calibration, CamCliArgs, CamStreamArgs, PreviewAction, StereoOfflineArgs};
 use pingpong_bot::defaults::vision::detector_for;
 use pingpong_bot::defaults::{self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, robot};
 use pingpong_bot::hardware::RealHardware;
@@ -20,8 +20,8 @@ use super::camera_worker::{self, CameraStats};
 use super::estimator_worker::{self, EstimatorStats};
 use super::fmt::{f2, f2_slice};
 use super::{
-    Options, PacedSource, PreviewEvent, PreviewWindow, RuntimeEvent, ShutdownGuard, control_worker,
-    shutdown_channel, sim_host,
+    Options, PacedSource, PreviewEvent, PreviewWindow, RuntimeEvent, ShutdownGuard, TestControl,
+    control_worker, shutdown_channel, sim_host,
 };
 
 /// 카메라 → 추정 버퍼. 실시간이라 크게 잡을 이유가 없다 (밀리면 어차피 버린다).
@@ -67,8 +67,7 @@ pub fn run(args: &Args) -> Result<()> {
     let (commit_tx, commit_rx) = bounded(1);
     let commit_evict_rx = commit_rx.clone();
     let (event_tx, event_rx) = unbounded();
-    // Task 4가 실제 키 입력으로 채운다 — 지금은 컴파일 유지용.
-    let (_test_control_tx, test_control_rx) = unbounded();
+    let (test_control_tx, test_control_rx) = unbounded();
     let (preview_tx, preview_rx) = if options.preview {
         let (tx, rx) = bounded(PREVIEW_CAPACITY);
         (Some(tx), Some(rx))
@@ -124,7 +123,7 @@ pub fn run(args: &Args) -> Result<()> {
         shutdown,
     );
 
-    let outcome = main_loop(&options, &event_rx, preview_rx, guard);
+    let outcome = main_loop(&options, &event_rx, preview_rx, test_control_tx, guard);
 
     let camera_stats: Vec<CameraStats> = camera_handles
         .drain(..)
@@ -178,6 +177,7 @@ fn main_loop(
     options: &Options,
     event_rx: &Receiver<RuntimeEvent>,
     preview_rx: Option<Receiver<PreviewEvent>>,
+    test_control_tx: Sender<TestControl>,
     guard: ShutdownGuard,
 ) -> Outcome {
     let mut preview = options.preview.then(|| PreviewWindow::new("real shot"));
@@ -218,7 +218,11 @@ fn main_loop(
                         preview.set_control_state(*state);
                     }
                 }
-                RuntimeEvent::TestZoneChanged { .. } => {}
+                RuntimeEvent::TestZoneChanged { zone, home_rail_x } => {
+                    if let Some(preview) = &mut preview {
+                        preview.set_zone(*zone, *home_rail_x);
+                    }
+                }
                 RuntimeEvent::Failed { reason, .. } => {
                     outcome.last = LastState::Failed(reason.clone());
                 }
@@ -249,9 +253,17 @@ fn main_loop(
                         preview.push(event);
                     }
                 }
-                if preview.show() {
-                    outcome.last = LastState::Quit;
-                    break outcome;
+                match preview.show() {
+                    PreviewAction::Quit => {
+                        outcome.last = LastState::Quit;
+                        break outcome;
+                    }
+                    PreviewAction::Key(key) => {
+                        if let Some(control) = TestControl::from_key(key) {
+                            let _ = test_control_tx.send(control);
+                        }
+                    }
+                    PreviewAction::Continue => {}
                 }
             }
             None => {
@@ -417,7 +429,11 @@ fn log_event(event: &RuntimeEvent) {
             "레일·라켓 조준 명령 전송"
         ),
         RuntimeEvent::ControlState { state } => debug!(?state, "제어 상태 전이"),
-        RuntimeEvent::TestZoneChanged { .. } => {}
+        RuntimeEvent::TestZoneChanged { zone, home_rail_x } => info!(
+            ?zone,
+            home_rail_x = f2(*home_rail_x),
+            "테스트 존 변경 — 준비 자세 레일 x 갱신"
+        ),
         RuntimeEvent::Failed { track_seq, reason } => {
             warn!(track = track_seq, reason, "실기 단순 제어 실패")
         }
