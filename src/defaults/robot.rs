@@ -105,7 +105,7 @@ pub const READY_JOINTS_4DOF: [f64; 4] = [0.5067, 0.0, -0.2054, -0.6925];
 /// [`READY_JOINTS_4DOF`]를 확정하는 것이 순서다.
 pub fn rail_frame() -> RailFrame {
     return RailFrame {
-        mount_y: -0.10,
+        mount_y: -0.128,
         rail_bottom_z: 0.88,
     };
 }
