@@ -1,4 +1,4 @@
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::HwError;
 use crate::robot::Joints;
@@ -196,6 +196,105 @@ impl DynamixelBus {
         }
         self.torque_enabled = enabled;
         Ok(())
+    }
+
+    /// Goal/Present Position과 Torque Enable, Hardware Error Status를 ID별로 기록한다.
+    ///
+    /// SyncWrite 성공은 패킷을 보냈다는 뜻일 뿐 모터가 토크를 유지한다는 뜻은 아니다.
+    /// 특히 토크가 켜진 팔을 손으로 밀면 overload shutdown으로 Goal은 갱신돼도
+    /// Present가 따라오지 않을 수 있어 시작 자세 실패 시 이 네 값을 같이 봐야 한다.
+    pub fn log_joint_diagnostics(&mut self) {
+        match &mut self.backend {
+            BusBackend::DryRun { ticks, .. } => {
+                debug!(present_ticks = ?ticks, "Dynamixel dry-run 관절 진단");
+            }
+            #[cfg(feature = "real")]
+            BusBackend::Real(real) => {
+                const HARDWARE_ERROR_STATUS_ADDRESS: u8 = 70;
+                let config = self.mapping.config.clone();
+                let ids = config.bus_ids();
+                let torque = read_u8s(real, &ids, config.addr_torque_enable, &config);
+                let errors = read_u8s(real, &ids, HARDWARE_ERROR_STATUS_ADDRESS, &config);
+                let goals = read_u32s(real, &ids, config.addr_goal_position, &config);
+                let present = read_u32s(real, &ids, config.addr_present_position, &config);
+                let (Some(torque), Some(errors), Some(goals), Some(present)) =
+                    (torque, errors, goals, present)
+                else {
+                    warn!(ids = ?ids, "Dynamixel 관절 상태 진단 읽기 실패");
+                    return;
+                };
+                for index in 0..ids.len() {
+                    let id = ids[index];
+                    let error = errors[index];
+                    let goal_tick = goals[index];
+                    let present_tick = present[index];
+                    let tick_error = i64::from(goal_tick) - i64::from(present_tick);
+                    if torque[index] == 0 || error != 0 || tick_error.abs() > 20 {
+                        warn!(
+                            id,
+                            torque_enabled = torque[index],
+                            hardware_error_status = error,
+                            hardware_error = hardware_error_labels(error),
+                            goal_tick,
+                            present_tick,
+                            goal_minus_present_tick = tick_error,
+                            "Dynamixel 관절 이상 진단"
+                        );
+                    } else {
+                        info!(
+                            id,
+                            torque_enabled = torque[index],
+                            hardware_error_status = error,
+                            goal_tick,
+                            present_tick,
+                            goal_minus_present_tick = tick_error,
+                            "Dynamixel 관절 정상 진단"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// 시작 자세가 수렴하지 않을 때 토크 차단·오류·큰 위치 괴리가 있는 모터를
+    /// 재부팅하고 현재 위치에서 토크를 다시 건다. 호출측이 이후 목표를 재전송한다.
+    pub fn recover_joint_control(&mut self) -> Result<bool, HwError> {
+        match &mut self.backend {
+            BusBackend::DryRun { .. } => return Ok(false),
+            #[cfg(feature = "real")]
+            BusBackend::Real(real) => {
+                const HARDWARE_ERROR_STATUS_ADDRESS: u8 = 70;
+                let config = self.mapping.config.clone();
+                let ids = config.bus_ids();
+                let torque = read_u8s(real, &ids, config.addr_torque_enable, &config)
+                    .ok_or_else(|| read_transport_error("Torque Enable 진단 읽기 실패"))?;
+                let errors = read_u8s(real, &ids, HARDWARE_ERROR_STATUS_ADDRESS, &config)
+                    .ok_or_else(|| read_transport_error("Hardware Error Status 읽기 실패"))?;
+                let recover_ids: Vec<u8> = ids
+                    .iter()
+                    .enumerate()
+                    // 큰 위치 오차만으로 재부팅하지 않는다. 토크가 살아 있는데 안
+                    // 움직이는 경우는 기계 걸림일 수 있어 재시도가 위험하다.
+                    .filter(|(index, _)| torque[*index] == 0 || errors[*index] != 0)
+                    .map(|(_, id)| *id)
+                    .collect();
+                if recover_ids.is_empty() {
+                    return Ok(false);
+                }
+                warn!(ids = ?recover_ids, "Dynamixel 시작 자세 자동 복구 — 모터 재부팅");
+                for id in &recover_ids {
+                    real.reboot_with_retry(*id, config.comm_retries, config.comm_retry_delay_ms)
+                        .map_err(|error| {
+                            read_transport_error(format!("Dynamixel ID {id} reboot 실패: {error}"))
+                        })?;
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            }
+        }
+        // reboot 뒤 Torque Enable은 0이다. Present를 Goal로 먼저 복사한 뒤 토크를
+        // 켜므로 갑자기 예전 Goal로 튀지 않는다.
+        self.enable_torque(true)?;
+        return Ok(true);
     }
 
     /// Python `set_joint_positions`.
@@ -658,4 +757,49 @@ fn read_u16s(
             Some(u16::from_le_bytes(pair))
         })
         .collect();
+}
+
+#[cfg(feature = "real")]
+fn read_u32s(
+    real: &mut RealBackend,
+    ids: &[u8],
+    address: u8,
+    config: &DynamixelConfig,
+) -> Option<Vec<u32>> {
+    let raw = real
+        .sync_read_with_retry(
+            ids,
+            address,
+            4,
+            config.comm_retries,
+            config.comm_retry_delay_ms,
+        )
+        .ok()?;
+    return raw
+        .into_iter()
+        .map(|bytes| {
+            let value: [u8; 4] = bytes.as_slice().try_into().ok()?;
+            Some(u32::from_le_bytes(value))
+        })
+        .collect();
+}
+
+#[cfg(feature = "real")]
+fn hardware_error_labels(status: u8) -> &'static str {
+    if status & (1 << 5) != 0 {
+        return "overload";
+    }
+    if status & (1 << 4) != 0 {
+        return "electrical_shock";
+    }
+    if status & (1 << 3) != 0 {
+        return "motor_encoder";
+    }
+    if status & (1 << 2) != 0 {
+        return "overheating";
+    }
+    if status & 1 != 0 {
+        return "input_voltage";
+    }
+    return "none";
 }

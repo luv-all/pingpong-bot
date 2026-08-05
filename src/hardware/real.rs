@@ -280,6 +280,23 @@ impl Hardware for RealHardware {
         return self.busy.load(Ordering::Acquire);
     }
 
+    fn log_joint_diagnostics(&mut self) {
+        match self.bus.lock() {
+            Ok(mut bus) => bus.log_joint_diagnostics(),
+            Err(_) => error!("Dynamixel 진단 실패 — bus mutex poisoned"),
+        }
+    }
+
+    fn recover_joint_control(&mut self) -> Result<bool, HwError> {
+        return self
+            .bus
+            .lock()
+            .map_err(|_| HwError::ReadFailed {
+                reason: "Dynamixel 복구 실패 — bus mutex poisoned".into(),
+            })?
+            .recover_joint_control();
+    }
+
     fn cancel(&mut self) {
         // executor 루프가 매 틱 이 플래그를 보고 빠져나오며 `busy`를 내린다.
         // `Drop`이 쓰는 것과 같은 경로다.

@@ -39,6 +39,17 @@ impl RealBackend {
         })
     }
 
+    pub(super) fn reboot_with_retry(
+        &mut self,
+        id: u8,
+        retries: u32,
+        retry_delay_ms: u64,
+    ) -> Result<(), String> {
+        self.run_with_retry(retries, retry_delay_ms, "reboot", |protocol, port| {
+            protocol.reboot(port, id).map(|_| ())
+        })
+    }
+
     fn run_with_retry<T>(
         &mut self,
         retries: u32,

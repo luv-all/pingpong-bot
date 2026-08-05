@@ -41,6 +41,16 @@ pub trait Hardware: Send {
         return false;
     }
 
+    /// 실기 모터의 Goal/Present/Torque/Error 상태를 로그로 남긴다.
+    /// 시뮬레이션 하드웨어는 할 일이 없다.
+    fn log_joint_diagnostics(&mut self) {}
+
+    /// 토크 차단·하드웨어 오류가 난 관절을 한 번 복구한다.
+    /// 실제로 복구를 시도했으면 `true`, 대상이 없으면 `false`다.
+    fn recover_joint_control(&mut self) -> Result<bool, HwError> {
+        return Ok(false);
+    }
+
     /// 실행 중인 궤적을 중단한다. 완료까지 기다리지 않는다.
     ///
     /// 진행 중인 전체축 궤적을 새 제어가 선점할 때 사용한다.

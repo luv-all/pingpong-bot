@@ -547,6 +547,14 @@ pub(super) fn initialize_pose(
     hardware: &mut dyn Hardware,
     arm: &Arm,
 ) -> Result<pingpong_bot::robot::Pose, MoveError> {
+    return initialize_pose_attempt(hardware, arm, true);
+}
+
+fn initialize_pose_attempt(
+    hardware: &mut dyn Hardware,
+    arm: &Arm,
+    allow_motor_recovery: bool,
+) -> Result<pingpong_bot::robot::Pose, MoveError> {
     let measured = hardware.read_pose().map_err(MoveError::Hardware)?;
     if let Some(rail) = arm.rail {
         info!(
@@ -625,6 +633,7 @@ pub(super) fn initialize_pose(
             stable_samples = 0;
         }
         if Instant::now() >= settle_deadline {
+            hardware.log_joint_diagnostics();
             let joint_errors: Vec<f64> = ready_joints
                 .values
                 .iter()
@@ -640,6 +649,19 @@ pub(super) fn initialize_pose(
                 joints_commanded_minus_measured = %format!("{joint_errors:?}"),
                 "시작 팔 자세 실측 수렴 실패 — 관절 부호·영점 보정 필요"
             );
+            if allow_motor_recovery {
+                match hardware.recover_joint_control() {
+                    Ok(true) => {
+                        info!("Dynamixel 자동 복구 완료 — 시작 팔 자세를 한 번 다시 명령");
+                        thread::sleep(Duration::from_millis(300));
+                        return initialize_pose_attempt(hardware, arm, false);
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        warn!(%error, "Dynamixel 자동 복구 실패");
+                    }
+                }
+            }
             return Err(MoveError::StartupAlignmentTimeout {
                 max_joint_error_rad,
             });
