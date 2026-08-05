@@ -6,18 +6,19 @@ use crate::hardware::rail::RailConfig;
 use super::motion::RAIL_ACCEL_M_S2;
 
 /// 실기 좌측 안전 마진 [m].
-pub const RAIL_END_MARGIN_M: f64 = 0.0705;
-/// 1.41 m 기준 좌측 마진 비율(5%).
+pub const RAIL_LEFT_END_MARGIN_M: f64 = 0.0100;
+/// 실기 우측 안전 마진 [m].
+pub const RAIL_RIGHT_END_MARGIN_M: f64 = 0.0705;
+/// 1.41 m 기준 우측 마진 비율(5%).
 pub const RAIL_ZONE_SAFETY_MARGIN_RATIO: f64 = 0.05;
 /// 실기에서 확인한 레일 좌표 범위 [m].
 pub const RAIL_PHYSICAL_X_MIN_M: f64 = 0.0;
 pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
-/// sim·real 공통 이동 범위 [m]. 좌측은 0.0705 m 마진을 두고,
-/// 우측 1.41 m는 이미 확인된 안전 상한이라 추가로 줄이지 않는다.
-pub const RAIL_X_MIN_M: f64 = RAIL_END_MARGIN_M;
-pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M;
+/// sim·real 공통 이동 범위 [m].
+pub const RAIL_X_MIN_M: f64 = RAIL_PHYSICAL_X_MIN_M + RAIL_LEFT_END_MARGIN_M;
+pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_RIGHT_END_MARGIN_M;
 /// 탁구대 실측 중앙 보정 위치 [m].
-pub const RAIL_READY_X_M: f64 = 0.7400;
+pub const RAIL_READY_X_M: f64 = 0.6750;
 
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.

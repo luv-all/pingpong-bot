@@ -39,7 +39,7 @@ CommitRequest {
 
 ## 시작·복귀 자세
 
-- 레일: 실기 안전 범위 `0.0705~1.4100m`, 준비 위치는 탁구대 실측 중앙 보정값 `RAIL_READY_X_M = 0.740m`
+- 레일: 실기 안전 범위 `0.0100~1.3395m`, 준비 위치는 탁구대 실측 중앙 보정값 `RAIL_READY_X_M = 0.675m`
 - 관절: `READY_JOINTS_4DOF`
 
 기존 감긴 `ready_prewind` 자세는 활성 real·GUI sim 경로에서 사용하지 않는다.
