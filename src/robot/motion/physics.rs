@@ -622,6 +622,41 @@ pub fn plan_ball_alignment(
     return plan_move_to(arm, start, aligned_pose.joints, aligned_pose.rail_x);
 }
 
+/// [`plan_ball_alignment`]과 같은 접촉 위치·방향을 계산하되 레일은 현재 위치에 고정한다.
+pub fn plan_ball_alignment_fixed_rail(
+    arm: &Arm,
+    start: &robot::Pose,
+    ball: Point3,
+) -> Result<Trajectory, DomainError> {
+    let corrected_ball = Point3::new(ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M, ball.y, ball.z);
+    let toward_net = Vector3::new(
+        table::WIDTH_X * 0.5 - corrected_ball.x,
+        table::LENGTH_Y * 0.5 - corrected_ball.y,
+        0.0,
+    );
+    let target_normal = if toward_net.norm_squared() > 1e-12 {
+        toward_net.normalize()
+    } else {
+        Vector3::y()
+    };
+    let contact_offset = crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z;
+    let racket_center = Point3::from(
+        corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
+            - target_normal * contact_offset,
+    );
+    let hint = robot::Pose::new(start.rail_x, start.joints.clone());
+    let (aligned_pose, _) = arm
+        .inverse_pose_at_fixed_rail_best_normal(
+            start.rail_x,
+            racket_center,
+            target_normal,
+            &hint,
+            robot::IkSearch::Global,
+        )
+        .map_err(DomainError::InfeasibleSwing)?;
+    return plan_move_to(arm, start, aligned_pose.joints, start.rail_x);
+}
+
 /// 검출 직후 백스윙과 공 도착 시 임팩트 궤적.
 #[derive(Debug, Clone)]
 pub struct AlignedImpactSequence {
@@ -1603,6 +1638,22 @@ mod tests {
                 .all(|velocity| velocity.abs() < 1e-12)
         );
         assert_eq!(alignment.end, alignment.follow_through);
+    }
+
+    #[test]
+    fn fixed_rail_ball_alignment_never_changes_rail_position() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let rail_x = arm.rail.expect("rail").default_x();
+        let start = robot::Pose::new(rail_x, arm.default_joints.clone());
+        let ball = Point3::new(table::WIDTH_X * 0.5, READY_RACKET_Y_M, 0.95);
+
+        let alignment =
+            plan_ball_alignment_fixed_rail(arm, &start, ball).expect("fixed rail alignment");
+
+        assert!((alignment.rail.start - rail_x).abs() < 1e-12);
+        assert!((alignment.rail.end - rail_x).abs() < 1e-12);
+        assert!((alignment.follow_through_rail_x - rail_x).abs() < 1e-12);
     }
 
     #[test]

@@ -68,6 +68,8 @@ enum LimitEscape {
 
 /// 모터 한계 클램프 경고 주기.
 const CLAMP_WARN_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
+/// 듀얼 모터가 약 3.5° 이상 어긋나면 기계적으로 싸우거나 영점이 틀린 것으로 본다.
+const MIRROR_ALIGNMENT_MAX_ERROR_TICKS: i32 = 40;
 
 /// 전체 SyncRead가 불안정한 버스에서 모터별로 Present Position을 읽는다.
 #[cfg(feature = "real")]
@@ -166,6 +168,64 @@ impl DynamixelBus {
             #[cfg(feature = "real")]
             BusBackend::Real(_) => None,
         };
+    }
+
+    /// 미러 슬레이브의 실측 tick이 `2*zero-master`와 맞는지 검사한다.
+    /// 이 검사는 시작·중립 복귀 직후에만 호출해 실시간 명령 경로를 느리게 하지 않는다.
+    pub fn verify_mirror_alignment(&mut self) -> Result<(), HwError> {
+        let config = self.mapping.config.clone();
+        if config.mirror_slaves.is_empty() {
+            return Ok(());
+        }
+        match &mut self.backend {
+            BusBackend::DryRun { .. } => return Ok(()),
+            #[cfg(feature = "real")]
+            BusBackend::Real(real) => {
+                for pair in &config.mirror_slaves {
+                    let ids = [pair.master_id, pair.slave_id];
+                    let raw = read_present_positions_individually(
+                        real,
+                        &ids,
+                        config.addr_present_position,
+                        config.comm_retries,
+                        config.comm_retry_delay_ms,
+                        None,
+                    )?;
+                    let mut ticks = Vec::with_capacity(2);
+                    for bytes in raw {
+                        let bytes: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
+                            read_transport_error("듀얼 모터 Present Position 응답 길이 오류")
+                        })?;
+                        ticks.push(u32::from_le_bytes(bytes) as i32);
+                    }
+                    let master_tick = ticks[0];
+                    let slave_tick = ticks[1];
+                    let expected_slave_tick = config.mirror_tick(master_tick);
+                    let slave_minus_expected_tick = slave_tick - expected_slave_tick;
+                    info!(
+                        master_id = pair.master_id,
+                        slave_id = pair.slave_id,
+                        master_tick,
+                        slave_tick,
+                        expected_slave_tick,
+                        slave_minus_expected_tick,
+                        "듀얼 MX-64 실측 대칭 진단"
+                    );
+                    if slave_minus_expected_tick.abs() > MIRROR_ALIGNMENT_MAX_ERROR_TICKS {
+                        return Err(read_transport_error(format!(
+                            "듀얼 MX-64 정렬 불일치: ID{}={}tick, ID{}={}tick, 기대={}tick, 오차={:+}tick. 방향·혼 영점·체결을 확인할 때까지 구동 차단",
+                            pair.master_id,
+                            master_tick,
+                            pair.slave_id,
+                            slave_tick,
+                            expected_slave_tick,
+                            slave_minus_expected_tick,
+                        )));
+                    }
+                }
+            }
+        }
+        return Ok(());
     }
 
     fn expand_goal_ticks(&self, ticks: &[i32]) -> Vec<(u8, i32)> {

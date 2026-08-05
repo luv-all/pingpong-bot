@@ -28,6 +28,11 @@ pub trait Hardware: Send {
         return Ok(());
     }
 
+    /// 기계적으로 결합된 주·보조 모터가 기대한 대칭 각도를 유지하는지 확인한다.
+    fn verify_coupled_joints(&mut self) -> Result<(), HwError> {
+        return Ok(());
+    }
+
     /// 2단계 제어 명령: 레일과 라켓 수평 조준축만 갱신한다.
     ///
     /// 기본 궤적 명령과 분리해, 중앙 정렬이 끝난 뒤 다른 Dynamixel 축에 Goal을

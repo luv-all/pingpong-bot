@@ -243,6 +243,16 @@ impl Hardware for RealHardware {
             .arm_limit_escape_from(joints)
     }
 
+    fn verify_coupled_joints(&mut self) -> Result<(), HwError> {
+        self.reap_executor();
+        self.bus
+            .lock()
+            .map_err(|_| HwError::ReadFailed {
+                reason: "Dynamixel bus mutex poisoned".into(),
+            })?
+            .verify_mirror_alignment()
+    }
+
     fn command_rail_and_racket(
         &mut self,
         rail_x: f64,

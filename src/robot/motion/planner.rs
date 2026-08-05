@@ -110,6 +110,15 @@ impl Planner {
         return physics::plan_ball_alignment(arm, start, ball);
     }
 
+    /// 레일은 현재 위치에 고정하고 Dynamixel 관절만 공 예측 위치로 정렬한다.
+    pub fn ball_alignment_fixed_rail(
+        arm: &Arm,
+        start: &robot::Pose,
+        ball: crate::Point3,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_ball_alignment_fixed_rail(arm, start, ball);
+    }
+
     pub fn aligned_impact_sequence(
         arm: &Arm,
         start: &robot::Pose,
