@@ -90,6 +90,15 @@ impl BallControlState {
     }
 }
 
+/// 명령 후 레일·조준축 재측정 상태.
+///
+/// **현재 실기 루프에서 도달 불가.** `spawn()`의 while 루프는 `pending_verification`을
+/// 초기값 `None`과 명령 직후 재설정 `None` 외에는 `Some(...)`으로 대입하지 않는다.
+/// 즉 `verify_due_command`의 수렴 판정·타임아웃·`consecutive_misses` 3회 연속
+/// 중단 경로는 이 구조체를 직접 구성해 호출하는 유닛 테스트에서만 실행된다.
+/// 부활 또는 제거는 별도 결정 사항으로 남아 있다 —
+/// `docs/superpowers/specs/2026-08-05-control-worker-state-machine-design.md` 참고.
+/// 이번 패스는 동작을 바꾸지 않는다.
 struct PendingVerification {
     track_seq: u64,
     command: DirectControlCommand,
@@ -146,9 +155,7 @@ pub fn spawn(
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
         let mut pending_verification: Option<PendingVerification> = None;
-        let mut return_due_at: Option<Instant> = None;
-        let mut struck_track_seq: Option<u64> = None;
-        let mut pending_impact_measurement: Option<(u64, f64, pingpong_bot::robot::Joints)> = None;
+        let mut state = BallControlState::Idle;
         let mut consecutive_misses: u8 = 0;
 
         while !shutdown.is_down() {
@@ -173,29 +180,28 @@ pub fn spawn(
                 }
                 VerificationResult::Pending => {}
             }
-            if pending_verification.is_none()
-                && return_due_at.is_some_and(|due_at| Instant::now() >= due_at)
-                && !hardware.is_busy()
-            {
-                return_due_at = None;
-                if let Some((track_seq, rail_commanded_m, joints_commanded)) =
-                    pending_impact_measurement.take()
-                {
+            let due_for_return = match &state {
+                BallControlState::Struck { return_due_at, .. } => Instant::now() >= *return_due_at,
+                BallControlState::Idle => false,
+            };
+            if pending_verification.is_none() && due_for_return && !hardware.is_busy() {
+                if let BallControlState::Struck { measurement, .. } = &state {
                     match hardware.read_pose() {
                         Ok(measured) => {
-                            let joint_errors: Vec<f64> = joints_commanded
+                            let joint_errors: Vec<f64> = measurement
+                                .joints_commanded
                                 .values
                                 .iter()
                                 .zip(&measured.joints.values)
                                 .map(|(commanded, measured)| commanded - measured)
                                 .collect();
                             info!(
-                                track_seq,
-                                rail_commanded_m = f4(rail_commanded_m),
+                                track_seq = measurement.track_seq,
+                                rail_commanded_m = f4(measurement.rail_commanded_m),
                                 rail_measured_m = f4(measured.rail_x),
                                 rail_commanded_minus_measured_m =
-                                    f4(rail_commanded_m - measured.rail_x),
-                                joints_commanded = %format!("{:?}", joints_commanded.values),
+                                    f4(measurement.rail_commanded_m - measured.rail_x),
+                                joints_commanded = %format!("{:?}", measurement.joints_commanded.values),
                                 joints_measured = %format!("{:?}", measured.joints.values),
                                 joints_commanded_minus_measured = %format!("{joint_errors:?}"),
                                 "동시 임팩트 완료 후 실측"
@@ -225,6 +231,7 @@ pub fn spawn(
                     }
                     Err(error) => warn!(%error, "중앙 복귀 후 포즈 읽기 실패"),
                 }
+                state = BallControlState::Idle;
             }
             let now = Instant::now();
             let mut timeout = pending_verification
@@ -236,12 +243,12 @@ pub fn spawn(
                         .min(RECV_TIMEOUT)
                 });
             if pending_verification.is_none()
-                && let Some(due_at) = return_due_at
+                && let BallControlState::Struck { return_due_at, .. } = &state
             {
-                let return_wait = if due_at <= now && hardware.is_busy() {
+                let return_wait = if *return_due_at <= now && hardware.is_busy() {
                     BUSY_POLL
                 } else {
-                    due_at.saturating_duration_since(now)
+                    return_due_at.saturating_duration_since(now)
                 };
                 timeout = timeout.min(return_wait);
             }
@@ -251,7 +258,7 @@ pub fn spawn(
                 Err(RecvTimeoutError::Timeout) => continue,
             };
             if !latch.should_send(request.track_seq, request.stage)
-                || struck_track_seq == Some(request.track_seq)
+                || state.blocks(request.track_seq)
                 || request.age_secs() > MAX_REQUEST_AGE_SECS
                 || last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
             {
@@ -335,13 +342,15 @@ pub fn spawn(
                 });
                 break;
             }
-            struck_track_seq = Some(request.track_seq);
-            return_due_at = Some(issued_at + Duration::from_secs_f64(trajectory.duration_secs));
-            pending_impact_measurement = Some((
-                request.track_seq,
-                applied.rail_m,
-                trajectory.follow_through.clone(),
-            ));
+            state = BallControlState::Struck {
+                track_seq: request.track_seq,
+                return_due_at: issued_at + Duration::from_secs_f64(trajectory.duration_secs),
+                measurement: PendingImpactMeasurement {
+                    track_seq: request.track_seq,
+                    rail_commanded_m: applied.rail_m,
+                    joints_commanded: trajectory.follow_through.clone(),
+                },
+            };
             pending_verification = None;
 
             info!(
