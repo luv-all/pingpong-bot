@@ -12,7 +12,7 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use pingpong_bot::error::{DomainError, HwError};
 use pingpong_bot::hardware::dynamixel::{DynamixelConfig, MotorMapping};
 use pingpong_bot::hardware::{AppliedRailRacketCommand, Hardware};
-use pingpong_bot::robot::Arm;
+use pingpong_bot::robot::{Arm, Joints};
 use pingpong_bot::robot::control::{
     DirectControlCommand, DirectControlMeasurement, DirectController, PredictionStage,
 };
@@ -33,6 +33,12 @@ const RAIL_ERROR_WARN_M: f64 = 0.020;
 const AIM_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
 const STARTUP_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_JOINT_TOLERANCE_RAD: f64 = 3.0_f64.to_radians();
+const STARTUP_TRIM_DELAY: Duration = Duration::from_secs(1);
+const STARTUP_MAX_TRIM_ATTEMPTS: u8 = 2;
+const STARTUP_MAX_TRIM_STEP_RAD: f64 = 5.0_f64.to_radians();
+// 작은 정상상태 오차에서 통신 진단/재부팅을 시도하지 않는다. 모터가 실제로
+// 멈췄다고 볼 만큼 크게 어긋난 경우에만 자동 복구 대상을 확인한다.
+const STARTUP_RECOVERY_MIN_ERROR_RAD: f64 = 10.0_f64.to_radians();
 const STARTUP_STABLE_SAMPLES: u8 = 2;
 
 #[derive(Default)]
@@ -613,15 +619,22 @@ fn initialize_pose_attempt(
     }
     // executor 종료는 마지막 Goal Position을 보냈다는 뜻일 뿐, 모터가 실제로
     // 도착했다는 뜻은 아니다. 실측이 준비 자세에 연속 두 번 들어올 때까지 기다린다.
-    let settle_deadline = Instant::now() + STARTUP_SETTLE_TIMEOUT;
+    let settle_started = Instant::now();
+    let settle_deadline = settle_started + STARTUP_SETTLE_TIMEOUT;
+    let mut next_trim_at = settle_started + STARTUP_TRIM_DELAY;
+    let mut trim_attempts = 0_u8;
     let mut stable_samples = 0_u8;
     let after = loop {
         let pose = hardware.read_pose().map_err(MoveError::Hardware)?;
-        let max_joint_error_rad = ready_joints
+        let joint_errors: Vec<f64> = ready_joints
             .values
             .iter()
             .zip(&pose.joints.values)
-            .map(|(commanded, measured)| (commanded - measured).abs())
+            .map(|(commanded, measured)| commanded - measured)
+            .collect();
+        let max_joint_error_rad = joint_errors
+            .iter()
+            .map(|error| error.abs())
             .fold(0.0_f64, f64::max);
         if max_joint_error_rad <= STARTUP_JOINT_TOLERANCE_RAD {
             stable_samples = stable_samples.saturating_add(1);
@@ -631,14 +644,57 @@ fn initialize_pose_attempt(
         } else {
             stable_samples = 0;
         }
-        if Instant::now() >= settle_deadline {
-            hardware.log_joint_diagnostics();
-            let joint_errors: Vec<f64> = ready_joints
+        // 위치모드인데도 중력·유격으로 3° 부근에서 멎는 실기를 위한 폐루프 미세
+        // 보정이다. 목표를 달성하지 못한 축만 남은 오차만큼 더 보내고 다시 실측한다.
+        // 고정 3.24° 오프셋이 아니라 매 실행의 실제 오차를 써서 과보정을 피한다.
+        if Instant::now() >= next_trim_at
+            && trim_attempts < STARTUP_MAX_TRIM_ATTEMPTS
+            && max_joint_error_rad < STARTUP_RECOVERY_MIN_ERROR_RAD
+        {
+            let compensated_values: Vec<f64> = ready_joints
                 .values
                 .iter()
-                .zip(&pose.joints.values)
-                .map(|(commanded, measured)| commanded - measured)
+                .zip(&joint_errors)
+                .enumerate()
+                .map(|(index, (target, error))| {
+                    let correction = if error.abs() > STARTUP_JOINT_TOLERANCE_RAD {
+                        error.clamp(-STARTUP_MAX_TRIM_STEP_RAD, STARTUP_MAX_TRIM_STEP_RAD)
+                    } else {
+                        0.0
+                    };
+                    let compensated = target + correction;
+                    return arm
+                        .joint_limit(index)
+                        .map_or(compensated, |limit| compensated.clamp(limit.min, limit.max));
+                })
                 .collect();
+            let compensated = Joints::from_slice(&compensated_values);
+            let correction_deg: Vec<f64> = compensated
+                .values
+                .iter()
+                .zip(&ready_joints.values)
+                .map(|(commanded, target)| (commanded - target).to_degrees())
+                .collect();
+            let correction = Planner::move_to(arm, &pose, compensated, pose.rail_x)
+                .map_err(MoveError::Plan)?;
+            trim_attempts += 1;
+            info!(
+                attempt = trim_attempts,
+                correction_deg = %format!("{correction_deg:?}"),
+                measured_error_deg = %format!("{:?}", joint_errors.iter().map(|error| error.to_degrees()).collect::<Vec<_>>()),
+                "시작 팔 자세 잔여 오차 폐루프 보정"
+            );
+            hardware
+                .command_joints(&correction)
+                .map_err(MoveError::Hardware)?;
+            while hardware.is_busy() {
+                thread::sleep(BUSY_POLL);
+            }
+            next_trim_at = Instant::now() + STARTUP_TRIM_DELAY;
+            continue;
+        }
+        if Instant::now() >= settle_deadline {
+            hardware.log_joint_diagnostics();
             warn!(
                 rail_commanded_m = f4(ready_rail_x),
                 rail_measured_m = f4(pose.rail_x),
@@ -648,7 +704,7 @@ fn initialize_pose_attempt(
                 joints_commanded_minus_measured = %format!("{joint_errors:?}"),
                 "시작 팔 자세 실측 수렴 실패 — 관절 부호·영점 보정 필요"
             );
-            if allow_motor_recovery {
+            if allow_motor_recovery && max_joint_error_rad >= STARTUP_RECOVERY_MIN_ERROR_RAD {
                 match hardware.recover_joint_control() {
                     Ok(true) => {
                         info!("Dynamixel 자동 복구 완료 — 시작 팔 자세를 한 번 다시 명령");
