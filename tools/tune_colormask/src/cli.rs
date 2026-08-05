@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use pingpong_bot::camera::{CamCliArgs, MonoOfflineArgs};
-use pingpong_bot::detector::ColorSpace;
+use pingpong_bot::vision::detect::colormask::ColorSpace;
 
 #[derive(Parser, Debug)]
 #[command(about = "공 픽셀 픽커 → YCrCb/HSV inRange → data/colormask.json upsert")]

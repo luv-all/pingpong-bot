@@ -9,12 +9,12 @@ use opencv::prelude::*;
 use pingpong_bot::camera;
 use pingpong_bot::camera::{Calibration, FrameSource, Preview, PreviewAction, StereoOfflineArgs};
 use pingpong_bot::defaults::detector_for;
-use pingpong_bot::detector::Detector;
-use pingpong_bot::estimator;
+use pingpong_bot::physics;
+use pingpong_bot::vision::Detector;
 
 pub struct CaptureResult {
-    pub traj: Vec<estimator::TrajPoint>,
-    pub bounces: Vec<estimator::BounceEvent>,
+    pub traj: Vec<physics::TrajPoint>,
+    pub bounces: Vec<physics::BounceEvent>,
     pub e: Option<f64>,
 }
 
@@ -87,7 +87,9 @@ pub fn run_capture(
                 frame0_ts = Some(frame.timestamp);
             }
             let cam_id = camera::Id(i as u8);
-            let pixel = detectors[i].detect(&frame);
+            let pixel = detectors[i]
+                .detect(&frame, None)?
+                .map(|candidate| candidate.pixel);
             let mut panel = frame
                 .image
                 .try_clone()
@@ -116,16 +118,16 @@ pub fn run_capture(
                 0.0
             }
         };
-        if let Some(pos) = estimator::Triangulate::pixels(&hits, &calibration) {
-            traj.push(estimator::TrajPoint {
+        if let Some(pos) = camera::Triangulate::pixels(&hits, &calibration) {
+            traj.push(physics::TrajPoint {
                 t: sync_t,
                 pos,
                 pixels: hits.clone(),
             });
         }
 
-        let bounces = estimator::TrajAnalysis::detect_bounces(&traj);
-        let e_mean = estimator::TrajAnalysis::mean_bounce_e(&bounces);
+        let bounces = physics::TrajAnalysis::detect_bounces(&traj);
+        let e_mean = physics::TrajAnalysis::mean_bounce_e(&bounces);
 
         if let Some(ev) = bounces.last() {
             for (i, panel) in panels.iter_mut().enumerate() {
@@ -208,9 +210,9 @@ pub fn run_capture(
         Preview::destroy_window(window);
     }
 
-    let bounces = estimator::TrajAnalysis::detect_bounces(&traj);
+    let bounces = physics::TrajAnalysis::detect_bounces(&traj);
     return Ok(CaptureResult {
-        e: estimator::TrajAnalysis::mean_bounce_e(&bounces),
+        e: physics::TrajAnalysis::mean_bounce_e(&bounces),
         traj,
         bounces,
     });

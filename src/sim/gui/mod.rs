@@ -25,6 +25,8 @@ pub mod robot;
 pub mod scene;
 pub mod shooter;
 #[cfg(feature = "gui")]
+pub mod trail;
+#[cfg(feature = "gui")]
 pub mod viewer;
 
 pub mod debug;

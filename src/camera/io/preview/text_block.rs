@@ -3,7 +3,7 @@ use opencv::core::{Mat, Point, Scalar};
 use opencv::imgproc;
 use opencv::prelude::*;
 
-use super::ops::overlay_scale;
+use super::ops::{hershey, overlay_scale};
 
 struct TextBlock {
     font_scale: f64,
@@ -148,11 +148,14 @@ fn put_outlined_text(
     return Ok(());
 }
 
-/// 좌상단 디버그 텍스트 (검정 외곽 + 본문색). Hershey는 ASCII만 — 호출측도 ASCII.
+/// 좌상단 디버그 텍스트 (검정 외곽 + 본문색). Hershey는 ASCII만 — 호출측도 ASCII로 쓴다.
 pub fn draw_debug_lines(img: &mut Mat, lines: &[impl AsRef<str>], color: Scalar) -> CvResult<()> {
     if lines.is_empty() {
         return Ok(());
     }
+    // 폭 계산 전에 바꿔야 `…`→`...`처럼 길어지는 글자가 칸을 넘지 않는다.
+    let lines: Vec<_> = lines.iter().map(|l| hershey(l.as_ref())).collect();
+    let lines = &lines[..];
     let s = overlay_scale(img.rows());
     let layout = fit_text_block(
         img.cols(),
@@ -187,6 +190,8 @@ pub fn draw_help_lines(img: &mut Mat, lines: &[impl AsRef<str>], color: Scalar) 
     if lines.is_empty() {
         return Ok(());
     }
+    let lines: Vec<_> = lines.iter().map(|l| hershey(l.as_ref())).collect();
+    let lines = &lines[..];
     let s = overlay_scale(img.rows());
     let layout = fit_text_block(
         img.cols(),

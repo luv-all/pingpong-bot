@@ -1,6 +1,7 @@
 //! 카메라 워커 → 추정 워커 메시지.
 
 use pingpong_bot::camera;
+use pingpong_bot::vision::Candidate;
 
 /// 프레임 1장 + 그 프레임의 검출 결과.
 ///
@@ -9,5 +10,5 @@ use pingpong_bot::camera;
 pub struct VisionEvent {
     pub frame: camera::Frame,
     /// `None` = 이 프레임에서 공을 못 찾음.
-    pub pixel: Option<camera::Pixel>,
+    pub found: Option<Candidate>,
 }

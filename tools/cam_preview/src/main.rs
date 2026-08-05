@@ -3,6 +3,7 @@
 //! - `q` / ESC 종료
 //! - `Space` 동결/해제
 //! - `e` 짧은 노출 시도 (macOS OpenCV/AVFoundation에선 대개 무시됨)
+//! - `--track` 공을 검출해 **생 삼각측량** 궤적을 그린다 (필터 없음)
 //!
 //! 모자이크는 `Preview::hstack_bgr` (최대 높이 + 패딩, 손실 없음).
 //! 표시만 모니터보다 클 때 downscale (`Preview::show_bgr`).
@@ -12,16 +13,27 @@ mod cam_slot;
 mod fps_meter;
 mod live_source;
 
-use anyhow::{Result, bail};
+use std::collections::VecDeque;
+
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use opencv::core::Scalar;
 use opencv::prelude::*;
-use pingpong_bot::camera::{OpenCvCapture, Preview, PreviewAction, ThreadedCapture};
+use pingpong_bot::camera::{
+    self, Calibration, OpenCvCapture, Preview, PreviewAction, ThreadedCapture, Triangulate,
+};
+use pingpong_bot::defaults;
+use pingpong_bot::vision::Detector;
 
 use args::Args;
 use cam_slot::CamSlot;
 use fps_meter::FpsMeter;
 use live_source::LiveSource;
+
+/// 생 삼각측량 궤적 — 초록. 필터를 안 거친 값이라는 뜻으로 검출과 다른 색을 쓴다.
+const RAW_TRACK: Scalar = Scalar::new(60.0, 255.0, 60.0, 0.0);
+/// 검출 픽셀 — 노랑.
+const DETECTED: Scalar = Scalar::new(0.0, 255.0, 255.0, 0.0);
 
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -32,9 +44,25 @@ fn main() -> Result<()> {
         bail!("--cam 이 비어 있음");
     }
 
+    // 필터를 안 거친 3D 궤적. 여기에 EKF 도 적합도 없다 — 두 시선의 교점 그 자체다.
+    let calibration = if args.track {
+        Some(
+            Calibration::load_json(&defaults::calibration_path())
+                .map_err(anyhow::Error::msg)
+                .context("calibration")?,
+        )
+    } else {
+        None
+    };
+    let mut trail: VecDeque<pingpong_bot::Point3> = VecDeque::with_capacity(args.trail.max(1));
+
     let mut cams: Vec<CamSlot> = Vec::with_capacity(resolved.len());
     let mut exp_supported = true;
     for r in resolved {
+        // 캘리브에 없는 카메라는 그냥 보여 주기만 한다 — 궤적은 두 대가 있어야 나온다.
+        let params = calibration
+            .as_ref()
+            .and_then(|c| c.params(r.camera_id).cloned());
         let mut cap = OpenCvCapture::from_device_with_backend(r.camera_id, r.device, backend)
             .map_err(anyhow::Error::msg)?;
         cam.stream.apply(&mut cap).map_err(anyhow::Error::msg)?;
@@ -63,6 +91,12 @@ fn main() -> Result<()> {
             exposure_backend,
             meter: FpsMeter::new(),
             panel: None,
+            params: params.clone(),
+            detector: match &params {
+                Some(params) => Some(Detector::for_camera(params).context("detector")?),
+                None => None,
+            },
+            found: None,
         });
     }
     if !exp_supported {
@@ -107,6 +141,10 @@ fn main() -> Result<()> {
                 continue;
             }
 
+            cam.found = match &mut cam.detector {
+                Some(detector) => detector.detect(&frame, None)?.map(|c| c.pixel),
+                None => None,
+            };
             let mut panel = frame
                 .image
                 .try_clone()
@@ -139,10 +177,33 @@ fn main() -> Result<()> {
                 }
             }
 
+            if let Some(pixel) = cam.found {
+                lines.push(format!("ball {:.0},{:.0}", pixel.x, pixel.y));
+            } else if cam.detector.is_some() {
+                lines.push("ball --".into());
+            }
+
             Preview::draw_debug_lines(&mut panel, &lines, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
             Preview::draw_cam_label(&mut panel, &cam.label, Scalar::new(0.0, 255.0, 255.0, 0.0))?;
             cam.panel = Some(panel);
         }
+
+        // 두 대가 같이 잡은 프레임만 복원한다. 필터가 없으므로 못 잡으면 그냥 빈 프레임이다.
+        if let Some(calibration) = &calibration
+            && !frozen
+        {
+            let hits: Vec<(camera::Id, camera::Pixel)> = cams
+                .iter()
+                .filter_map(|cam| Some((cam.params.as_ref()?.camera_id, cam.found?)))
+                .collect();
+            if let Some(point) = Triangulate::pixels(&hits, calibration) {
+                if trail.len() >= args.trail.max(1) {
+                    trail.pop_front();
+                }
+                trail.push_back(point);
+            }
+        }
+        let track: Vec<pingpong_bot::Point3> = trail.iter().copied().collect();
 
         let mut panels = Vec::with_capacity(cams.len());
         for cam in &cams {
@@ -152,6 +213,17 @@ fn main() -> Result<()> {
             let mut shown = panel
                 .try_clone()
                 .map_err(|e| anyhow::anyhow!("clone: {e}"))?;
+            if let Some(params) = &cam.params {
+                Preview::draw_world_track(&mut shown, params, &track, RAW_TRACK, 2)?;
+                if let Some(last) = track.last()
+                    && let Some(pixel) = params.project_world_unclipped(*last)
+                {
+                    Preview::draw_circle_px(&mut shown, pixel, 6, RAW_TRACK, 2)?;
+                }
+            }
+            if let Some(pixel) = cam.found {
+                Preview::draw_circle_px(&mut shown, pixel, 11, DETECTED, 2)?;
+            }
             if frozen {
                 Preview::draw_cam_label(&mut shown, "FROZEN", Scalar::new(0.0, 0.0, 255.0, 0.0))?;
             }
@@ -166,11 +238,15 @@ fn main() -> Result<()> {
         } else {
             "e auto"
         };
-        let help = ["Space freeze", help_exp, "q/ESC quit"];
+        let mut help = vec!["Space freeze", help_exp, "q/ESC quit"];
+        if args.track {
+            help.insert(0, "c clear track");
+        }
         Preview::draw_help_lines(&mut mosaic, &help, Scalar::new(0.0, 255.0, 80.0, 0.0))?;
         match Preview::show_bgr(window, &mosaic, 1)?.action {
             PreviewAction::Quit => break,
             PreviewAction::Continue => {}
+            PreviewAction::Key(key) if key == i32::from(b'c') => trail.clear(),
             PreviewAction::Key(key) if key == i32::from(b' ') => {
                 frozen = !frozen;
                 println!("{}", if frozen { "frozen" } else { "live" });

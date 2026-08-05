@@ -7,8 +7,8 @@ pub mod shooter;
 use anyhow::{Context, Result, ensure};
 use nalgebra::{Rotation3, Vector3};
 use pingpong_bot::Point3;
-use pingpong_bot::estimator::Prediction;
 use pingpong_bot::robot::motion;
+use pingpong_bot::robot::motion::Prediction;
 use pingpong_bot::robot::{self, Arm, Joints, RacketPose};
 
 pub use draft::Draft;

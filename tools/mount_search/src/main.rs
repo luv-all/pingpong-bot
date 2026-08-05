@@ -24,9 +24,9 @@ mod scenario;
 use anyhow::Result;
 use clap::Parser;
 use pingpong_bot::defaults;
-use pingpong_bot::estimator::Prediction;
 use pingpong_bot::robot;
 use pingpong_bot::robot::motion;
+use pingpong_bot::robot::motion::Prediction;
 
 use args::Args;
 use mount_result::MountResult;

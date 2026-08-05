@@ -7,6 +7,41 @@ use crate::Point3;
 use crate::camera;
 use nalgebra::Vector3;
 
+/// Hershey 폰트에 없는 글자를 ASCII로 바꾼다.
+///
+/// OpenCV는 못 그리는 글자를 `?`로 찍는다. 활자 기호(`—`, `·`, `…`)는 뜻이 같은 ASCII가
+/// 있으니 여기서 바꾸고, 한글처럼 대응이 없는 글자는 `?`로 남는다. **HUD 문자열은 여전히
+/// ASCII로 쓴다** — 이건 마지막 방어선이지 면허가 아니다.
+pub(super) fn hershey(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.is_ascii() {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_ascii() {
+            out.push(c);
+            continue;
+        }
+        out.push_str(match c {
+            '—' | '–' | '−' => "-",
+            '·' | '•' => "|",
+            '…' => "...",
+            '→' => "->",
+            '←' => "<-",
+            '×' => "x",
+            '≥' => ">=",
+            '≤' => "<=",
+            '°' => "deg",
+            'μ' => "u",
+            'Δ' | 'δ' => "d",
+            'σ' => "sigma",
+            'ω' => "w",
+            _ => "?",
+        });
+    }
+    return std::borrow::Cow::Owned(out);
+}
+
 /// 창 좌표 → 원본 이미지 좌표. `scale` ≤ 0 이거나 1이면 그대로.
 pub fn unscale_xy(x: i32, y: i32, scale: f64) -> (i32, i32) {
     if scale <= 0.0 || (scale - 1.0).abs() < 1e-9 {
@@ -108,7 +143,7 @@ pub fn draw_cam_label(img: &mut Mat, label: &str, color: Scalar) -> CvResult<()>
     let margin = (18.0 * s).round() as i32;
     imgproc::put_text(
         img,
-        label,
+        &hershey(label),
         Point::new(margin, img.rows().saturating_sub(margin).max(margin + 8)),
         imgproc::FONT_HERSHEY_SIMPLEX,
         font_scale,
@@ -129,5 +164,24 @@ mod tests {
         let (x, y) = unscale_xy(500, 200, 0.5);
         assert_eq!((x, y), (1000, 400));
         assert_eq!(unscale_xy(10, 20, 1.0), (10, 20));
+    }
+
+    #[test]
+    fn hershey_leaves_ascii_alone_and_maps_the_rest() {
+        // ASCII는 복사하지 않는다.
+        assert!(matches!(
+            hershey("SEL none - 1-8|Tab"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert_eq!(hershey("xyz=—"), "xyz=-");
+        assert_eq!(hershey("SAVING…"), "SAVING...");
+        assert_eq!(hershey("Space freeze · click"), "Space freeze | click");
+        assert_eq!(hershey("p save→data.json"), "p save->data.json");
+        // 대응이 없는 글자는 OpenCV가 찍는 것과 같은 `?`로 남는다.
+        assert_eq!(hershey("프레임 없음"), "??? ??");
+        // 출력은 항상 그릴 수 있어야 한다.
+        for s in ["μ=0.3 ×2 Δq 15°", "σ 2.0 ω spin", "≥ 3 ≤ 9"] {
+            assert!(hershey(s).is_ascii(), "{s}");
+        }
     }
 }

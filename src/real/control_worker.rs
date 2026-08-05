@@ -17,7 +17,7 @@ use crossbeam_channel::{Receiver, Sender, select};
 use pingpong_bot::defaults;
 use pingpong_bot::error::{DomainError, HwError, SwingPlanError};
 use pingpong_bot::hardware::Hardware;
-use pingpong_bot::robot::motion::{self, Planner};
+use pingpong_bot::robot::motion::{self, HitPlane, InterceptWindow, Planner};
 use pingpong_bot::robot::{self, Arm};
 use tracing::{debug, info, info_span, warn};
 
@@ -28,6 +28,9 @@ use super::{
 
 /// 예측의 `time_to_impact_secs`는 요청 시각 기준이다. 계획을 시작할 때 이미 이만큼 낡았으면
 /// 그 예측으로 세운 궤적은 임팩트 시점이 어긋난다 — 버리고 다음 요청을 기다린다.
+///
+/// TODO(제어): 버리는 대신 나이만큼 전진시켜 살릴 수 있다 — `trajectory.predicted` 가 5 ms
+/// 간격 전체 궤적이므로 `at_time(t + age)` 한 줄이다.
 const MAX_REQUEST_AGE_SECS: f64 = 0.015;
 
 /// 계획 재시도 스로틀. sim `SWING_RETRY_THROTTLE_SECS`와 같은 값이다.
@@ -48,11 +51,15 @@ enum CommitOutcome {
 }
 
 /// 제어 워커를 띄운다. 셧다운·치명 실패 시 [`ShotEvent::Done`]을 보낸다.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut hardware: Box<dyn Hardware>,
     arm: Arc<Arm>,
     home: bool,
     coarse_track_enabled: bool,
+    // 로봇이 칠 수 있는 평면들. 비전이 준 궤적을 여기서 자른다 — 도달 범위는 로봇 것이라
+    // 비전이 알 이유가 없다.
+    intercept: InterceptWindow,
     rx: Receiver<CommitRequest>,
     track_rx: Receiver<TrackRequest>,
     status_tx: Sender<ControlStatus>,
@@ -62,6 +69,7 @@ pub fn spawn(
 ) -> JoinHandle<()> {
     return thread::spawn(move || {
         let _span = info_span!("control").entered();
+        let planes = intercept.hit_planes();
 
         if home && let Err(error) = move_to_center(hardware.as_mut(), &arm) {
             warn!(%error, "홈 이동 실패 — 현재 자세에서 시작한다");
@@ -93,6 +101,7 @@ pub fn spawn(
             let outcome = wait_for_commit(
                 hardware.as_mut(),
                 &arm,
+                &planes,
                 &rx,
                 &track_rx,
                 coarse_track_enabled,
@@ -128,9 +137,11 @@ pub fn spawn(
 }
 
 /// 커밋할 때까지 요청을 처리한다.
+#[allow(clippy::too_many_arguments)]
 fn wait_for_commit(
     hardware: &mut dyn Hardware,
     arm: &Arm,
+    planes: &[HitPlane],
     rx: &Receiver<CommitRequest>,
     track_rx: &Receiver<TrackRequest>,
     coarse_track_enabled: bool,
@@ -159,7 +170,7 @@ fn wait_for_commit(
                 match received {
                     Ok(track) => {
                         if coarse_track_enabled {
-                            coarse_track(hardware, arm, &track, &mut coarse);
+                            coarse_track(hardware, arm, planes, &track, &mut coarse);
                         }
                     }
                     Err(_) => return CommitOutcome::Disconnected,
@@ -202,7 +213,7 @@ fn wait_for_commit(
             }
         };
 
-        match Planner::plan_best(arm, &request.predictions, &start) {
+        match Planner::plan_best(arm, &request.predictions(planes), &start) {
             Ok(planned) => {
                 // 선추종 이동이 아직 돌고 있으면 여기서 끊는다. `command`는 busy면
                 // **조용히 무시하고 `Ok`를 돌려주므로**, 안 끊으면 스윙이 통째로 사라진다.
@@ -220,7 +231,7 @@ fn wait_for_commit(
                 let trajectory = &planned.trajectory;
                 debug!(
                     shot = shot_seq,
-                    ball_y = f2(request.ball_y),
+                    ball_y = f2(request.ball_y()),
                     request_age_secs = f2(age),
                     "커밋 요청 소비"
                 );
@@ -270,7 +281,7 @@ fn wait_for_commit(
                 debug!(
                     %error,
                     shot = shot_seq,
-                    candidates = request.predictions.len(),
+                    candidates = request.predictions(planes).len(),
                     rail_x = f2(start.rail_x),
                     start_joints = f2_slice(&start.joints.values),
                     "스윙 계획 실패 — 재시도"
@@ -454,6 +465,7 @@ const COARSE_IDLE_HOME_SECS: f64 = 0.50;
 fn coarse_track(
     hardware: &mut dyn Hardware,
     arm: &Arm,
+    planes: &[HitPlane],
     request: &TrackRequest,
     state: &mut CoarseTrack,
 ) {
@@ -485,12 +497,15 @@ fn coarse_track(
         .is_none_or(|at| at.elapsed().as_secs_f64() >= COARSE_RESCORE_THROTTLE_SECS)
     {
         state.last_rescore = Some(Instant::now());
-        state.preferred_y = Planner::best_scored_coarse_plane_y(arm, &request.predictions, &start);
+        state.preferred_y =
+            Planner::best_scored_coarse_plane_y(arm, &request.predictions(planes), &start);
     }
 
-    let Some((rail_x, joints)) =
-        Planner::plan_coarse_track_targets_for_plane(arm, &request.predictions, state.preferred_y)
-    else {
+    let Some((rail_x, joints)) = Planner::plan_coarse_track_targets_for_plane(
+        arm,
+        &request.predictions(planes),
+        state.preferred_y,
+    ) else {
         return;
     };
 

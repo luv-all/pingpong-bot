@@ -4,26 +4,23 @@ use clap::Parser;
 use pingpong_bot::camera::{CamCliArgs, MonoOfflineArgs};
 
 #[derive(Parser, Debug)]
-#[command(about = "Detector 본선 — adaptive ROI 튜닝 + 단계 패널")]
+#[command(about = "vision 검출기 단계 패널 — 레이어마다 마스크 하나")]
 pub struct Args {
     #[command(flatten)]
     pub cam: CamCliArgs,
 
-    #[arg(long)]
-    pub images: Option<PathBuf>,
-
     #[command(flatten)]
     pub offline: MonoOfflineArgs,
 
-    /// 시작 시 ROI off
-    #[arg(long)]
-    pub no_roi: bool,
     #[arg(short = 'o', long)]
     pub output: Option<PathBuf>,
-    #[arg(long, default_value_t = 300)]
+    #[arg(long, default_value_t = 2000)]
     pub max_frames: usize,
     #[arg(long)]
     pub no_preview: bool,
     #[arg(long)]
     pub wait_ms: Option<i32>,
+    /// 패널 축소 배율.
+    #[arg(long, default_value_t = 0.5)]
+    pub scale: f64,
 }

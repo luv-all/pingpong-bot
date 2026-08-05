@@ -3,7 +3,8 @@
 use anyhow::{Result, ensure};
 use nalgebra::Vector3;
 use pingpong_bot::defaults::{EstimatorParams, PhysicsParams};
-use pingpong_bot::estimator::{Kinematics, Prediction};
+use pingpong_bot::physics::Kinematics;
+use pingpong_bot::robot::motion::Prediction;
 use pingpong_bot::robot::motion::{InterceptWindow, physics as motion_physics};
 use pingpong_bot::sim::launch;
 

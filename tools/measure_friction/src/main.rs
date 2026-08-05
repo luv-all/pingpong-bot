@@ -11,7 +11,7 @@ use clap::Parser;
 use pingpong_bot::constants::{self, table};
 use pingpong_bot::defaults::PhysicsParams;
 use pingpong_bot::defaults::{calibration_path, primitive_4dof};
-use pingpong_bot::estimator;
+use pingpong_bot::physics;
 use pingpong_bot::sim::physics::SimWorld;
 
 use args::Args;
@@ -53,7 +53,7 @@ fn main() -> Result<()> {
 
     if let Some(ref raw) = args.vt_pairs {
         let pairs = parse_pairs(raw)?;
-        let mu = estimator::PhysicsIdentify::friction_from_tangential_speeds(&pairs)
+        let mu = physics::PhysicsIdentify::friction_from_tangential_speeds(&pairs)
             .context("접선 쌍으로부터 μ 추정 실패")?;
         println!("friction μ = {mu:.6}  (from {} vt pairs)", pairs.len());
         patch.friction = Some(mu);
@@ -79,7 +79,7 @@ fn main() -> Result<()> {
 
     print!(
         "{}",
-        estimator::PhysicsIdentify::format_physics_for_defaults(
+        physics::PhysicsIdentify::format_physics_for_defaults(
             patch.restitution,
             patch.friction,
             patch.drag
@@ -138,7 +138,7 @@ fn measure_mu_in_sim(drop_height: f64, horiz_speed: f64) -> Result<f64> {
         bail!("sim 바운스 접선 속도 미검출 — --vt-pairs 로 수동 입력");
     }
     println!("sim vt_in={vin_t:.4} vt_out={vout_t:.4}");
-    return estimator::PhysicsIdentify::friction_from_tangential_speeds(&[(vin_t, vout_t)])
+    return physics::PhysicsIdentify::friction_from_tangential_speeds(&[(vin_t, vout_t)])
         .context("sim μ 계산 실패");
 }
 

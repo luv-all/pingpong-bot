@@ -2,6 +2,7 @@
 
 use crate::sim::gui::ball;
 use crate::sim::gui::shooter;
+use crate::sim::gui::trail;
 
 use super::SceneLayers;
 use crate::sim::gui::robot;
@@ -12,6 +13,7 @@ pub struct SceneLayersBuilder {
     ghost: Option<ball::Handle>,
     robot: Option<robot::Handle>,
     shooter: Option<shooter::Handle>,
+    trails: Vec<trail::Handle>,
 }
 
 impl SceneLayersBuilder {
@@ -36,12 +38,18 @@ impl SceneLayersBuilder {
         return self;
     }
 
+    pub fn trail(mut self, handle: trail::Handle) -> Self {
+        self.trails.push(handle);
+        return self;
+    }
+
     pub fn build(self) -> SceneLayers {
         return SceneLayers {
             ball: self.ball,
             ghost: self.ghost,
             robot: self.robot,
             shooter: self.shooter,
+            trails: self.trails,
         };
     }
 }

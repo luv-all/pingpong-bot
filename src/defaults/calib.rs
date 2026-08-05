@@ -19,6 +19,19 @@ pub const DEFAULT_STREAM_FOURCC: &str = arducam_b0332::FOURCC_MJPG;
 pub const DEFAULT_STREAM_THREADED: bool = true;
 pub const DEFAULT_FOV_Y_DEG: f64 = arducam_b0332::VFOV_DEG;
 
+/// 지금 리그로 찍은 클립. **이보다 오래된 클립은 쓰면 안 된다.**
+///
+/// 2026-08-03 에 카메라를 옮기고 다시 캘리브했다. 그 전 클립(`fly_01`~`fly_09`, `drop_02`,
+/// `roll_01`)은 지금 `data/calibration.json` 과 맞지 않는다 — 같은 픽셀이 다른 3D 점을
+/// 가리키므로 지표가 조용히 거짓말을 한다. 파일은 남겨 두되 도구가 자동으로 집지 않는다.
+///
+/// 리그를 또 만지면 여기를 갱신한다. 클립 자체에 캘리브 지문을 박는 게 더 튼튼하지만
+/// (`meta.json` 에 캘리브 해시), 그건 녹화 도구를 고쳐야 해서 후속이다.
+pub const CURRENT_RIG_CLIPS: [&str; 11] = [
+    "fly_10", "fly_11", "fly_12", "fly_13", "fly_14", "fly_15", "fly_16", "fly_17", "fly_18",
+    "fly_19", "fly_20",
+];
+
 /// 캘리브·colormask 등 비전 산출물 루트.
 pub const DEFAULT_DATA_DIR: &str = "data";
 /// 멀티캠 `Calibration` 번들 SSOT.

@@ -5,7 +5,7 @@
 //! - [`facade`] — Charuco / TablePnp / Preview
 //! - [`arducam_b0332`] — B0332 datasheet (`constants::camera` re-export)
 //!
-//! 삼각측량 계산은 [`crate::estimator::Triangulate`].
+//! 삼각측량은 [`Triangulate`].
 
 pub mod arducam_b0332;
 pub mod calib;
@@ -15,6 +15,7 @@ pub mod io;
 mod id;
 mod params;
 mod role;
+mod triangulate;
 mod view;
 
 /// 이미지 픽셀 좌표.
@@ -27,6 +28,7 @@ pub type Pixel = nalgebra::Point2<f64>;
 pub use id::Id;
 pub use params::Params;
 pub use role::Role;
+pub use triangulate::Triangulate;
 pub use view::View;
 
 pub use calib::{BoardSpec, Calibration, FrameDetect, Landmark, Pnp, PnpResult, Report};

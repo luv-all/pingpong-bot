@@ -1,6 +1,6 @@
 //! 색공간 채널 AABB.
 
-use pingpong_bot::detector::{ColorSpace, ColormaskParams};
+use pingpong_bot::vision::detect::colormask::{ColorSpace, ColormaskParams};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChannelRange {

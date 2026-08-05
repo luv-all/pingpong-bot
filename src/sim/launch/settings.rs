@@ -3,8 +3,8 @@
 use super::layout;
 use crate::constants::{ball, table};
 use crate::defaults;
-use crate::estimator;
-use crate::estimator::HitPlane;
+use crate::physics;
+use crate::robot::motion::HitPlane;
 use nalgebra::Vector3;
 use rand::Rng;
 use rapier3d::prelude::{
@@ -197,7 +197,7 @@ impl Settings {
         let plane = HitPlane {
             y: table::DEFAULT_HIT_PLANE_Y,
         };
-        return crate::estimator::Kinematics::predict_to(
+        return crate::physics::Kinematics::predict_to(
             position,
             velocity,
             spin,
@@ -297,7 +297,7 @@ fn apply_aero_force(
         return;
     }
     let force =
-        estimator::Kinematics::aero_accel(velocity, omega, physics.drag, physics.magnus) * mass;
+        physics::Kinematics::aero_accel(velocity, omega, physics.drag, physics.magnus) * mass;
     body.add_force(
         Vector::new(force.x as f32, force.y as f32, force.z as f32),
         true,
