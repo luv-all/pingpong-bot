@@ -870,34 +870,32 @@ impl SimWorld {
             return;
         }
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        let strike =
-            match motion::Planner::ball_alignment_strike(&self.arm, &start, target.position) {
-                Ok(strike) => strike,
+        let alignment =
+            match motion::Planner::ball_alignment(&self.arm, &start, target.position) {
+                Ok(alignment) => alignment,
                 Err(error) => {
                     self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
                     self.debug_snap.last_fail_text = Some(error.to_string());
                     if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
-                        warn!(shot = self.shot_seq, %error, "shot: 이동 중 타격 계획 실패");
+                        warn!(shot = self.shot_seq, %error, "shot: 위치·방향 정렬 계획 실패");
                     }
                     return;
                 }
             };
         self.hard_fail_streak = 0;
         self.debug_snap.clear_fail_on_success();
-        let duration_secs = strike.duration_secs;
-        let impact_time_secs = strike.impact_time_secs;
-        let rail_commanded_m = strike.rail.end;
+        let duration_secs = alignment.duration_secs;
+        let rail_commanded_m = alignment.rail.end;
         self.robot.set_auto_return_to_center(false);
-        self.robot.replace_swing(strike);
+        self.robot.replace_swing(alignment);
         self.direct_return_at = Some(self.sim_time + duration_secs);
         info!(
             shot = self.shot_seq,
             stage = ?stage,
             duration_secs,
-            impact_time_secs,
             rail_commanded_m,
             target = ?target.position.coords,
-            "shot: 레일·팔 동시 이동 commit — 예측점에서 짧은 타격"
+            "shot: 레일·팔 동시 위치·방향 정렬 commit — 스윙 없음"
         );
         self.swing_committed = true;
         self.debug_snap.commit_phase = CommitPhase::Committed;

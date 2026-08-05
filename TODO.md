@@ -9,9 +9,9 @@
 - **1.4 제어 전환 완료:** real `CommitRequest`가 `BallTrajectory`와
   `Provisional | Refined` 단계를 전달한다.
 - **공 위치·높이 정렬 공통 제어 완료:** real·GUI sim이
-  `HitTargetSelector`와 `Planner::ball_alignment_strike`를 공유한다.
+  `HitTargetSelector`와 `Planner::ball_alignment`를 공유한다.
 - **중립 준비·복귀 완료:** 레일 0.710m와 기본 관절각에서 시작하고,
-  이동 중 예측 지점에서 짧게 타격한 다음 같은 자세로 복귀한다.
+  예측 지점에 정지 정렬한 다음 같은 자세로 복귀한다.
 - **실기 오차 계측 완료:** 명령 후 레일·전체 관절을 재측정해
   `commanded`, `measured`, `commanded - measured`를 구분해 남긴다.
 - **로그 정리:** 관전 창의 공 감지 상태는 `false ↔ true`로 바뀔 때만 한 번 기록한다.
@@ -122,7 +122,7 @@
   제어 전환과 별개로 검출 연속성 개선이 남아 있다.
 - 당시 검증은 `BallTrajectory → Prediction` 임시 어댑터까지였다. 현재 활성
   제어는 이 어댑터가 아니라 `BallTrajectory → HitTargetSelector →
-  Planner::ball_alignment_strike` 경로를 사용한다.
+  Planner::ball_alignment` 경로를 사용한다.
 
 ---
 
@@ -130,12 +130,12 @@
 
 현재 런타임은 중립 준비 자세에서 `BallTrajectory`의 목표 x·y·z에 라켓 중심을
 맞추고 라켓 면을 상대 네트 중앙으로 향하게 한다. 레일·팔을 동시에 움직이며
-원래 예측 지점을 통과하는 순간 백스윙 없는 짧은 전진 타격을 실행한다.
+별도 스윙 없이 목표 자세에서 정지한다.
 
 ```text
 BallTrajectory
     → HitTargetSelector
-    → Planner::ball_alignment_strike
+    → Planner::ball_alignment
     → Hardware::command
 ```
 
@@ -143,14 +143,14 @@ BallTrajectory
 
 - [x] 예측 궤적에서 정렬할 목표 x·y·z 선택
 - [x] 위치와 상대 네트 중앙 방향을 함께 만족하는 자세 IK 계산
-- [x] 레일·관절·토크·테이블 충돌 한계를 통과한 이동 중 타격 궤적 생성
+- [x] 레일·관절·토크·테이블 충돌 한계를 통과한 정지 정렬 궤적 생성
 - [x] 공마다 정렬 명령을 최대 한 번 전송
-- [x] real과 GUI sim이 같은 `Planner::ball_alignment_strike` 사용
+- [x] real과 GUI sim이 같은 `Planner::ball_alignment` 사용
 
 ### 2.2 적용값과 수렴 확인
 
 - [x] 시작·복귀 시 레일 0.710m와 기본 관절각의 중립 자세 사용
-- [x] 레일·팔 동시 이동 중 원래 예측 지점에서 최대 1.80m/s의 짧은 전진 타격
+- [x] 레일·팔 동시 이동 후 예측 위치에서 정지
 - [x] 명령 뒤 레일·전체 관절 재측정 및 `commanded - measured` 기록
 - [x] 개별 공의 정렬 계획 실패 시 워커를 종료하지 않고 다음 공 계속 처리
 - [ ] Windows 실물 장비에서 위치·높이 정렬과 복귀 최종 검증

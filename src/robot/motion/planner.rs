@@ -98,15 +98,6 @@ impl Planner {
         return physics::plan_ball_alignment(arm, start, ball);
     }
 
-    /// 레일·팔 정렬 중 원래 예측 공 위치에서 짧게 타격한다.
-    pub fn ball_alignment_strike(
-        arm: &Arm,
-        start: &robot::Pose,
-        ball: crate::Point3,
-    ) -> Result<Trajectory, DomainError> {
-        return physics::plan_ball_alignment_strike(arm, start, ball);
-    }
-
     pub fn aligned_impact_sequence(
         arm: &Arm,
         start: &robot::Pose,

@@ -26,9 +26,8 @@ use crate::robot::{
 /// 이전 `12.0`은 근거 없는 리터럴이었다 — 테이블 전폭(1.525 m)을 0.127초에
 /// 주파해, rough-to-fine 추종이 예측 방향으로 레일을 미리 옮길 때 렌더 프레임
 /// 상 순간이동처럼 보였다(육안 확인, 2026-07-23). 실기
-/// `config/real-hardware.toml`의 `[hardware.rail]` `vel`/`max_vel` = 5.0 m/s에
-/// 맞춰 재보정 — 전폭 주파 0.305초로, 연속적인 움직임으로 보인다.
-pub const RAIL_MAX_SPEED: f64 = 5.0;
+/// 실기 반복 시험 설정에 맞춰 계획기와 AXL 명령 상한을 7.5 m/s로 통일한다.
+pub const RAIL_MAX_SPEED: f64 = 7.5;
 
 /// 4-DOF 휴지(ready) 자세 [rad] — yaw, 어깨, 팔꿈치, 손목 순.
 ///

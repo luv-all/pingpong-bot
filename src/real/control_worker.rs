@@ -168,7 +168,7 @@ pub fn spawn(
         let _ = event_tx.send(RuntimeEvent::ControlState {
             state: ControlStateSnapshot::Idle,
         });
-        info!("공 위치·방향 정렬 준비 — 정렬 뒤 짧은 전진 타격");
+        info!("공 위치·방향 정렬 준비 — 스윙 없이 목표 자세로 이동");
 
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
@@ -314,28 +314,28 @@ pub fn spawn(
                 log_verification(&previous, &start, "superseded", false);
             }
             let issued_at = Instant::now();
-            let strike = match Planner::ball_alignment_strike(&arm, &start, target.position) {
-                Ok(strike) => strike,
+            let alignment = match Planner::ball_alignment(&arm, &start, target.position) {
+                Ok(alignment) => alignment,
                 Err(error) => {
                     latch.mark_finished();
                     let _ = event_tx.send(RuntimeEvent::Failed {
                         track_seq: Some(request.track_seq),
-                        reason: format!("이번 공 건너뜀 — 이동 중 타격 계획 불가: {error}"),
+                        reason: format!("이번 공 건너뜀 — 위치·방향 정렬 계획 불가: {error}"),
                     });
                     continue;
                 }
             };
-            let rail_commanded_m = strike.rail.end;
-            let aim_commanded_rad = strike
+            let rail_commanded_m = alignment.rail.end;
+            let aim_commanded_rad = alignment
                 .end
                 .values
                 .get(pingpong_bot::robot::control::DIRECT_AIM_JOINT_INDEX)
                 .copied()
                 .unwrap_or(0.0);
-            if let Err(error) = hardware.command(&strike) {
+            if let Err(error) = hardware.command(&alignment) {
                 let _ = event_tx.send(RuntimeEvent::Failed {
                     track_seq: Some(request.track_seq),
-                    reason: format!("이동 중 짧은 타격 명령 실패: {error}"),
+                    reason: format!("위치·방향 정렬 명령 실패: {error}"),
                 });
                 break;
             }
@@ -349,14 +349,14 @@ pub fn spawn(
                 aim_rad: aim_commanded_rad,
             });
 
-            let return_due_at = issued_at + Duration::from_secs_f64(strike.duration_secs);
+            let return_due_at = issued_at + Duration::from_secs_f64(alignment.duration_secs);
             state = BallControlState::Aligning {
                 track_seq: request.track_seq,
                 return_due_at,
                 measurement: PendingAlignmentMeasurement {
                     track_seq: request.track_seq,
                     rail_commanded_m,
-                    joints_commanded: strike.follow_through.clone(),
+                    joints_commanded: alignment.follow_through.clone(),
                 },
             };
             // 같은 공의 반복 정렬 명령은 막고, 새 track에서 다시 정렬한다.
@@ -378,11 +378,9 @@ pub fn spawn(
                 target_z = f4(target.position.z),
                 rail_commanded_m = f4(rail_commanded_m),
                 aim_commanded_rad = f4(aim_commanded_rad),
-                impact_time_secs = f4(strike.impact_time_secs),
-                strike_duration_secs = f4(strike.duration_secs),
-                strike_joint_velocity = %format!("{:?}", strike.end_velocity),
-                joints_commanded = %format!("{:?}", strike.follow_through.values),
-                "레일·팔 동시 이동 시작 — 예측 타격점에서 짧은 전진 타격"
+                alignment_duration_secs = f4(alignment.duration_secs),
+                joints_commanded = %format!("{:?}", alignment.follow_through.values),
+                "레일·팔 동시 위치·방향 정렬 시작 — 스윙 없음"
             );
         }
 

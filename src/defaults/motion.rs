@@ -20,7 +20,7 @@ pub const TIME_TO_GO_BIAS: f64 = 0.5;
 pub const MIN_TIME_TO_GO_SECS: f64 = 1e-3;
 pub const JDOT_STEP: f64 = 1e-4;
 
-pub const RETURN_TO_CENTER_MIN_SECS: f64 = 0.3;
+pub const RETURN_TO_CENTER_MIN_SECS: f64 = 0.2;
 pub const RETURN_TO_CENTER_MAX_SECS: f64 = 3.0;
 pub const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
 
