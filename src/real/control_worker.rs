@@ -227,6 +227,7 @@ pub fn spawn(
         let window = motion::InterceptWindow::default();
         let mut home_rail_x = arm.rail.map(|rail| rail.default_x()).unwrap_or(pose.rail_x);
         let mut current_zone = TestZone::Center;
+        let mut zone_filter: Option<TestZone> = None;
 
         if let Some(sim_tx) = &sim_tx {
             let _ = sim_tx.try_send(SimUpdate {
@@ -242,6 +243,7 @@ pub fn spawn(
         let _ = event_tx.send(RuntimeEvent::TestZoneChanged {
             zone: current_zone,
             home_rail_x,
+            filtering: false,
         });
         info!("공 위치·방향 정렬 준비 — 스윙 없이 목표 자세로 이동");
 
@@ -254,6 +256,7 @@ pub fn spawn(
         let mut pending_refined: Option<CommitRequest> = None;
         let mut consecutive_misses: u8 = 0;
         let mut pending_test_control: Option<TestControl> = None;
+        let mut last_filtered_track_seq: Option<u64> = None;
 
         'control: while !shutdown.is_down() {
             while let Ok(control) = test_control_rx.try_recv() {
@@ -278,6 +281,7 @@ pub fn spawn(
                             &arm,
                             &mut home_rail_x,
                             &mut current_zone,
+                            &mut zone_filter,
                             &mut latch,
                             &mut state,
                             sim_tx.as_ref(),
@@ -344,6 +348,7 @@ pub fn spawn(
                     &arm,
                     &mut home_rail_x,
                     &mut current_zone,
+                    &mut zone_filter,
                     &mut latch,
                     &mut state,
                     sim_tx.as_ref(),
@@ -496,6 +501,27 @@ pub fn spawn(
                     continue;
                 }
             };
+            let corrected_target_x =
+                target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M;
+            if let Some(zone) = zone_filter
+                && let Some(rail) = arm.rail
+                && !zone.contains_x(rail, corrected_target_x)
+            {
+                if last_filtered_track_seq != Some(track_seq) {
+                    let (zone_min_m, zone_max_m) = zone.bounds(rail);
+                    info!(
+                        track_seq,
+                        zone = zone.label(),
+                        corrected_target_x = f4(corrected_target_x),
+                        zone_min_m = f4(zone_min_m),
+                        zone_max_m = f4(zone_max_m),
+                        "선택한 제어 구간 밖의 공 — 명령 생략"
+                    );
+                    last_filtered_track_seq = Some(track_seq);
+                }
+                continue;
+            }
+            last_filtered_track_seq = None;
             // 중앙 복귀 직후 읽어 둔 실측 자세를 재사용한다. 토크가 유지되는
             // 대기 중에는 자세가 바뀌지 않으므로 느린 4-ID 직렬 읽기를 없앤다.
             let (start, start_pose_source) = if matches!(state, BallControlState::Idle) {
@@ -1155,20 +1181,20 @@ fn apply_test_control(
     arm: &Arm,
     home_rail_x: &mut f64,
     current_zone: &mut TestZone,
+    zone_filter: &mut Option<TestZone>,
     latch: &mut CommandLatch,
     state: &mut BallControlState,
     sim_tx: Option<&Sender<SimUpdate>>,
     event_tx: &Sender<RuntimeEvent>,
 ) -> Result<(), MoveError> {
-    let (target_zone, target_rail_x) = if let TestControl::SetZone(zone) = control
-        && let Some(rail) = arm.rail
-    {
-        (zone, zone.rail_x(rail))
-    } else {
-        (*current_zone, *home_rail_x)
+    let (target_zone, target_rail_x, target_filter) = match (control, arm.rail) {
+        (TestControl::SetZone(zone), Some(rail)) => (zone, zone.rail_x(rail), Some(zone)),
+        (TestControl::DefaultMode, Some(rail)) => (TestZone::Center, rail.default_x(), None),
+        _ => (*current_zone, *home_rail_x, *zone_filter),
     };
     move_to_ready(hardware, arm, target_rail_x)?;
     *current_zone = target_zone;
+    *zone_filter = target_filter;
     *home_rail_x = target_rail_x;
     *latch = CommandLatch::default();
     *state = BallControlState::Idle;
@@ -1183,6 +1209,7 @@ fn apply_test_control(
     info!(
         control = ?control,
         zone = ?current_zone,
+        zone_filter = ?zone_filter,
         home_rail_x = f4(*home_rail_x),
         "테스트 컨트롤 적용 — 준비 자세 복귀"
     );
@@ -1192,6 +1219,7 @@ fn apply_test_control(
     let _ = event_tx.send(RuntimeEvent::TestZoneChanged {
         zone: *current_zone,
         home_rail_x: *home_rail_x,
+        filtering: zone_filter.is_some(),
     });
     return Ok(());
 }
@@ -1587,6 +1615,7 @@ mod tests {
         };
         let mut home_rail_x = rail.default_x();
         let mut current_zone = TestZone::Center;
+        let mut zone_filter = None;
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
 
         apply_test_control(
@@ -1595,6 +1624,7 @@ mod tests {
             &robot.arm,
             &mut home_rail_x,
             &mut current_zone,
+            &mut zone_filter,
             &mut latch,
             &mut state,
             None,
@@ -1603,6 +1633,7 @@ mod tests {
         .expect("apply set zone");
 
         assert_eq!(current_zone, TestZone::Left);
+        assert_eq!(zone_filter, Some(TestZone::Left));
         assert!((home_rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-9);
         assert!(matches!(state, BallControlState::Idle));
         assert_eq!(
@@ -1638,6 +1669,7 @@ mod tests {
         let mut state = BallControlState::Idle;
         let mut home_rail_x = rail.x_max;
         let mut current_zone = TestZone::Right;
+        let mut zone_filter = Some(TestZone::Right);
         let (event_tx, _event_rx) = crossbeam_channel::unbounded();
 
         apply_test_control(
@@ -1646,6 +1678,7 @@ mod tests {
             &robot.arm,
             &mut home_rail_x,
             &mut current_zone,
+            &mut zone_filter,
             &mut latch,
             &mut state,
             None,
@@ -1654,6 +1687,40 @@ mod tests {
         .expect("apply wait");
 
         assert_eq!(current_zone, TestZone::Right);
+        assert_eq!(zone_filter, Some(TestZone::Right));
         assert!((home_rail_x - rail.x_max).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_default_mode_clears_filter_and_returns_to_center() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let mut hardware = PoseApplyingHardware {
+            pose: Pose::new(rail.x_min, robot.arm.default_joints.clone()),
+        };
+        let mut latch = CommandLatch::default();
+        let mut state = BallControlState::Idle;
+        let mut home_rail_x = rail.x_min;
+        let mut current_zone = TestZone::Left;
+        let mut zone_filter = Some(TestZone::Left);
+        let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+
+        apply_test_control(
+            TestControl::DefaultMode,
+            &mut hardware,
+            &robot.arm,
+            &mut home_rail_x,
+            &mut current_zone,
+            &mut zone_filter,
+            &mut latch,
+            &mut state,
+            None,
+            &event_tx,
+        )
+        .expect("apply default mode");
+
+        assert_eq!(current_zone, TestZone::Center);
+        assert_eq!(zone_filter, None);
+        assert!((home_rail_x - rail.default_x()).abs() < 1e-9);
     }
 }

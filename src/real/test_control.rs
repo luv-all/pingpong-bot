@@ -17,13 +17,15 @@ pub enum TestZone {
 }
 
 impl TestZone {
-    /// 이 존의 준비 자세 레일 x [m].
+    /// 이 존의 시작·타격 후 대기 레일 x [m].
+    /// 안전 제어 범위 기준 16% / 50% / 83%를 사용한다.
     pub fn rail_x(self, rail: LinearRail) -> f64 {
-        return match self {
-            Self::Left => rail.x_min,
-            Self::Center => rail.default_x(),
-            Self::Right => rail.x_max,
+        let fraction = match self {
+            Self::Left => 0.16,
+            Self::Center => 0.50,
+            Self::Right => 0.83,
         };
+        return rail.x_min + (rail.x_max - rail.x_min) * fraction;
     }
 
     /// 프리뷰 패널 표시용 라벨.
@@ -33,6 +35,27 @@ impl TestZone {
             Self::Center => "CENTER",
             Self::Right => "RIGHT",
         };
+    }
+
+    /// 안전 제어 범위 기준 이 모드가 받는 x 구간 [m].
+    /// 경계 공을 놓치지 않도록 0~45%, 20~60%, 55~100%로 서로 겹친다.
+    pub fn bounds(self, rail: LinearRail) -> (f64, f64) {
+        let span = rail.x_max - rail.x_min;
+        let (min_fraction, max_fraction) = match self {
+            Self::Left => (0.0, 0.45),
+            Self::Center => (0.20, 0.60),
+            Self::Right => (0.55, 1.0),
+        };
+        return (
+            rail.x_min + span * min_fraction,
+            rail.x_min + span * max_fraction,
+        );
+    }
+
+    /// 해당 모드의 겹친 제어 구간에 들어오는지 판정한다.
+    pub fn contains_x(self, rail: LinearRail, x: f64) -> bool {
+        let (min, max) = self.bounds(rail);
+        return x >= min && x <= max;
     }
 }
 
@@ -47,18 +70,22 @@ pub enum TestControl {
     /// 다음 idle 시점에 적용 — home 레일 x를 이 존으로 바꾸고 `Wait`과
     /// 동일하게 정리한다.
     SetZone(TestZone),
+    /// 다음 idle 시점에 중앙 준비 자세로 복귀하고 전체 구간의 공을 받는다.
+    DefaultMode,
 }
 
 impl TestControl {
     /// highgui 키코드 → 수동 컨트롤. 매핑에 없는 키는 `None`(무시).
     ///
-    /// `1`/`2`/`3` = 좌/센터/우 존, `w` = wait(존 유지), `r` = 즉시 리셋.
+    /// `1`/`2`/`3` = 0~45% / 20~60% / 55~100% 존, `4` = 전체 구간 기본 모드.
+    /// `w` = wait(모드 유지), `r` = 즉시 리셋.
     /// `q`/ESC는 프리뷰 창 자체가 Quit으로 소비하므로 여기 없다.
     pub fn from_key(key: i32) -> Option<Self> {
         return match key {
             k if k == i32::from(b'1') => Some(Self::SetZone(TestZone::Left)),
             k if k == i32::from(b'2') => Some(Self::SetZone(TestZone::Center)),
             k if k == i32::from(b'3') => Some(Self::SetZone(TestZone::Right)),
+            k if k == i32::from(b'4') => Some(Self::DefaultMode),
             k if k == i32::from(b'w') || k == i32::from(b'W') => Some(Self::Wait),
             k if k == i32::from(b'r') || k == i32::from(b'R') => Some(Self::ResetPosition),
             _ => None,
@@ -83,11 +110,27 @@ mod tests {
     }
 
     #[test]
-    fn zone_rail_x_insets_left_and_right_by_the_safety_margin() {
+    fn zone_home_positions_are_16_50_83_percent_of_safe_range() {
         let rail = test_rail();
-        assert_eq!(TestZone::Left.rail_x(rail), rail.x_min);
-        assert_eq!(TestZone::Center.rail_x(rail), rail.default_x());
-        assert_eq!(TestZone::Right.rail_x(rail), rail.x_max);
+        let span = rail.x_max - rail.x_min;
+        assert!((TestZone::Left.rail_x(rail) - (rail.x_min + span * 0.16)).abs() < 1e-12);
+        assert!((TestZone::Center.rail_x(rail) - (rail.x_min + span * 0.50)).abs() < 1e-12);
+        assert!((TestZone::Right.rail_x(rail) - (rail.x_min + span * 0.83)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn zones_use_requested_overlapping_ranges() {
+        let rail = test_rail();
+        let at = |fraction: f64| rail.x_min + (rail.x_max - rail.x_min) * fraction;
+
+        assert!(TestZone::Left.contains_x(rail, at(0.0)));
+        assert!(TestZone::Left.contains_x(rail, at(0.45)));
+        assert!(!TestZone::Left.contains_x(rail, at(0.451)));
+        assert!(TestZone::Center.contains_x(rail, at(0.20)));
+        assert!(TestZone::Center.contains_x(rail, at(0.60)));
+        assert!(!TestZone::Center.contains_x(rail, at(0.601)));
+        assert!(TestZone::Right.contains_x(rail, at(0.55)));
+        assert!(TestZone::Right.contains_x(rail, at(1.0)));
     }
 
     #[test]
@@ -110,6 +153,10 @@ mod tests {
         assert_eq!(
             TestControl::from_key(i32::from(b'3')),
             Some(TestControl::SetZone(TestZone::Right))
+        );
+        assert_eq!(
+            TestControl::from_key(i32::from(b'4')),
+            Some(TestControl::DefaultMode)
         );
     }
 

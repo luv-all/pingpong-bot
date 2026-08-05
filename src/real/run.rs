@@ -220,9 +220,13 @@ fn main_loop(
                         preview.set_control_state(*state);
                     }
                 }
-                RuntimeEvent::TestZoneChanged { zone, home_rail_x } => {
+                RuntimeEvent::TestZoneChanged {
+                    zone,
+                    home_rail_x,
+                    filtering,
+                } => {
                     if let Some(preview) = &mut preview {
-                        preview.set_zone(*zone, *home_rail_x);
+                        preview.set_zone(*zone, *home_rail_x, *filtering);
                     }
                 }
                 RuntimeEvent::Failed { reason, .. } => {
@@ -431,10 +435,15 @@ fn log_event(event: &RuntimeEvent) {
             "레일·라켓 조준 명령 전송"
         ),
         RuntimeEvent::ControlState { state } => debug!(?state, "제어 상태 전이"),
-        RuntimeEvent::TestZoneChanged { zone, home_rail_x } => info!(
+        RuntimeEvent::TestZoneChanged {
+            zone,
+            home_rail_x,
+            filtering,
+        } => info!(
             ?zone,
             home_rail_x = f2(*home_rail_x),
-            "테스트 존 변경 — 준비 자세 레일 x 갱신"
+            filtering,
+            "제어 모드 변경 — 준비 자세 레일 x·존 필터 갱신"
         ),
         RuntimeEvent::Failed { track_seq, reason } => {
             warn!(track = track_seq, reason, "실기 단순 제어 실패")

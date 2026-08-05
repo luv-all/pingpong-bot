@@ -58,7 +58,7 @@ pub struct PreviewWindow {
     /// 최근 제어 상태 — 다음 상태가 올 때까지 남는다.
     control_state: Option<ControlStateSnapshot>,
     /// 현재 테스트 존과 그 준비 레일 x — 상태 패널이 소비한다.
-    current_zone: Option<(TestZone, f64)>,
+    current_zone: Option<(TestZone, f64, bool)>,
     /// 마지막 렌더 이후 화면에 반영 안 된 변경(새 프레임·결과·상태·존)이 있는가.
     ///
     /// `show()`는 메인 루프 tick마다(사실상 `waitKey(1)`에 막힌 ~1kHz 상한으로) 불린다.
@@ -94,8 +94,8 @@ impl PreviewWindow {
     }
 
     /// 현재 테스트 존과 그 준비 레일 x를 화면에 반영한다.
-    pub fn set_zone(&mut self, zone: TestZone, home_rail_x: f64) {
-        self.current_zone = Some((zone, home_rail_x));
+    pub fn set_zone(&mut self, zone: TestZone, home_rail_x: f64, filtering: bool) {
+        self.current_zone = Some((zone, home_rail_x, filtering));
         self.dirty = true;
     }
 
@@ -205,7 +205,7 @@ fn draw_marker(image: &mut Mat, pixel: Option<camera::Pixel>, radius: i32, color
 fn draw_control_state_panel(
     image: &mut Mat,
     state: &ControlStateSnapshot,
-    zone: Option<(TestZone, f64)>,
+    zone: Option<(TestZone, f64, bool)>,
 ) -> opencv::Result<()> {
     let panel_x = image.cols() - STATE_PANEL_W - STATE_PANEL_MARGIN_PX;
     let panel_y = STATE_PANEL_MARGIN_PX;
@@ -302,8 +302,12 @@ fn draw_control_state_panel(
         )?;
     }
 
-    if let Some((zone, home_rail_x)) = zone {
-        let zone_line = format!("ZONE {}  x={home_rail_x:.3}", zone.label());
+    if let Some((zone, home_rail_x, filtering)) = zone {
+        let zone_line = if filtering {
+            format!("MODE {}  x={home_rail_x:.3}", zone.label())
+        } else {
+            format!("MODE ALL  x={home_rail_x:.3}")
+        };
         camera::Preview::draw_text_at_px(
             image,
             camera::Pixel::new(f64::from(panel_x + 14), f64::from(panel_y + 116)),
@@ -316,7 +320,7 @@ fn draw_control_state_panel(
     camera::Preview::draw_text_at_px(
         image,
         camera::Pixel::new(f64::from(panel_x + 14), f64::from(panel_y + 134)),
-        "1/2/3 zone  w wait  r reset",
+        "1:0-45  2:20-60  3:55-100  4:all",
         0.35,
         STATE_IDLE_COLOR,
         1,
@@ -334,8 +338,8 @@ mod tests {
     fn set_zone_stores_the_current_zone_and_home_x() {
         let mut window = PreviewWindow::new("test");
         assert!(window.current_zone.is_none());
-        window.set_zone(TestZone::Right, 1.34);
-        assert_eq!(window.current_zone, Some((TestZone::Right, 1.34)));
+        window.set_zone(TestZone::Right, 1.34, true);
+        assert_eq!(window.current_zone, Some((TestZone::Right, 1.34, true)));
     }
 
     fn idle_pixel(img: &Mat) -> Vec3b {
