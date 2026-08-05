@@ -113,7 +113,7 @@ pub struct SimWorld {
     /// 이번 비행이 발사된 `sim_time` — `park_if_out_of_play`의 최대 비행
     /// 시간 안전장치(`MAX_BALL_FLIGHT_SECS`)가 기준으로 삼는다.
     flight_started_at: f64,
-    /// 위치 정렬 유지 후 중립 준비 자세 복귀를 시작할 sim 시각.
+    /// 위치 정렬·타격 후 중립 준비 자세 복귀를 시작할 sim 시각.
     direct_return_at: Option<f64>,
     /// 뷰어·Status용 디버그 스냅샷 (실패 사유·궤적·한계).
     debug_snap: SimDebugSnapshot,
@@ -870,31 +870,34 @@ impl SimWorld {
             return;
         }
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        let alignment = match motion::Planner::ball_alignment(&self.arm, &start, target.position) {
-            Ok(alignment) => alignment,
-            Err(error) => {
-                self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
-                self.debug_snap.last_fail_text = Some(error.to_string());
-                if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
-                    warn!(shot = self.shot_seq, %error, "shot: 공 위치·높이 정렬 계획 실패");
+        let strike =
+            match motion::Planner::ball_alignment_strike(&self.arm, &start, target.position) {
+                Ok(strike) => strike,
+                Err(error) => {
+                    self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
+                    self.debug_snap.last_fail_text = Some(error.to_string());
+                    if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
+                        warn!(shot = self.shot_seq, %error, "shot: 이동 중 타격 계획 실패");
+                    }
+                    return;
                 }
-                return;
-            }
-        };
+            };
         self.hard_fail_streak = 0;
         self.debug_snap.clear_fail_on_success();
-        let alignment_duration_secs = alignment.duration_secs;
-        let rail_commanded_m = alignment.follow_through_rail_x;
+        let duration_secs = strike.duration_secs;
+        let impact_time_secs = strike.impact_time_secs;
+        let rail_commanded_m = strike.rail.end;
         self.robot.set_auto_return_to_center(false);
-        self.robot.replace_swing(alignment);
-        self.direct_return_at = Some(self.sim_time + alignment_duration_secs + 0.20);
+        self.robot.replace_swing(strike);
+        self.direct_return_at = Some(self.sim_time + duration_secs);
         info!(
             shot = self.shot_seq,
             stage = ?stage,
-            duration_secs = alignment_duration_secs,
+            duration_secs,
+            impact_time_secs,
             rail_commanded_m,
             target = ?target.position.coords,
-            "shot: 공 위치·높이 정렬 commit — 스윙 없음"
+            "shot: 레일·팔 동시 이동 commit — 예측점에서 짧은 타격"
         );
         self.swing_committed = true;
         self.debug_snap.commit_phase = CommitPhase::Committed;

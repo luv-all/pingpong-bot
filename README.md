@@ -21,10 +21,10 @@ BallTrajectory {
 ```
 
 real 제어는 `BallTrajectory → CommitRequest → HitTargetSelector →
-Planner::ball_alignment` 경로로 정렬 궤적을 계산한다. 공의 예측 x·y·z에
-라켓 중심을 정지 상태로 맞추고, 라켓 면은 상대 네트 중앙을 향하게 한다.
-0.2초 유지한 뒤 원래 중립 자세로 복귀한다. 현재 활성 경로에는 백스윙·임팩트·
-팔로스루가 없으며, GUI sim도 같은 정렬 계획기를 쓴다.
+Planner::ball_alignment_strike` 경로로 결합 궤적을 계산한다. 레일과 팔이 함께
+움직이고, 라켓 중심이 원래 예측 x·y·z를 통과하는 순간 상대 네트 중앙 방향의
+짧은 전진 속도를 낸다. 백스윙 없이 짧게 따라 나간 뒤 중립 자세로 복귀하며,
+GUI sim도 같은 계획기를 쓴다.
 
 ---
 
@@ -91,8 +91,8 @@ cargo run -p pingpong-bot -- --debug
 실행하면 Rapier 디지털 트윈(탁구대·공·로봇) + kiss3d/egui 뷰어가 뜬다.  
 로봇은 실기 보정 레일 준비 위치(0.710 m)와 준비 관절 자세에서 시작한다.
 슈터 GUI로 발사하면 기본 경로는 월드 ground-truth 궤적에서 목표를 고른 뒤
-실기와 같은 `Planner::ball_alignment`로 라켓 중심을 공 위치·높이에 정렬한다.
-스윙이나 임팩트 속도는 만들지 않고, 잠깐 유지한 뒤 중립 자세로 복귀한다.
+실기와 같은 `Planner::ball_alignment_strike`로 레일·팔을 함께 움직인다.
+원래 예측 위치에서 짧은 타격 속도를 낸 뒤 중립 자세로 복귀한다.
 GUI `Random`은 로봇 접수 회귀를 통과한 좌우 위치·yaw·속도 범위만 무작위화한다.
 높이·스핀 극단값은 도달 시간을 보장하지 않으므로 각각의 슬라이더로 시험한다.
 
@@ -112,7 +112,7 @@ cargo run -p pingpong-bot -- --mode sim --debug
 4. **Park**는 공을 회수한다. 마우스 드래그/스크롤은 시점 회전/줌이다.
 
 기본 sim은 카메라 추정값이 아닌 월드 ground-truth로 `BallTrajectory`를 만들지만,
-그 뒤의 목표 선택·공 위치 정렬 궤적 계산은 실기와 같은 코드를 쓴다.
+그 뒤의 목표 선택·공 위치 정렬·타격 궤적 계산은 실기와 같은 코드를 쓴다.
 **Eval**과 bang-bang 스윙 토글은 보존 중인 시뮬레이션 진단 기능이며 현재 실기
 직접 제어 경로에는 대응하지 않는다.
 
@@ -121,9 +121,9 @@ cargo run -p pingpong-bot -- --mode sim --debug
 실기는 **Windows 2단계** 환경을 기준으로 한다. 카메라와 공 추적을 시작하기 전에
 선택적 홈 이동으로 레일 0.710m와 기본 관절각의 중립 자세를 만든다. 공 검출 시
 예측 궤적에서 목표 x·y·z를 고르고, 주변 레일 후보 가운데 관절 이동이 작고
-테이블·관절·토크·레일 한계를 통과하는 위치 전용 IK 해를 선택한다. 모든 관절은
-정지 상태에서 출발해 정지 상태로 도착하므로 타격 속도를 만들지 않는다. 정렬 자세를
-0.2초 유지한 뒤 같은 중립 자세로 자동 복귀한다. 안전한 경로가 없으면 해당 공만
+테이블·관절·토크·레일 한계를 통과하는 위치·방향 IK 해를 선택한다. 레일·팔 이동을
+한 궤적으로 실행하며, 원래 예측 위치를 지날 때 목표 1.80m/s의 짧은 전진 타격을
+만든 뒤 같은 중립 자세로 자동 복귀한다. 안전한 경로가 없으면 해당 공만
 건너뛰고 사유를 로그로 남기며 다음 공을 계속 처리한다.
 
 실행 전 체크리스트:
@@ -297,9 +297,9 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 
 ### `--mode real` — 공 위치·높이 정렬 제어
 
-공 궤적에서 선택한 목표의 x·y·z에 라켓 중심을 맞춘다. 레일과 전체 관절을
-하나의 정지-정지 궤적으로 움직이면서 라켓 면을 상대 네트 중앙으로 돌린다.
-0.2초 유지한 뒤 중앙 중립 자세로 복귀하며 타격 동작은 하지 않는다.
+공 궤적에서 선택한 목표 x·y·z를 임팩트 지점으로 사용한다. 레일과 전체 관절이
+동시에 움직이고, 라켓 면을 상대 네트 중앙으로 돌리면서 예측 지점에서 짧은 전진
+타격 속도를 낸다. 짧은 팔로스루 뒤 중앙 중립 자세로 복귀한다.
 스레드와 하드웨어 경계는 [`src/real/README.md`](src/real/README.md)에 정리돼 있다.
 
 ```bash
@@ -339,8 +339,8 @@ AXL의 `ActPos`와 `CmdPos` 원점이 다르면 시작 로그에 두 값과 차�
 ## 아키텍처
 
 현재 활성 제어의 공통 경계는 `BallTrajectory → HitTargetSelector →
-Planner::ball_alignment → Hardware`다. `sim`과 `real`은 같은 목표 선택과
-위치 정렬 궤적 계산을 사용한다. 실기는 `Hardware::command`로 레일·전체 관절에
+Planner::ball_alignment_strike → Hardware`다. `sim`과 `real`은 같은 목표 선택과
+이동 중 타격 궤적 계산을 사용한다. 실기는 `Hardware::command`로 레일·전체 관절에
 전송하고 GUI sim은 같은 궤적을 `robot::State`에 적용한다. GUI sim 엔트리(`main`)는
 뷰어와 `SimSession`을 함께 실행한다.
 
@@ -418,7 +418,7 @@ flowchart LR
     physics["Physics 스레드 · 1 kHz"]
     simHw["robot::State"]
     viewer -.-> physics
-    physics -->|"공통 위치 정렬 궤적"| simHw
+    physics -->|"공통 이동 중 타격 궤적"| simHw
     simHw --> physics
   end
 

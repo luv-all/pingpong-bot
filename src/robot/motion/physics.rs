@@ -593,6 +593,81 @@ pub fn plan_ball_alignment(
     return plan_move_to(arm, start, aligned_pose.joints, aligned_pose.rail_x);
 }
 
+/// 레일·팔 정렬 이동과 짧은 타격을 한 궤적으로 실행한다.
+///
+/// [`plan_ball_alignment`]이 구한 공 위치·네트 방향 자세를 **임팩트 knot**로
+/// 사용한다. 따라서 라켓 중심은 원래 예측된 공 `(x,y,z)`를 지나는 순간 전진
+/// 속도를 가지며, 레일과 관절은 그 시점까지 동시에 이동한다. 별도 백스윙은 없다.
+pub fn plan_ball_alignment_strike(
+    arm: &Arm,
+    start: &robot::Pose,
+    ball: Point3,
+) -> Result<Trajectory, DomainError> {
+    let alignment = plan_ball_alignment(arm, start, ball)?;
+    let impact_joints = alignment.follow_through.clone();
+    let impact_rail_x = alignment.follow_through_rail_x;
+    let impact_pose = robot::Pose::new(impact_rail_x, impact_joints.clone());
+    let racket = arm
+        .forward_kinematics_with_rail(impact_rail_x, &impact_joints)
+        .ok_or_else(|| {
+            DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: ball.x,
+                target_y: ball.y,
+                target_z: ball.z,
+            })
+        })?;
+    let (_, mut impact_velocity) = arm
+        .linear_velocities_for_racket_velocity(
+            &impact_pose,
+            racket.normal * FIXED_IMPACT_PUSH_SPEED_M_S,
+        )
+        .map_err(DomainError::InfeasibleSwing)?;
+    let peak = impact_velocity
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f64, f64::max);
+    if peak > arm.max_joint_speed && arm.max_joint_speed > 0.0 {
+        let scale = arm.max_joint_speed / peak;
+        for velocity in &mut impact_velocity {
+            *velocity *= scale;
+        }
+    }
+
+    let start_velocity = vec![0.0; start.joints.values.len()];
+    let mut duration = alignment.duration_secs.max(FIXED_IMPACT_MIN_DURATION_SECS);
+    let mut last_error = None;
+    while duration <= RETURN_TO_CENTER_MAX_SECS {
+        let rail = Rail {
+            start: start.rail_x,
+            end: impact_rail_x,
+            start_velocity: 0.0,
+            end_velocity: 0.0,
+        };
+        match build_feasible_trajectory(
+            arm,
+            &start.joints,
+            impact_joints.clone(),
+            start_velocity.clone(),
+            impact_velocity.clone(),
+            duration,
+            rail,
+        ) {
+            Ok(trajectory) => return Ok(trajectory),
+            Err(error) => {
+                last_error = Some(error);
+                duration *= RETURN_TO_CENTER_GROWTH;
+            }
+        }
+    }
+    return Err(DomainError::InfeasibleSwing(last_error.unwrap_or(
+        SwingPlanError::InverseKinematicsNoSolution {
+            target_x: ball.x,
+            target_y: ball.y,
+            target_z: ball.z,
+        },
+    )));
+}
+
 /// 검출 직후 백스윙과 공 도착 시 임팩트 궤적.
 #[derive(Debug, Clone)]
 pub struct AlignedImpactSequence {
@@ -1535,6 +1610,36 @@ mod tests {
                 .all(|velocity| velocity.abs() < 1e-12)
         );
         assert_eq!(alignment.end, alignment.follow_through);
+    }
+
+    #[test]
+    fn ball_alignment_strike_hits_original_prediction_while_rail_moves() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let start = robot::Pose::new(
+            arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+            arm.default_joints.clone(),
+        );
+        let ball = Point3::new(table::WIDTH_X * 0.5 + 0.18, READY_RACKET_Y_M, 0.95);
+        let strike = plan_ball_alignment_strike(arm, &start, ball).expect("moving strike");
+        let impact_joints = strike.sample_at(strike.impact_time_secs);
+        let impact_rail_x = strike.sample_rail_at(strike.impact_time_secs);
+        let impact = arm
+            .forward_kinematics_with_rail(impact_rail_x, &impact_joints)
+            .expect("impact FK");
+
+        assert!((impact.position.coords - ball.coords).norm() < 2e-3);
+        assert!(
+            strike
+                .end_velocity
+                .iter()
+                .any(|velocity| velocity.abs() > 1e-3),
+            "예측 타격점에서 전진 관절속도가 있어야 함"
+        );
+        assert!(
+            (strike.rail.end - strike.rail.start).abs() > 1e-3,
+            "레일도 임팩트까지 동시에 이동해야 함"
+        );
     }
 
     #[test]

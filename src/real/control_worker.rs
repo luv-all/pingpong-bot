@@ -26,13 +26,12 @@ const MAX_REQUEST_AGE_SECS: f64 = 0.050;
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const BUSY_POLL: Duration = Duration::from_millis(5);
-const ALIGNMENT_HOLD: Duration = Duration::from_millis(200);
 const VERIFY_POLL_PERIOD: Duration = Duration::from_millis(20);
 const VERIFY_STABLE_SAMPLES: u8 = 2;
 const MAX_CONSECUTIVE_MISSES: u8 = 3;
 const RAIL_ERROR_WARN_M: f64 = 0.020;
 const AIM_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
-const STARTUP_SETTLE_TIMEOUT: Duration = Duration::from_secs(3);
+const STARTUP_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_JOINT_TOLERANCE_RAD: f64 = 3.0_f64.to_radians();
 const STARTUP_STABLE_SAMPLES: u8 = 2;
 
@@ -163,7 +162,7 @@ pub fn spawn(
         let _ = event_tx.send(RuntimeEvent::ControlState {
             state: ControlStateSnapshot::Idle,
         });
-        info!("단순 위치 정렬 준비 — 공 x·y·z에 라켓 중심 맞춤, 스윙 없음");
+        info!("공 위치·방향 정렬 준비 — 정렬 뒤 짧은 전진 타격");
 
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
@@ -309,28 +308,28 @@ pub fn spawn(
                 log_verification(&previous, &start, "superseded", false);
             }
             let issued_at = Instant::now();
-            let alignment = match Planner::ball_alignment(&arm, &start, target.position) {
-                Ok(alignment) => alignment,
+            let strike = match Planner::ball_alignment_strike(&arm, &start, target.position) {
+                Ok(strike) => strike,
                 Err(error) => {
                     latch.mark_finished();
                     let _ = event_tx.send(RuntimeEvent::Failed {
                         track_seq: Some(request.track_seq),
-                        reason: format!("이번 공 건너뜀 — 위치·높이 정렬 불가: {error}"),
+                        reason: format!("이번 공 건너뜀 — 이동 중 타격 계획 불가: {error}"),
                     });
                     continue;
                 }
             };
-            let rail_commanded_m = alignment.follow_through_rail_x;
-            let aim_commanded_rad = alignment
-                .follow_through
+            let rail_commanded_m = strike.rail.end;
+            let aim_commanded_rad = strike
+                .end
                 .values
                 .get(pingpong_bot::robot::control::DIRECT_AIM_JOINT_INDEX)
                 .copied()
                 .unwrap_or(0.0);
-            if let Err(error) = hardware.command(&alignment) {
+            if let Err(error) = hardware.command(&strike) {
                 let _ = event_tx.send(RuntimeEvent::Failed {
                     track_seq: Some(request.track_seq),
-                    reason: format!("공 위치·높이 정렬 명령 실패: {error}"),
+                    reason: format!("이동 중 짧은 타격 명령 실패: {error}"),
                 });
                 break;
             }
@@ -344,15 +343,14 @@ pub fn spawn(
                 aim_rad: aim_commanded_rad,
             });
 
-            let return_due_at =
-                issued_at + Duration::from_secs_f64(alignment.duration_secs) + ALIGNMENT_HOLD;
+            let return_due_at = issued_at + Duration::from_secs_f64(strike.duration_secs);
             state = BallControlState::Aligning {
                 track_seq: request.track_seq,
                 return_due_at,
                 measurement: PendingAlignmentMeasurement {
                     track_seq: request.track_seq,
                     rail_commanded_m,
-                    joints_commanded: alignment.follow_through.clone(),
+                    joints_commanded: strike.follow_through.clone(),
                 },
             };
             // 같은 공의 반복 정렬 명령은 막고, 새 track에서 다시 정렬한다.
@@ -374,10 +372,11 @@ pub fn spawn(
                 target_z = f4(target.position.z),
                 rail_commanded_m = f4(rail_commanded_m),
                 aim_commanded_rad = f4(aim_commanded_rad),
-                alignment_duration_secs = f4(alignment.duration_secs),
-                hold_secs = f4(ALIGNMENT_HOLD.as_secs_f64()),
-                joints_commanded = %format!("{:?}", alignment.follow_through.values),
-                "공 위치·높이 정렬 시작 — 스윙 없음"
+                impact_time_secs = f4(strike.impact_time_secs),
+                strike_duration_secs = f4(strike.duration_secs),
+                strike_joint_velocity = %format!("{:?}", strike.end_velocity),
+                joints_commanded = %format!("{:?}", strike.follow_through.values),
+                "레일·팔 동시 이동 시작 — 예측 타격점에서 짧은 전진 타격"
             );
         }
 
@@ -817,7 +816,7 @@ impl std::fmt::Display for MoveError {
                 max_joint_error_rad,
             } => write!(
                 f,
-                "시작 팔 자세가 3초 안에 수렴하지 않음: 최대 관절 오차 {:+.2}°",
+                "시작 팔 자세가 10초 안에 수렴하지 않음: 최대 관절 오차 {:+.2}°",
                 max_joint_error_rad.to_degrees()
             ),
         };
