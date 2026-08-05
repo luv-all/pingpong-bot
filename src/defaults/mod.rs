@@ -62,11 +62,11 @@ pub use hardware::{
 };
 pub use impact::ImpactParams;
 pub use motion::{
-    COARSE_TRACK_JOINT_FRACTION, JACOBIAN_DAMPING, JDOT_STEP, MAGNUS_OMEGA_MAX,
-    MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
-    POSITION_TOLERANCE_RAD_OR_M, POST_ALIGNMENT_HOLD_SECS, RACKET_DIRECTION_TOLERANCE_DEG,
-    RACKET_SPEED_RATIO_TOLERANCE, RAIL_ACCEL_M_S2, RETURN_TO_CENTER_GROWTH,
-    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS, TIME_TO_GO_BIAS,
+    ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, COARSE_TRACK_JOINT_FRACTION, JACOBIAN_DAMPING,
+    JDOT_STEP, MAGNUS_OMEGA_MAX, MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS,
+    PLAN_DT_SECS, POSITION_TOLERANCE_RAD_OR_M, POST_ALIGNMENT_HOLD_SECS,
+    RACKET_DIRECTION_TOLERANCE_DEG, RACKET_SPEED_RATIO_TOLERANCE, RAIL_ACCEL_M_S2,
+    RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS, TIME_TO_GO_BIAS,
 };
 pub use physics::PhysicsParams;
 pub use robot::{
@@ -118,8 +118,8 @@ mod tests {
         assert_eq!(model_rail.x_min, rail_config.x_min_m);
         assert_eq!(model_rail.x_max, rail_config.x_max_m);
         assert!((model_rail.x_min - 0.0705).abs() < 1e-12);
-        assert!((model_rail.x_max - 1.4495).abs() < 1e-12);
-        assert!((model_rail.default_x() - 0.7600).abs() < 1e-12);
+        assert!((model_rail.x_max - 1.4100).abs() < 1e-12);
+        assert!((model_rail.default_x() - 0.7400).abs() < 1e-12);
         assert!((rail_config.x_min_m - model_rail.x_min).abs() < 1e-12);
         assert!((rail_config.x_max_m - model_rail.x_max).abs() < 1e-12);
         let c = ControlParams::default();

@@ -5,20 +5,19 @@ use crate::hardware::rail::RailConfig;
 
 use super::motion::RAIL_ACCEL_M_S2;
 
-/// 실기 양쪽 안전 마진 [m].
-///
-/// 좌측에서 검증된 0.0705 m를 양쪽에 동일하게 적용한다.
+/// 실기 좌측 안전 마진 [m].
 pub const RAIL_END_MARGIN_M: f64 = 0.0705;
-/// 물리 전체 길이 대비 안전 마진 비율(약 4.64%).
-pub const RAIL_ZONE_SAFETY_MARGIN_RATIO: f64 = RAIL_END_MARGIN_M / RAIL_PHYSICAL_X_MAX_M;
-/// 중앙 0.76 m를 기준으로 재산정한 물리 레일 전체 범위 [m].
+/// 1.41 m 기준 좌측 마진 비율(5%).
+pub const RAIL_ZONE_SAFETY_MARGIN_RATIO: f64 = 0.05;
+/// 실기에서 확인한 레일 좌표 범위 [m].
 pub const RAIL_PHYSICAL_X_MIN_M: f64 = 0.0;
-pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.52;
-/// 물리 양 끝에서 0.0705 m를 제외한 sim·real 공통 이동 범위 [m].
-pub const RAIL_X_MIN_M: f64 = RAIL_PHYSICAL_X_MIN_M + RAIL_END_MARGIN_M;
-pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_END_MARGIN_M;
-/// 물리 레일 전체의 정확한 50% 준비 위치 [m].
-pub const RAIL_READY_X_M: f64 = 0.5 * (RAIL_PHYSICAL_X_MIN_M + RAIL_PHYSICAL_X_MAX_M);
+pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
+/// sim·real 공통 이동 범위 [m]. 좌측은 0.0705 m 마진을 두고,
+/// 우측 1.41 m는 이미 확인된 안전 상한이라 추가로 줄이지 않는다.
+pub const RAIL_X_MIN_M: f64 = RAIL_END_MARGIN_M;
+pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M;
+/// 탁구대 실측 중앙 보정 위치 [m].
+pub const RAIL_READY_X_M: f64 = 0.7400;
 
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.

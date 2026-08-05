@@ -42,6 +42,8 @@ pub const READY_RACKET_Y_M: f64 = 0.215;
 pub const DETECTION_WINDUP_DISTANCE_M: f64 = 0.020;
 /// 기본 타격에서 라켓 중심을 공 중심보다 아래에 둘 거리 [m].
 pub const IMPACT_CENTER_BELOW_BALL_M: f64 = 0.020;
+/// 기초 정렬 모드에서 공이 닿을 지점을 블레이드 중심보다 낮추는 거리 [m].
+pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.030;
 /// 공을 상대편으로 넘기기 위한 라켓 면의 위쪽 기울기 [deg].
 pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 /// 검출 직후 추가 백스윙의 첫 시도 시간 [s].

@@ -6,11 +6,11 @@ use crate::Point3;
 use crate::constants::table;
 use crate::defaults;
 use crate::defaults::motion::{
-    DETECTION_WINDUP_DISTANCE_M, DETECTION_WINDUP_MIN_DURATION_SECS,
-    FIXED_IMPACT_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_DISTANCE_M, FIXED_IMPACT_PUSH_SPEED_M_S,
-    IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M,
-    READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS,
-    RETURN_TO_CENTER_MIN_SECS,
+    ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, DETECTION_WINDUP_DISTANCE_M,
+    DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_MIN_DURATION_SECS,
+    FIXED_IMPACT_PUSH_DISTANCE_M, FIXED_IMPACT_PUSH_SPEED_M_S, IMPACT_CENTER_BELOW_BALL_M,
+    IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M, READY_RACKET_HEIGHT_M, READY_RACKET_Y_M,
+    RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
@@ -561,6 +561,8 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 /// 함께 푼 뒤 정지→정지 궤적 검사를 통과시킨다. 임팩트 속도와 공 도착 시각은 이
 /// 기초 정렬 모드에서 사용하지 않는다. 공 중심과 라켓 중심을 겹치지 않도록
 /// `공 반지름 + 라켓 반두께` 만큼 법선 반대쪽에 라켓 중심을 둔다.
+/// 공이 닿는 지점은 블레이드 중심보다 3 cm 아래라서, 라켓 중심은
+/// 공 중심보다 3 cm 위로 올린다.
 pub fn plan_ball_alignment(
     arm: &Arm,
     start: &robot::Pose,
@@ -577,7 +579,10 @@ pub fn plan_ball_alignment(
         Vector3::y()
     };
     let contact_offset = crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z;
-    let racket_center = Point3::from(ball.coords - target_normal * contact_offset);
+    let racket_center = Point3::from(
+        ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
+            - target_normal * contact_offset,
+    );
     let hint_rail_x = arm
         .rail
         .as_ref()
@@ -1579,11 +1584,12 @@ mod tests {
             reached.normal
         );
         let contact = reached.position.coords
+            - Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
             + reached.normal
                 * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z);
         assert!(
             (contact - ball.coords).norm() < 2e-3,
-            "라켓 면 중앙 접촉점이 공 중심에 닿아야 함: contact={contact:?} ball={:?}",
+            "라켓 중심보다 3cm 아래 접촉점이 공 중심에 닿아야 함: contact={contact:?} ball={:?}",
             ball.coords
         );
         assert!(
