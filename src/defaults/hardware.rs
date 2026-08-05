@@ -12,6 +12,11 @@ pub const RAIL_X_MAX_M: f64 = 1.41;
 /// 실기에서 눈으로 맞춘 레일 중앙 준비 위치 [m].
 pub const RAIL_READY_X_M: f64 = 0.71;
 
+/// 좌/우 존 준비 위치가 레일 양 끝에서 안쪽으로 확보하는 안전 여유 — 레일
+/// 전체 구간(`x_max - x_min`) 대비 비율. 초기값 5% — 실기 벤치에서 하드
+/// 스탑까지의 여유를 눈으로 확인한 뒤 조정한다.
+pub const RAIL_ZONE_SAFETY_MARGIN_RATIO: f64 = 0.05;
+
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.
     fn default() -> Self {
