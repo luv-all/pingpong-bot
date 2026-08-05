@@ -15,7 +15,7 @@
 //! | [`impact`] | `ImpactParams` |
 //! | [`intercept`] | `EstimatorParams` |
 //! | [`robot`] | URDF·primitive (`Result`) |
-//! | [`vision`] | colormask/calib 로드 + [`detector_for`] |
+//! | [`vision`] | 튜너블 + 캐스케이드·picker·트리거 조립, colormask/calib 로드 |
 //! | [`calib`] | Cam* / Charuco / Rig |
 //! | [`hardware`] | DynamixelConfig / RailConfig |
 //! | [`dxl_limits`] | derate·속도·토크 배열 |

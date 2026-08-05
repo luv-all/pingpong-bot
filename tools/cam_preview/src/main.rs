@@ -23,7 +23,6 @@ use pingpong_bot::camera::{
     self, Calibration, OpenCvCapture, Preview, PreviewAction, ThreadedCapture, Triangulate,
 };
 use pingpong_bot::defaults;
-use pingpong_bot::vision::Detector;
 
 use args::Args;
 use cam_slot::CamSlot;
@@ -93,7 +92,7 @@ fn main() -> Result<()> {
             panel: None,
             params: params.clone(),
             detector: match &params {
-                Some(params) => Some(Detector::for_camera(params).context("detector")?),
+                Some(params) => Some(defaults::vision::cascade(params).context("detector")?),
                 None => None,
             },
             found: None,

@@ -9,16 +9,6 @@ use crate::camera::Frame;
 
 use super::super::{Layer, Mask};
 
-/// 배경 모델이 기억하는 프레임 수. 정상 상태 학습률은 `1/HISTORY`다.
-pub const HISTORY: i32 = 500;
-/// 마할라노비스 제곱 임계 — OpenCV 기본값.
-pub const VAR_THRESHOLD: f64 = 16.0;
-/// 모델을 돌릴 배율. 공 반지름이 3~18 px라 절반에서도 남는다.
-pub const SCALE: f64 = 0.5;
-/// 음수는 자동. MOG2 구현은 `1 / min(2·nframes, HISTORY)`를 쓴다. 초반이 커서 모델이
-/// 빨리 서고, `2·nframes ≥ HISTORY`부터 `1/HISTORY`로 고정된다.
-pub const LEARNING_RATE: f64 = -1.0;
-
 /// 배경 차분 레이어. MOG2로 정지한 픽셀을 끈다.
 ///
 /// fly_04 실측 전경 비율 0.04 % (`tests/diag_background.rs`).

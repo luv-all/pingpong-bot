@@ -9,13 +9,10 @@ use crate::Point3;
 use crate::camera;
 use crate::camera::Triangulate;
 use crate::constants::table;
+use crate::defaults::vision::seed::MAX_REPROJECTION_PX;
 
 use super::detect::Candidate;
 
-/// 삼각측량 위치 노이즈 σ [m]. 시드 공분산의 바닥값.
-pub const TRIANGULATION_SIGMA: f64 = 0.03;
-/// 재투영이 이보다 벌어지면 두 캠이 다른 걸 잡은 것 [px].
-pub const MAX_REPROJECTION_PX: f64 = 14.0;
 /// 시드를 받아 줄 플레이 부피 여유 [m].
 const VOLUME_MARGIN: f64 = 0.5;
 

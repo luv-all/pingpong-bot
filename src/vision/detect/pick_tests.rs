@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::camera::Pixel;
+use crate::defaults::vision::detect::MIN_CIRCULARITY;
 
 fn picker() -> Picker {
     return Picker {

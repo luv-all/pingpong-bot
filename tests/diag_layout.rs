@@ -13,7 +13,7 @@ use nalgebra::{Matrix2x3, Matrix3, Vector3};
 use pingpong_bot::camera::{self, Calibration};
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
-use pingpong_bot::vision::fit::SIGMA_PX;
+use pingpong_bot::defaults::vision::fit::SIGMA_PX;
 use pingpong_bot::{Point3, Vector3 as V3};
 
 const WIDTH: u32 = 1280;

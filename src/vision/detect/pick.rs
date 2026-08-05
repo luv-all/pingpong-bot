@@ -14,11 +14,6 @@ use super::{Candidate, Mask};
 const RADIUS_MIN_SCALE: f64 = 0.5;
 const RADIUS_MAX_SCALE: f64 = 1.8;
 
-/// 원형도 하한. 순위에 안 쓰고 걸러내기만 하므로 느슨하게 잡는다.
-///
-/// 완벽한 원이어도 래스터화만으로 떨어진다 — 실측 r=3 px 에서 0.67, r=20 px 에서 0.87
-/// (`pick_tests.rs`). 모션 블러가 여기서 더 깎는다.
-pub const MIN_CIRCULARITY: f64 = 0.35;
 
 /// 기대 반지름과의 편차로 후보를 고른다. 가장 큰 것을 고르면 팔이 공을 이긴다.
 pub struct Picker {

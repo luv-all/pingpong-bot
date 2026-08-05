@@ -13,7 +13,7 @@ use pingpong_bot::camera::Calibration;
 use pingpong_bot::defaults::EstimatorParams;
 use pingpong_bot::robot::motion::Prediction;
 use pingpong_bot::robot::motion::{InterceptWindow, Planner};
-use pingpong_bot::vision::{Fit, Outcome, State, triggers};
+use pingpong_bot::vision::{Fit, Outcome, State};
 use tracing::{debug, info_span};
 
 use super::commit_request::predictions_at;
@@ -66,7 +66,7 @@ pub fn spawn(
     return thread::spawn(move || {
         let _span = info_span!("estimator").entered();
         let mut stats = EstimatorStats::default();
-        let mut ekf = Fit::new(&calibration, triggers::primary());
+        let mut ekf = Fit::new(&calibration, pingpong_bot::defaults::vision::trigger());
         // 프레임 시각은 벽시계지만 필터는 경과만 안다. 첫 프레임이 t=0 이다.
         let mut origin: Option<Instant> = None;
         // TODO(제어): `decide` 는 "칠 만한가" 정책이라 제어 쪽 판단이다. 여기 있는 이유는

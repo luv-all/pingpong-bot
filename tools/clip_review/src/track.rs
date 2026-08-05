@@ -13,10 +13,8 @@ use pingpong_bot::Point3;
 use pingpong_bot::camera::{self, Calibration, Frame, FrameSource, OpenCvCapture, Triangulate};
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
-use pingpong_bot::vision::{Outcome, State, Track, Trajectory, Vision, triggers};
-
-/// 재투영 오차가 이보다 크면 두 캠이 서로 다른 걸 잡은 것 — 시드 게이트와 같은 상한.
-const MAX_REPROJECTION_PX: f64 = 14.0;
+use pingpong_bot::defaults::vision::seed::MAX_REPROJECTION_PX;
+use pingpong_bot::vision::{Outcome, State, Track, Trajectory, Vision};
 
 /// 로봇 마운트 y [m] — 궤적을 그릴 하한.
 ///
@@ -214,8 +212,8 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
     let calibration = Calibration::load_json(&defaults::calibration_path())
         .map_err(|e| format!("calibration 로드: {e}"))?;
     // 실기와 **같은** 트리거다. 도구가 더 늦게 걸면 실기에서 쓸 수 있는 구간을 못 본다.
-    let mut vision =
-        Vision::load(&calibration, triggers::primary()).map_err(|e| format!("vision 조립: {e}"))?;
+    let mut vision = Vision::load(&calibration, defaults::vision::trigger())
+        .map_err(|e| format!("vision 조립: {e}"))?;
 
     let mut left_frames = load_all(left, camera::Id(0))?;
     let mut right_frames = load_all(right, camera::Id(1))?;

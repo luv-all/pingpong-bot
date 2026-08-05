@@ -46,7 +46,7 @@ impl Vision {
         let detectors = calibration
             .cameras
             .iter()
-            .map(|params| Ok((params.camera_id, Detector::for_camera(params)?)))
+            .map(|params| Ok((params.camera_id, crate::defaults::vision::cascade(params)?)))
             .collect::<Result<Vec<_>>>()?;
         return Ok(Self {
             fit: Fit::new(calibration, trigger),

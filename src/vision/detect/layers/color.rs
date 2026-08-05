@@ -11,9 +11,6 @@ use crate::camera::Frame;
 
 use super::super::{Layer, Mask};
 
-/// 임계를 잡을 때 남길 양성 비율. 색은 판별자가 아니라 후보 생성기라 재현율을 높게 잡는다.
-pub const KEEP_RATIO: f64 = 0.99;
-
 /// `w · bgr + b >= 0`이면 통과. 평면 하나다.
 ///
 /// 상자(`inRange`)나 타원체와 달리 음성 표본으로도 피팅한다. 상자는 공을 더 담으려면 모든

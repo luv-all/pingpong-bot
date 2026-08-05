@@ -14,9 +14,8 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use opencv::core::{Mat, Scalar};
 use opencv::prelude::*;
-use pingpong_bot::camera::{self, Calibration, Preview, PreviewAction};
+use pingpong_bot::camera::{Calibration, Preview, PreviewAction};
 use pingpong_bot::defaults;
-use pingpong_bot::vision::detect::{self, Detector, Layer};
 
 use cli::Args;
 
@@ -30,23 +29,6 @@ const YELLOW: Scalar = Scalar::new(0.0, 255.0, 255.0, 0.0);
 const LABEL_ON_MASK: Scalar = Scalar::new(255.0, 0.0, 255.0, 0.0);
 /// 마스크가 지운 곳의 밝기. 0 이면 경계만 보이고 장면이 안 보인다.
 const DIMMED: f64 = 0.22;
-
-/// 본선과 같은 조립. 여기가 유일한 SSOT 라 툴과 런타임이 갈릴 수 없다.
-fn detector_for(params: &camera::Params) -> Result<Detector> {
-    let layers: Vec<Box<dyn Layer>> = vec![
-        Box::new(detect::Background::new(
-            detect::background::HISTORY,
-            detect::background::VAR_THRESHOLD,
-            detect::background::SCALE,
-            detect::background::LEARNING_RATE,
-        )?),
-        Box::new(detect::ColorBox::load(params.camera_id)?),
-    ];
-    return Ok(Detector::new(
-        layers,
-        detect::Picker::from_calib(params, detect::MIN_CIRCULARITY)?,
-    ));
-}
 
 /// 패널 개수에 맞는 열 수 — 최대한 정사각에 가깝게, [`MAX_COLS`] 이하로.
 ///
@@ -110,7 +92,7 @@ fn main() -> Result<()> {
     let Some(params) = calibration.params(cam_id).cloned() else {
         bail!("calibration 에 cam{} 없음", cam_id.0);
     };
-    let mut detector = detector_for(&params)?;
+    let mut detector = defaults::vision::cascade(&params)?;
 
     let window = "detect:full";
     let wait_ms = args
