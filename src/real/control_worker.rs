@@ -33,14 +33,17 @@ const MAX_CONSECUTIVE_MISSES: u8 = 3;
 const RAIL_ERROR_WARN_M: f64 = 0.020;
 const AIM_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
 const STARTUP_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
-const STARTUP_JOINT_TOLERANCE_RAD: f64 = 3.0_f64.to_radians();
+// 3° 허용치는 모터가 아직 이동 중인 2.5° 오차를 0.35초 만에
+// "수렴"으로 판정했다. 1° 안에 들어와야 실측 라켓 오차가 약 7 mm 이하다.
+const STARTUP_JOINT_TOLERANCE_RAD: f64 = 1.0_f64.to_radians();
 const STARTUP_TRIM_DELAY: Duration = Duration::from_secs(1);
 const STARTUP_MAX_TRIM_ATTEMPTS: u8 = 2;
 const STARTUP_MAX_TRIM_STEP_RAD: f64 = 5.0_f64.to_radians();
 // 작은 정상상태 오차에서 통신 진단/재부팅을 시도하지 않는다. 모터가 실제로
 // 멈췄다고 볼 만큼 크게 어긋난 경우에만 자동 복구 대상을 확인한다.
 const STARTUP_RECOVERY_MIN_ERROR_RAD: f64 = 10.0_f64.to_radians();
-const STARTUP_STABLE_SAMPLES: u8 = 2;
+// 20 ms 간격 5회(80 ms 이상) 연속 수렴해야 도착으로 본다.
+const STARTUP_STABLE_SAMPLES: u8 = 5;
 // 2026-08-05 자·육안 실측. 센서값이 아니라 시작 FK 모델과 비교할 벤치 기준이다.
 const BENCH_WRIST_ABOVE_TABLE_M: f64 = 0.340;
 const BENCH_RACKET_LOWEST_ABOVE_TABLE_M: f64 = 0.155;
