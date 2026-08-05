@@ -60,16 +60,35 @@ const BENCH_RACKET_TOTAL_LENGTH_M: f64 = 0.255;
 #[derive(Default)]
 struct CommandLatch {
     track_seq: Option<u64>,
+    primary_sent: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefinedAction {
+    /// 본 예측 첫 명령: 레일과 팔을 함께 계산·이동한다.
+    PrimaryRailAndArm,
+    /// 같은 공의 후속 갱신: 이미 계산된 레일 위치에서 팔만 미세 보정한다.
+    ArmCorrection,
 }
 
 impl CommandLatch {
-    /// 본 예측을 통과한 같은 공의 최신 갱신을 계속 허용한다.
-    fn accepts(&mut self, track_seq: u64, refined_ready: bool) -> bool {
+    fn next_action(&mut self, track_seq: u64, refined_ready: bool) -> Option<RefinedAction> {
         if self.track_seq != Some(track_seq) {
             *self = Self::default();
             self.track_seq = Some(track_seq);
         }
-        return refined_ready;
+        if !refined_ready {
+            return None;
+        }
+        return Some(if self.primary_sent {
+            RefinedAction::ArmCorrection
+        } else {
+            RefinedAction::PrimaryRailAndArm
+        });
+    }
+
+    fn mark_primary_sent(&mut self) {
+        self.primary_sent = true;
     }
 }
 
@@ -457,9 +476,9 @@ pub fn spawn(
                 continue;
             }
             let refined_ready = refined_prediction_ready(&request);
-            if !latch.accepts(track_seq, refined_ready) {
+            let Some(action) = latch.next_action(track_seq, refined_ready) else {
                 continue;
-            }
+            };
             if hardware.is_busy() || last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
             {
                 pending_refined = Some(request);
@@ -503,13 +522,20 @@ pub fn spawn(
                 log_verification(&previous, &start, "superseded", false);
             }
             let issued_at = Instant::now();
-            let alignment = match Planner::ball_alignment_fixed_rail(&arm, &start, target.position)
-            {
+            let alignment = match action {
+                RefinedAction::PrimaryRailAndArm => {
+                    Planner::ball_alignment(&arm, &start, target.position)
+                }
+                RefinedAction::ArmCorrection => {
+                    Planner::ball_alignment_fixed_rail(&arm, &start, target.position)
+                }
+            };
+            let alignment = match alignment {
                 Ok(alignment) => alignment,
                 Err(error) => {
                     let _ = event_tx.send(RuntimeEvent::Failed {
                         track_seq: Some(track_seq),
-                        reason: format!("본 예측 정렬 계획 불가 — 다음 공에서 재시도: {error}"),
+                        reason: format!("본 예측 {action:?} 정렬 계획 불가: {error}"),
                     });
                     continue;
                 }
@@ -542,12 +568,19 @@ pub fn spawn(
                 .get(pingpong_bot::robot::control::DIRECT_AIM_JOINT_INDEX)
                 .copied()
                 .unwrap_or(0.0);
-            if let Err(error) = hardware.command_joints(&alignment) {
+            let command_result = match action {
+                RefinedAction::PrimaryRailAndArm => hardware.command(&alignment),
+                RefinedAction::ArmCorrection => hardware.command_joints(&alignment),
+            };
+            if let Err(error) = command_result {
                 let _ = event_tx.send(RuntimeEvent::Failed {
                     track_seq: Some(track_seq),
                     reason: format!("위치·방향 정렬 명령 실패: {error}"),
                 });
                 break;
+            }
+            if action == RefinedAction::PrimaryRailAndArm {
+                latch.mark_primary_sent();
             }
             last_command = Some(issued_at);
             let _ = event_tx.send(RuntimeEvent::Commanded {
@@ -601,12 +634,13 @@ pub fn spawn(
                 target_y = f4(target.position.y),
                 target_z = f4(target.position.z),
                 rail_commanded_m = f4(rail_commanded_m),
+                control_action = ?action,
                 aim_commanded_rad = f4(aim_commanded_rad),
                 alignment_duration_secs = f4(alignment.duration_secs),
                 dual_base_step_deg = f2(dual_base_step_rad.to_degrees()),
                 post_alignment_hold_secs = pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS,
                 joints_commanded = %format!("{:?}", alignment.follow_through.values),
-                "레일 고정·팔 본 예측 실시간 위치·방향 보정 시작 — 스윙 없음"
+                "본 예측 레일·팔 정렬/팔 실시간 미세 보정 시작 — 스윙 없음"
             );
         }
 
@@ -1448,18 +1482,32 @@ mod tests {
     }
 
     #[test]
-    fn each_vision_track_accepts_only_refined_updates() {
+    fn each_vision_track_sends_primary_then_arm_corrections() {
         let mut latch = CommandLatch::default();
-        assert!(!latch.accepts(1, false));
-        assert!(latch.accepts(1, true));
-        assert!(latch.accepts(1, true));
+        assert_eq!(latch.next_action(1, false), None);
+        assert_eq!(
+            latch.next_action(1, true),
+            Some(RefinedAction::PrimaryRailAndArm)
+        );
+        latch.mark_primary_sent();
+        assert_eq!(
+            latch.next_action(1, true),
+            Some(RefinedAction::ArmCorrection)
+        );
     }
 
     #[test]
     fn new_track_resets_latch() {
         let mut latch = CommandLatch::default();
-        assert!(latch.accepts(1, true));
-        assert!(latch.accepts(2, true));
+        assert_eq!(
+            latch.next_action(1, true),
+            Some(RefinedAction::PrimaryRailAndArm)
+        );
+        latch.mark_primary_sent();
+        assert_eq!(
+            latch.next_action(2, true),
+            Some(RefinedAction::PrimaryRailAndArm)
+        );
     }
 
     #[test]
@@ -1525,7 +1573,10 @@ mod tests {
             pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
         };
         let mut latch = CommandLatch::default();
-        assert!(latch.accepts(9, true));
+        assert_eq!(
+            latch.next_action(9, true),
+            Some(RefinedAction::PrimaryRailAndArm)
+        );
         let mut state = BallControlState::Aligning {
             return_due_at: Instant::now(),
             measurement: PendingAlignmentMeasurement {
@@ -1554,7 +1605,10 @@ mod tests {
         assert_eq!(current_zone, TestZone::Left);
         assert!((home_rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-9);
         assert!(matches!(state, BallControlState::Idle));
-        assert!(latch.accepts(9, true));
+        assert_eq!(
+            latch.next_action(9, true),
+            Some(RefinedAction::PrimaryRailAndArm)
+        );
         assert!((hardware.pose.rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-6);
 
         let events: Vec<_> = event_rx.try_iter().collect();
