@@ -27,6 +27,9 @@ use crate::vision::{Detector, Trigger};
 pub const PIXEL_LOUPE_ZOOM: i32 = 8;
 /// loupe 소스 반경 [px].
 pub const PIXEL_LOUPE_SRC_HALF: i32 = 7;
+/// 필터 불확실성이 먼저 줄지 않아도 정렬을 시작할 탁구대 y 비율.
+/// 기존 중앙(0.50)보다 발사기 쪽인 0.60에서 약 50~80ms 먼저 명령한다.
+pub const ALIGNMENT_TRIGGER_TABLE_Y_FRAC: f64 = 0.60;
 
 /// [`crate::defaults::DEFAULT_COLORMASK_PATH`]에서 캠별 params. 파일·해당 cam 없으면 에러.
 pub fn colormask_for(camera_id: camera::Id) -> Result<ColormaskParams> {
@@ -108,7 +111,34 @@ pub fn trigger() -> Box<dyn Trigger> {
             velocity: Vector3::repeat(sigma / params.max_lead),
         }),
         Box::new(PlaneCrossing {
-            y: table::LENGTH_Y * 0.5,
+            y: table::LENGTH_Y * ALIGNMENT_TRIGGER_TABLE_Y_FRAC,
         }),
     ]));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::Point3;
+    use crate::vision::State;
+
+    fn uncertain_state(y: f64) -> State {
+        return State {
+            t: Duration::from_millis(100),
+            position: Point3::new(0.70, y, 1.0),
+            velocity: Vector3::new(0.0, -4.0, 0.0),
+            sigma_position: Vector3::repeat(10.0),
+            sigma_velocity: Vector3::repeat(10.0),
+            spin: None,
+        };
+    }
+
+    #[test]
+    fn fallback_trigger_starts_at_sixty_percent_table_length() {
+        let trigger = trigger();
+        assert!(!trigger.ready(&[uncertain_state(table::LENGTH_Y * 0.61)]));
+        assert!(trigger.ready(&[uncertain_state(table::LENGTH_Y * 0.59)]));
+    }
 }

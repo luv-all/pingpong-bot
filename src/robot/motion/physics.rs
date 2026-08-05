@@ -6,11 +6,12 @@ use crate::Point3;
 use crate::constants::table;
 use crate::defaults;
 use crate::defaults::motion::{
-    ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, DETECTION_WINDUP_DISTANCE_M,
-    DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_MIN_DURATION_SECS,
-    FIXED_IMPACT_PUSH_DISTANCE_M, FIXED_IMPACT_PUSH_SPEED_M_S, IMPACT_CENTER_BELOW_BALL_M,
-    IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M, READY_RACKET_HEIGHT_M, READY_RACKET_Y_M,
-    RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
+    ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+    DETECTION_WINDUP_DISTANCE_M, DETECTION_WINDUP_MIN_DURATION_SECS,
+    FIXED_IMPACT_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_DISTANCE_M, FIXED_IMPACT_PUSH_SPEED_M_S,
+    IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M,
+    READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH,
+    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
@@ -561,16 +562,21 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 /// 함께 푼 뒤 정지→정지 궤적 검사를 통과시킨다. 임팩트 속도와 공 도착 시각은 이
 /// 기초 정렬 모드에서 사용하지 않는다. 공 중심과 라켓 중심을 겹치지 않도록
 /// `공 반지름 + 라켓 반두께` 만큼 법선 반대쪽에 라켓 중심을 둔다.
-/// 공이 닿는 지점은 블레이드 중심보다 1.5 cm 아래라서, 라켓 중심은
-/// 공 중심보다 1.5 cm 위로 올린다.
+/// 공의 x는 발사기 기준 오른쪽으로 3 cm 보정한다. 공이 닿는 지점은
+/// 블레이드 중심보다 0.5 cm 아래라서, 라켓 중심은 공 중심보다 0.5 cm 위로 올린다.
 pub fn plan_ball_alignment(
     arm: &Arm,
     start: &robot::Pose,
     ball: Point3,
 ) -> Result<Trajectory, DomainError> {
+    let corrected_ball = Point3::new(
+        ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+        ball.y,
+        ball.z,
+    );
     let toward_net = Vector3::new(
-        table::WIDTH_X * 0.5 - ball.x,
-        table::LENGTH_Y * 0.5 - ball.y,
+        table::WIDTH_X * 0.5 - corrected_ball.x,
+        table::LENGTH_Y * 0.5 - corrected_ball.y,
         0.0,
     );
     let target_normal = if toward_net.norm_squared() > 1e-12 {
@@ -580,7 +586,7 @@ pub fn plan_ball_alignment(
     };
     let contact_offset = crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z;
     let racket_center = Point3::from(
-        ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
+        corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
             - target_normal * contact_offset,
     );
     let hint_rail_x = arm
@@ -600,17 +606,17 @@ pub fn plan_ball_alignment(
         .forward_kinematics_with_rail(aligned_pose.rail_x, &aligned_pose.joints)
         .ok_or_else(|| {
             DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
-                target_x: ball.x,
-                target_y: ball.y,
-                target_z: ball.z,
+                target_x: corrected_ball.x,
+                target_y: corrected_ball.y,
+                target_z: corrected_ball.z,
             })
         })?;
     if reached.normal.dot(&target_normal) <= 0.0 {
         return Err(DomainError::InfeasibleSwing(
             SwingPlanError::RacketOrientationUnreachable {
-                target_x: ball.x,
-                target_y: ball.y,
-                target_z: ball.z,
+                target_x: corrected_ball.x,
+                target_y: corrected_ball.y,
+                target_z: corrected_ball.z,
                 normal_x: target_normal.x,
                 normal_y: target_normal.y,
                 normal_z: target_normal.z,
@@ -1564,6 +1570,11 @@ mod tests {
         );
         // 중앙에서 벗어난 공으로 시험해 +Y만 보는 구현도 잡아낸다.
         let ball = Point3::new(table::WIDTH_X * 0.5 + 0.18, READY_RACKET_Y_M, 0.95);
+        let corrected_ball = Point3::new(
+            ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+            ball.y,
+            ball.z,
+        );
         let alignment = plan_ball_alignment(arm, &start, ball).expect("position alignment");
         let reached = arm
             .forward_kinematics_with_rail(
@@ -1573,8 +1584,8 @@ mod tests {
             .expect("alignment FK");
 
         let toward_net = Vector3::new(
-            table::WIDTH_X * 0.5 - ball.x,
-            table::LENGTH_Y * 0.5 - ball.y,
+            table::WIDTH_X * 0.5 - corrected_ball.x,
+            table::LENGTH_Y * 0.5 - corrected_ball.y,
             0.0,
         )
         .normalize();
@@ -1588,9 +1599,9 @@ mod tests {
             + reached.normal
                 * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z);
         assert!(
-            (contact - ball.coords).norm() < 2e-3,
-            "라켓 중심보다 1.5cm 아래 접촉점이 공 중심에 닿아야 함: contact={contact:?} ball={:?}",
-            ball.coords
+            (contact - corrected_ball.coords).norm() < 2e-3,
+            "오른쪽 3cm 보정 후 라켓 중심보다 0.5cm 아래 접촉점이 목표에 닿아야 함: contact={contact:?} corrected_ball={:?}",
+            corrected_ball.coords
         );
         assert!(
             alignment

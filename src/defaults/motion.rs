@@ -43,8 +43,11 @@ pub const DETECTION_WINDUP_DISTANCE_M: f64 = 0.020;
 /// 기본 타격에서 라켓 중심을 공 중심보다 아래에 둘 거리 [m].
 pub const IMPACT_CENTER_BELOW_BALL_M: f64 = 0.020;
 /// 기초 정렬 모드에서 공이 닿을 지점을 블레이드 중심보다 낮추는 거리 [m].
-/// 기존 3cm 아래 타격점에서 1.5cm 위로 올렸다.
-pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.015;
+/// 현재는 블레이드 중심보다 0.5cm 아래를 맞춘다.
+pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.005;
+/// 발사기 기준 오른쪽으로 적용하는 공별 타격 예측 위치 보정 [m].
+/// 현재 실물 레일은 `reverse=true`이므로 오른쪽은 제어 x 감소 방향이다.
+pub const ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M: f64 = 0.030;
 /// 공을 상대편으로 넘기기 위한 라켓 면의 위쪽 기울기 [deg].
 pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 /// 검출 직후 추가 백스윙의 첫 시도 시간 [s].

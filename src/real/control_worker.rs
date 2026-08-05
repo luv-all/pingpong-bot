@@ -12,7 +12,9 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use pingpong_bot::error::{DomainError, HwError};
 use pingpong_bot::hardware::dynamixel::{DynamixelConfig, MotorMapping};
 use pingpong_bot::hardware::{AppliedRailRacketCommand, Hardware};
-use pingpong_bot::robot::control::{DirectControlCommand, DirectControlMeasurement};
+use pingpong_bot::robot::control::{
+    DirectControlCommand, DirectControlMeasurement, PredictionStage,
+};
 use pingpong_bot::robot::motion::{self, Planner};
 use pingpong_bot::robot::{Arm, Joints};
 use pingpong_bot::vision::State as VisionState;
@@ -56,22 +58,45 @@ const BENCH_RACKET_TOTAL_LENGTH_M: f64 = 0.255;
 #[derive(Default)]
 struct CommandLatch {
     track_seq: Option<u64>,
-    finished: bool,
+    provisional_sent: bool,
+    refined_sent: bool,
 }
 
 impl CommandLatch {
-    fn should_send(&mut self, track_seq: u64) -> bool {
+    /// 한 공에 최대 두 번: 빠른 예비 정렬 후 정밀 예측 보정을 허용한다.
+    fn next_stage(&mut self, track_seq: u64, refined_ready: bool) -> Option<PredictionStage> {
         if self.track_seq != Some(track_seq) {
             *self = Self::default();
             self.track_seq = Some(track_seq);
         }
-        return !self.finished;
+        if !self.provisional_sent {
+            return Some(PredictionStage::Provisional);
+        }
+        if refined_ready && !self.refined_sent {
+            return Some(PredictionStage::Refined);
+        }
+        return None;
     }
 
-    /// 이 공의 처리가 끝났다 — 성공·계획 생략 모두 같은 track의 재시도를 막는다.
-    fn mark_finished(&mut self) {
-        self.finished = true;
+    fn mark_sent(&mut self, stage: PredictionStage) {
+        match stage {
+            PredictionStage::Provisional => self.provisional_sent = true,
+            PredictionStage::Refined => self.refined_sent = true,
+        }
     }
+}
+
+/// 기존 예측 유효 기준. 예비 명령은 이보다 먼저 나가고, 이 기준을
+/// 만족한 최신 궤적이 오면 두 번째 정밀 명령으로 덮어쓴다.
+fn refined_prediction_ready(request: &CommitRequest) -> bool {
+    let Some(last) = request.trajectory.measured.last() else {
+        return false;
+    };
+    let params = pingpong_bot::defaults::EstimatorParams::default();
+    let position_limit = nalgebra::Vector3::repeat(params.max_impact_sigma);
+    let velocity_limit =
+        nalgebra::Vector3::repeat(params.max_impact_sigma / params.max_lead);
+    return last.sigma_position < position_limit && last.sigma_velocity < velocity_limit;
 }
 
 /// 새 비전의 전체 예측 궤적에서 제어가 사용할 접수 평면을 고른다.
@@ -131,20 +156,9 @@ struct PendingAlignmentMeasurement {
 enum BallControlState {
     Idle,
     Aligning {
-        track_seq: u64,
         return_due_at: Instant,
         measurement: PendingAlignmentMeasurement,
     },
-}
-
-impl BallControlState {
-    /// 이 상태가 주어진 `track_seq`의 추가 명령을 막는가.
-    fn blocks(&self, track_seq: u64) -> bool {
-        return matches!(
-            self,
-            BallControlState::Aligning { track_seq: active, .. } if *active == track_seq
-        );
-    }
 }
 
 /// 명령 후 레일·조준축 재측정 상태.
@@ -423,8 +437,13 @@ pub fn spawn(
                 Err(RecvTimeoutError::Timeout) => continue,
             };
             let track_seq = request.track_seq();
-            if !latch.should_send(track_seq)
-                || state.blocks(track_seq)
+            let refined_ready = refined_prediction_ready(&request);
+            let Some(stage) = latch.next_stage(track_seq, refined_ready) else {
+                continue;
+            };
+            // 예비 궤적을 재생하는 동안은 최신 예측만 받아 두고, 완료 후
+            // 도착한 다음 요청으로 정밀 궤적을 다시 계획한다.
+            if hardware.is_busy()
                 || last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
             {
                 continue;
@@ -455,15 +474,22 @@ pub fn spawn(
             let alignment = match Planner::ball_alignment(&arm, &start, target.position) {
                 Ok(alignment) => alignment,
                 Err(error) => {
-                    latch.mark_finished();
                     let _ = event_tx.send(RuntimeEvent::Failed {
                         track_seq: Some(track_seq),
-                        reason: format!("이번 공 건너뜀 — 위치·방향 정렬 계획 불가: {error}"),
+                        reason: format!(
+                            "정렬 {stage:?} 계획 불가 — 다음 예측에서 재시도: {error}"
+                        ),
                     });
                     continue;
                 }
             };
             let rail_commanded_m = alignment.rail.end;
+            let corrected_target_position = pingpong_bot::Point3::new(
+                target.position.x
+                    - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+                target.position.y,
+                target.position.z,
+            );
             let aim_commanded_rad = alignment
                 .end
                 .values
@@ -477,17 +503,17 @@ pub fn spawn(
                 });
                 break;
             }
-            latch.mark_finished();
+            latch.mark_sent(stage);
             last_command = Some(issued_at);
             let _ = event_tx.send(RuntimeEvent::Commanded {
                 track_seq,
-                target: target.position,
+                target: corrected_target_position,
                 rail_x: rail_commanded_m,
                 aim_rad: aim_commanded_rad,
             });
             if let Some(sim_tx) = &sim_tx {
                 let _ = sim_tx.try_send(SimUpdate {
-                    target: Some(target.position),
+                    target: Some(corrected_target_position),
                     ..SimUpdate::default()
                 });
             }
@@ -496,7 +522,6 @@ pub fn spawn(
             let return_due_at = predicted_arrival_at
                 + Duration::from_secs_f64(pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS);
             state = BallControlState::Aligning {
-                track_seq,
                 return_due_at,
                 measurement: PendingAlignmentMeasurement {
                     track_seq,
@@ -504,7 +529,7 @@ pub fn spawn(
                     joints_commanded: alignment.follow_through.clone(),
                 },
             };
-            // 같은 공의 반복 정렬 명령은 막고, 새 track에서 다시 정렬한다.
+            // 예비 명령 후에는 같은 track의 정밀 명령 한 번을 추가로 허용한다.
             pending_verification = None;
             let _ = event_tx.send(RuntimeEvent::ControlState {
                 state: ControlStateSnapshot::Aligning {
@@ -517,6 +542,7 @@ pub fn spawn(
 
             info!(
                 track_seq,
+                stage = ?stage,
                 request_age_secs = f4(request.age_secs()),
                 target_time_secs = f4(target.t.as_secs_f64()),
                 predicted_arrival_in_secs = f4(
@@ -525,7 +551,8 @@ pub fn spawn(
                         .as_secs_f64()
                 ),
                 sigma_position_m = %format!("{:?}", target.sigma_position),
-                target_x = f4(target.position.x),
+                vision_target_x = f4(target.position.x),
+                corrected_target_x = f4(corrected_target_position.x),
                 target_y = f4(target.position.y),
                 target_z = f4(target.position.z),
                 rail_commanded_m = f4(rail_commanded_m),
@@ -533,7 +560,7 @@ pub fn spawn(
                 alignment_duration_secs = f4(alignment.duration_secs),
                 post_alignment_hold_secs = pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS,
                 joints_commanded = %format!("{:?}", alignment.follow_through.values),
-                "레일·팔 동시 위치·방향 정렬 시작 — 스윙 없음"
+                "레일·팔 2단계 위치·방향 정렬 시작 — 스윙 없음"
             );
         }
 
@@ -1298,30 +1325,45 @@ mod tests {
     }
 
     #[test]
-    fn each_vision_track_is_sent_only_once() {
+    fn each_vision_track_sends_provisional_then_refined_once() {
         let mut latch = CommandLatch::default();
-        assert!(latch.should_send(1));
-        latch.mark_finished();
-        assert!(!latch.should_send(1));
-        assert!(latch.should_send(2));
+        assert_eq!(
+            latch.next_stage(1, false),
+            Some(PredictionStage::Provisional)
+        );
+        latch.mark_sent(PredictionStage::Provisional);
+        assert_eq!(latch.next_stage(1, false), None);
+        assert_eq!(
+            latch.next_stage(1, true),
+            Some(PredictionStage::Refined)
+        );
+        latch.mark_sent(PredictionStage::Refined);
+        assert_eq!(latch.next_stage(1, true), None);
     }
 
     #[test]
     fn new_track_resets_latch() {
         let mut latch = CommandLatch::default();
-        assert!(latch.should_send(1));
-        latch.mark_finished();
-        assert!(latch.should_send(2));
+        assert_eq!(
+            latch.next_stage(1, false),
+            Some(PredictionStage::Provisional)
+        );
+        latch.mark_sent(PredictionStage::Provisional);
+        assert_eq!(
+            latch.next_stage(2, false),
+            Some(PredictionStage::Provisional)
+        );
     }
 
     #[test]
-    fn aligned_track_is_permanently_blocked_even_after_returning_to_idle() {
-        let mut latch = CommandLatch::default();
-        assert!(latch.should_send(3));
-        latch.mark_finished();
-        assert!(!latch.should_send(3));
+    fn refined_prediction_uses_existing_sigma_gate() {
+        let refined = vision_request(Duration::ZERO);
+        assert!(refined_prediction_ready(&refined));
 
-        assert!(latch.should_send(4));
+        let mut provisional = vision_request(Duration::ZERO);
+        provisional.trajectory.measured.0[0].sigma_position =
+            nalgebra::Vector3::repeat(1.0);
+        assert!(!refined_prediction_ready(&provisional));
     }
 
     #[test]
@@ -1370,28 +1412,6 @@ mod tests {
     }
 
     #[test]
-    fn idle_blocks_nothing() {
-        let state = BallControlState::Idle;
-        assert!(!state.blocks(1));
-        assert!(!state.blocks(999));
-    }
-
-    #[test]
-    fn aligning_blocks_only_its_own_track() {
-        let state = BallControlState::Aligning {
-            track_seq: 5,
-            return_due_at: Instant::now(),
-            measurement: PendingAlignmentMeasurement {
-                track_seq: 5,
-                rail_commanded_m: 0.30,
-                joints_commanded: Joints::from_slice(&[0.0; 4]),
-            },
-        };
-        assert!(state.blocks(5));
-        assert!(!state.blocks(6));
-    }
-
-    #[test]
     fn apply_test_control_set_zone_moves_home_clears_latch_and_emits_zone_event() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
         let rail = robot.arm.rail.expect("rail 있는 로봇");
@@ -1399,10 +1419,12 @@ mod tests {
             pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
         };
         let mut latch = CommandLatch::default();
-        latch.should_send(9);
-        latch.mark_finished();
+        assert_eq!(
+            latch.next_stage(9, false),
+            Some(PredictionStage::Provisional)
+        );
+        latch.mark_sent(PredictionStage::Provisional);
         let mut state = BallControlState::Aligning {
-            track_seq: 9,
             return_due_at: Instant::now(),
             measurement: PendingAlignmentMeasurement {
                 track_seq: 9,
@@ -1430,7 +1452,10 @@ mod tests {
         assert_eq!(current_zone, TestZone::Left);
         assert!((home_rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-9);
         assert!(matches!(state, BallControlState::Idle));
-        assert!(latch.should_send(9));
+        assert_eq!(
+            latch.next_stage(9, false),
+            Some(PredictionStage::Provisional)
+        );
         assert!((hardware.pose.rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-6);
 
         let events: Vec<_> = event_rx.try_iter().collect();
