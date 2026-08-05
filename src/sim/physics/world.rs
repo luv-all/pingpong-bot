@@ -12,9 +12,7 @@ use crate::error::DomainError;
 use crate::estimator;
 use crate::physics;
 use crate::robot::Arm;
-use crate::robot::control::{
-    DIRECT_AIM_JOINT_INDEX, DirectController, PredictionStability, PredictionStage,
-};
+use crate::robot::control::{DirectController, PredictionStability, PredictionStage};
 use crate::robot::motion;
 use crate::robot::motion::InterceptWindow;
 use crate::robot::motion::Prediction;
@@ -115,11 +113,7 @@ pub struct SimWorld {
     /// 이번 비행이 발사된 `sim_time` — `park_if_out_of_play`의 최대 비행
     /// 시간 안전장치(`MAX_BALL_FLIGHT_SECS`)가 기준으로 삼는다.
     flight_started_at: f64,
-    /// 관절 푸시 시작 sim 시각과 공 도착까지 남은 임팩트 시간.
-    direct_strike_at: Option<(f64, crate::Point3, f64)>,
-    /// 검출 직후 백스윙이 끝나면 이어서 실행할 공 높이 정렬 임팩트.
-    direct_impact_after_windup: Option<motion::Trajectory>,
-    /// 높이 정렬 임팩트 완료 후 감긴 준비 자세 복귀를 시작할 sim 시각.
+    /// 위치 정렬 유지 후 중립 준비 자세 복귀를 시작할 sim 시각.
     direct_return_at: Option<f64>,
     /// 뷰어·Status용 디버그 스냅샷 (실패 사유·궤적·한계).
     debug_snap: SimDebugSnapshot,
@@ -424,8 +418,6 @@ impl SimWorld {
             hard_fail_streak: 0,
             last_swing_attempt_at: f64::NEG_INFINITY,
             flight_started_at: 0.0,
-            direct_strike_at: None,
-            direct_impact_after_windup: None,
             direct_return_at: None,
             debug_snap: SimDebugSnapshot::default(),
             diag_marker_secs: 0.0,
@@ -435,13 +427,6 @@ impl SimWorld {
             diag_debug_snap_secs: 0.0,
             bang_bang_worker: super::bang_bang_worker::BangBangWorker::new(),
         };
-        let initial = robot::Pose::new(world.robot.rail_x(), world.robot.joints().clone());
-        if let Ok(ready) = motion::Planner::ready_prewind(&world.arm, &initial) {
-            world.robot.snap_to_pose(robot::Pose::new(
-                ready.follow_through_rail_x,
-                ready.follow_through,
-            ));
-        }
         world.sync_shooter_pose(&default_shooter);
         return world;
     }
@@ -601,8 +586,6 @@ impl SimWorld {
         self.robot.step_commands(&self.arm, dt);
         let t_swing = std::time::Instant::now();
         self.try_auto_swing(dt);
-        self.try_direct_aligned_impact();
-        self.try_direct_impact_after_windup();
         self.try_direct_return_to_center();
         self.diag_auto_swing_secs = t_swing.elapsed().as_secs_f64();
         self.drive_arm_motors();
@@ -887,118 +870,38 @@ impl SimWorld {
             return;
         }
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        // 이 궤적은 현재 sim 상태에서 바로 표본화했으므로 기준시각 경과는 0이다.
-        // 목표 선택·라켓 헤드 x 정렬·끝선 조준·명령시간 계산은 실기와 같은 코드다.
-        let command = match controller.command_for_target(&self.arm, &start, target, stage, 0.0) {
-            Ok(command) => command,
+        let alignment = match motion::Planner::ball_alignment(&self.arm, &start, target.position) {
+            Ok(alignment) => alignment,
             Err(error) => {
                 self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
                 self.debug_snap.last_fail_text = Some(error.to_string());
                 if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
-                    warn!(shot = self.shot_seq, %error, "shot: 레일·라켓 조준 명령 계산 실패");
+                    warn!(shot = self.shot_seq, %error, "shot: 공 위치·높이 정렬 계획 실패");
                 }
                 return;
             }
         };
         self.hard_fail_streak = 0;
         self.debug_snap.clear_fail_on_success();
-        let mut targets = self.robot.targets().clone();
-        let Some(aim) = targets.values.get_mut(DIRECT_AIM_JOINT_INDEX) else {
-            warn!(
-                shot = self.shot_seq,
-                joint_count = targets.values.len(),
-                "shot: sim 라켓 조준축이 없어 명령 적용 실패"
-            );
-            return;
-        };
-        *aim = command.aim_rad;
+        let alignment_duration_secs = alignment.duration_secs;
+        let rail_commanded_m = alignment.follow_through_rail_x;
         self.robot.set_auto_return_to_center(false);
-        self.robot
-            .set_rail_target_in_secs(&self.arm, command.rail_x, command.duration_secs);
-        self.robot.set_targets(targets);
-        self.direct_strike_at = Some((
-            self.sim_time,
-            command.target.position,
-            command.target.time_secs,
-        ));
-        self.direct_impact_after_windup = None;
-        self.direct_return_at = None;
+        self.robot.replace_swing(alignment);
+        self.direct_return_at = Some(self.sim_time + alignment_duration_secs + 0.20);
         info!(
             shot = self.shot_seq,
-            stage = ?command.stage,
-            duration_secs = command.duration_secs,
-            rail_commanded_m = command.rail_x,
-            aim_commanded_deg = command.aim_rad.to_degrees(),
-            target = ?command.target.position.coords,
-            arrival_secs = command.target.time_secs,
-            "shot: 공통 레일·라켓 헤드 정렬·조준 명령 commit"
+            stage = ?stage,
+            duration_secs = alignment_duration_secs,
+            rail_commanded_m,
+            target = ?target.position.coords,
+            "shot: 공 위치·높이 정렬 commit — 스윙 없음"
         );
         self.swing_committed = true;
         self.debug_snap.commit_phase = CommitPhase::Committed;
         self.position_refined = refined;
     }
 
-    /// 레일 정렬과 함께 감긴 자세의 높이를 맞추고 공 도착 시각에 임팩트한다.
-    fn try_direct_aligned_impact(&mut self) {
-        let Some((strike_at, ball, impact_duration_secs)) = self.direct_strike_at else {
-            return;
-        };
-        if self.sim_time < strike_at || self.robot.is_swinging() {
-            return;
-        }
-        let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        match motion::Planner::aligned_impact_sequence(
-            &self.arm,
-            &start,
-            ball,
-            impact_duration_secs,
-        ) {
-            Ok(sequence) => {
-                self.direct_strike_at = None;
-                self.direct_impact_after_windup = Some(sequence.impact.clone());
-                self.robot.set_rail_target_in_secs(
-                    &self.arm,
-                    sequence.impact_pose.rail_x,
-                    impact_duration_secs,
-                );
-                self.robot.replace_joint_swing(sequence.windup.clone());
-                info!(
-                    shot = self.shot_seq,
-                    windup_duration_secs = sequence.windup.duration_secs,
-                    impact_height_m = ball.z,
-                    normal_error = sequence.normal_error,
-                    "shot: 검출 직후 6cm 감김 유지·높이 정렬 시작"
-                );
-            }
-            Err(error) => {
-                self.direct_strike_at = None;
-                self.direct_return_at = Some(self.sim_time);
-                self.debug_snap.last_fail_text = Some(error.to_string());
-                warn!(shot = self.shot_seq, %error, "shot: 백스윙·높이 정렬 임팩트 계획 실패");
-            }
-        }
-    }
-
-    /// 감긴 자세의 높이 정렬이 끝난 직후 공 도착 시각에 맞춘 전진 임팩트를 시작한다.
-    fn try_direct_impact_after_windup(&mut self) {
-        if self.robot.is_swinging() {
-            return;
-        }
-        let Some(impact) = self.direct_impact_after_windup.take() else {
-            return;
-        };
-        self.direct_return_at = Some(self.sim_time + impact.duration_secs);
-        self.robot.replace_joint_swing(impact.clone());
-        info!(
-            shot = self.shot_seq,
-            impact_time_secs = impact.impact_time_secs,
-            duration_secs = impact.duration_secs,
-            impact_joint_velocity = ?impact.end_velocity,
-            "shot: 백스윙 완료 · 공 높이 정렬 임팩트 시작"
-        );
-    }
-
-    /// 높이 정렬 임팩트가 끝나면 감긴 중앙 준비 자세로 복귀한다.
+    /// 위치 정렬 유지가 끝나면 최초 중립 준비 자세로 복귀한다.
     fn try_direct_return_to_center(&mut self) {
         let Some(return_at) = self.direct_return_at else {
             return;
@@ -1007,7 +910,7 @@ impl SimWorld {
             return;
         }
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        match motion::Planner::ready_prewind(&self.arm, &start) {
+        match motion::Planner::return_to_center(&self.arm, &start) {
             Ok(trajectory) => {
                 self.direct_return_at = None;
                 self.robot.replace_swing(trajectory);
@@ -1193,8 +1096,6 @@ impl SimWorld {
         self.last_swing_attempt_at = f64::NEG_INFINITY;
         self.flight_started_at = self.sim_time;
         self.direct_return_at = None;
-        self.direct_strike_at = None;
-        self.direct_impact_after_windup = None;
         self.debug_snap.reset_for_new_flight();
         self.try_auto_swing(f64::from(self.integration_parameters.dt));
     }
@@ -2073,25 +1974,22 @@ mod tests {
     }
 
     #[test]
-    fn direct_control_runs_aligned_impact_before_return() {
+    fn direct_control_runs_position_alignment_before_return() {
         let mut world = SimWorld::new(test_robot());
         world.set_use_ground_truth(true);
         world.shoot_ball(&launch::Settings::default());
 
-        let mut impact_started = false;
+        let mut alignment_started = false;
         for _ in 0..2_000 {
             world.step(1.0 / 1000.0, None);
-            if world.direct_strike_at.is_none()
-                && world.direct_return_at.is_some()
-                && world.robot().is_swinging()
-            {
-                impact_started = true;
+            if world.direct_return_at.is_some() && world.robot().is_swinging() {
+                alignment_started = true;
                 break;
             }
         }
         assert!(
-            impact_started,
-            "준비 자세 복귀 전에 높이 정렬 임팩트가 실행돼야 함"
+            alignment_started,
+            "준비 자세 복귀 전에 공 위치·높이 정렬이 실행돼야 함"
         );
     }
 

@@ -89,6 +89,15 @@ impl Planner {
         return physics::plan_ready_prewind(arm, start);
     }
 
+    /// 타격 없이 라켓 중심을 공 위치에 정지 정렬한다.
+    pub fn ball_alignment(
+        arm: &Arm,
+        start: &robot::Pose,
+        ball: crate::Point3,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_ball_alignment(arm, start, ball);
+    }
+
     pub fn aligned_impact_sequence(
         arm: &Arm,
         start: &robot::Pose,

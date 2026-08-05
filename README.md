@@ -20,11 +20,11 @@ BallTrajectory {
 }
 ```
 
-real 제어는 `BallTrajectory → CommitRequest → DirectController` 경로로 목표와
-레일·라켓 조준 명령을 계산한다. 라켓 헤드 x를 공 x에 맞추고 ID 3으로
-상대편 끝선 중앙을 조준한다. 평소에는 발사기 높이 1.05m에서 2cm 감긴 자세로
-대기하고, 공 검출 시 뒤로 더 감지 않고 예측 높이에 맞춘 뒤 공 도착 시 펴지며
-임팩트하도록 한다. GUI sim도 같은 계산과 궤적 계획을 쓴다.
+real 제어는 `BallTrajectory → CommitRequest → HitTargetSelector →
+Planner::ball_alignment` 경로로 정렬 궤적을 계산한다. 공의 예측 x·y·z에
+라켓 중심을 정지 상태로 맞추고, 라켓 면은 상대 네트 중앙을 향하게 한다.
+0.2초 유지한 뒤 원래 중립 자세로 복귀한다. 현재 활성 경로에는 백스윙·임팩트·
+팔로스루가 없으며, GUI sim도 같은 정렬 계획기를 쓴다.
 
 ---
 
@@ -90,9 +90,9 @@ cargo run -p pingpong-bot -- --debug
 
 실행하면 Rapier 디지털 트윈(탁구대·공·로봇) + kiss3d/egui 뷰어가 뜬다.  
 로봇은 실기 보정 레일 준비 위치(0.710 m)와 준비 관절 자세에서 시작한다.
-슈터 GUI로 발사하면 기본 경로는 월드 ground-truth 궤적을
-`DirectController`에 넣어 레일·라켓 조준 2단계 명령을 계산하고, 공 도착 직전에
-실기와 같은 추가 백스윙·높이 정렬 임팩트를 실행한다.
+슈터 GUI로 발사하면 기본 경로는 월드 ground-truth 궤적에서 목표를 고른 뒤
+실기와 같은 `Planner::ball_alignment`로 라켓 중심을 공 위치·높이에 정렬한다.
+스윙이나 임팩트 속도는 만들지 않고, 잠깐 유지한 뒤 중립 자세로 복귀한다.
 GUI `Random`은 로봇 접수 회귀를 통과한 좌우 위치·yaw·속도 범위만 무작위화한다.
 높이·스핀 극단값은 도달 시간을 보장하지 않으므로 각각의 슬라이더로 시험한다.
 
@@ -112,24 +112,19 @@ cargo run -p pingpong-bot -- --mode sim --debug
 4. **Park**는 공을 회수한다. 마우스 드래그/스크롤은 시점 회전/줌이다.
 
 기본 sim은 카메라 추정값이 아닌 월드 ground-truth로 `BallTrajectory`를 만들지만,
-그 뒤의 목표 선택·단계 판정·레일·라켓 조준 명령 계산은 실기와 같은 코드를 쓴다.
+그 뒤의 목표 선택·공 위치 정렬 궤적 계산은 실기와 같은 코드를 쓴다.
 **Eval**과 bang-bang 스윙 토글은 보존 중인 시뮬레이션 진단 기능이며 현재 실기
 직접 제어 경로에는 대응하지 않는다.
 
 ### 실기 실행 순서
 
 실기는 **Windows 2단계** 환경을 기준으로 한다. 카메라와 공 추적을 시작하기 전에
-선택적 홈 이동으로 레일·전체 관절 자세를 초기화한 후,
-공마다 레일을 최대 두 번 위치 제어하고 ID 3 수평축으로 상대편 끝선 중앙을 조준한다.
-시작부터 라켓을 발사기 높이 1.05m에서 임팩트 방향 반대로 2cm 감아 둔다. 공 검출 시
-예측한 공의 x·y·z와 상대편 끝선 중앙 방향을 동시에 만족하는 임팩트 자세를 구하고,
-같은 2cm 감김을 유지하며 높이·레일만 보정한다. 라켓 중심은 기본적으로 공 중심보다
-2cm 아래를 겨냥하고 라켓 면은 상대편을 향하면서 8° 위로 든다. 이 자세가 테이블이나
-관절 한계를 넘으면 1cm 아래, 정중앙, 1cm 위 순서로 안전한 접촉점을 다시 찾는다.
-안전한 후보가 있을 때만 공 도착 시 최대 1.80m/s로 펴지게 한다.
-0.06초 팔로스루 후에는
-같은 감긴 중앙 준비 자세로 자동 복귀한다. 전진 임팩트의 고정 최소시간은 시간 부족
-판정에서 제외하며 백스윙 뒤 실제 남은 시간을 사용한다. 적응형 반환 탄도는 아직 지원하지 않는다.
+선택적 홈 이동으로 레일 0.710m와 기본 관절각의 중립 자세를 만든다. 공 검출 시
+예측 궤적에서 목표 x·y·z를 고르고, 주변 레일 후보 가운데 관절 이동이 작고
+테이블·관절·토크·레일 한계를 통과하는 위치 전용 IK 해를 선택한다. 모든 관절은
+정지 상태에서 출발해 정지 상태로 도착하므로 타격 속도를 만들지 않는다. 정렬 자세를
+0.2초 유지한 뒤 같은 중립 자세로 자동 복귀한다. 안전한 경로가 없으면 해당 공만
+건너뛰고 사유를 로그로 남기며 다음 공을 계속 처리한다.
 
 실행 전 체크리스트:
 
@@ -300,11 +295,11 @@ cargo run -p jog -- --port COM8 --debug
 cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 ```
 
-### `--mode real` — 라켓 헤드·리니어 레일 2단계 제어
+### `--mode real` — 공 위치·높이 정렬 제어
 
-공 궤적의 1차·정밀 목표가 갱신될 때마다 라켓 헤드 x를 공 x에 맞추고,
-리니어 위치에서 계산한 각으로 ID 3을 돌려 상대편 끝선 중앙을 조준한다.
-레일·조준과 관절 푸시를 함께 시작하고 공 도착 시 임팩트한 뒤 중앙 준비 자세로 복귀한다.
+공 궤적에서 선택한 목표의 x·y·z에 라켓 중심을 맞춘다. 레일과 전체 관절을
+하나의 정지-정지 궤적으로 움직이면서 라켓 면을 상대 네트 중앙으로 돌린다.
+0.2초 유지한 뒤 중앙 중립 자세로 복귀하며 타격 동작은 하지 않는다.
 스레드와 하드웨어 경계는 [`src/real/README.md`](src/real/README.md)에 정리돼 있다.
 
 ```bash
@@ -324,10 +319,8 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 | `--release-torque` | off | 종료 시 토크 해제. 기본은 켠 채로 둬서 팔이 안 주저앉게 한다 |
 | `--timeout-secs` | 60 | 공 대기 경고 간격. 초과해도 세션은 계속 |
 
-새 공은 `track_seq`로 구분하며, 공마다 1차·정밀 명령을 최대 한 번씩 보낸다.
-명령 예상 도착 시점부터 레일·조준축을 20ms 간격으로 다시 읽어,
-허용치 안에 2회 연속 들어와야 수렴으로 인정한다. 로그는 요청값, 실제 적용값,
-실측값을 분리하며 레일 20mm 또는 조준축 3° 초과 시 `WARN`을 남긴다.
+새 공은 `track_seq`로 구분하며, 공마다 정렬 명령을 최대 한 번 보낸다.
+명령 후 레일과 전체 관절을 다시 읽어 명령값·실측값·차이를 로그로 남긴다.
 ESC·`q`로 세션을 종료한다.
 
 AXL 시작 로그는 원시 보드 위치와 앱 위치를 함께 기록한다. 기본 `reverse=true`에서는
@@ -345,10 +338,11 @@ AXL의 `ActPos`와 `CmdPos` 원점이 다르면 시작 로그에 두 값과 차�
 
 ## 아키텍처
 
-현재 활성 제어의 공통 경계는 `BallTrajectory → DirectController → Hardware`다.
-`sim`과 `real`은 같은 목표 선택·단계 판정·명령 시간 계산을 사용한다. 실기는
-`Hardware::command_rail_and_racket`으로 전송하고 GUI sim은 `robot::State`의
-레일·조준 목표에 적용한다. GUI sim 엔트리(`main`)는 뷰어와 `SimSession`을 함께 실행한다.
+현재 활성 제어의 공통 경계는 `BallTrajectory → HitTargetSelector →
+Planner::ball_alignment → Hardware`다. `sim`과 `real`은 같은 목표 선택과
+위치 정렬 궤적 계산을 사용한다. 실기는 `Hardware::command`로 레일·전체 관절에
+전송하고 GUI sim은 같은 궤적을 `robot::State`에 적용한다. GUI sim 엔트리(`main`)는
+뷰어와 `SimSession`을 함께 실행한다.
 
 ### 도메인
 
@@ -411,7 +405,7 @@ flowchart LR
 ```
 
 실기(`--mode real`)는 [`src/real/`](src/real/)이 돌린다. 현재는 공마다 레일과
-조준 ID 3에 1차·정밀 명령을 최대 한 번씩 보내는 단순 제어 경로다.
+전체 관절에 위치·높이 정렬 명령을 최대 한 번 보내는 단순 제어 경로다.
 상태를 스레드별로 단독 소유하며 crossbeam 채널로만 잇는다
 ([`src/real/README.md`](src/real/README.md)).
 [`src/pipeline/`](src/pipeline/)도 `DirectController`를 사용하도록 맞춰져 있지만
@@ -424,11 +418,11 @@ flowchart LR
     physics["Physics 스레드 · 1 kHz"]
     simHw["robot::State"]
     viewer -.-> physics
-    physics -->|"공통 직접 제어 명령"| simHw
+    physics -->|"공통 위치 정렬 궤적"| simHw
     simHw --> physics
   end
 
-  subgraph realSide ["real — 레일·라켓 조준 2단계"]
+  subgraph realSide ["real — 공 위치·높이 정렬"]
     realCamera["UVC × 2"]
     realWorkers["src/real 워커<br/>cam × 2 · 추정 · 제어"]
     realHw["RealHardware"]
@@ -453,7 +447,7 @@ src/
   planner/      보존 중인 스윙·임팩트·충돌 계획 라이브러리 (현재 직접 제어에서 미사용)
   robot/        build/ · urdf/ · Arm · state
   sim/          physics/ · session/ · gui/
-  real/         실기 레일·라켓 조준 2단계 제어 런타임 (bin 전용 · README.md)
+  real/         실기 공 위치·높이 정렬 제어 런타임 (bin 전용 · README.md)
   hardware/     rail/ · SimHardware · RealHardware
   pipeline/     카메라→추정→DirectController 골격 (현재 호출부 없음)
   telemetry/
@@ -484,7 +478,7 @@ cargo run -p pingpong-bot
 
 - 좌표계: **Z-up**, 원점 = 탁구대 로봇쪽 꼭짓점. +X 너비 · +Y 길이 · 테이블면 `z ≈ 0.76 m`
 - 로봇 `y ≈ 0`, 슈터 `+y`. 공은 주차 → GUI 발사 → 이탈 시 회수
-- 기본 `use_ground_truth = true` (월드 상태로 궤적 생성 후 공통 `DirectController` 실행)
+- 기본 `use_ground_truth = true` (월드 상태로 궤적 생성 후 공통 위치 정렬 계획 실행)
 - `use_ground_truth = false`인 EKF 제어와 기존 전체 스윙 계획기는 라이브러리·진단 경로
 - 뷰어: kiss3d 3D + egui 슈터 패널 (단일 창)
 
@@ -553,7 +547,7 @@ cargo build -p pingpong-bot --release
 | fuse 검출 · measure_* → defaults 스니펫 | ✅ |
 | EKF (sim 기본은 ground truth) | ✅ |
 | Dynamixel 4축 · AXL 레일 · `jog` | ✅ (Windows 재검증) |
-| real 비전→레일·라켓 조준 2단계 제어 | ✅ 코드 완료, Windows 실물 재검증 필요 |
+| real 비전→공 위치·높이 정렬 제어 | ✅ 코드 완료, Windows 실물 재검증 필요 |
 
 **로드맵:** [`TODO.md`](TODO.md) · [`docs/decisions.md`](docs/decisions.md)
 

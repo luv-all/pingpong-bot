@@ -8,15 +8,12 @@
 - **1.1~1.3 핵심 구현 완료:** `N×7` 규약, 채택 관측 버퍼, 미래 궤적 샘플링.
 - **1.4 제어 전환 완료:** real `CommitRequest`가 `BallTrajectory`와
   `Provisional | Refined` 단계를 전달한다.
-- **레일·라켓 조준 공통 제어 완료:** `DirectController`를 real·GUI sim이
-  공유해 목표 선택, 라켓 헤드 x 보정, 레일 clamp, 조준각, 명령 시간을 같이 계산한다.
-- **2단계 예측 제어 완료:** 추적 성립 즉시 1차 목표로 이동하고,
-  관측 0.25초·최근 3회 10cm 수렴 후 갱신된 공 x와 같은 상대편 끝선 조준 함수를 다시 적용한다.
-- **실기 오차 계측 완료:** 명령 후 레일·조준축을 재측정해
-  `requested`, `applied`, `measured`, `applied - measured`를 구분해 남긴다.
-  20ms 간격으로 확인하고 허용치 안에 2회 연속 들어오면 수렴으로 판정한다.
-- **안전 중단 추가:** 예상 도착 후 500ms까지 수렴하지 못한 상태가 3회
-  연속이면 레일을 정지하고 조준축을 현재 위치에 홀드한 뒤 제어를 종료한다.
+- **공 위치·높이 정렬 공통 제어 완료:** real·GUI sim이
+  `HitTargetSelector`와 `Planner::ball_alignment`를 공유한다.
+- **중립 준비·복귀 완료:** 레일 0.710m와 기본 관절각에서 시작하고,
+  정렬 자세를 0.2초 유지한 뒤 같은 자세로 복귀한다.
+- **실기 오차 계측 완료:** 명령 후 레일·전체 관절을 재측정해
+  `commanded`, `measured`, `commanded - measured`를 구분해 남긴다.
 - **로그 정리:** 관전 창의 공 감지 상태는 `false ↔ true`로 바뀔 때만 한 번 기록한다.
 - `fly_07/08/09` 검출·삼각측량·EKF 예측 진단 통과. 단, 이것은 아직
   `Target → 위치 이동`까지의 통합 테스트가 아니다.
@@ -125,62 +122,47 @@
   제어 전환과 별개로 검출 연속성 개선이 남아 있다.
 - 당시 검증은 `BallTrajectory → Prediction` 임시 어댑터까지였다. 현재 활성
   제어는 이 어댑터가 아니라 `BallTrajectory → HitTargetSelector →
-  DirectController` 경로를 사용한다.
+  Planner::ball_alignment` 경로를 사용한다.
 
 ---
 
-## 2. 현재 활성 제어 — 리니어 레일·라켓 조준 2단계
+## 2. 현재 활성 제어 — 공 위치·높이 단순 정렬
 
-현재 런타임은 발사기 시험용 2cm 감긴 준비·높이 정렬·임팩트를 실행한다.
-`BallTrajectory`에서 선택한 공의 x·y·z에 라켓 중심을 맞추고, 타격 순간 라켓이
-상대편 탁구대 끝선 중앙을 바라보게 한다.
+현재 런타임은 중립 준비 자세에서 `BallTrajectory`의 목표 x·y·z에 라켓 중심을
+맞추고 라켓 면을 상대 네트 중앙으로 향하게 한다. 스윙은 하지 않고, 정렬 후
+정지한 상태로 0.2초 유지한다.
 
 ```text
 BallTrajectory
     → HitTargetSelector
-    → PredictionStability (Provisional | Refined)
-    → DirectController
-    → DirectControlCommand
-    → Hardware::command_rail_and_racket
+    → Planner::ball_alignment
+    → Hardware::command
 ```
 
 ### 2.1 명령 계산
 
-- [x] 현재 포즈를 읽고 레일 이동 거리와 조준축 이동 각도를 계산
-- [x] 레일 가속·최고속도와 조준축 최고속도로 최소 도달 시간 계산
-- [x] 공 도착까지 시간이 부족하면 하드웨어 명령 전송 전 거부
-- [x] 레일 목표를 `0.000~1.410m` 물리 범위로 제한
-- [x] 라켓 헤드 x가 공 x와 같아지도록 FK 오프셋만큼 레일 보정
-- [x] 두 단계 모두 레일 위치→상대편 끝선 중앙 조준각 함수 사용
-- [x] 공마다 각 단계를 최대 한 번 전송하고 최신 요청만 유지
-- [x] real, GUI sim, 호출부 없는 generic pipeline이 같은 `DirectController` 사용
+- [x] 예측 궤적에서 정렬할 목표 x·y·z 선택
+- [x] 위치와 상대 네트 중앙 방향을 함께 만족하는 자세 IK 계산
+- [x] 레일·관절·토크·테이블 충돌 한계를 통과한 정지-정지 궤적 생성
+- [x] 공마다 정렬 명령을 최대 한 번 전송
+- [x] real과 GUI sim이 같은 `Planner::ball_alignment` 사용
 
 ### 2.2 적용값과 수렴 확인
 
-- [x] 하드웨어가 clamp·틱 양자화 뒤의 `AppliedRailRacketCommand` 반환
-- [x] 예상 도착 시점부터 20ms 간격으로 레일·조준축 재측정
-- [x] 레일 20mm·조준축 3° 안에 2회 연속 들어오면 `converged`
-- [x] 정밀 명령이 1차 명령을 덮으면 기존 측정을 `superseded`로 종료
-- [x] 예상 도착 후 500ms까지 수렴하지 못하면 `timeout`
-- [x] `timeout` 3회 연속이면 레일 정지·조준축 홀드 후 제어 종료
-- [x] 시작·복귀 시 1.05m 높이에서 상대편을 향한 채 2cm 감긴 준비 자세 사용
-- [x] 공 검출 시 뒤로 더 감지 않고 2cm 감김을 유지하며 예측 높이 정렬
-- [x] 라켓 중심을 공보다 2cm 아래에 두고 면을 8° 위로 기울임
-- [x] 충돌 시 접촉 높이 대체 후보와 상승 중간 복귀 경로 재계산
-- [x] 개별 공의 임팩트 계획 실패 시 워커를 종료하지 않고 다음 공 계속 처리
-- [x] 타격 순간 공 위치와 상대편 끝선 중앙 방향을 전체 자세 IK로 함께 정렬
-- [x] 공 도착 시 최대 1.80m/s 목표 임팩트, 0.06초 팔로스루
-- [ ] Windows 실물 장비에서 clamp·양자화·수렴 로그 최종 검증
+- [x] 시작·복귀 시 레일 0.710m와 기본 관절각의 중립 자세 사용
+- [x] 공 위치 정렬 후 0.2초 정지 유지
+- [x] 명령 뒤 레일·전체 관절 재측정 및 `commanded - measured` 기록
+- [x] 개별 공의 정렬 계획 실패 시 워커를 종료하지 않고 다음 공 계속 처리
+- [ ] Windows 실물 장비에서 위치·높이 정렬과 복귀 최종 검증
 
 ### 2.3 현재 활성 경로에서 제외
 
-- 공별 반환 탄도를 맞추는 적응형 임팩트 속도 계산
-- 여러 백스윙·타격 후보를 비교하는 최적화
+- 반환 탄도와 임팩트 속도 계산
+- 백스윙·임팩트·팔로스루 및 공 도착 시각 동기화
 - 물리 E-stop 입력
 
 `PositionController`와 스윙 플래너 코드는 라이브러리에 남아 있지만 현재 real·GUI
-sim의 직접 제어 경로에서는 호출하지 않는다. 현재 경로는 `ready_prewind`와
-`aligned_impact_sequence`를 관절 궤적으로 실행한다.
+sim의 직접 제어 경로에서는 호출하지 않는다.
 
 ### 2.4 남은 정리·검증
 
@@ -219,14 +201,14 @@ sim의 직접 제어 경로에서는 호출하지 않는다. 현재 경로는 `r
   "제어 괴리 로그"·"제어 워커" 섹션이 완료로 적은 재측정 수렴 판정·3회 연속
   실패 시 중단은 현재 실기에서 발동하지 않는다. 부활·제거 결정은 보류.
   `docs/superpowers/specs/2026-08-05-control-worker-state-machine-design.md` 참고.
-- [x] **한 공에 스윙은 최대 한 번 — 확정된 의도, 2026-08-05 latch로 명시화.**
+- [x] **한 공에 정렬 명령은 최대 한 번 — 2026-08-05 latch로 명시화.**
   명령이 하나 성공하면 단계와 무관하게 그 `track_seq`의 이후 요청을 전부
   막는다. 리팩터 중 `BallControlState::Idle` 복귀 후 이 차단이 풀리는 틈이
-  잠깐 생겼었는데, `CommandLatch::mark_struck()`을 추가해 latch가
-  track_seq당 영구히 막도록 고쳤다(`src/real/control_worker.rs`).
+  잠깐 생겼었는데, `CommandLatch::mark_finished()`가 latch를
+  track_seq당 계속 막도록 한다(`src/real/control_worker.rs`).
   `Provisional`이 거의 즉시 도착하므로 `Refined`(0.25초 관측 후)는 도착
-  전에 이미 막히는 것도 확정된 동작이다 — 사용자 확인: 일단 친 공은 다시
-  스윙하지 않는다(핑퐁에 재시도 없음). `src/real/README.md:14`도 이에
+  전에 이미 막히는 것도 확정된 동작이다 — 한 공에는 정렬 명령을 다시
+  보내지 않는다. `src/real/README.md`도 이에
   맞춰 갱신함.
 - [ ] **vision control integration — `main`의 새 비전 스택을 제어 경로에 연결.**
   `main`이 `detector`/`estimator`(재귀 EKF)를 전부 지우고 `vision::Fit`

@@ -165,7 +165,7 @@ fn draw_marker(image: &mut Mat, pixel: Option<camera::Pixel>, radius: i32, color
     }
 }
 
-/// `IDLE`/`STRUCK` 두 노드 다이어그램을 모자이크 우상단에 그린다.
+/// `IDLE`/`ALIGN` 두 노드 다이어그램을 모자이크 우상단에 그린다.
 fn draw_control_state_panel(image: &mut Mat, state: &ControlStateSnapshot) -> opencv::Result<()> {
     let panel_x = image.cols() - STATE_PANEL_W - STATE_PANEL_MARGIN_PX;
     let panel_y = STATE_PANEL_MARGIN_PX;
@@ -178,13 +178,13 @@ fn draw_control_state_panel(image: &mut Mat, state: &ControlStateSnapshot) -> op
         -1,
     )?;
 
-    let struck_active = !matches!(state, ControlStateSnapshot::Idle);
-    let idle_color = if struck_active {
+    let align_active = !matches!(state, ControlStateSnapshot::Idle);
+    let idle_color = if align_active {
         STATE_IDLE_COLOR
     } else {
         STATE_ACTIVE_COLOR
     };
-    let struck_color = if struck_active {
+    let align_color = if align_active {
         STATE_ACTIVE_COLOR
     } else {
         STATE_IDLE_COLOR
@@ -216,19 +216,19 @@ fn draw_control_state_panel(image: &mut Mat, state: &ControlStateSnapshot) -> op
         camera::Pixel::new(f64::from(struck_x), f64::from(node_y)),
         STATE_NODE_W,
         STATE_NODE_H,
-        struck_color,
+        align_color,
         -1,
     )?;
     camera::Preview::draw_text_at_px(
         image,
         camera::Pixel::new(f64::from(struck_x + 4), f64::from(node_y + 21)),
-        "STRUCK",
+        "ALIGN",
         0.42,
         Scalar::new(0.0, 0.0, 0.0, 0.0),
         1,
     )?;
 
-    if let ControlStateSnapshot::Struck {
+    if let ControlStateSnapshot::Aligning {
         track_seq,
         return_due_at,
         rail_commanded_m,
@@ -290,12 +290,12 @@ mod tests {
     }
 
     #[test]
-    fn struck_state_highlights_the_struck_node() {
+    fn aligning_state_highlights_the_align_node() {
         let mut img = Mat::zeros(200, 500, opencv::core::CV_8UC3)
             .unwrap()
             .to_mat()
             .unwrap();
-        let state = ControlStateSnapshot::Struck {
+        let state = ControlStateSnapshot::Aligning {
             track_seq: 7,
             return_due_at: Instant::now() + Duration::from_millis(300),
             rail_commanded_m: 0.30,

@@ -541,6 +541,58 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
     return plan_move_to(arm, start, ready_pose.joints, hint_rail_x);
 }
 
+/// 타격 속도 없이 라켓 중심을 공의 예측 위치에 정렬한다.
+///
+/// 라켓 면 법선은 현재 공 위치에서 상대 네트의 수평 중앙을 향한다. 위치와 방향을
+/// 함께 푼 뒤 정지→정지 궤적 검사를 통과시킨다. 임팩트 속도와 공 도착 시각은 이
+/// 기초 정렬 모드에서 사용하지 않는다.
+pub fn plan_ball_alignment(
+    arm: &Arm,
+    start: &robot::Pose,
+    ball: Point3,
+) -> Result<Trajectory, DomainError> {
+    let toward_net = Vector3::new(
+        table::WIDTH_X * 0.5 - ball.x,
+        table::LENGTH_Y * 0.5 - ball.y,
+        0.0,
+    );
+    let target_normal = if toward_net.norm_squared() > 1e-12 {
+        toward_net.normalize()
+    } else {
+        Vector3::y()
+    };
+    let hint_rail_x = arm
+        .rail
+        .as_ref()
+        .map_or(start.rail_x, |rail| rail.clamp_x(ball.x));
+    let hint = robot::Pose::new(hint_rail_x, start.joints.clone());
+    let (aligned_pose, _) = arm
+        .inverse_pose_with_rail_best_normal(ball, target_normal, &hint, robot::IkSearch::Global)
+        .map_err(DomainError::InfeasibleSwing)?;
+    let reached = arm
+        .forward_kinematics_with_rail(aligned_pose.rail_x, &aligned_pose.joints)
+        .ok_or_else(|| {
+            DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: ball.x,
+                target_y: ball.y,
+                target_z: ball.z,
+            })
+        })?;
+    if reached.normal.dot(&target_normal) <= 0.0 {
+        return Err(DomainError::InfeasibleSwing(
+            SwingPlanError::RacketOrientationUnreachable {
+                target_x: ball.x,
+                target_y: ball.y,
+                target_z: ball.z,
+                normal_x: target_normal.x,
+                normal_y: target_normal.y,
+                normal_z: target_normal.z,
+            },
+        ));
+    }
+    return plan_move_to(arm, start, aligned_pose.joints, aligned_pose.rail_x);
+}
+
 /// 검출 직후 백스윙과 공 도착 시 임팩트 궤적.
 #[derive(Debug, Clone)]
 pub struct AlignedImpactSequence {
@@ -1444,6 +1496,45 @@ mod tests {
             forward_distance > DETECTION_WINDUP_DISTANCE_M * 0.85,
             "설정한 감김 거리만큼 상대편 방향으로 펴져야 함: {forward_distance:.4}m"
         );
+    }
+
+    #[test]
+    fn ball_alignment_reaches_position_with_zero_impact_velocity() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let start = robot::Pose::new(
+            arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+            arm.default_joints.clone(),
+        );
+        // 중앙에서 벗어난 공으로 시험해 +Y만 보는 구현도 잡아낸다.
+        let ball = Point3::new(table::WIDTH_X * 0.5 + 0.18, READY_RACKET_Y_M, 0.95);
+        let alignment = plan_ball_alignment(arm, &start, ball).expect("position alignment");
+        let reached = arm
+            .forward_kinematics_with_rail(
+                alignment.follow_through_rail_x,
+                &alignment.follow_through,
+            )
+            .expect("alignment FK");
+
+        assert!((reached.position.coords - ball.coords).norm() < 2e-3);
+        let toward_net = Vector3::new(
+            table::WIDTH_X * 0.5 - ball.x,
+            table::LENGTH_Y * 0.5 - ball.y,
+            0.0,
+        )
+        .normalize();
+        assert!(
+            reached.normal.dot(&toward_net) > 0.90,
+            "라켓 면이 상대 네트 중앙을 향해야 함: normal={:?}",
+            reached.normal
+        );
+        assert!(
+            alignment
+                .end_velocity
+                .iter()
+                .all(|velocity| velocity.abs() < 1e-12)
+        );
+        assert_eq!(alignment.end, alignment.follow_through);
     }
 
     #[test]

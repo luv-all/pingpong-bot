@@ -10,7 +10,7 @@ use pingpong_bot::robot::control::PredictionStage;
 #[derive(Debug, Clone, Copy)]
 pub enum ControlStateSnapshot {
     Idle,
-    Struck {
+    Aligning {
         track_seq: u64,
         return_due_at: Instant,
         rail_commanded_m: f64,
