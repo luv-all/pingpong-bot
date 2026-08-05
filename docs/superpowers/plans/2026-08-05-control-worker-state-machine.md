@@ -18,7 +18,7 @@
 - No new external dependencies. No new channels — reuse the existing `event_tx: Sender<RuntimeEvent>`.
 - The state panel is fixed-size (not scaled by `overlay_scale`), drawn only when `--preview` is on. The `--sim` kiss3d window is not touched.
 - This codebase writes explicit `return` statements at the end of every function (not bare tail expressions) — match that style in all new code.
-- Run `cargo test --lib` (or the equivalent scoped command shown per task) after every implementation step, not just at the end.
+- `src/real/*` (control_worker.rs, preview.rs, run.rs, runtime_event.rs, mod.rs) is part of the `main.rs` **binary** target (`mod real;` in `src/main.rs`, not `src/lib.rs`) — its tests only run with `cargo test --bin pingpong-bot <filter>` (default features already include `gui`/`real`, no extra flags needed). `src/camera/*` is part of the **library** crate — its tests run with `cargo test --lib <filter>`. Run the exact command shown per step, not just at the end.
 
 ---
 
@@ -62,7 +62,7 @@ Add to the `#[cfg(test)] mod tests` block at the bottom of `src/real/control_wor
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test --lib real::control_worker::tests::idle_blocks_nothing`
+Run: `cargo test --bin pingpong-bot real::control_worker::tests::idle_blocks_nothing`
 
 Expected: FAIL with "cannot find type `BallControlState` in this scope" (does not compile yet).
 
@@ -105,7 +105,7 @@ impl BallControlState {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test --lib real::control_worker::tests::idle_blocks_nothing real::control_worker::tests::struck_blocks_only_its_own_track`
+Run: `cargo test --bin pingpong-bot real::control_worker::tests::idle_blocks_nothing real::control_worker::tests::struck_blocks_only_its_own_track`
 
 Expected: PASS (2 tests). You will also see a `warning: struct/enum is never constructed/used` — expected at this point, Task 2 wires it in.
 
@@ -323,7 +323,7 @@ Add this doc comment directly above `struct PendingVerification` (now shifted do
 
 - [ ] **Step 7: Run the full existing test suite for this file**
 
-Run: `cargo test --lib real::control_worker`
+Run: `cargo test --bin pingpong-bot real::control_worker`
 
 Expected: PASS — all of `startup_initialization_sets_ready_rail_and_all_joints`, `each_prediction_stage_is_sent_only_once_per_ball`, `new_track_resets_latch_before_refined_stage`, `due_command_needs_two_stable_readbacks`, `idle_blocks_nothing`, `struck_blocks_only_its_own_track` pass, no compile errors, no leftover references to `struck_track_seq`/`return_due_at`/`pending_impact_measurement` as locals.
 
@@ -478,7 +478,7 @@ This requires `debug` to be imported in `run.rs` — change the existing `use tr
 
 - [ ] **Step 4: Run a build check**
 
-Run: `cargo build --lib`
+Run: `cargo build --bin pingpong-bot`
 
 Expected: builds clean (the two arms above are placeholders — Task 7 replaces the first one with real forwarding).
 
@@ -509,7 +509,7 @@ Add `ControlStateSnapshot` to the existing `use super::{CommitRequest, PoseMsg, 
 
 - [ ] **Step 6: Run the tests**
 
-Run: `cargo test --lib real::control_worker`
+Run: `cargo test --bin pingpong-bot real::control_worker`
 
 Expected: PASS, same tests as Task 2 Step 7 — this task adds a fire-and-forget send on an unbounded channel, nothing observable changes for these tests.
 
@@ -780,7 +780,7 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test --lib real::preview::tests::idle_state_highlights_the_idle_node`
+Run: `cargo test --bin pingpong-bot real::preview::tests::idle_state_highlights_the_idle_node`
 
 Expected: FAIL with "cannot find function `draw_control_state_panel` in this scope".
 
@@ -909,7 +909,7 @@ fn draw_control_state_panel(image: &mut Mat, state: &ControlStateSnapshot) -> op
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test --lib real::preview`
+Run: `cargo test --bin pingpong-bot real::preview`
 
 Expected: PASS (2 new tests). You will see an `unused function draw_control_state_panel` warning if `render()` isn't calling it yet — resolved in the next step.
 
@@ -947,7 +947,7 @@ In `render()`, after the existing `if !self.sticky.is_empty() { ... }` block and
 
 - [ ] **Step 6: Run the full test suite for this file and a build check**
 
-Run: `cargo test --lib real::preview && cargo build --lib`
+Run: `cargo test --bin pingpong-bot real::preview && cargo build --bin pingpong-bot`
 
 Expected: PASS, clean build, no unused-function warnings remaining.
 
@@ -993,7 +993,7 @@ with:
 
 - [ ] **Step 2: Build and run the full real-module test suite**
 
-Run: `cargo test --lib real::`
+Run: `cargo test --bin pingpong-bot real::`
 
 Expected: PASS across `control_worker`, `preview`, `sim_child`, `ball_receding`, `estimator_worker` — no regressions anywhere in `src/real/`.
 
