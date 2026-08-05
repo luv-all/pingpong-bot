@@ -28,15 +28,19 @@ pub const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
 pub const FIXED_IMPACT_MIN_DURATION_SECS: f64 = 0.25;
 /// 공이 없을 때 기존 임팩트 자세보다 뒤에서 대기할 거리 [m].
 ///
-/// 기존 임팩트 자세(0cm)와 최대 감김 시험값(6cm)의 중간인 3cm를 쓴다.
-pub const READY_PREWIND_DISTANCE_M: f64 = 0.030;
+/// 큰 동작을 줄인 반복 발사기 시험값 2cm.
+pub const READY_PREWIND_DISTANCE_M: f64 = 0.020;
 /// 공이 없을 때 미리 맞춰 둘 대표 라켓 중심 높이 [m].
 pub const READY_RACKET_HEIGHT_M: f64 = 1.050;
 /// 기본 인터셉트 구간 중앙의 준비 타격 y [m].
 pub const READY_RACKET_Y_M: f64 = 0.215;
 /// 공 검출 후 공 높이에서 유지할 임팩트 자세 기준 백스윙 거리 [m].
-/// 준비 자세와 같은 3cm로 두어 검출 뒤 불필요한 추가 감김을 없앤다.
-pub const DETECTION_WINDUP_DISTANCE_M: f64 = 0.030;
+/// 준비 자세와 같은 2cm로 두어 검출 뒤 불필요한 추가 감김을 없앤다.
+pub const DETECTION_WINDUP_DISTANCE_M: f64 = 0.020;
+/// 기본 타격에서 라켓 중심을 공 중심보다 아래에 둘 거리 [m].
+pub const IMPACT_CENTER_BELOW_BALL_M: f64 = 0.020;
+/// 공을 상대편으로 넘기기 위한 라켓 면의 위쪽 기울기 [deg].
+pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 /// 검출 직후 추가 백스윙의 첫 시도 시간 [s].
 pub const DETECTION_WINDUP_MIN_DURATION_SECS: f64 = 0.120;
 /// 라켓 면 법선 방향의 짧은 임팩트 전진 거리 [m].

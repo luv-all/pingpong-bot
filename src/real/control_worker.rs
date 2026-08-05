@@ -221,13 +221,21 @@ pub fn spawn(
                     }
                 }
                 if let Err(error) = move_to_center(hardware.as_mut(), &arm) {
-                    let reason = format!("제어 후 중앙 복귀 실패: {error}");
-                    warn!(%error, "제어 후 중앙 복귀 실패 — 제어를 중단한다");
+                    let reason = format!("제어 후 중앙 복귀 실패 — 현재 자세 유지: {error}");
+                    warn!(%error, "안전한 중앙 복귀 궤적 없음 — 명령하지 않고 다음 공을 기다린다");
+                    let fatal_hardware_error = matches!(error, MoveError::Hardware(_));
                     let _ = event_tx.send(RuntimeEvent::Failed {
                         track_seq: latch.track_seq,
                         reason,
                     });
-                    break;
+                    state = BallControlState::Idle;
+                    let _ = event_tx.send(RuntimeEvent::ControlState {
+                        state: ControlStateSnapshot::Idle,
+                    });
+                    if fatal_hardware_error {
+                        break;
+                    }
+                    continue;
                 }
                 match hardware.read_pose() {
                     Ok(pose) => {
@@ -412,7 +420,12 @@ pub fn spawn(
                 windup_duration_secs = f4(sequence.windup.duration_secs),
                 impact_time_secs = f4(sequence.impact.impact_time_secs),
                 total_impact_motion_secs = f4(sequence.impact.duration_secs),
-                impact_height_m = f4(command.target.position.z),
+                ball_height_m = f4(command.target.position.z),
+                racket_center_height_m = f4(command.target.position.z - sequence.center_below_ball_m),
+                racket_center_below_ball_m = f4(sequence.center_below_ball_m),
+                racket_target_normal_z = f4(sequence.target_normal.z),
+                racket_achieved_normal_z = f4(sequence.achieved_normal.z),
+                racket_target_upward_tilt_deg = f2(sequence.target_normal.z.asin().to_degrees()),
                 racket_normal_error = f4(sequence.normal_error),
                 impact_joint_velocity = %format!("{:?}", sequence.impact.end_velocity),
                 "감긴 자세 높이 정렬 완료 · 임팩트 시작"
@@ -627,12 +640,99 @@ pub(super) fn initialize_pose(
 /// 시작 자세 초기화와 공 제어 후 복귀에 같은 전체축 이동을 사용한다.
 fn move_to_center(hardware: &mut dyn Hardware, arm: &Arm) -> Result<(), MoveError> {
     let start = hardware.read_pose().map_err(MoveError::Hardware)?;
-    let trajectory = Planner::ready_prewind(arm, &start).map_err(MoveError::Plan)?;
-    hardware.command(&trajectory).map_err(MoveError::Hardware)?;
-    while hardware.is_busy() {
-        thread::sleep(BUSY_POLL);
+    let trajectories = plan_ready_return_segments(arm, &start).map_err(MoveError::Plan)?;
+    if trajectories.len() > 1 {
+        info!(
+            segments = trajectories.len(),
+            "직접 복귀 관통 회피 — 위로 든 뒤 준비 자세 복귀"
+        );
+    }
+    for trajectory in trajectories {
+        hardware.command(&trajectory).map_err(MoveError::Hardware)?;
+        while hardware.is_busy() {
+            thread::sleep(BUSY_POLL);
+        }
     }
     return Ok(());
+}
+
+/// 직접 복귀가 테이블을 스치면 안전한 상승 중간 자세를 거치는 2구간을 찾는다.
+/// 모든 구간은 실행 전에 속도·토크·테이블 충돌 검사를 통과해야 한다.
+fn plan_ready_return_segments(
+    arm: &Arm,
+    start: &pingpong_bot::robot::Pose,
+) -> Result<Vec<pingpong_bot::robot::motion::Trajectory>, DomainError> {
+    match Planner::ready_prewind(arm, start) {
+        Ok(direct) => return Ok(vec![direct]),
+        Err(error) => {
+            if !matches!(
+                error,
+                DomainError::InfeasibleSwing(
+                    pingpong_bot::error::SwingPlanError::TablePenetration { .. }
+                )
+            ) {
+                return Err(error);
+            }
+        }
+    }
+
+    let racket = arm
+        .forward_kinematics_with_rail(start.rail_x, &start.joints)
+        .ok_or_else(|| {
+            DomainError::InfeasibleSwing(
+                pingpong_bot::error::SwingPlanError::InverseKinematicsNoSolution {
+                    target_x: start.rail_x,
+                    target_y: 0.0,
+                    target_z: 0.0,
+                },
+            )
+        })?;
+    let mut last_error = None;
+    for lift_m in [0.03, 0.06, 0.10, 0.15] {
+        let lifted_target = pingpong_bot::Point3::new(
+            racket.position.x,
+            racket.position.y,
+            racket.position.z + lift_m,
+        );
+        let lifted_joints = match arm.rail.as_ref() {
+            Some(rail) => arm.inverse_kinematics_with_rail(
+                rail,
+                start.rail_x,
+                lifted_target,
+                Some(&start.joints),
+            ),
+            None => arm.inverse_kinematics_near(lifted_target, Some(&start.joints)),
+        };
+        let lifted_joints = match lifted_joints {
+            Ok(joints) => joints,
+            Err(error) => {
+                last_error = Some(DomainError::InfeasibleSwing(error));
+                continue;
+            }
+        };
+        let lift = match Planner::move_to(arm, start, lifted_joints, start.rail_x) {
+            Ok(trajectory) => trajectory,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
+        let lifted_pose =
+            pingpong_bot::robot::Pose::new(lift.follow_through_rail_x, lift.follow_through.clone());
+        match Planner::ready_prewind(arm, &lifted_pose) {
+            Ok(ready) => return Ok(vec![lift, ready]),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    return Err(last_error.unwrap_or_else(|| {
+        DomainError::InfeasibleSwing(
+            pingpong_bot::error::SwingPlanError::InverseKinematicsNoSolution {
+                target_x: start.rail_x,
+                target_y: racket.position.y,
+                target_z: racket.position.z,
+            },
+        )
+    }));
 }
 
 #[derive(Debug)]
@@ -711,6 +811,21 @@ mod tests {
 
         assert!((initialized.rail_x - rail.default_x()).abs() < 1e-12);
         assert_eq!(initialized.joints, expected.follow_through);
+    }
+
+    #[test]
+    fn logged_follow_through_pose_has_a_safe_ready_return() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        // 2026-08-05 실기 로그에서 직접 복귀가 테이블을 2mm 관통했던 실측 자세.
+        let start = Pose::new(
+            1.258_578,
+            Joints::from_slice(&[1.264_000_169, -0.423_378_697, 0.115_048_559, -0.550_699_103]),
+        );
+
+        let segments = plan_ready_return_segments(&robot.arm, &start)
+            .expect("직접 또는 상승 중간 자세를 거쳐 안전하게 복귀");
+        assert!(!segments.is_empty());
+        assert!(segments.len() <= 2);
     }
 
     #[test]

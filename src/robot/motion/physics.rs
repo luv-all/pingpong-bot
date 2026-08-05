@@ -8,8 +8,9 @@ use crate::defaults;
 use crate::defaults::motion::{
     DETECTION_WINDUP_DISTANCE_M, DETECTION_WINDUP_MIN_DURATION_SECS,
     FIXED_IMPACT_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_DISTANCE_M, FIXED_IMPACT_PUSH_SPEED_M_S,
-    READY_PREWIND_DISTANCE_M, READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH,
-    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
+    IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M,
+    READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS,
+    RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
@@ -547,6 +548,12 @@ pub struct AlignedImpactSequence {
     pub impact: Trajectory,
     pub impact_pose: robot::Pose,
     pub normal_error: f64,
+    /// 양수면 라켓 중심이 공 중심보다 아래에 있다.
+    pub center_below_ball_m: f64,
+    /// 실제 IK에 요구한 라켓 면 법선.
+    pub target_normal: Vector3<f64>,
+    /// IK가 실제로 만든 라켓 면 법선.
+    pub achieved_normal: Vector3<f64>,
 }
 
 /// 공 높이와 상대편 끝선 중앙 조준을 동시에 만족하는 백스윙→임팩트를 만든다.
@@ -556,28 +563,82 @@ pub fn plan_aligned_impact_sequence(
     ball: Point3,
     time_to_impact_secs: f64,
 ) -> Result<AlignedImpactSequence, DomainError> {
-    let target_normal =
+    let toward_opponent =
         Vector3::new(table::WIDTH_X * 0.5 - ball.x, table::LENGTH_Y - ball.y, 0.0).normalize();
+    let tilt_rad = IMPACT_UPWARD_TILT_DEG.to_radians();
+    let target_normal = toward_opponent * tilt_rad.cos() + Vector3::z() * tilt_rad.sin();
+    // 기본은 공 중심보다 2cm 아래를 맞춘다. 그 자세나 궤적이 테이블·관절 한계를
+    // 넘으면 라켓 중심을 단계적으로 올려 안전한 접촉점을 다시 찾는다.
+    let center_below_candidates = [IMPACT_CENTER_BELOW_BALL_M, 0.010, 0.0, -0.010];
+    let mut last_error = None;
+    for center_below_ball_m in center_below_candidates {
+        let contact_center = Point3::new(ball.x, ball.y, ball.z - center_below_ball_m);
+        match plan_aligned_impact_sequence_for_target(
+            arm,
+            start,
+            contact_center,
+            target_normal,
+            time_to_impact_secs,
+        ) {
+            Ok(mut sequence) => {
+                sequence.center_below_ball_m = center_below_ball_m;
+                sequence.target_normal = target_normal;
+                return Ok(sequence);
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    return Err(last_error.unwrap_or_else(|| {
+        DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+            target_x: ball.x,
+            target_y: ball.y,
+            target_z: ball.z,
+        })
+    }));
+}
+
+fn plan_aligned_impact_sequence_for_target(
+    arm: &Arm,
+    start: &robot::Pose,
+    contact_center: Point3,
+    target_normal: Vector3<f64>,
+    time_to_impact_secs: f64,
+) -> Result<AlignedImpactSequence, DomainError> {
     let hint_rail = arm
         .rail
         .as_ref()
-        .map_or(start.rail_x, |rail| rail.clamp_x(ball.x));
+        .map_or(start.rail_x, |rail| rail.clamp_x(contact_center.x));
     // 같은 라켓 방향 해가 여러 개일 때 현재 준비 자세와 가까운 팔 모양을 고른다.
     // 기본 관절값을 힌트로 쓰면 타격 직전에 다른 IK 가지로 넘어가며 팔이 다시
     // 뒤로 말릴 수 있다.
     let hint = robot::Pose::new(hint_rail, start.joints.clone());
     let (impact_pose, normal_error) = arm
-        .inverse_pose_with_rail_best_normal(ball, target_normal, &hint, robot::IkSearch::Global)
+        .inverse_pose_with_rail_best_normal(
+            contact_center,
+            target_normal,
+            &hint,
+            robot::IkSearch::Global,
+        )
         .map_err(DomainError::InfeasibleSwing)?;
     let achieved = arm
         .forward_kinematics_with_rail(impact_pose.rail_x, &impact_pose.joints)
         .ok_or_else(|| {
             DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
-                target_x: ball.x,
-                target_y: ball.y,
-                target_z: ball.z,
+                target_x: contact_center.x,
+                target_y: contact_center.y,
+                target_z: contact_center.z,
             })
         })?;
+    // 위치는 맞더라도 면이 아래를 향하면 네트를 넘기는 목적에 맞지 않는다.
+    if achieved.normal.z < -1e-6 {
+        return Err(DomainError::InfeasibleSwing(
+            SwingPlanError::InverseKinematicsNoSolution {
+                target_x: contact_center.x,
+                target_y: contact_center.y,
+                target_z: contact_center.z,
+            },
+        ));
+    }
     let windup_target =
         Point3::from(achieved.position.coords - achieved.normal * DETECTION_WINDUP_DISTANCE_M);
     let windup_joints = match arm.rail {
@@ -673,6 +734,9 @@ pub fn plan_aligned_impact_sequence(
         impact,
         impact_pose,
         normal_error,
+        center_below_ball_m: 0.0,
+        target_normal,
+        achieved_normal: achieved.normal,
     });
 }
 
@@ -1361,8 +1425,18 @@ mod tests {
         let toward_opponent =
             Vector3::new(table::WIDTH_X * 0.5 - ball.x, table::LENGTH_Y - ball.y, 0.0).normalize();
 
-        assert!((impact.position.z - ball.z).abs() < 2e-3);
-        assert!((impact.position.coords - ball.coords).norm() < 2e-3);
+        assert!((impact.position.z - (ball.z - sequence.center_below_ball_m)).abs() < 2e-3);
+        assert!((impact.position.x - ball.x).abs() < 2e-3);
+        assert!((impact.position.y - ball.y).abs() < 2e-3);
+        assert!(sequence.center_below_ball_m <= IMPACT_CENTER_BELOW_BALL_M);
+        assert!(
+            sequence.target_normal.z > 0.0,
+            "라켓 면은 아래를 향하면 안 됨"
+        );
+        assert!(
+            sequence.achieved_normal.z >= 0.0,
+            "실제 라켓 면도 아래를 향하면 안 됨"
+        );
         assert!(impact.normal.dot(&toward_opponent) > 0.90);
         let forward_distance =
             (impact.position.coords - windup_pose.position.coords).dot(&impact.normal);
