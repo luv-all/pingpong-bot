@@ -518,43 +518,26 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
         .as_ref()
         .map(|rail| rail.default_x())
         .unwrap_or(start.rail_x);
-    let canonical_target = Point3::new(
+    let ready_target = Point3::new(
         table::WIDTH_X * 0.5,
-        READY_RACKET_Y_M,
+        READY_RACKET_Y_M - READY_PREWIND_DISTANCE_M,
         READY_RACKET_HEIGHT_M,
     );
-    let canonical_normal = Vector3::new(0.0, 1.0, 0.0);
+    let ready_normal = Vector3::new(0.0, 1.0, 0.0);
     let hint = robot::Pose::new(hint_rail_x, arm.default_joints.clone());
-    let (canonical_pose, _) = arm
+    // 자연스러운 관절 모양은 위치와 법선을 한 번에 푼 자세 IK에서 얻는다.
+    // 그 관절 모양은 유지하고 레일만 실기 보정 중앙값으로 평행이동한다.
+    // 준비 중 라켓 x가 조금 달라져도 검출 직후 DirectController가 레일로
+    // 공 x를 맞추므로, x를 억지로 고정해 팔꿈치·손목을 뒤틀 필요가 없다.
+    let (ready_pose, _) = arm
         .inverse_pose_with_rail_best_normal(
-            canonical_target,
-            canonical_normal,
+            ready_target,
+            ready_normal,
             &hint,
             robot::IkSearch::Global,
         )
         .map_err(DomainError::InfeasibleSwing)?;
-    let canonical = arm
-        .forward_kinematics_with_rail(canonical_pose.rail_x, &canonical_pose.joints)
-        .ok_or_else(|| {
-            DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
-                target_x: canonical_target.x,
-                target_y: canonical_target.y,
-                target_z: canonical_target.z,
-            })
-        })?;
-    let target =
-        Point3::from(canonical.position.coords - canonical.normal * READY_PREWIND_DISTANCE_M);
-    let ready_joints = match arm.rail {
-        Some(rail) => arm.inverse_kinematics_with_rail(
-            &rail,
-            hint_rail_x,
-            target,
-            Some(&canonical_pose.joints),
-        ),
-        None => arm.inverse_kinematics_near(target, Some(&canonical_pose.joints)),
-    }
-    .map_err(DomainError::InfeasibleSwing)?;
-    return plan_move_to(arm, start, ready_joints, hint_rail_x);
+    return plan_move_to(arm, start, ready_pose.joints, hint_rail_x);
 }
 
 /// 검출 직후 백스윙과 공 도착 시 임팩트 궤적.
@@ -1401,7 +1384,15 @@ mod tests {
             .expect("ready FK");
 
         assert!((racket.position.z - READY_RACKET_HEIGHT_M).abs() < 2e-3);
-        assert!(racket.normal.dot(&Vector3::new(0.0, 1.0, 0.0)) > 0.90);
+        let forward = racket.normal.dot(&Vector3::new(0.0, 1.0, 0.0));
+        assert!(
+            forward > 0.99,
+            "ready rail={} joints={:?} position={:?} normal={:?} forward={forward}",
+            ready.follow_through_rail_x,
+            ready.follow_through.values,
+            racket.position.coords,
+            racket.normal
+        );
     }
 
     #[test]

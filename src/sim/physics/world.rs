@@ -14,7 +14,6 @@ use crate::physics;
 use crate::robot::Arm;
 use crate::robot::control::{
     DIRECT_AIM_JOINT_INDEX, DirectController, PredictionStability, PredictionStage,
-    REFINED_MIN_OBSERVATION_SECS,
 };
 use crate::robot::motion;
 use crate::robot::motion::InterceptWindow;
@@ -777,14 +776,7 @@ impl SimWorld {
             return;
         }
 
-        let refine_due = self.swing_committed
-            && !self.position_refined
-            && self.sim_time - self.flight_started_at >= REFINED_MIN_OBSERVATION_SECS;
-        if self.swing_abandoned
-            || (self.swing_committed && self.position_refined)
-            || (self.use_bang_bang_swing && self.swing_committed)
-            || (self.robot.is_swinging() && !refine_due)
-        {
+        if self.swing_abandoned || self.swing_committed || self.robot.is_swinging() {
             if let Some(prediction) = marker {
                 self.set_debug_prediction(Some(prediction));
             }
@@ -1225,6 +1217,15 @@ impl SimWorld {
             body.reset_forces(true);
         }
         self.ball_state = crate::sim::physics::BallState::Parked;
+        // 직전 공의 실패·commit은 로그에 이미 남겼다. 주차 뒤까지 빨간 실패와
+        // "확정—치는 중"을 유지하면 현재 로봇이 고장 난 것처럼 보이므로 UI 상태를
+        // 대기로 되돌린다. 진행 중인 준비 자세 복귀 궤적 자체는 취소하지 않는다.
+        self.swing_committed = false;
+        self.position_refined = false;
+        self.swing_abandoned = false;
+        self.debug_snap.last_fail = None;
+        self.debug_snap.last_fail_text = None;
+        self.debug_snap.commit_phase = CommitPhase::Idle;
     }
 
     /// 테이블 밖·바닥으로 떨어졌거나, 테이블 위에서 멈춰버린 공을 슈터로 회수한다.
@@ -2135,6 +2136,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parking_clears_stale_failure_and_committed_status() {
+        let mut world = SimWorld::new(test_robot());
+        world.swing_committed = true;
+        world.debug_snap.commit_phase = CommitPhase::Committed;
+        world.debug_snap.last_fail_text = Some("직전 공 실패".to_owned());
+
+        world.park_ball(&launch::Settings::default());
+
+        assert!(!world.swing_committed);
+        assert_eq!(world.debug_snap.commit_phase, CommitPhase::Idle);
+        assert!(world.debug_snap.last_fail_text.is_none());
+    }
+
     /// 2026-07-30 실측 마운트(베이스 z 0.81→0.935)로 관절속도 한계를 넘기기
     /// 시작했다. `rail_bottom_z`를 0.755(= 옛 베이스 z 0.81)로 되돌리면 통과하는
     /// 것을 확인했으므로 원인은 마운트 높이 하나다.
@@ -2472,14 +2487,12 @@ mod tests {
     }
 
     #[test]
-    fn provisional_motion_is_replanned_at_refined_prediction_time() {
-        // 추적 직후 1차 목표로 레일이 움직이고, 0.25초가 지나면 정밀 목표로
-        // 진행 중 궤적이 한 번 교체되는지 확인한다.
+    fn committed_motion_is_not_replanned_too_late() {
+        // 추적 직후 첫 목표로 타격을 시작했다면 0.25초 뒤 정밀 단계가 되어도
+        // 진행 중 궤적을 덮어쓰거나 시간 부족 실패를 새로 만들지 않는다.
         let robot = test_robot();
-        let center_rail_x = robot.arm.rail.as_ref().expect("리니어").default_x();
         let mut world = SimWorld::new(robot.clone());
         world.set_use_ground_truth(true);
-        *world.robot_mut() = robot::State::new(robot.arm.default_joints.clone(), center_rail_x);
 
         let settings = launch::Settings::default();
         world.shoot_ball(&settings);
@@ -2491,16 +2504,9 @@ mod tests {
         for _ in 0..300 {
             world.step(1.0 / 1000.0, None);
         }
-        // 기본 샷은 0.25초 시점에 남은 시간이 0.15초뿐이라, 물리 한계를 유지하면
-        // 정밀 재계획이 명시적으로 거부될 수 있다. 성공 또는 명시적 시간 부족만 허용한다.
         assert!(
-            world.position_refined
-                || world
-                    .debug_snap
-                    .last_fail_text
-                    .as_deref()
-                    .is_some_and(|text| text.contains("남은 시간")),
-            "정밀 재계획 성공 또는 명시적 시간 부족이어야 함: {:?}",
+            !world.position_refined && world.debug_snap.last_fail_text.is_none(),
+            "타격 시작 뒤 늦은 정밀 재계획·실패가 없어야 함: {:?}",
             world.debug_snap.last_fail_text
         );
     }

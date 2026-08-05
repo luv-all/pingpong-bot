@@ -187,7 +187,10 @@ pub fn draw(
         // Random은 슬라이더(`ui_state.shooter`)에도 반영한다 — 안 그러면 다음
         // 프레임에 원본으로 덮여 슈터 위치가 한 프레임만 깜빡인다.
         if random_shoot {
-            ui_state.shooter = ui_state.shooter.randomized(&mut rand::thread_rng());
+            // GUI Random도 로봇 접수 회귀에서 검증한 좌우·yaw·속도 범위를 쓴다.
+            // `randomized`의 높이·스핀 조합은 네트만 통과할 뿐 로봇 도달 시간은
+            // 보장하지 않아, 명령 직후 시간 부족으로 팔이 미동도 하지 않는 샷을 만든다.
+            ui_state.shooter = ui_state.shooter.randomized_aim(&mut rand::thread_rng());
             ctrl.request_shoot();
         }
         ctrl.shooter = ui_state.shooter.clone();
