@@ -228,6 +228,7 @@ pub fn spawn(
                             break 'control;
                         }
                         pending_verification = None;
+                        consecutive_misses = 0;
                         match apply_test_control(
                             TestControl::ResetPosition,
                             hardware.as_mut(),
@@ -293,6 +294,7 @@ pub fn spawn(
             };
             let idle_ready = pending_verification.is_none() && !hardware.is_busy();
             if idle_ready && let Some(control) = pending_test_control.take() {
+                consecutive_misses = 0;
                 match apply_test_control(
                     control,
                     hardware.as_mut(),
@@ -937,13 +939,16 @@ fn apply_test_control(
     sim_tx: Option<&Sender<SimUpdate>>,
     event_tx: &Sender<RuntimeEvent>,
 ) -> Result<(), MoveError> {
-    if let TestControl::SetZone(zone) = control
+    let (target_zone, target_rail_x) = if let TestControl::SetZone(zone) = control
         && let Some(rail) = arm.rail
     {
-        *current_zone = zone;
-        *home_rail_x = zone.rail_x(rail);
-    }
-    move_to_ready(hardware, arm, *home_rail_x)?;
+        (zone, zone.rail_x(rail))
+    } else {
+        (*current_zone, *home_rail_x)
+    };
+    move_to_ready(hardware, arm, target_rail_x)?;
+    *current_zone = target_zone;
+    *home_rail_x = target_rail_x;
     *latch = CommandLatch::default();
     *state = BallControlState::Idle;
     if let Ok(pose) = hardware.read_pose()
