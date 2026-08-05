@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use pingpong_bot::error::{DomainError, HwError};
+use pingpong_bot::hardware::dynamixel::{DynamixelConfig, MotorMapping};
 use pingpong_bot::hardware::{AppliedRailRacketCommand, Hardware};
 use pingpong_bot::robot::Arm;
 use pingpong_bot::robot::control::{
@@ -31,6 +32,9 @@ const VERIFY_STABLE_SAMPLES: u8 = 2;
 const MAX_CONSECUTIVE_MISSES: u8 = 3;
 const RAIL_ERROR_WARN_M: f64 = 0.020;
 const AIM_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
+const STARTUP_SETTLE_TIMEOUT: Duration = Duration::from_secs(3);
+const STARTUP_JOINT_TOLERANCE_RAD: f64 = 3.0_f64.to_radians();
+const STARTUP_STABLE_SAMPLES: u8 = 2;
 
 #[derive(Default)]
 struct CommandLatch {
@@ -555,13 +559,93 @@ pub(super) fn initialize_pose(
             "시작 자세 초기화 전 실측"
         );
     }
-    let trajectory = Planner::return_to_center(arm, &measured).map_err(MoveError::Plan)?;
-    let ready_joints = trajectory.follow_through.clone();
-    hardware.command(&trajectory).map_err(MoveError::Hardware)?;
-    while hardware.is_busy() {
-        thread::sleep(BUSY_POLL);
+    // 전원이 꺼진 동안 손으로 팔을 움직였을 수 있다. 현재 자세에서 중립 자세로
+    // 곧장 가는 경로가 테이블을 스치면 상승 중간 자세를 거치는 안전 복귀를 쓴다.
+    let trajectories = plan_neutral_return_segments(arm, &measured).map_err(MoveError::Plan)?;
+    let ready_joints = arm.default_joints.clone();
+    let ready_rail_x = arm
+        .rail
+        .as_ref()
+        .map_or(measured.rail_x, |rail| rail.default_x());
+    let mapping = MotorMapping::new(DynamixelConfig::default()).map_err(|error| {
+        MoveError::Hardware(HwError::InvalidConfig {
+            reason: error.to_string(),
+        })
+    })?;
+    let goal_ticks: Vec<i32> = ready_joints
+        .values
+        .iter()
+        .enumerate()
+        .map(|(index, angle)| mapping.radians_to_ticks(index, *angle))
+        .collect();
+    let goal_joint_deg: Vec<f64> = ready_joints
+        .values
+        .iter()
+        .map(|angle| angle.to_degrees())
+        .collect();
+    info!(
+        rail_target_m = f4(ready_rail_x),
+        joints_target_rad = %format!("{:?}", ready_joints.values),
+        joints_target_deg = %format!("{goal_joint_deg:?}"),
+        dynamixel_goal_ticks = %format!("{goal_ticks:?}"),
+        joint_signs = %format!("{:?}", mapping.config().joint_signs),
+        joint_offsets_rad = %format!("{:?}", mapping.config().joint_offsets_rad),
+        "시작 자세 공통 목표 — sim·real 동일 논리 좌표"
+    );
+    if trajectories.len() > 1 {
+        info!(
+            segments = trajectories.len(),
+            "손으로 바뀐 시작 자세 복구 — 상승 중간 자세를 거쳐 중립 자세로 이동"
+        );
     }
-    let after = hardware.read_pose().map_err(MoveError::Hardware)?;
+    for trajectory in trajectories {
+        hardware.command(&trajectory).map_err(MoveError::Hardware)?;
+        while hardware.is_busy() {
+            thread::sleep(BUSY_POLL);
+        }
+    }
+    // executor 종료는 마지막 Goal Position을 보냈다는 뜻일 뿐, 모터가 실제로
+    // 도착했다는 뜻은 아니다. 실측이 준비 자세에 연속 두 번 들어올 때까지 기다린다.
+    let settle_deadline = Instant::now() + STARTUP_SETTLE_TIMEOUT;
+    let mut stable_samples = 0_u8;
+    let after = loop {
+        let pose = hardware.read_pose().map_err(MoveError::Hardware)?;
+        let max_joint_error_rad = ready_joints
+            .values
+            .iter()
+            .zip(&pose.joints.values)
+            .map(|(commanded, measured)| (commanded - measured).abs())
+            .fold(0.0_f64, f64::max);
+        if max_joint_error_rad <= STARTUP_JOINT_TOLERANCE_RAD {
+            stable_samples = stable_samples.saturating_add(1);
+            if stable_samples >= STARTUP_STABLE_SAMPLES {
+                break pose;
+            }
+        } else {
+            stable_samples = 0;
+        }
+        if Instant::now() >= settle_deadline {
+            let joint_errors: Vec<f64> = ready_joints
+                .values
+                .iter()
+                .zip(&pose.joints.values)
+                .map(|(commanded, measured)| commanded - measured)
+                .collect();
+            warn!(
+                rail_commanded_m = f4(ready_rail_x),
+                rail_measured_m = f4(pose.rail_x),
+                rail_commanded_minus_measured_m = f4(ready_rail_x - pose.rail_x),
+                joints_commanded = %format!("{:?}", ready_joints.values),
+                joints_measured = %format!("{:?}", pose.joints.values),
+                joints_commanded_minus_measured = %format!("{joint_errors:?}"),
+                "시작 팔 자세 실측 수렴 실패 — 관절 부호·영점 보정 필요"
+            );
+            return Err(MoveError::StartupAlignmentTimeout {
+                max_joint_error_rad,
+            });
+        }
+        thread::sleep(VERIFY_POLL_PERIOD);
+    };
     if let Some(rail) = arm.rail {
         let joint_errors: Vec<f64> = ready_joints
             .values
@@ -577,6 +661,21 @@ pub(super) fn initialize_pose(
             joints_measured = %format!("{:?}", after.joints.values),
             joints_commanded_minus_measured = %format!("{joint_errors:?}"),
             "시작 자세 초기화 후 실측"
+        );
+    }
+    if let (Some(target_racket), Some(measured_racket)) = (
+        arm.forward_kinematics_with_rail(ready_rail_x, &ready_joints),
+        arm.forward_kinematics_with_rail(after.rail_x, &after.joints),
+    ) {
+        let position_error = target_racket.position.coords - measured_racket.position.coords;
+        info!(
+            racket_target_xyz_m = %format!("{:?}", target_racket.position.coords),
+            racket_measured_xyz_m = %format!("{:?}", measured_racket.position.coords),
+            racket_target_minus_measured_xyz_m = %format!("{position_error:?}"),
+            racket_target_normal = %format!("{:?}", target_racket.normal),
+            racket_measured_normal = %format!("{:?}", measured_racket.normal),
+            racket_normal_dot = f4(target_racket.normal.dot(&measured_racket.normal)),
+            "시작 자세 라켓 FK 얼라인 진단"
         );
     }
     return Ok(after);
@@ -684,6 +783,7 @@ fn plan_neutral_return_segments(
 pub(super) enum MoveError {
     Hardware(HwError),
     Plan(DomainError),
+    StartupAlignmentTimeout { max_joint_error_rad: f64 },
 }
 
 impl std::fmt::Display for MoveError {
@@ -691,6 +791,13 @@ impl std::fmt::Display for MoveError {
         return match self {
             Self::Hardware(error) => write!(f, "{error}"),
             Self::Plan(error) => write!(f, "{error}"),
+            Self::StartupAlignmentTimeout {
+                max_joint_error_rad,
+            } => write!(
+                f,
+                "시작 팔 자세가 3초 안에 수렴하지 않음: 최대 관절 오차 {:+.2}°",
+                max_joint_error_rad.to_degrees()
+            ),
         };
     }
 }
