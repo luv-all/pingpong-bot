@@ -22,6 +22,12 @@ pub trait Hardware: Send {
 
     fn read_pose(&mut self) -> Result<robot::Pose, HwError>;
 
+    /// 실측 자세가 모터 소프트 한계 밖일 때 첫 명령의 즉시 클램프를 막고,
+    /// 현재값에서 정상 범위 방향으로만 복귀할 수 있게 한다.
+    fn arm_joint_limit_escape(&mut self, _joints: &robot::Joints) -> Result<(), HwError> {
+        return Ok(());
+    }
+
     /// 2단계 제어 명령: 레일과 라켓 수평 조준축만 갱신한다.
     ///
     /// 기본 궤적 명령과 분리해, 중앙 정렬이 끝난 뒤 다른 Dynamixel 축에 Goal을

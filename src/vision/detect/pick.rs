@@ -14,7 +14,6 @@ use super::{Candidate, Mask};
 const RADIUS_MIN_SCALE: f64 = 0.5;
 const RADIUS_MAX_SCALE: f64 = 1.8;
 
-
 /// 기대 반지름과의 편차로 후보를 고른다. 가장 큰 것을 고르면 팔이 공을 이긴다.
 pub struct Picker {
     min_radius_px: f64,

@@ -253,7 +253,9 @@ mod tests {
         let mut any_lit = false;
         for y in 0..50 {
             for x in 0..100 {
-                if *img.at_2d::<opencv::core::Vec3b>(y, x).unwrap() != opencv::core::Vec3b::from([0, 0, 0]) {
+                if *img.at_2d::<opencv::core::Vec3b>(y, x).unwrap()
+                    != opencv::core::Vec3b::from([0, 0, 0])
+                {
                     any_lit = true;
                 }
             }

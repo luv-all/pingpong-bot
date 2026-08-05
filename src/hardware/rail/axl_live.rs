@@ -77,8 +77,7 @@ impl AxlLive {
         check_axl("AxmSignalServoOn", unsafe {
             (self.ffi.axm_signal_servo_on)(axis, super::axl_ffi::ENABLE)
         })?;
-        let (actual_position_m, command_position_m) =
-            self.read_actual_and_command_m(axis)?;
+        let (actual_position_m, command_position_m) = self.read_actual_and_command_m(axis)?;
         let command_minus_actual_m = command_position_m - actual_position_m;
         let soft_limit = config.soft_limit_args_for_command_offset(command_minus_actual_m);
         tracing::info!(

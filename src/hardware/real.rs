@@ -231,6 +231,18 @@ impl Hardware for RealHardware {
         return Ok(robot::Pose::new(self.read_rail_x_m()?, joints));
     }
 
+    fn arm_joint_limit_escape(&mut self, joints: &robot::Joints) -> Result<(), HwError> {
+        self.reap_executor();
+        self.bus
+            .lock()
+            .map_err(|_| HwError::CommandFailed {
+                duration_secs: 0.0,
+                joint_count: joints.values.len(),
+                reason: "Dynamixel bus mutex poisoned".into(),
+            })?
+            .arm_limit_escape_from(joints)
+    }
+
     fn command_rail_and_racket(
         &mut self,
         rail_x: f64,

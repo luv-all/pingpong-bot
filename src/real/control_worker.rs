@@ -43,6 +43,9 @@ const STARTUP_MAX_TRIM_ATTEMPTS: u8 = 6;
 const STARTUP_MAX_TRIM_STEP_RAD: f64 = 5.0_f64.to_radians();
 /// 엔코더 한두 틱의 진동은 보정하지 않는다.
 const STARTUP_TRIM_MIN_ERROR_RAD: f64 = 0.25_f64.to_radians();
+/// 너무 불확실한 초기 예측으로 팔을 레일 끝·관절 끝까지 보내지 않는다.
+/// 이보다 안정되면 여전히 정밀 게이트보다 훨씬 일찍 예비 정렬을 시작한다.
+const PROVISIONAL_MAX_POSITION_SIGMA_M: f64 = 0.15;
 // 작은 정상상태 오차에서 통신 진단/재부팅을 시도하지 않는다. 모터가 실제로
 // 멈췄다고 볼 만큼 크게 어긋난 경우에만 자동 복구 대상을 확인한다.
 const STARTUP_RECOVERY_MIN_ERROR_RAD: f64 = 10.0_f64.to_radians();
@@ -94,8 +97,7 @@ fn refined_prediction_ready(request: &CommitRequest) -> bool {
     };
     let params = pingpong_bot::defaults::EstimatorParams::default();
     let position_limit = nalgebra::Vector3::repeat(params.max_impact_sigma);
-    let velocity_limit =
-        nalgebra::Vector3::repeat(params.max_impact_sigma / params.max_lead);
+    let velocity_limit = nalgebra::Vector3::repeat(params.max_impact_sigma / params.max_lead);
     return last.sigma_position < position_limit && last.sigma_velocity < velocity_limit;
 }
 
@@ -161,6 +163,15 @@ enum BallControlState {
     },
 }
 
+impl BallControlState {
+    fn active_track_seq(&self) -> Option<u64> {
+        return match self {
+            Self::Idle => None,
+            Self::Aligning { measurement, .. } => Some(measurement.track_seq),
+        };
+    }
+}
+
 /// 명령 후 레일·조준축 재측정 상태.
 ///
 /// **현재 실기 루프에서 도달 불가.** `spawn()`의 while 루프는 `pending_verification`을
@@ -221,6 +232,7 @@ pub fn spawn(
                 ..SimUpdate::default()
             });
         }
+        let mut cached_idle_pose = Some(pose.clone());
         let _ = event_tx.send(RuntimeEvent::Ready { pose });
         let _ = event_tx.send(RuntimeEvent::ControlState {
             state: ControlStateSnapshot::Idle,
@@ -235,6 +247,9 @@ pub fn spawn(
         let mut last_command: Option<Instant> = None;
         let mut pending_verification: Option<PendingVerification> = None;
         let mut state = BallControlState::Idle;
+        // 1차 이동 중 도착한 같은 공의 최신 정밀 예측을 버리지 않고, 이동이
+        // 끝나는 즉시 꺼내 기존 목표를 덮어쓴다.
+        let mut pending_refined: Option<CommitRequest> = None;
         let mut consecutive_misses: u8 = 0;
         let mut pending_test_control: Option<TestControl> = None;
 
@@ -253,6 +268,7 @@ pub fn spawn(
                             break 'control;
                         }
                         pending_verification = None;
+                        pending_refined = None;
                         consecutive_misses = 0;
                         match apply_test_control(
                             TestControl::ResetPosition,
@@ -265,7 +281,7 @@ pub fn spawn(
                             sim_tx.as_ref(),
                             &event_tx,
                         ) {
-                            Ok(()) => {}
+                            Ok(()) => cached_idle_pose = hardware.read_pose().ok(),
                             Err(MoveError::Hardware(error)) => {
                                 let _ = event_tx.send(RuntimeEvent::Failed {
                                     track_seq: latch.track_seq,
@@ -331,7 +347,7 @@ pub fn spawn(
                     sim_tx.as_ref(),
                     &event_tx,
                 ) {
-                    Ok(()) => {}
+                    Ok(()) => cached_idle_pose = hardware.read_pose().ok(),
                     Err(MoveError::Hardware(error)) => {
                         let _ = event_tx.send(RuntimeEvent::Failed {
                             track_seq: latch.track_seq,
@@ -387,6 +403,8 @@ pub fn spawn(
                         reason,
                     });
                     state = BallControlState::Idle;
+                    cached_idle_pose = None;
+                    pending_refined = None;
                     let _ = event_tx.send(RuntimeEvent::ControlState {
                         state: ControlStateSnapshot::Idle,
                     });
@@ -397,17 +415,20 @@ pub fn spawn(
                 }
                 match hardware.read_pose() {
                     Ok(pose) => {
+                        cached_idle_pose = Some(pose.clone());
                         if let Some(sim_tx) = &sim_tx {
                             let _ = sim_tx.try_send(SimUpdate {
                                 pose: Some(PoseMsg::from(&pose)),
                                 ..SimUpdate::default()
                             });
                         }
-                        info!(track_seq = latch.track_seq, "제어 후 중앙 복귀 완료");
+                        let returned_track_seq = state.active_track_seq();
+                        info!(track_seq = returned_track_seq, "제어 후 중앙 복귀 완료");
                     }
                     Err(error) => warn!(%error, "중앙 복귀 후 포즈 읽기 실패"),
                 }
                 state = BallControlState::Idle;
+                pending_refined = None;
                 let _ = event_tx.send(RuntimeEvent::ControlState {
                     state: ControlStateSnapshot::Idle,
                 });
@@ -431,31 +452,41 @@ pub fn spawn(
                 };
                 timeout = timeout.min(return_wait);
             }
-            let request = match rx.recv_timeout(timeout) {
-                Ok(request) => request,
-                Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => continue,
+            let can_apply_buffered_refined = pending_refined.is_some()
+                && !hardware.is_busy()
+                && last_command.is_none_or(|at| at.elapsed() >= COMMAND_THROTTLE);
+            let request = if can_apply_buffered_refined {
+                pending_refined.take().expect("확인한 정밀 예측")
+            } else {
+                match rx.recv_timeout(timeout) {
+                    Ok(request) => request,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                    Err(RecvTimeoutError::Timeout) => continue,
+                }
             };
             let track_seq = request.track_seq();
+            // 한 공의 정렬·유지가 끝나기 전에 검출기가 만든 새 잡음 track이
+            // latch와 복귀 상태를 덮어쓰지 못하게 한다. 같은 track의 Refined만 허용한다.
+            if state
+                .active_track_seq()
+                .is_some_and(|active| active != track_seq)
+            {
+                continue;
+            }
             let refined_ready = refined_prediction_ready(&request);
             let Some(stage) = latch.next_stage(track_seq, refined_ready) else {
                 continue;
             };
             // 예비 궤적을 재생하는 동안은 최신 예측만 받아 두고, 완료 후
             // 도착한 다음 요청으로 정밀 궤적을 다시 계획한다.
-            if hardware.is_busy()
-                || last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
+            if hardware.is_busy() || last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
             {
+                if stage == PredictionStage::Refined {
+                    pending_refined = Some(request);
+                }
                 continue;
             }
 
-            let start = match hardware.read_pose() {
-                Ok(pose) => pose,
-                Err(error) => {
-                    warn!(track_seq, %error, "명령 직전 포즈 읽기 실패");
-                    continue;
-                }
-            };
             let target = match select_alignment_target(&request, window) {
                 Ok(target) => target,
                 Err(error) => {
@@ -467,6 +498,38 @@ pub fn spawn(
                     continue;
                 }
             };
+            if stage == PredictionStage::Provisional
+                && target.sigma_position.max() > PROVISIONAL_MAX_POSITION_SIGMA_M
+            {
+                debug!(
+                    track_seq,
+                    sigma_position_m = %format!("{:?}", target.sigma_position),
+                    "예비 예측 불확실성이 너무 큼 — 극단 자세 명령 생략"
+                );
+                continue;
+            }
+            let (start, start_pose_source) = if matches!(state, BallControlState::Idle) {
+                // 중앙 복귀 직후 읽어 둔 실측 자세를 재사용한다. 토크가 유지되는
+                // 대기 중에는 자세가 바뀌지 않으므로 느린 4-ID 직렬 읽기를 없앤다.
+                match cached_idle_pose.take() {
+                    Some(pose) => (pose, "cached_ready"),
+                    None => match hardware.read_pose() {
+                        Ok(pose) => (pose, "measured"),
+                        Err(error) => {
+                            warn!(track_seq, %error, "명령 직전 포즈 읽기 실패");
+                            continue;
+                        }
+                    },
+                }
+            } else {
+                match hardware.read_pose() {
+                    Ok(pose) => (pose, "measured_refined"),
+                    Err(error) => {
+                        warn!(track_seq, %error, "정밀 명령 직전 포즈 읽기 실패");
+                        continue;
+                    }
+                }
+            };
             if let Some(previous) = pending_verification.take() {
                 log_verification(&previous, &start, "superseded", false);
             }
@@ -476,17 +539,14 @@ pub fn spawn(
                 Err(error) => {
                     let _ = event_tx.send(RuntimeEvent::Failed {
                         track_seq: Some(track_seq),
-                        reason: format!(
-                            "정렬 {stage:?} 계획 불가 — 다음 예측에서 재시도: {error}"
-                        ),
+                        reason: format!("정렬 {stage:?} 계획 불가 — 다음 예측에서 재시도: {error}"),
                     });
                     continue;
                 }
             };
             let rail_commanded_m = alignment.rail.end;
             let corrected_target_position = pingpong_bot::Point3::new(
-                target.position.x
-                    - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+                target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
                 target.position.y,
                 target.position.z,
             );
@@ -504,6 +564,9 @@ pub fn spawn(
                 break;
             }
             latch.mark_sent(stage);
+            if stage == PredictionStage::Refined {
+                pending_refined = None;
+            }
             last_command = Some(issued_at);
             let _ = event_tx.send(RuntimeEvent::Commanded {
                 track_seq,
@@ -543,6 +606,7 @@ pub fn spawn(
             info!(
                 track_seq,
                 stage = ?stage,
+                start_pose_source,
                 request_age_secs = f4(request.age_secs()),
                 target_time_secs = f4(target.t.as_secs_f64()),
                 predicted_arrival_in_secs = f4(
@@ -828,6 +892,9 @@ fn initialize_pose_attempt(
     allow_motor_recovery: bool,
 ) -> Result<pingpong_bot::robot::Pose, MoveError> {
     let measured = hardware.read_pose().map_err(MoveError::Hardware)?;
+    hardware
+        .arm_joint_limit_escape(&measured.joints)
+        .map_err(MoveError::Hardware)?;
     if let Some(rail) = arm.rail {
         info!(
             rail_measured_m = f4(measured.rail_x),
@@ -922,11 +989,8 @@ fn initialize_pose_attempt(
             && trim_attempts < STARTUP_MAX_TRIM_ATTEMPTS
             && max_joint_error_rad < STARTUP_RECOVERY_MIN_ERROR_RAD
         {
-            let incremental_correction_deg = accumulate_startup_trim_goal(
-                arm,
-                &mut compensated_goal_values,
-                &joint_errors,
-            );
+            let incremental_correction_deg =
+                accumulate_startup_trim_goal(arm, &mut compensated_goal_values, &joint_errors);
             let compensated = Joints::from_slice(&compensated_goal_values);
             let cumulative_correction_deg: Vec<f64> = compensated_goal_values
                 .iter()
@@ -1035,6 +1099,9 @@ fn initialize_pose_attempt(
 /// 시작 자세 초기화와 공 제어 후 복귀·수동 테스트 컨트롤이 같은 전체축 이동을 쓴다.
 fn move_to_ready(hardware: &mut dyn Hardware, arm: &Arm, rail_x: f64) -> Result<(), MoveError> {
     let start = hardware.read_pose().map_err(MoveError::Hardware)?;
+    hardware
+        .arm_joint_limit_escape(&start.joints)
+        .map_err(MoveError::Hardware)?;
     let trajectories =
         plan_neutral_return_segments(arm, &start, rail_x).map_err(MoveError::Plan)?;
     if trajectories.len() > 1 {
@@ -1110,22 +1177,14 @@ fn plan_neutral_return_segments(
     start: &pingpong_bot::robot::Pose,
     rail_x: f64,
 ) -> Result<Vec<pingpong_bot::robot::motion::Trajectory>, DomainError> {
-    match Planner::return_to_center_at(arm, start, rail_x) {
+    let planning_start = clamp_small_joint_limit_overshoot(arm, start);
+    let direct_error = match Planner::return_to_center_at(arm, &planning_start, rail_x) {
         Ok(direct) => return Ok(vec![direct]),
-        Err(error) => {
-            if !matches!(
-                error,
-                DomainError::InfeasibleSwing(
-                    pingpong_bot::error::SwingPlanError::TablePenetration { .. }
-                )
-            ) {
-                return Err(error);
-            }
-        }
-    }
+        Err(error) => error,
+    };
 
     let racket = arm
-        .forward_kinematics_with_rail(start.rail_x, &start.joints)
+        .forward_kinematics_with_rail(planning_start.rail_x, &planning_start.joints)
         .ok_or_else(|| {
             DomainError::InfeasibleSwing(
                 pingpong_bot::error::SwingPlanError::InverseKinematicsNoSolution {
@@ -1135,7 +1194,10 @@ fn plan_neutral_return_segments(
                 },
             )
         })?;
-    let mut last_error = None;
+    // 직접 복귀가 테이블 관통뿐 아니라 관절 한계·토크 한계로 실패해도 상승
+    // 중간 자세를 시도한다. 극단 예측 자세에서는 정지→정지 단일 quintic이
+    // 중간에 한계를 넘지만, 위로 먼저 접은 뒤에는 중앙 복귀가 가능할 수 있다.
+    let mut last_error = Some(direct_error);
     for lift_m in [0.03, 0.06, 0.10, 0.15] {
         let lifted_target = pingpong_bot::Point3::new(
             racket.position.x,
@@ -1145,11 +1207,11 @@ fn plan_neutral_return_segments(
         let lifted_joints = match arm.rail.as_ref() {
             Some(rail) => arm.inverse_kinematics_with_rail(
                 rail,
-                start.rail_x,
+                planning_start.rail_x,
                 lifted_target,
-                Some(&start.joints),
+                Some(&planning_start.joints),
             ),
-            None => arm.inverse_kinematics_near(lifted_target, Some(&start.joints)),
+            None => arm.inverse_kinematics_near(lifted_target, Some(&planning_start.joints)),
         };
         let lifted_joints = match lifted_joints {
             Ok(joints) => joints,
@@ -1158,13 +1220,14 @@ fn plan_neutral_return_segments(
                 continue;
             }
         };
-        let lift = match Planner::move_to(arm, start, lifted_joints, start.rail_x) {
-            Ok(trajectory) => trajectory,
-            Err(error) => {
-                last_error = Some(error);
-                continue;
-            }
-        };
+        let lift =
+            match Planner::move_to(arm, &planning_start, lifted_joints, planning_start.rail_x) {
+                Ok(trajectory) => trajectory,
+                Err(error) => {
+                    last_error = Some(error);
+                    continue;
+                }
+            };
         let lifted_pose =
             pingpong_bot::robot::Pose::new(lift.follow_through_rail_x, lift.follow_through.clone());
         match Planner::return_to_center_at(arm, &lifted_pose, rail_x) {
@@ -1181,6 +1244,27 @@ fn plan_neutral_return_segments(
             },
         )
     }));
+}
+
+/// Dynamixel 양자화·탄성 때문에 관절이 URDF 한계를 아주 조금 넘으면 시작점
+/// 자체가 불가능하다고 판정되어 모든 복귀가 막힌다. 1° 이내 초과만 계획 좌표에서
+/// 경계로 붙이고, 그보다 큰 초과는 그대로 두어 안전 검사가 실패하게 한다.
+fn clamp_small_joint_limit_overshoot(
+    arm: &Arm,
+    start: &pingpong_bot::robot::Pose,
+) -> pingpong_bot::robot::Pose {
+    const MAX_RECOVERABLE_OVERSHOOT_RAD: f64 = 1.0_f64.to_radians();
+    let mut joints = start.joints.clone();
+    for (index, angle) in joints.values.iter_mut().enumerate() {
+        let Some(limit) = arm.joint_limit(index) else {
+            continue;
+        };
+        let clamped = angle.clamp(limit.min, limit.max);
+        if (*angle - clamped).abs() <= MAX_RECOVERABLE_OVERSHOOT_RAD {
+            *angle = clamped;
+        }
+    }
+    return pingpong_bot::robot::Pose::new(start.rail_x, joints);
 }
 
 #[derive(Debug)]
@@ -1336,6 +1420,24 @@ mod tests {
     }
 
     #[test]
+    fn extreme_logged_alignment_pose_has_a_safe_ready_return() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let start = Pose::new(
+            0.1114,
+            Joints::from_slice(&[0.5031457, 0.5246214, -1.3284274, 0.2914563]),
+        );
+        let rail = robot.arm.rail.expect("rail");
+
+        let segments = plan_neutral_return_segments(&robot.arm, &start, rail.default_x())
+            .expect("극단 정렬 자세에서도 중간 자세를 거쳐 복귀");
+
+        assert_eq!(
+            segments.last().expect("ready segment").follow_through,
+            robot.arm.default_joints
+        );
+    }
+
+    #[test]
     fn delayed_vision_request_is_advanced_instead_of_dropped() {
         let request = vision_request(Duration::from_millis(80));
         let target = select_alignment_target(&request, motion::InterceptWindow::default())
@@ -1360,10 +1462,7 @@ mod tests {
         );
         latch.mark_sent(PredictionStage::Provisional);
         assert_eq!(latch.next_stage(1, false), None);
-        assert_eq!(
-            latch.next_stage(1, true),
-            Some(PredictionStage::Refined)
-        );
+        assert_eq!(latch.next_stage(1, true), Some(PredictionStage::Refined));
         latch.mark_sent(PredictionStage::Refined);
         assert_eq!(latch.next_stage(1, true), None);
     }
@@ -1388,8 +1487,7 @@ mod tests {
         assert!(refined_prediction_ready(&refined));
 
         let mut provisional = vision_request(Duration::ZERO);
-        provisional.trajectory.measured.0[0].sigma_position =
-            nalgebra::Vector3::repeat(1.0);
+        provisional.trajectory.measured.0[0].sigma_position = nalgebra::Vector3::repeat(1.0);
         assert!(!refined_prediction_ready(&provisional));
     }
 

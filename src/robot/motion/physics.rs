@@ -10,8 +10,8 @@ use crate::defaults::motion::{
     DETECTION_WINDUP_DISTANCE_M, DETECTION_WINDUP_MIN_DURATION_SECS,
     FIXED_IMPACT_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_DISTANCE_M, FIXED_IMPACT_PUSH_SPEED_M_S,
     IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M,
-    READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH,
-    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
+    READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS,
+    RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
@@ -569,11 +569,7 @@ pub fn plan_ball_alignment(
     start: &robot::Pose,
     ball: Point3,
 ) -> Result<Trajectory, DomainError> {
-    let corrected_ball = Point3::new(
-        ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-        ball.y,
-        ball.z,
-    );
+    let corrected_ball = Point3::new(ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M, ball.y, ball.z);
     let toward_net = Vector3::new(
         table::WIDTH_X * 0.5 - corrected_ball.x,
         table::LENGTH_Y * 0.5 - corrected_ball.y,
@@ -1570,11 +1566,8 @@ mod tests {
         );
         // 중앙에서 벗어난 공으로 시험해 +Y만 보는 구현도 잡아낸다.
         let ball = Point3::new(table::WIDTH_X * 0.5 + 0.18, READY_RACKET_Y_M, 0.95);
-        let corrected_ball = Point3::new(
-            ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-            ball.y,
-            ball.z,
-        );
+        let corrected_ball =
+            Point3::new(ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M, ball.y, ball.z);
         let alignment = plan_ball_alignment(arm, &start, ball).expect("position alignment");
         let reached = arm
             .forward_kinematics_with_rail(

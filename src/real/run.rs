@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
-use pingpong_bot::camera::{Calibration, CamCliArgs, CamStreamArgs, PreviewAction, StereoOfflineArgs};
+use pingpong_bot::camera::{
+    Calibration, CamCliArgs, CamStreamArgs, PreviewAction, StereoOfflineArgs,
+};
 use pingpong_bot::defaults::vision::detector_for;
 use pingpong_bot::defaults::{self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, robot};
 use pingpong_bot::hardware::RealHardware;

@@ -55,6 +55,15 @@ pub struct DynamixelBus {
     prefer_individual_position_reads: bool,
     /// 클램프 경고 스로틀 — 200 Hz 스트리밍이라 매번 찍으면 로그가 잠긴다.
     last_clamp_warn: Option<std::time::Instant>,
+    /// 시작 실측이 소프트 한계 밖일 때만 여는 단방향 복귀 통로.
+    /// 매 명령마다 바깥 경계를 안쪽으로 좁혀 다시 바깥으로 움직일 수 없게 한다.
+    limit_escapes: Vec<Option<LimitEscape>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LimitEscape {
+    Below { floor_tick: i32 },
+    Above { ceiling_tick: i32 },
 }
 
 /// 모터 한계 클램프 경고 주기.
@@ -95,6 +104,7 @@ fn read_present_positions_individually(
 impl DynamixelBus {
     pub fn dry_run(config: DynamixelConfig) -> Result<Self, DynamixelConfigError> {
         let mapping = MotorMapping::new(config)?;
+        let joint_count = mapping.config.motor_ids.len();
         let ticks = (0..mapping.config.motor_ids.len())
             .map(|index| mapping.radians_to_ticks(index, 0.0))
             .collect();
@@ -110,6 +120,7 @@ impl DynamixelBus {
             torque_enabled: false,
             prefer_individual_position_reads: false,
             last_clamp_warn: None,
+            limit_escapes: vec![None; joint_count],
         });
     }
 
@@ -180,6 +191,7 @@ impl DynamixelBus {
         let mapping = MotorMapping::new(config).map_err(|e| HwError::InvalidConfig {
             reason: e.to_string(),
         })?;
+        let joint_count = mapping.config.motor_ids.len();
         let timeout = std::time::Duration::from_millis(100);
         let port = serialport::new(&mapping.config.port, mapping.config.baudrate)
             .timeout(timeout)
@@ -199,6 +211,7 @@ impl DynamixelBus {
             torque_enabled: false,
             prefer_individual_position_reads: false,
             last_clamp_warn: None,
+            limit_escapes: vec![None; joint_count],
         };
         bus.apply_motion_profile()?;
         return Ok(bus);
@@ -362,7 +375,10 @@ impl DynamixelBus {
             .values
             .iter()
             .enumerate()
-            .filter(|(index, angle)| self.mapping.clamped_by_motor_limit(*index, **angle))
+            .filter(|(index, angle)| {
+                self.mapping.clamped_by_motor_limit(*index, **angle)
+                    && !self.limit_escape_allows(*index, **angle)
+            })
             .map(|(index, _)| index)
             .collect();
         if !clamped.is_empty()
@@ -395,6 +411,7 @@ impl DynamixelBus {
             ));
         };
         if self.mapping.clamped_by_motor_limit(joint_index, angle_rad)
+            && !self.limit_escape_allows(joint_index, angle_rad)
             && self
                 .last_clamp_warn
                 .is_none_or(|at| at.elapsed() >= CLAMP_WARN_PERIOD)
@@ -407,7 +424,7 @@ impl DynamixelBus {
             );
         }
 
-        let tick = self.mapping.radians_to_ticks(joint_index, angle_rad);
+        let tick = self.limit_aware_goal_tick(joint_index, angle_rad);
         let mut bus_goals = vec![(motor_id, tick)];
         for pair in &self.mapping.config.mirror_slaves {
             if pair.master_id == motor_id {
@@ -466,9 +483,94 @@ impl DynamixelBus {
             .values
             .iter()
             .enumerate()
-            .map(|(index, angle)| self.mapping.radians_to_ticks(index, *angle))
+            .map(|(index, angle)| self.limit_aware_goal_tick(index, *angle))
             .collect();
         self.write_raw_goal_ticks(&ticks, 0.0)
+    }
+
+    /// 현재 자세가 모터 소프트 한계 밖이면 그 현재값까지만 임시 허용한다.
+    /// 이후 목표 tick은 정상 범위 방향으로만 갈 수 있고, 한계 안에 들어오는 순간
+    /// 임시 통로를 닫는다. 따라서 정상 운전 범위 자체는 넓어지지 않는다.
+    pub fn arm_limit_escape_from(&mut self, joints: &Joints) -> Result<(), HwError> {
+        let joint_count = self.mapping.config.motor_ids.len();
+        if joints.values.len() != joint_count {
+            return Err(command_transport_error(
+                0.0,
+                joints.values.len(),
+                format!(
+                    "한계 복귀 관절 수 불일치: got {} want {joint_count}",
+                    joints.values.len()
+                ),
+            ));
+        }
+        self.limit_escapes.fill(None);
+        for (index, angle) in joints.values.iter().copied().enumerate() {
+            let raw = self.mapping.radians_to_raw_ticks(index, angle);
+            let (lo, hi) = self.mapping.tick_limit(index);
+            let escape = if raw < lo {
+                Some(LimitEscape::Below { floor_tick: raw })
+            } else if raw > hi {
+                Some(LimitEscape::Above { ceiling_tick: raw })
+            } else {
+                None
+            };
+            if let Some(escape) = escape {
+                warn!(
+                    joint = index,
+                    motor_id = self.mapping.config.motor_ids[index],
+                    present_tick = raw,
+                    normal_min_tick = lo,
+                    normal_max_tick = hi,
+                    ?escape,
+                    "시작 관절이 모터 한계 밖 — 현재값 유지 후 정상 범위 방향으로만 복귀"
+                );
+            }
+            self.limit_escapes[index] = escape;
+        }
+        return Ok(());
+    }
+
+    fn limit_escape_allows(&self, joint_index: usize, angle_rad: f64) -> bool {
+        let raw = self.mapping.radians_to_raw_ticks(joint_index, angle_rad);
+        let (lo, hi) = self.mapping.tick_limit(joint_index);
+        return match self.limit_escapes.get(joint_index).copied().flatten() {
+            Some(LimitEscape::Below { floor_tick }) => raw >= floor_tick && raw < lo,
+            Some(LimitEscape::Above { ceiling_tick }) => raw > hi && raw <= ceiling_tick,
+            None => false,
+        };
+    }
+
+    fn limit_aware_goal_tick(&mut self, joint_index: usize, angle_rad: f64) -> i32 {
+        let raw = self.mapping.radians_to_raw_ticks(joint_index, angle_rad);
+        let (lo, hi) = self.mapping.tick_limit(joint_index);
+        let Some(escape) = self.limit_escapes[joint_index] else {
+            return raw.clamp(lo, hi);
+        };
+        match escape {
+            LimitEscape::Below { floor_tick } if raw < lo => {
+                let applied = raw.max(floor_tick);
+                self.limit_escapes[joint_index] = Some(LimitEscape::Below {
+                    floor_tick: applied,
+                });
+                applied
+            }
+            LimitEscape::Above { ceiling_tick } if raw > hi => {
+                let applied = raw.min(ceiling_tick);
+                self.limit_escapes[joint_index] = Some(LimitEscape::Above {
+                    ceiling_tick: applied,
+                });
+                applied
+            }
+            _ => {
+                self.limit_escapes[joint_index] = None;
+                info!(
+                    joint = joint_index,
+                    motor_id = self.mapping.config.motor_ids[joint_index],
+                    "모터 한계 밖 시작 자세의 단방향 복귀 완료"
+                );
+                raw.clamp(lo, hi)
+            }
+        }
     }
 
     /// Position Control + PWM/Current Limit 최대 → (호출측에서 Torque ON).
@@ -698,23 +800,17 @@ impl DynamixelBus {
                         None,
                     )?
                 } else {
-                    match real.sync_read_with_retry(
-                        &ids,
-                        address,
-                        4,
-                        retries,
-                        retry_delay_ms,
-                    ) {
+                    match real.sync_read_with_retry(&ids, address, 4, retries, retry_delay_ms) {
                         Ok(raw) => raw,
                         Err(group_error) => {
-                        // 전체 SyncRead는 한 ID의 응답만 깨져도 전부 실패한다.
-                        // 모터가 움직일 때의 일시적 Checksum/timeout은 ID별 읽기로
-                        // 격리해 정상 응답 모터까지 함께 버리지 않는다.
-                        warn!(
-                            ids = ?ids,
-                            error = %group_error,
-                            "Present Position 전체 SyncRead 실패 — 이후 ID별 읽기 사용"
-                        );
+                            // 전체 SyncRead는 한 ID의 응답만 깨져도 전부 실패한다.
+                            // 모터가 움직일 때의 일시적 Checksum/timeout은 ID별 읽기로
+                            // 격리해 정상 응답 모터까지 함께 버리지 않는다.
+                            warn!(
+                                ids = ?ids,
+                                error = %group_error,
+                                "Present Position 전체 SyncRead 실패 — 이후 ID별 읽기 사용"
+                            );
                             self.prefer_individual_position_reads = true;
                             let recovered = read_present_positions_individually(
                                 real,
@@ -730,18 +826,18 @@ impl DynamixelBus {
                     }
                 };
                 raw_positions
-                .into_iter()
-                .map(|bytes| {
-                    let raw: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
-                        read_transport_error(format!(
-                            "Present Position 응답 길이 오류: got {} bytes, want 4",
-                            bytes.len()
-                        ))
-                    })?;
-                    // Python SDK getData(4) → unsigned 해석 후 int. joint mode 0..=4095.
-                    Ok(u32::from_le_bytes(raw) as i32)
-                })
-                .collect::<Result<Vec<_>, HwError>>()?
+                    .into_iter()
+                    .map(|bytes| {
+                        let raw: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
+                            read_transport_error(format!(
+                                "Present Position 응답 길이 오류: got {} bytes, want 4",
+                                bytes.len()
+                            ))
+                        })?;
+                        // Python SDK getData(4) → unsigned 해석 후 int. joint mode 0..=4095.
+                        Ok(u32::from_le_bytes(raw) as i32)
+                    })
+                    .collect::<Result<Vec<_>, HwError>>()?
             }
         };
         if ticks.len() != joint_count {
