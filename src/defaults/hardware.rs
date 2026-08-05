@@ -5,17 +5,19 @@ use crate::hardware::rail::RailConfig;
 
 use super::motion::RAIL_ACCEL_M_S2;
 
-/// 현재 설정된 AXL 레일의 앱 좌표 범위 [m].
-/// 실제 양 끝점의 보드 좌표를 측정한 뒤 범위를 최종 확정해야 한다.
-pub const RAIL_X_MIN_M: f64 = 0.0;
-pub const RAIL_X_MAX_M: f64 = 1.41;
-/// 실기에서 눈으로 맞춘 레일 중앙 준비 위치 [m].
-pub const RAIL_READY_X_M: f64 = 0.71;
-
 /// 좌/우 존 준비 위치가 레일 양 끝에서 안쪽으로 확보하는 안전 여유 — 레일
-/// 전체 구간(`x_max - x_min`) 대비 비율. 초기값 5% — 실기 벤치에서 하드
-/// 스탑까지의 여유를 눈으로 확인한 뒤 조정한다.
+/// 물리 전체 구간 대비 비율.
 pub const RAIL_ZONE_SAFETY_MARGIN_RATIO: f64 = 0.05;
+/// 실측 물리 레일 전체 범위 [m].
+pub const RAIL_PHYSICAL_X_MIN_M: f64 = 0.0;
+pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
+const RAIL_PHYSICAL_SPAN_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_PHYSICAL_X_MIN_M;
+const RAIL_END_MARGIN_M: f64 = RAIL_PHYSICAL_SPAN_M * RAIL_ZONE_SAFETY_MARGIN_RATIO;
+/// 물리 양 끝 5%를 제외한 공통 사용 가능 범위 [m].
+pub const RAIL_X_MIN_M: f64 = RAIL_PHYSICAL_X_MIN_M + RAIL_END_MARGIN_M;
+pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_END_MARGIN_M;
+/// 물리 레일 전체의 정확한 50% 준비 위치 [m].
+pub const RAIL_READY_X_M: f64 = 0.5 * (RAIL_PHYSICAL_X_MIN_M + RAIL_PHYSICAL_X_MAX_M);
 
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.
@@ -99,11 +101,11 @@ impl Default for RailConfig {
             reverse: true,
             x_min_m: RAIL_X_MIN_M,
             x_max_m: RAIL_X_MAX_M,
-            vel: 15.0,
+            vel: 11.25,
             accel: RAIL_ACCEL_M_S2,
             decel: RAIL_ACCEL_M_S2,
             min_vel: 0.001,
-            max_vel: 15.0,
+            max_vel: 11.25,
             pulse_out_method: 4,
             enc_input_method: 3,
             abs_rel_mode: 0,

@@ -39,7 +39,7 @@ CommitRequest {
 
 ## 시작·복귀 자세
 
-- 레일: `RAIL_READY_X_M = 0.71m`
+- 레일: 물리 전체 `0.00~1.41m` 중 양 끝 5%를 제외한 `0.0705~1.3395m`, 준비 위치는 정확한 중앙 `RAIL_READY_X_M = 0.705m`
 - 관절: `READY_JOINTS_4DOF`
 
 기존 감긴 `ready_prewind` 자세는 활성 real·GUI sim 경로에서 사용하지 않는다.

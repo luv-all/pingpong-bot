@@ -3,15 +3,11 @@
 //! 슈터(발사기)가 좌/센터/우로 공을 쏘는 무랠리 테스트 프로토콜에서, 운영자가
 //! `--preview` 창의 키 입력으로 로봇의 준비 자세와 내부 상태를 직접 통제한다.
 
-use pingpong_bot::defaults::RAIL_ZONE_SAFETY_MARGIN_RATIO;
 use pingpong_bot::robot::LinearRail;
 
 /// 슈터가 겨누는 존 — 이 존의 레일 x가 다음 준비 자세 목표가 된다.
 ///
-/// `Left = x_min`, `Right = x_max`는 미검증 가정이다 — 실기에서 방향이
-/// 반대로 확인되면 이 매핑만 뒤집으면 된다. 좌/우는 레일 양 끝단에서
-/// [`RAIL_ZONE_SAFETY_MARGIN_RATIO`]만큼 안쪽으로 물러난 위치를 목표로 한다 —
-/// 준비 자세가 기계적 하드 스탑에 바짝 붙지 않게 하는 안전 여유다.
+/// `LinearRail::x_min/x_max` 자체가 물리 양 끝에서 5% 안쪽인 공통 안전 범위다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestZone {
     Left,
@@ -20,13 +16,12 @@ pub enum TestZone {
 }
 
 impl TestZone {
-    /// 이 존의 준비 자세 레일 x [m] — 좌/우는 안전 여유만큼 안쪽으로 물러난다.
+    /// 이 존의 준비 자세 레일 x [m].
     pub fn rail_x(self, rail: LinearRail) -> f64 {
-        let margin = (rail.x_max - rail.x_min) * RAIL_ZONE_SAFETY_MARGIN_RATIO;
         return match self {
-            Self::Left => rail.x_min + margin,
+            Self::Left => rail.x_min,
             Self::Center => rail.default_x(),
-            Self::Right => rail.x_max - margin,
+            Self::Right => rail.x_max,
         };
     }
 
@@ -79,9 +74,9 @@ mod tests {
         return LinearRail {
             mount_y: 1.0,
             mount_z: 0.2,
-            x_min: 0.0,
-            x_max: 1.41,
-            default_x: 0.71,
+            x_min: pingpong_bot::defaults::RAIL_X_MIN_M,
+            x_max: pingpong_bot::defaults::RAIL_X_MAX_M,
+            default_x: pingpong_bot::defaults::RAIL_READY_X_M,
             max_speed: 1.0,
         };
     }
@@ -89,10 +84,9 @@ mod tests {
     #[test]
     fn zone_rail_x_insets_left_and_right_by_the_safety_margin() {
         let rail = test_rail();
-        let margin = (rail.x_max - rail.x_min) * pingpong_bot::defaults::RAIL_ZONE_SAFETY_MARGIN_RATIO;
-        assert_eq!(TestZone::Left.rail_x(rail), rail.x_min + margin);
+        assert_eq!(TestZone::Left.rail_x(rail), rail.x_min);
         assert_eq!(TestZone::Center.rail_x(rail), rail.default_x());
-        assert_eq!(TestZone::Right.rail_x(rail), rail.x_max - margin);
+        assert_eq!(TestZone::Right.rail_x(rail), rail.x_max);
     }
 
     #[test]
@@ -120,8 +114,14 @@ mod tests {
 
     #[test]
     fn w_and_r_map_to_wait_and_reset_case_insensitively() {
-        assert_eq!(TestControl::from_key(i32::from(b'w')), Some(TestControl::Wait));
-        assert_eq!(TestControl::from_key(i32::from(b'W')), Some(TestControl::Wait));
+        assert_eq!(
+            TestControl::from_key(i32::from(b'w')),
+            Some(TestControl::Wait)
+        );
+        assert_eq!(
+            TestControl::from_key(i32::from(b'W')),
+            Some(TestControl::Wait)
+        );
         assert_eq!(
             TestControl::from_key(i32::from(b'r')),
             Some(TestControl::ResetPosition)

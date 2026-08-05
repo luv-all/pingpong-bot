@@ -692,7 +692,46 @@ pub(super) fn initialize_pose(
     hardware: &mut dyn Hardware,
     arm: &Arm,
 ) -> Result<pingpong_bot::robot::Pose, MoveError> {
-    return initialize_pose_attempt(hardware, arm, true);
+    let ready = initialize_pose_attempt(hardware, arm, true)?;
+    return sweep_startup_rail(hardware, arm, ready);
+}
+
+/// 팔을 안전 준비 자세로 만든 뒤 레일 사용 가능 범위의 양 끝과 중앙을 차례로
+/// 확인한다. 범위는 물리 레일의 5%/95%, 마지막 위치는 정확한 50%다.
+fn sweep_startup_rail(
+    hardware: &mut dyn Hardware,
+    arm: &Arm,
+    mut pose: pingpong_bot::robot::Pose,
+) -> Result<pingpong_bot::robot::Pose, MoveError> {
+    let Some(rail) = arm.rail else {
+        return Ok(pose);
+    };
+    for (label, target_x) in [
+        ("5%", rail.x_min),
+        ("95%", rail.x_max),
+        ("50%", rail.default_x()),
+    ] {
+        info!(
+            position = label,
+            rail_target_m = f4(target_x),
+            "시작 레일 범위 확인 이동"
+        );
+        let trajectory = Planner::move_to(arm, &pose, arm.default_joints.clone(), target_x)
+            .map_err(MoveError::Plan)?;
+        hardware.command(&trajectory).map_err(MoveError::Hardware)?;
+        while hardware.is_busy() {
+            thread::sleep(BUSY_POLL);
+        }
+        pose = hardware.read_pose().map_err(MoveError::Hardware)?;
+        info!(
+            position = label,
+            rail_commanded_m = f4(target_x),
+            rail_measured_m = f4(pose.rail_x),
+            rail_commanded_minus_measured_m = f4(target_x - pose.rail_x),
+            "시작 레일 범위 확인 완료"
+        );
+    }
+    return Ok(pose);
 }
 
 fn initialize_pose_attempt(

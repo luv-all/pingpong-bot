@@ -7,7 +7,7 @@ use super::rail_config::RailConfig;
 use super::rail_kind::RailKind;
 
 /// 팔 궤적 종료시간에 맞춰 계산한 레일 속도에 적용하는 실기 시험 배율.
-const COMMAND_SPEED_SCALE: f64 = 2.0;
+const COMMAND_SPEED_SCALE: f64 = 1.5;
 
 pub struct AxlRail {
     config: RailConfig,
