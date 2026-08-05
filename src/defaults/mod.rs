@@ -57,8 +57,9 @@ pub use dxl_limits::{
 };
 pub use estimator::EstimatorParams;
 pub use hardware::{
-    RAIL_LEFT_END_MARGIN_M, RAIL_PHYSICAL_X_MAX_M, RAIL_PHYSICAL_X_MIN_M, RAIL_READY_X_M,
-    RAIL_RIGHT_END_MARGIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M, RAIL_ZONE_SAFETY_MARGIN_RATIO,
+    RAIL_BOARD_ZERO_DOMAIN_M, RAIL_LEFT_END_MARGIN_M, RAIL_PHYSICAL_X_MAX_M, RAIL_PHYSICAL_X_MIN_M,
+    RAIL_READY_X_M, RAIL_RIGHT_END_MARGIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M,
+    RAIL_ZONE_SAFETY_MARGIN_RATIO,
 };
 pub use impact::ImpactParams;
 pub use motion::{
@@ -120,6 +121,10 @@ mod tests {
         assert!((model_rail.x_min - 0.0100).abs() < 1e-12);
         assert!((model_rail.x_max - 1.3395).abs() < 1e-12);
         assert!((model_rail.default_x() - 0.6750).abs() < 1e-12);
+        assert!((rail_config.board_zero_domain_m - 0.7050).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(0.0100) - 0.6950).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(1.3395) - -0.6345).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(0.6750) - 0.0300).abs() < 1e-12);
         assert!((rail_config.x_min_m - model_rail.x_min).abs() < 1e-12);
         assert!((rail_config.x_max_m - model_rail.x_max).abs() < 1e-12);
         let c = ControlParams::default();

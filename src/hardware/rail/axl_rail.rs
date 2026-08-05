@@ -60,6 +60,7 @@ impl AxlRail {
             domain_position_m,
             configured_domain_min_m = config.x_min_m,
             configured_domain_max_m = config.x_max_m,
+            board_zero_domain_m = config.board_zero_domain_m,
             configured_board_min_m = board_limits.negative_m,
             configured_board_max_m = board_limits.positive_m,
             reverse = config.reverse,

@@ -14,8 +14,13 @@ pub struct RailConfig {
     pub irq_no: i32,
     pub pulses_per_meter: u32,
     /// `true`이면 앱 도메인과 AXL 보드의 좌표축 방향이 반대이다.
-    /// AXL 보드의 0은 레일 중앙이며 도메인 중점에 대응한다.
+    /// AXL 보드의 0은 `board_zero_domain_m`에 대응한다.
     pub reverse: bool,
+    /// AXL 보드 절대좌표 0에 대응하는 앱 도메인 좌표 [m].
+    ///
+    /// 이 값은 가동 범위와 독립적인 실측 원점이다. 가동 범위의 양끝을 비대칭으로
+    /// 바꾸어도 좌표 원점이 따라 움직이면 안 된다.
+    pub board_zero_domain_m: f64,
     pub x_min_m: f64,
     pub x_max_m: f64,
     pub vel: f64,
@@ -48,6 +53,9 @@ impl RailConfig {
         if self.pulses_per_meter == 0 {
             return Err(RailConfigError::PulsesPerMeter);
         }
+        if !self.board_zero_domain_m.is_finite() {
+            return Err(RailConfigError::InvalidRange);
+        }
         if !self.x_min_m.is_finite() || !self.x_max_m.is_finite() || self.x_min_m >= self.x_max_m {
             return Err(RailConfigError::InvalidRange);
         }
@@ -70,7 +78,7 @@ impl RailConfig {
     /// `reverse`면 실제 AXL 엔코더 좌표처럼 부호를 반전한다.
     pub fn domain_to_board_abs(&self, domain_m: f64) -> f64 {
         if self.reverse {
-            return self.domain_midpoint_m() - domain_m;
+            return self.board_zero_domain_m - domain_m;
         }
         return domain_m;
     }
@@ -78,7 +86,7 @@ impl RailConfig {
     /// 절대 위치: 보드(cmd/act) → 앱이 해석하는 도메인 좌표.
     pub fn board_to_domain_abs(&self, board_m: f64) -> f64 {
         if self.reverse {
-            return self.domain_midpoint_m() - board_m;
+            return self.board_zero_domain_m - board_m;
         }
         return board_m;
     }
@@ -94,8 +102,10 @@ impl RailConfig {
     /// 도메인 이동 범위를 AXL 보드 좌표계의 양/음 소프트 리밋으로 변환한다.
     pub fn soft_limit_args(&self) -> SoftLimitArgs {
         let (positive_m, negative_m) = if self.reverse {
-            let midpoint_m = self.domain_midpoint_m();
-            (midpoint_m - self.x_min_m, midpoint_m - self.x_max_m)
+            (
+                self.board_zero_domain_m - self.x_min_m,
+                self.board_zero_domain_m - self.x_max_m,
+            )
         } else {
             (self.x_max_m, self.x_min_m)
         };
@@ -126,10 +136,6 @@ impl RailConfig {
         command_now_m: f64,
     ) -> f64 {
         return command_now_m + (actual_target_m - actual_now_m);
-    }
-
-    fn domain_midpoint_m(&self) -> f64 {
-        return 0.5 * (self.x_min_m + self.x_max_m);
     }
 }
 
@@ -184,6 +190,7 @@ mod tests {
     fn reverse_abs_and_soft_limits_use_centered_board_axis() {
         let cfg = RailConfig {
             reverse: true,
+            board_zero_domain_m: 0.715,
             x_min_m: 0.0,
             x_max_m: 1.43,
             ..RailConfig::default()
@@ -204,6 +211,7 @@ mod tests {
     fn real_axl_negative_position_maps_to_expected_domain_position() {
         let cfg = RailConfig {
             reverse: true,
+            board_zero_domain_m: 0.705,
             x_min_m: 0.0,
             x_max_m: 1.41,
             ..RailConfig::default()
@@ -223,6 +231,7 @@ mod tests {
     fn command_based_soft_limits_include_axl_origin_gap() {
         let cfg = RailConfig {
             reverse: true,
+            board_zero_domain_m: 0.705,
             x_min_m: 0.0,
             x_max_m: 1.41,
             soft_limit_selection: 0,

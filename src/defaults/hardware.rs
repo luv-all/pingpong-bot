@@ -14,6 +14,9 @@ pub const RAIL_ZONE_SAFETY_MARGIN_RATIO: f64 = 0.05;
 /// 실기에서 확인한 레일 좌표 범위 [m].
 pub const RAIL_PHYSICAL_X_MIN_M: f64 = 0.0;
 pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
+/// AXL 보드 실측 원점(보드 0.0m)에 대응하는 제어 좌표 [m].
+/// 가동 범위를 비대칭으로 바꾸어도 이 원점은 고정한다.
+pub const RAIL_BOARD_ZERO_DOMAIN_M: f64 = 0.7050;
 /// sim·real 공통 이동 범위 [m].
 pub const RAIL_X_MIN_M: f64 = RAIL_PHYSICAL_X_MIN_M + RAIL_LEFT_END_MARGIN_M;
 pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_RIGHT_END_MARGIN_M;
@@ -100,6 +103,7 @@ impl Default for RailConfig {
             irq_no: 7,
             pulses_per_meter: 250_000,
             reverse: true,
+            board_zero_domain_m: RAIL_BOARD_ZERO_DOMAIN_M,
             x_min_m: RAIL_X_MIN_M,
             x_max_m: RAIL_X_MAX_M,
             vel: 11.25,
