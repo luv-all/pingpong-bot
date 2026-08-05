@@ -9,7 +9,10 @@ mod text_block;
 mod world_grid_params;
 
 pub use fitted_bgr::{FittedBgr, fit_bgr_downscale};
-pub use ops::{draw_cam_label, draw_circle_px, draw_world_velocity, hstack_bgr, unscale_xy};
+pub use ops::{
+    draw_cam_label, draw_circle_px, draw_rect_px, draw_text_at_px, draw_world_velocity,
+    hstack_bgr, unscale_xy,
+};
 pub use pixel_pick_mouse::{
     PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, PixelPickMouse, arrow_delta, draw_pixel_loupe,
 };

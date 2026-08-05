@@ -71,6 +71,54 @@ pub fn draw_circle_px(
     return Ok(());
 }
 
+/// 사각형. `thickness < 0`이면 채움 (OpenCV 관례).
+pub fn draw_rect_px(
+    img: &mut Mat,
+    top_left: camera::Pixel,
+    width: i32,
+    height: i32,
+    color: Scalar,
+    thickness: i32,
+) -> CvResult<()> {
+    imgproc::rectangle(
+        img,
+        opencv::core::Rect::new(
+            top_left.x.round() as i32,
+            top_left.y.round() as i32,
+            width,
+            height,
+        ),
+        color,
+        thickness,
+        imgproc::LINE_8,
+        0,
+    )?;
+    return Ok(());
+}
+
+/// 임의 위치 텍스트 한 줄. 자동 스케일 없음 — 호출측이 `font_scale`을 정한다.
+pub fn draw_text_at_px(
+    img: &mut Mat,
+    origin: camera::Pixel,
+    text: &str,
+    font_scale: f64,
+    color: Scalar,
+    thickness: i32,
+) -> CvResult<()> {
+    imgproc::put_text(
+        img,
+        text,
+        Point::new(origin.x.round() as i32, origin.y.round() as i32),
+        imgproc::FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        color,
+        thickness,
+        imgproc::LINE_8,
+        false,
+    )?;
+    return Ok(());
+}
+
 /// 월드 점·속도를 카메라에 투영해 화살표를 그린다. `dt_draw` 초만큼 전진한 끝을 tip으로.
 pub fn draw_world_velocity(
     img: &mut Mat,
@@ -129,5 +177,52 @@ mod tests {
         let (x, y) = unscale_xy(500, 200, 0.5);
         assert_eq!((x, y), (1000, 400));
         assert_eq!(unscale_xy(10, 20, 1.0), (10, 20));
+    }
+
+    #[test]
+    fn draw_rect_px_fills_the_requested_area() {
+        let mut img = Mat::zeros(50, 50, opencv::core::CV_8UC3)
+            .unwrap()
+            .to_mat()
+            .unwrap();
+        draw_rect_px(
+            &mut img,
+            camera::Pixel::new(10.0, 10.0),
+            20,
+            20,
+            Scalar::new(10.0, 20.0, 30.0, 0.0),
+            -1,
+        )
+        .unwrap();
+        let inside = *img.at_2d::<opencv::core::Vec3b>(20, 20).unwrap();
+        assert_eq!(inside, opencv::core::Vec3b::from([10, 20, 30]));
+        let outside = *img.at_2d::<opencv::core::Vec3b>(5, 5).unwrap();
+        assert_eq!(outside, opencv::core::Vec3b::from([0, 0, 0]));
+    }
+
+    #[test]
+    fn draw_text_at_px_writes_nonzero_pixels() {
+        let mut img = Mat::zeros(50, 100, opencv::core::CV_8UC3)
+            .unwrap()
+            .to_mat()
+            .unwrap();
+        draw_text_at_px(
+            &mut img,
+            camera::Pixel::new(5.0, 30.0),
+            "OK",
+            1.0,
+            Scalar::new(255.0, 255.0, 255.0, 0.0),
+            2,
+        )
+        .unwrap();
+        let mut any_lit = false;
+        for y in 0..50 {
+            for x in 0..100 {
+                if *img.at_2d::<opencv::core::Vec3b>(y, x).unwrap() != opencv::core::Vec3b::from([0, 0, 0]) {
+                    any_lit = true;
+                }
+            }
+        }
+        assert!(any_lit);
     }
 }
