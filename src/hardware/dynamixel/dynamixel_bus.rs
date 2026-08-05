@@ -51,12 +51,46 @@ pub struct DynamixelBus {
     pub(super) mapping: MotorMapping,
     backend: BusBackend,
     torque_enabled: bool,
+    /// 전체 Present Position SyncRead가 깨진 버스에서 이후 느린 재시도를 반복하지 않는다.
+    prefer_individual_position_reads: bool,
     /// 클램프 경고 스로틀 — 200 Hz 스트리밍이라 매번 찍으면 로그가 잠긴다.
     last_clamp_warn: Option<std::time::Instant>,
 }
 
 /// 모터 한계 클램프 경고 주기.
 const CLAMP_WARN_PERIOD: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// 전체 SyncRead가 불안정한 버스에서 모터별로 Present Position을 읽는다.
+#[cfg(feature = "real")]
+fn read_present_positions_individually(
+    real: &mut RealBackend,
+    ids: &[u8],
+    address: u8,
+    retries: u32,
+    retry_delay_ms: u64,
+    group_error: Option<&str>,
+) -> Result<Vec<Vec<u8>>, HwError> {
+    let mut recovered = Vec::with_capacity(ids.len());
+    for id in ids {
+        let mut one = real
+            .sync_read_with_retry(&[*id], address, 4, retries, retry_delay_ms)
+            .map_err(|error| {
+                let group_context = group_error.map_or_else(String::new, |group| {
+                    format!(", group_error={group}")
+                });
+                read_transport_error(format!(
+                    "Present Position ID별 sync_read 실패 (addr={address}, id={id}{group_context}): {error}"
+                ))
+            })?;
+        let bytes = one.pop().ok_or_else(|| {
+            read_transport_error(format!(
+                "Present Position ID별 sync_read 빈 응답 (addr={address}, id={id})"
+            ))
+        })?;
+        recovered.push(bytes);
+    }
+    return Ok(recovered);
+}
 
 impl DynamixelBus {
     pub fn dry_run(config: DynamixelConfig) -> Result<Self, DynamixelConfigError> {
@@ -74,6 +108,7 @@ impl DynamixelBus {
                 last_current_limits: Vec::new(),
             },
             torque_enabled: false,
+            prefer_individual_position_reads: false,
             last_clamp_warn: None,
         });
     }
@@ -162,6 +197,7 @@ impl DynamixelBus {
                 port,
             )),
             torque_enabled: false,
+            prefer_individual_position_reads: false,
             last_clamp_warn: None,
         };
         bus.apply_motion_profile()?;
@@ -643,6 +679,7 @@ impl DynamixelBus {
 
     fn read_raw_ticks(&mut self) -> Result<Vec<i32>, HwError> {
         let joint_count = self.mapping.config.motor_ids.len();
+        let prefer_individual_position_reads = self.prefer_individual_position_reads;
         let ticks = match &mut self.backend {
             BusBackend::DryRun { ticks, .. } => ticks.clone(),
             #[cfg(feature = "real")]
@@ -651,48 +688,45 @@ impl DynamixelBus {
                 let address = self.mapping.config.addr_present_position;
                 let retries = self.mapping.config.comm_retries;
                 let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
-                let raw_positions = match real.sync_read_with_retry(
-                    &ids,
-                    address,
-                    4,
-                    retries,
-                    retry_delay_ms,
-                ) {
-                    Ok(raw) => raw,
-                    Err(group_error) => {
+                let raw_positions = if prefer_individual_position_reads {
+                    read_present_positions_individually(
+                        real,
+                        &ids,
+                        address,
+                        retries,
+                        retry_delay_ms,
+                        None,
+                    )?
+                } else {
+                    match real.sync_read_with_retry(
+                        &ids,
+                        address,
+                        4,
+                        retries,
+                        retry_delay_ms,
+                    ) {
+                        Ok(raw) => raw,
+                        Err(group_error) => {
                         // 전체 SyncRead는 한 ID의 응답만 깨져도 전부 실패한다.
                         // 모터가 움직일 때의 일시적 Checksum/timeout은 ID별 읽기로
                         // 격리해 정상 응답 모터까지 함께 버리지 않는다.
                         warn!(
                             ids = ?ids,
                             error = %group_error,
-                            "Present Position 전체 SyncRead 실패 — ID별 읽기로 복구 시도"
+                            "Present Position 전체 SyncRead 실패 — 이후 ID별 읽기 사용"
                         );
-                        let mut recovered = Vec::with_capacity(ids.len());
-                        for id in &ids {
-                            let mut one = real
-                                .sync_read_with_retry(
-                                    &[*id],
-                                    address,
-                                    4,
-                                    retries,
-                                    retry_delay_ms,
-                                )
-                                .map_err(|error| {
-                                    read_transport_error(format!(
-                                        "Present Position ID별 sync_read 실패 (addr={address}, id={id}, \
-                                         group_error={group_error}): {error}"
-                                    ))
-                                })?;
-                            let bytes = one.pop().ok_or_else(|| {
-                                read_transport_error(format!(
-                                    "Present Position ID별 sync_read 빈 응답 (addr={address}, id={id})"
-                                ))
-                            })?;
-                            recovered.push(bytes);
+                            self.prefer_individual_position_reads = true;
+                            let recovered = read_present_positions_individually(
+                                real,
+                                &ids,
+                                address,
+                                retries,
+                                retry_delay_ms,
+                                Some(&group_error),
+                            )?;
+                            info!(ids = ?ids, "Present Position ID별 읽기로 통신 복구");
+                            recovered
                         }
-                        info!(ids = ?ids, "Present Position ID별 읽기로 통신 복구");
-                        recovered
                     }
                 };
                 raw_positions

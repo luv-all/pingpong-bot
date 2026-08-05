@@ -324,7 +324,9 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 새 공은 `track_seq`로 구분하며, 공마다 예비·정밀 정렬 명령을 각각 한 번씩 최대 두 번 보낸다.
 명령 후 레일과 전체 관절을 다시 읽어 명령값·실측값·차이를 로그로 남긴다.
 전체 Dynamixel SyncRead가 일시적 timeout/checksum 오류로 실패하면 8회 재시도 후
-관절 ID별 읽기로 자동 복구를 시도한다.
+관절 ID별 읽기로 자동 복구하고, 해당 실행에서는 이후 묶음 읽기를 반복하지 않는다.
+시작 자세의 관절 편차가 2°를 넘으면 편차를 허용하지 않고, 직전 모터 목표에
+`commanded - measured`를 누적해 최대 6회까지 다시 이동·실측한다.
 ESC·`q`로 세션을 종료한다.
 
 AXL 시작 로그는 원시 보드 위치와 앱 위치를 함께 기록한다. 기본 `reverse=true`에서는

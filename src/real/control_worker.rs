@@ -35,14 +35,14 @@ const MAX_CONSECUTIVE_MISSES: u8 = 3;
 const RAIL_ERROR_WARN_M: f64 = 0.020;
 const AIM_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
 const STARTUP_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
-// 3° 허용치는 모터가 아직 이동 중인 2.5° 오차를 0.35초 만에
-// "수렴"으로 판정했다. 반대로 1°는 하드웨어 오류 없이 1.84°에서 안정된
-// ID 4를 10초 타임아웃으로 막았다. 실기 추종 편차를 반영해 2°를 쓰되,
-// 아래 연속 샘플 조건으로 이동 중 조기 통과를 막는다.
+// 2° 수렴 기준은 유지하고, 편차를 허용하는 대신 아래 누적 폐루프
+// 보정으로 모터 목표를 실측 오차만큼 계속 더 이동시킨다.
 const STARTUP_JOINT_TOLERANCE_RAD: f64 = 2.0_f64.to_radians();
 const STARTUP_TRIM_DELAY: Duration = Duration::from_secs(1);
-const STARTUP_MAX_TRIM_ATTEMPTS: u8 = 2;
+const STARTUP_MAX_TRIM_ATTEMPTS: u8 = 6;
 const STARTUP_MAX_TRIM_STEP_RAD: f64 = 5.0_f64.to_radians();
+/// 엔코더 한두 틱의 진동은 보정하지 않는다.
+const STARTUP_TRIM_MIN_ERROR_RAD: f64 = 0.25_f64.to_radians();
 // 작은 정상상태 오차에서 통신 진단/재부팅을 시도하지 않는다. 모터가 실제로
 // 멈췄다고 볼 만큼 크게 어긋난 경우에만 자동 복구 대상을 확인한다.
 const STARTUP_RECOVERY_MIN_ERROR_RAD: f64 = 10.0_f64.to_radians();
@@ -735,6 +735,28 @@ pub(super) fn initialize_pose(
     return Ok(ready);
 }
 
+/// 직전 모터 목표에 `commanded - measured`를 누적한다.
+fn accumulate_startup_trim_goal(
+    arm: &Arm,
+    compensated_goal_values: &mut [f64],
+    joint_errors: &[f64],
+) -> Vec<f64> {
+    let mut incremental_correction_deg = Vec::with_capacity(joint_errors.len());
+    for (index, error) in joint_errors.iter().copied().enumerate() {
+        let correction = if error.abs() > STARTUP_TRIM_MIN_ERROR_RAD {
+            error.clamp(-STARTUP_MAX_TRIM_STEP_RAD, STARTUP_MAX_TRIM_STEP_RAD)
+        } else {
+            0.0
+        };
+        let next_goal = compensated_goal_values[index] + correction;
+        compensated_goal_values[index] = arm
+            .joint_limit(index)
+            .map_or(next_goal, |limit| next_goal.clamp(limit.min, limit.max));
+        incremental_correction_deg.push(correction.to_degrees());
+    }
+    return incremental_correction_deg;
+}
+
 /// 시작 실측 관절을 FK에 넣어 라켓 장착 모델과 자로 잰 실물 기준의 차이를 기록한다.
 /// 여기서 `model_*`은 엔코더를 읽은 뒤의 **모델 계산값**이지 별도 자세 센서값이 아니다.
 fn log_startup_racket_geometry(arm: &Arm, pose: &pingpong_bot::robot::Pose) {
@@ -870,6 +892,9 @@ fn initialize_pose_attempt(
     let mut next_trim_at = settle_started + STARTUP_TRIM_DELAY;
     let mut trim_attempts = 0_u8;
     let mut stable_samples = 0_u8;
+    // 매 보정을 ready 목표에서 다시 시작하면 중력·유격 편차가 다시
+    // 돌아온다. 직전 모터 목표에 실측 오차를 누적해 진짜 폐루프로 보정한다.
+    let mut compensated_goal_values = ready_joints.values.clone();
     let after = loop {
         let pose = hardware.read_pose().map_err(MoveError::Hardware)?;
         let joint_errors: Vec<f64> = ready_joints
@@ -897,26 +922,13 @@ fn initialize_pose_attempt(
             && trim_attempts < STARTUP_MAX_TRIM_ATTEMPTS
             && max_joint_error_rad < STARTUP_RECOVERY_MIN_ERROR_RAD
         {
-            let compensated_values: Vec<f64> = ready_joints
-                .values
-                .iter()
-                .zip(&joint_errors)
-                .enumerate()
-                .map(|(index, (target, error))| {
-                    let correction = if error.abs() > STARTUP_JOINT_TOLERANCE_RAD {
-                        error.clamp(-STARTUP_MAX_TRIM_STEP_RAD, STARTUP_MAX_TRIM_STEP_RAD)
-                    } else {
-                        0.0
-                    };
-                    let compensated = target + correction;
-                    return arm
-                        .joint_limit(index)
-                        .map_or(compensated, |limit| compensated.clamp(limit.min, limit.max));
-                })
-                .collect();
-            let compensated = Joints::from_slice(&compensated_values);
-            let correction_deg: Vec<f64> = compensated
-                .values
+            let incremental_correction_deg = accumulate_startup_trim_goal(
+                arm,
+                &mut compensated_goal_values,
+                &joint_errors,
+            );
+            let compensated = Joints::from_slice(&compensated_goal_values);
+            let cumulative_correction_deg: Vec<f64> = compensated_goal_values
                 .iter()
                 .zip(&ready_joints.values)
                 .map(|(commanded, target)| (commanded - target).to_degrees())
@@ -926,9 +938,10 @@ fn initialize_pose_attempt(
             trim_attempts += 1;
             info!(
                 attempt = trim_attempts,
-                correction_deg = %format!("{correction_deg:?}"),
+                incremental_correction_deg = %format!("{incremental_correction_deg:?}"),
+                cumulative_correction_deg = %format!("{cumulative_correction_deg:?}"),
                 measured_error_deg = %format!("{:?}", joint_errors.iter().map(|error| error.to_degrees()).collect::<Vec<_>>()),
-                "시작 팔 자세 잔여 오차 폐루프 보정"
+                "시작 팔 자세 잔여 오차 누적 폐루프 보정"
             );
             hardware
                 .command_joints(&correction)
@@ -1290,6 +1303,20 @@ mod tests {
 
         assert!((initialized.rail_x - rail.default_x()).abs() < 1e-12);
         assert_eq!(initialized.joints, expected.follow_through);
+    }
+
+    #[test]
+    fn startup_trim_adds_each_measured_error_to_previous_motor_goal() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let mut goal = robot.arm.default_joints.values.clone();
+        let original = goal.clone();
+        let errors = [0.0, 0.0, -2.0_f64.to_radians(), 0.1_f64.to_radians()];
+
+        accumulate_startup_trim_goal(&robot.arm, &mut goal, &errors);
+        accumulate_startup_trim_goal(&robot.arm, &mut goal, &errors);
+
+        assert!((goal[2] - (original[2] - 4.0_f64.to_radians())).abs() < 1e-12);
+        assert_eq!(goal[3], original[3], "0.25° 미만 진동은 무시");
     }
 
     #[test]
