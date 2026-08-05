@@ -870,29 +870,31 @@ impl SimWorld {
             return;
         }
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        let alignment =
-            match motion::Planner::ball_alignment(&self.arm, &start, target.position) {
-                Ok(alignment) => alignment,
-                Err(error) => {
-                    self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
-                    self.debug_snap.last_fail_text = Some(error.to_string());
-                    if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
-                        warn!(shot = self.shot_seq, %error, "shot: 위치·방향 정렬 계획 실패");
-                    }
-                    return;
+        let alignment = match motion::Planner::ball_alignment(&self.arm, &start, target.position) {
+            Ok(alignment) => alignment,
+            Err(error) => {
+                self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
+                self.debug_snap.last_fail_text = Some(error.to_string());
+                if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
+                    warn!(shot = self.shot_seq, %error, "shot: 위치·방향 정렬 계획 실패");
                 }
-            };
+                return;
+            }
+        };
         self.hard_fail_streak = 0;
         self.debug_snap.clear_fail_on_success();
         let duration_secs = alignment.duration_secs;
         let rail_commanded_m = alignment.rail.end;
         self.robot.set_auto_return_to_center(false);
         self.robot.replace_swing(alignment);
-        self.direct_return_at = Some(self.sim_time + duration_secs);
+        self.direct_return_at =
+            Some(self.sim_time + target.time_secs + crate::defaults::POST_ALIGNMENT_HOLD_SECS);
         info!(
             shot = self.shot_seq,
             stage = ?stage,
             duration_secs,
+            predicted_arrival_in_secs = target.time_secs,
+            post_alignment_hold_secs = crate::defaults::POST_ALIGNMENT_HOLD_SECS,
             rail_commanded_m,
             target = ?target.position.coords,
             "shot: 레일·팔 동시 위치·방향 정렬 commit — 스윙 없음"

@@ -28,7 +28,6 @@ pub const PIXEL_LOUPE_ZOOM: i32 = 8;
 /// loupe 소스 반경 [px].
 pub const PIXEL_LOUPE_SRC_HALF: i32 = 7;
 
-
 /// [`crate::defaults::DEFAULT_COLORMASK_PATH`]에서 캠별 params. 파일·해당 cam 없으면 에러.
 pub fn colormask_for(camera_id: camera::Id) -> Result<ColormaskParams> {
     let path = colormask_path();

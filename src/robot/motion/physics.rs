@@ -1101,15 +1101,30 @@ fn impact_knot_accelerations(
 
 fn trajectory_collision_free(arm: &Arm, trajectory: &Trajectory) -> bool {
     let samples = (trajectory.duration_secs / 0.005).ceil() as usize;
+    let start_depth = crate::robot::collision::table_penetration(
+        arm,
+        trajectory.sample_rail_at(0.0),
+        &trajectory.sample_at(0.0),
+    );
+    let escaping_existing_collision = start_depth > 1e-3;
+    let mut previous_depth = start_depth;
     for index in 0..=samples.max(1) {
         let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
         let joints = trajectory.sample_at(time);
         let rail_x = trajectory.sample_rail_at(time);
-        if crate::robot::collision::table_penetration(arm, rail_x, &joints) > 1e-3 {
+        let depth = crate::robot::collision::table_penetration(arm, rail_x, &joints);
+        if !escaping_existing_collision && depth > 1e-3 {
             return false;
         }
+        // 충돌 뒤 이미 안전마진 안쪽에서 시작했다면, 오직 위로 빠져나오는
+        // 경로만 허용한다. 샘플 수치 오차 0.5 mm를 넘게 더 깊어지면 즉시 거부한다.
+        if escaping_existing_collision && depth > previous_depth + 0.0005 {
+            return false;
+        }
+        previous_depth = depth;
     }
-    return true;
+    // 탈출 동작은 끝에서 반드시 3 cm 안전영역을 완전히 회복해야 한다.
+    return !escaping_existing_collision || previous_depth <= 1e-3;
 }
 
 /// 궤적 전 구간을 샘플해 각 관절의 `|토크| / 토크한계` 최악 비율을 구한다.

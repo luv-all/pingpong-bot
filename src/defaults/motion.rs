@@ -9,7 +9,8 @@ pub const MAX_INTERCEPT_SAMPLES: usize = 1_024;
 pub const MAGNUS_OMEGA_MAX: f64 = 80.0;
 
 /// 실기 AXL 레일 가속/감속 [m/s²] — `RailConfig::default()`도 이 값을 쓴다.
-pub const RAIL_ACCEL_M_S2: f64 = 16.0;
+/// 발사기 실기 시험에서 기존 16 m/s²가 느려 2배로 올린 값.
+pub const RAIL_ACCEL_M_S2: f64 = 32.0;
 pub const POSITION_TOLERANCE_RAD_OR_M: f64 = 1e-3;
 pub const RACKET_SPEED_RATIO_TOLERANCE: f64 = 0.15;
 pub const RACKET_DIRECTION_TOLERANCE_DEG: f64 = 15.0;
@@ -23,6 +24,8 @@ pub const JDOT_STEP: f64 = 1e-4;
 pub const RETURN_TO_CENTER_MIN_SECS: f64 = 0.2;
 pub const RETURN_TO_CENTER_MAX_SECS: f64 = 3.0;
 pub const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
+/// 예측된 공 도착 시각부터 중앙 복귀를 시작할 때까지 자세를 유지하는 시간.
+pub const POST_ALIGNMENT_HOLD_SECS: f64 = 0.5;
 
 /// 발사기 반복 시험용 고정 푸시가 한계를 지키며 임팩트를 만들 최소 시간.
 pub const FIXED_IMPACT_MIN_DURATION_SECS: f64 = 0.25;

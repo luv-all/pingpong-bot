@@ -137,10 +137,13 @@ pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
         let Some(pose) = arm.forward_kinematics_with_rail(rail_x, &current) else {
             break;
         };
+        // depth 자체에 TABLE_CLEARANCE가 이미 포함돼 있다. 여기에 clearance를
+        // 한 번 더 더하면 6 cm까지 과도하게 들리므로 수치 오차 여유만 추가한다.
+        const SOLVE_EPSILON_M: f64 = 0.001;
         let lifted = Point3::new(
             pose.position.coords.x,
             pose.position.coords.y,
-            pose.position.coords.z + depth + TABLE_CLEARANCE,
+            pose.position.coords.z + depth + SOLVE_EPSILON_M,
         );
         let Ok(mut solved) = (if let Some(rail) = &arm.rail {
             arm.inverse_kinematics_with_rail(rail, rail_x, lifted, Some(&current))
@@ -177,8 +180,9 @@ pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
 
 fn over_table_xy(p: Vector3<f64>) -> bool {
     const MARGIN: f64 = 0.01;
-    // 로봇 쪽 끝(y~=0)은 마운트/상완이 테이블과 맞닿음 - 플레이 영역만 검사
-    const PLAY_Y_MIN: f64 = 0.08;
+    // 상완은 robot_obbs에서 이미 제외한다. 따라서 로봇 쪽 상판 가장자리부터
+    // 전완·라켓을 검사해 예전 y=0..8 cm 충돌 사각지대를 남기지 않는다.
+    const PLAY_Y_MIN: f64 = 0.0;
     return p.x >= -MARGIN
         && p.x <= table::WIDTH_X + MARGIN
         && p.y >= PLAY_Y_MIN

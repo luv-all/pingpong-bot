@@ -56,8 +56,12 @@ pub const RAIL_THICKNESS: f64 = 0.055;
 /// 레일 시각화 단면 너비 [m]. 단면 폭 실측이 없어 장식값으로 남긴다.
 pub const RAIL_VISUAL_WIDTH: f64 = 0.06;
 
-/// 테이블 면 위 최소 여유 [m] - OBB 최저점이 이보다 낮으면 관통.
-pub const TABLE_CLEARANCE: f64 = 0.003;
+/// 테이블 면 위 최소 안전 여유 [m].
+///
+/// 실물의 조립 오차·링크 유격·Dynamixel 추종 오차를 흡수하기 위해 로봇 링크와
+/// 라켓 OBB의 최저점이 상판보다 최소 3 cm 높게 유지되도록 한다. 예전 3 mm는
+/// 시뮬 기하가 정확하다는 전제에 가까워 실기 충돌 방지 여유로는 부족했다.
+pub const TABLE_CLEARANCE: f64 = 0.030;
 
 /// `clamp_above_table` 최대 반복 (리프트->재IK).
 pub const TABLE_CLAMP_ITERS: usize = 6;

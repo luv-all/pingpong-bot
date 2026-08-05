@@ -279,21 +279,22 @@ impl DynamixelBus {
                 for id in config.bus_ids() {
                     let torque = read_u8(real, id, config.addr_torque_enable, &config);
                     let error = read_u8(real, id, HARDWARE_ERROR_STATUS_ADDRESS, &config);
-                    match (torque, error) {
-                        (Some(torque), Some(error)) if torque == 0 || error != 0 => {
-                            recover_ids.push(id);
-                        }
-                        (None, None) => warn!(
+                    if torque == Some(0) || error.is_some_and(|status| status != 0) {
+                        // 둘 중 하나만 읽혔더라도 명시적인 shutdown 증거가 있으면
+                        // 복구한다. 다른 레지스터의 읽기 실패 때문에 놓치지 않는다.
+                        recover_ids.push(id);
+                    } else if torque.is_none() && error.is_none() {
+                        warn!(
                             id,
                             "Dynamixel 자동 복구 진단 불가 — 무응답 ID는 강제 구동하지 않음"
-                        ),
-                        (torque, error) if torque.is_none() || error.is_none() => warn!(
+                        );
+                    } else if torque.is_none() || error.is_none() {
+                        warn!(
                             id,
                             torque_enabled = ?torque,
                             hardware_error_status = ?error,
                             "Dynamixel 자동 복구 진단 일부 실패 — 해당 ID는 강제 구동하지 않음"
-                        ),
-                        _ => {}
+                        );
                     }
                 }
                 if recover_ids.is_empty() {

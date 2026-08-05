@@ -29,9 +29,9 @@ pub mod calib;
 mod control;
 pub mod detector;
 pub mod dxl_limits;
+mod estimator;
 mod hardware;
 mod impact;
-mod estimator;
 pub mod motion;
 mod physics;
 mod robot;
@@ -55,14 +55,14 @@ pub use dxl_limits::{
     joint_reflected_inertias_4dof_array, joint_torque_limits_4dof, joint_torque_limits_4dof_array,
     reflected_inertia,
 };
-pub use impact::ImpactParams;
 pub use estimator::EstimatorParams;
+pub use impact::ImpactParams;
 pub use motion::{
     COARSE_TRACK_JOINT_FRACTION, JACOBIAN_DAMPING, JDOT_STEP, MAGNUS_OMEGA_MAX,
     MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
-    POSITION_TOLERANCE_RAD_OR_M, RACKET_DIRECTION_TOLERANCE_DEG, RACKET_SPEED_RATIO_TOLERANCE,
-    RAIL_ACCEL_M_S2, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
-    TIME_TO_GO_BIAS,
+    POSITION_TOLERANCE_RAD_OR_M, POST_ALIGNMENT_HOLD_SECS, RACKET_DIRECTION_TOLERANCE_DEG,
+    RACKET_SPEED_RATIO_TOLERANCE, RAIL_ACCEL_M_S2, RETURN_TO_CENTER_GROWTH,
+    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS, TIME_TO_GO_BIAS,
 };
 pub use physics::PhysicsParams;
 pub use robot::{

@@ -384,7 +384,9 @@ pub fn spawn(
                 });
             }
 
-            let return_due_at = issued_at + Duration::from_secs_f64(alignment.duration_secs);
+            let predicted_arrival_at = request.trajectory.origin + target.t;
+            let return_due_at = predicted_arrival_at
+                + Duration::from_secs_f64(pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS);
             state = BallControlState::Aligning {
                 track_seq,
                 return_due_at,
@@ -409,6 +411,11 @@ pub fn spawn(
                 track_seq,
                 request_age_secs = f4(request.age_secs()),
                 target_time_secs = f4(target.t.as_secs_f64()),
+                predicted_arrival_in_secs = f4(
+                    predicted_arrival_at
+                        .saturating_duration_since(Instant::now())
+                        .as_secs_f64()
+                ),
                 sigma_position_m = %format!("{:?}", target.sigma_position),
                 target_x = f4(target.position.x),
                 target_y = f4(target.position.y),
@@ -416,6 +423,7 @@ pub fn spawn(
                 rail_commanded_m = f4(rail_commanded_m),
                 aim_commanded_rad = f4(aim_commanded_rad),
                 alignment_duration_secs = f4(alignment.duration_secs),
+                post_alignment_hold_secs = pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS,
                 joints_commanded = %format!("{:?}", alignment.follow_through.values),
                 "레일·팔 동시 위치·방향 정렬 시작 — 스윙 없음"
             );
@@ -607,14 +615,37 @@ fn initialize_pose_attempt(
             "시작 자세 초기화 전 실측"
         );
     }
-    // 전원이 꺼진 동안 손으로 팔을 움직였을 수 있다. 현재 자세에서 중립 자세로
-    // 곧장 가는 경로가 테이블을 스치면 상승 중간 자세를 거치는 안전 복귀를 쓴다.
-    let trajectories = plan_neutral_return_segments(arm, &measured).map_err(MoveError::Plan)?;
     let ready_joints = arm.default_joints.clone();
     let ready_rail_x = arm
         .rail
         .as_ref()
         .map_or(measured.rail_x, |rail| rail.default_x());
+    let initial_max_joint_error_rad = ready_joints
+        .values
+        .iter()
+        .zip(&measured.joints.values)
+        .map(|(target, actual)| (target - actual).abs())
+        .fold(0.0_f64, f64::max);
+    // 충돌 뒤 overload shutdown으로 Torque가 꺼졌다면 자세 명령을 먼저 보내지
+    // 않는다. 현재 위치를 새 Goal로 잡아 Torque를 안전하게 복구한 뒤 한 번 재시도한다.
+    if allow_motor_recovery && initial_max_joint_error_rad >= STARTUP_RECOVERY_MIN_ERROR_RAD {
+        hardware.log_joint_diagnostics();
+        match hardware.recover_joint_control() {
+            Ok(true) => {
+                info!(
+                    max_initial_joint_error_deg = initial_max_joint_error_rad.to_degrees(),
+                    "시작 명령 전 Dynamixel 오류 축 복구 완료 — 현재 위치에서 초기화를 다시 시작"
+                );
+                thread::sleep(Duration::from_millis(300));
+                return initialize_pose_attempt(hardware, arm, false);
+            }
+            Ok(false) => {}
+            Err(error) => warn!(%error, "시작 명령 전 Dynamixel 자동 복구 실패"),
+        }
+    }
+    // 전원이 꺼진 동안 손으로 팔을 움직였을 수 있다. 현재 자세에서 중립 자세로
+    // 곧장 가는 경로가 테이블을 스치면 상승 중간 자세를 거치는 안전 복귀를 쓴다.
+    let trajectories = plan_neutral_return_segments(arm, &measured).map_err(MoveError::Plan)?;
     let mapping = MotorMapping::new(DynamixelConfig::default()).map_err(|error| {
         MoveError::Hardware(HwError::InvalidConfig {
             reason: error.to_string(),

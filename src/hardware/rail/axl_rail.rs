@@ -6,6 +6,9 @@ use tracing::info;
 use super::rail_config::RailConfig;
 use super::rail_kind::RailKind;
 
+/// 팔 궤적 종료시간에 맞춰 계산한 레일 속도에 적용하는 실기 시험 배율.
+const COMMAND_SPEED_SCALE: f64 = 2.0;
+
 pub struct AxlRail {
     config: RailConfig,
     kind: RailKind,
@@ -113,13 +116,16 @@ impl AxlRail {
         }
 
         let accel = self.config.accel.min(self.config.decel);
-        let vel = velocity_for_distance_duration(distance_m, usable_duration, accel)
-            .clamp(self.config.min_vel, self.config.max_vel);
+        let calculated_vel = velocity_for_distance_duration(distance_m, usable_duration, accel);
+        let vel =
+            (calculated_vel * COMMAND_SPEED_SCALE).clamp(self.config.min_vel, self.config.max_vel);
         let board_target_m = normalize_m(self.config.domain_to_board_abs(domain_m));
         info!(
             current_m,
             target_m = domain_m,
             board_target_m,
+            calculated_velocity_m_s = calculated_vel,
+            command_speed_scale = COMMAND_SPEED_SCALE,
             velocity_m_s = vel,
             duration_secs,
             usable_duration_secs = usable_duration,
