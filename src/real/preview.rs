@@ -59,6 +59,12 @@ pub struct PreviewWindow {
     control_state: Option<ControlStateSnapshot>,
     /// 현재 테스트 존과 그 준비 레일 x — 상태 패널이 소비한다.
     current_zone: Option<(TestZone, f64)>,
+    /// 마지막 렌더 이후 화면에 반영 안 된 변경(새 프레임·결과·상태·존)이 있는가.
+    ///
+    /// `show()`는 메인 루프 tick마다(사실상 `waitKey(1)`에 막힌 ~1kHz 상한으로) 불린다.
+    /// 카메라는 그보다 훨씬 느리게 들어오므로, 변경이 없으면 모자이크 재구성(clone·hconcat·
+    /// downscale)과 `imshow` 재업로드를 건너뛰고 키 입력만 폴링한다.
+    dirty: bool,
 }
 
 impl PreviewWindow {
@@ -71,22 +77,26 @@ impl PreviewWindow {
             last_target: BTreeMap::new(),
             control_state: None,
             current_zone: None,
+            dirty: true,
         };
     }
 
     /// 최근 제어 결과를 화면에 고정한다.
     pub fn set_result(&mut self, lines: Vec<String>) {
         self.sticky = lines;
+        self.dirty = true;
     }
 
     /// 최근 제어 상태를 화면에 반영한다.
     pub fn set_control_state(&mut self, state: ControlStateSnapshot) {
         self.control_state = Some(state);
+        self.dirty = true;
     }
 
     /// 현재 테스트 존과 그 준비 레일 x를 화면에 반영한다.
     pub fn set_zone(&mut self, zone: TestZone, home_rail_x: f64) {
         self.current_zone = Some((zone, home_rail_x));
+        self.dirty = true;
     }
 
     /// 프레임 1장을 받아 마커를 그려 보관한다. 프레임은 여기서 소비된다.
@@ -119,13 +129,26 @@ impl PreviewWindow {
 
         self.hud = event.hud;
         self.panels.insert(camera_id.0, image);
+        self.dirty = true;
     }
 
     /// 창을 갱신한다. 반환값은 highgui 키 입력 그대로 — 호출측이 Quit/Key를 처리한다.
+    ///
+    /// 새 프레임·결과·상태·존 변경이 없으면 모자이크를 다시 만들지 않고 키 입력만 본다.
     pub fn show(&mut self) -> PreviewAction {
         if self.panels.is_empty() {
             return PreviewAction::Continue;
         }
+        if !self.dirty {
+            return match camera::Preview::poll_key(1) {
+                Ok(action) => action,
+                Err(error) => {
+                    warn!(%error, "프리뷰 키 폴링 실패");
+                    PreviewAction::Continue
+                }
+            };
+        }
+        self.dirty = false;
         return match self.render() {
             Ok(action) => action,
             Err(error) => {

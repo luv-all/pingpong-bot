@@ -18,7 +18,7 @@ pub use pixel_pick_mouse::{
     PIXEL_LOUPE_SRC_HALF, PIXEL_LOUPE_ZOOM, PixelPickMouse, arrow_delta, draw_pixel_loupe,
 };
 pub use preview_action::PreviewAction;
-pub use show_bgr_result::{ShowBgrResult, destroy_window, display_fit_bounds, show_bgr};
+pub use show_bgr_result::{ShowBgrResult, destroy_window, display_fit_bounds, poll_key, show_bgr};
 pub use text_block::{draw_debug_lines, draw_help_lines};
 pub use world_grid_params::{WorldGridParams, apply_grid_key, draw_world_grid};
 pub use world_track::draw_world_track;
