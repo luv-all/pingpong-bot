@@ -25,6 +25,45 @@ pub const RACKET_HANDLE_LENGTH: f64 = 0.10;
 /// URDF 원점 보정용. primitive 손잡이 축은 local +Z — [`RACKET_HANDLE_LENGTH`].
 pub const RACKET_URDF_TIP_Y: f64 = 0.0513;
 
+/// 실측 라켓 장착 피치 보정 [rad].
+///
+/// 2026-08-05 시작 자세에서 엔코더 FK는 라켓 장축을 수직에서 18.55°로
+/// 계산했지만, 실물은 손잡이 쪽이 로봇 방향으로 기울어진 8.00°였다.
+/// CAD EE 자세에 local +X 기준 +10.55°를 더하면 두 방향이 일치한다.
+pub const RACKET_MOUNT_PITCH_CORRECTION_RAD: f64 = 10.55_f64.to_radians();
+
+/// URDF EE 원점 → 실물 블레이드 중심의 장축 방향 보정 거리 [m].
+///
+/// 같은 시작 자세에서 모델 블레이드 중심은 상판 위 0.3449 m였고, 실측
+/// 최하단 0.155 m와 블레이드 길이 0.160 m, 기울기 8°로 구한 실제 중심은
+/// 약 0.2349 m다. 따라서 보정된 local -Y(라켓 아래쪽)로 0.1111 m 옮긴다.
+/// 이 값은 전체 라켓 길이 0.255 m를 충돌 박스로 키우는 값이 아니라, 실제
+/// 타격면 중심을 올바르게 놓는 장착 보정이다.
+pub const RACKET_BLADE_CENTER_OFFSET_M: f64 = 0.1111;
+
+/// URDF 패들 링크 원점을 실측 블레이드 중심으로 바꾸는 고정 변환.
+///
+/// 반환값은 URDF 링크 좌표에서 합성하도록 `L * P * D * L⁻¹`이다.
+/// `L`은 CAD 라켓 축을 domain 축으로 바꾸는 변환이고, `P`는
+/// 실측 피치, `D`는 보정된 라켓 local -Y 방향 중심 이동이다.
+pub fn racket_urdf_mount_calibration() -> nalgebra::Isometry3<f64> {
+    use nalgebra::{Isometry3, Translation3, Unit, UnitQuaternion, Vector3};
+
+    let link_from_racket = UnitQuaternion::from_axis_angle(
+        &Unit::new_normalize(Vector3::new(0.0, 1.0, 1.0)),
+        std::f64::consts::PI,
+    );
+    let pitch = UnitQuaternion::from_axis_angle(
+        &Unit::new_normalize(Vector3::x()),
+        RACKET_MOUNT_PITCH_CORRECTION_RAD,
+    );
+    let link_from_racket_iso = Isometry3::from_parts(Translation3::identity(), link_from_racket);
+    return link_from_racket_iso
+        * Isometry3::from_parts(Translation3::identity(), pitch)
+        * Isometry3::translation(0.0, -RACKET_BLADE_CENTER_OFFSET_M, 0.0)
+        * link_from_racket_iso.inverse();
+}
+
 /// 손잡이 시각·근사 반경 [m].
 pub const RACKET_HANDLE_RADIUS: f64 = 0.012;
 

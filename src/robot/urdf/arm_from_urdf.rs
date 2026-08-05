@@ -140,6 +140,10 @@ pub fn to_arm(urdf: &UrdfModel, max_joint_speed: f64) -> Result<Arm, UrdfLoadErr
         aggregated_inertials.push(LinkInertial::combine(&bodies));
     }
 
+    // CAD가 내본 패들 링크 원점/각도를 버니어 실측 타격면 중심으로 교정한다.
+    // 이 체인을 sim과 real이 공유하므로 FK·IK·Rapier·충돌 검사에 동시 반영된다.
+    pending *= crate::constants::geometry::racket_urdf_mount_calibration();
+
     let mount = urdf.mount.isometry();
     let chain = SerialChain::new(mount.rotation, joints, pending).map_err(|e| {
         UrdfLoadError::ArmConversion {

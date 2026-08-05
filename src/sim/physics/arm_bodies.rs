@@ -436,12 +436,14 @@ mod tests {
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
         let mut joints = MultibodyJointSet::new();
+        let mut mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
+        mount.x = arm.rail.as_ref().map_or(mount.x, |rail| rail.default_x());
         let mb = ArmMultibody::spawn(
             &mut bodies,
             &mut colliders,
             &mut joints,
             &arm,
-            Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords,
+            mount,
             &arm.default_joints,
             racket_e(),
         );
@@ -495,7 +497,8 @@ mod tests {
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
         let mut joints = MultibodyJointSet::new();
-        let mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
+        let mut mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
+        mount.x = arm.rail.as_ref().map_or(mount.x, |rail| rail.default_x());
         let mut q = arm.default_joints.clone();
         q.values[1] = 0.3;
         q.values[2] = -0.5;
@@ -705,7 +708,8 @@ mod tests {
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
         let mut joints = MultibodyJointSet::new();
-        let mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
+        let mut mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
+        mount.x = arm.rail.as_ref().map_or(mount.x, |rail| rail.default_x());
         let mb = ArmMultibody::spawn(
             &mut bodies,
             &mut colliders,
@@ -747,7 +751,7 @@ mod tests {
             for i in 0..target.values.len().min(impact.values.len()) {
                 target.values[i] = start.values[i] + t * (impact.values[i] - start.values[i]);
             }
-            let rail_x = 0.05 * t;
+            let rail_x = arm.rail.as_ref().map_or(mount.x, |rail| rail.x_min) + 0.05 * t;
             mb.set_base_xy(&mut bodies, &mut joints, rail_x, mount.y, mount.z);
             mb.set_motor_targets(&mut joints, &target);
             pipeline.step(

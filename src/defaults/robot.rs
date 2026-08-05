@@ -147,17 +147,29 @@ pub fn primitive_4dof_with_mount(mount_y: f64, mount_z: f64) -> Result<Robot, Ro
         .expect("4-dof q3 axis"),
     ];
 
-    let chain = SerialChain::new(
-        UnitQuaternion::identity(),
-        joints,
-        // CAD tip: +Y=면 법선, −Z=손잡이(면 내, 홈 포즈 기준). 타격점은 면 평행 이동.
-        Isometry3::translation(
+    // primitive도 실측 피치를 적용해 URDF 활성 로봇과 같은 라켓 축을 쓴다.
+    // 다만 primitive EE는 이미 손목→블레이드 중심 0.10 m를 포함하므로,
+    // URDF 원점용 0.1111 m 추가 이동은 중복 적용하지 않는다.
+    let link_from_racket = UnitQuaternion::from_axis_angle(
+        &nalgebra::Unit::new_normalize(Vector3::new(0.0, 1.0, 1.0)),
+        std::f64::consts::PI,
+    );
+    let mount_pitch = UnitQuaternion::from_axis_angle(
+        &nalgebra::Unit::new_normalize(Vector3::x()),
+        geometry::RACKET_MOUNT_PITCH_CORRECTION_RAD,
+    );
+    let link_from_racket_iso =
+        Isometry3::from_parts(nalgebra::Translation3::identity(), link_from_racket);
+    let ee_transform = link_from_racket_iso
+        * Isometry3::from_parts(nalgebra::Translation3::identity(), mount_pitch)
+        * Isometry3::translation(
             0.0,
-            -geometry::RACKET_HALF_Z,
             -geometry::RACKET_HANDLE_LENGTH,
-        ),
-    )
-    .expect("4-dof serial chain");
+            -geometry::RACKET_HALF_Z,
+        )
+        * link_from_racket_iso.inverse();
+    let chain = SerialChain::new(UnitQuaternion::identity(), joints, ee_transform)
+        .expect("4-dof serial chain");
 
     let (link_inertials, aggregated_inertials) = primitive_4dof_inertials();
 
@@ -507,5 +519,51 @@ mod tests {
         let rail = arm.rail.expect("rail");
         assert!((rail.mount_y - frame.mount_y()).abs() < 1e-12);
         assert!((rail.mount_z - frame.mount_z()).abs() < 1e-12);
+    }
+
+    /// 2026-08-05 버니어 실측(손잡이 끝이 로봇 쪽으로 8°)을 라켓
+    /// 장착 변환의 회귀 기준으로 고정한다.
+    #[test]
+    fn measured_racket_mount_matches_bench_geometry() {
+        let robot = urdf_4dof().expect("4-dof");
+        let arm = robot.arm.as_ref();
+        let measured = Joints::from_slice(&[
+            0.5276893910326605,
+            -0.0015339807878856412,
+            -0.16566992509164924,
+            -0.6856894121848816,
+        ]);
+        let rail_x = arm.rail.as_ref().map_or(0.705, |rail| rail.default_x());
+        let pose = arm
+            .forward_kinematics_with_rail(rail_x, &measured)
+            .expect("measured FK");
+        let [w, x, y, z] = pose.orientation;
+        let rotation = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(w, x, y, z));
+        let axis_x = rotation * Vector3::x();
+        let blade_axis = rotation * Vector3::y();
+        let axis_normal = rotation * Vector3::z();
+        let angle_deg = blade_axis.z.abs().acos().to_degrees();
+        let half_height = axis_x.z.abs() * geometry::RACKET_HALF_X
+            + blade_axis.z.abs() * geometry::RACKET_HALF_Y
+            + axis_normal.z.abs() * geometry::RACKET_HALF_Z;
+        let lowest = pose.position.z - crate::constants::table::SURFACE_Z - half_height;
+
+        assert!(
+            (angle_deg - 8.0).abs() < 0.15,
+            "bench angle=8deg, model={angle_deg:.3}deg"
+        );
+        assert!(
+            blade_axis.y < 0.0 && blade_axis.z > 0.0,
+            "손잡이 쪽(+blade Y)은 로봇(-world Y)·위(+Z)로 기울어야 함: {blade_axis:?}"
+        );
+        assert!(
+            pose.normal.y > 0.0 && pose.normal.z >= 0.0,
+            "라켓 면은 상대 탁구대(+Y)를 보고 아래로 기울지 않아야 함: {:?}",
+            pose.normal
+        );
+        assert!(
+            (lowest - 0.155).abs() < 0.003,
+            "bench lowest=0.155m, model={lowest:.4}m"
+        );
     }
 }
