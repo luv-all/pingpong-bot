@@ -41,6 +41,12 @@ const STARTUP_MAX_TRIM_STEP_RAD: f64 = 5.0_f64.to_radians();
 // 멈췄다고 볼 만큼 크게 어긋난 경우에만 자동 복구 대상을 확인한다.
 const STARTUP_RECOVERY_MIN_ERROR_RAD: f64 = 10.0_f64.to_radians();
 const STARTUP_STABLE_SAMPLES: u8 = 2;
+// 2026-08-05 자·육안 실측. 센서값이 아니라 시작 FK 모델과 비교할 벤치 기준이다.
+const BENCH_WRIST_ABOVE_TABLE_M: f64 = 0.340;
+const BENCH_RACKET_LOWEST_ABOVE_TABLE_M: f64 = 0.155;
+const BENCH_HANDLE_END_ABOVE_TABLE_M: f64 = 0.410;
+const BENCH_RACKET_AXIS_FROM_VERTICAL_DEG: f64 = 8.0;
+const BENCH_RACKET_TOTAL_LENGTH_M: f64 = 0.255;
 
 #[derive(Default)]
 struct CommandLatch {
@@ -693,45 +699,73 @@ pub(super) fn initialize_pose(
     arm: &Arm,
 ) -> Result<pingpong_bot::robot::Pose, MoveError> {
     let ready = initialize_pose_attempt(hardware, arm, true)?;
-    return sweep_startup_rail(hardware, arm, ready);
+    log_startup_racket_geometry(arm, &ready);
+    return Ok(ready);
 }
 
-/// 팔을 안전 준비 자세로 만든 뒤 레일 사용 가능 범위의 양 끝과 중앙을 차례로
-/// 확인한다. 범위는 물리 레일의 5%/95%, 마지막 위치는 정확한 50%다.
-fn sweep_startup_rail(
-    hardware: &mut dyn Hardware,
-    arm: &Arm,
-    mut pose: pingpong_bot::robot::Pose,
-) -> Result<pingpong_bot::robot::Pose, MoveError> {
-    let Some(rail) = arm.rail else {
-        return Ok(pose);
+/// 시작 실측 관절을 FK에 넣어 라켓 장착 모델과 자로 잰 실물 기준의 차이를 기록한다.
+/// 여기서 `model_*`은 엔코더를 읽은 뒤의 **모델 계산값**이지 별도 자세 센서값이 아니다.
+fn log_startup_racket_geometry(arm: &Arm, pose: &pingpong_bot::robot::Pose) {
+    let Some(racket) = arm.forward_kinematics_with_rail(pose.rail_x, &pose.joints) else {
+        warn!("초기 라켓 기하 진단 FK 실패");
+        return;
     };
-    for (label, target_x) in [
-        ("5%", rail.x_min),
-        ("95%", rail.x_max),
-        ("50%", rail.default_x()),
-    ] {
-        info!(
-            position = label,
-            rail_target_m = f4(target_x),
-            "시작 레일 범위 확인 이동"
-        );
-        let trajectory = Planner::move_to(arm, &pose, arm.default_joints.clone(), target_x)
-            .map_err(MoveError::Plan)?;
-        hardware.command(&trajectory).map_err(MoveError::Hardware)?;
-        while hardware.is_busy() {
-            thread::sleep(BUSY_POLL);
-        }
-        pose = hardware.read_pose().map_err(MoveError::Hardware)?;
-        info!(
-            position = label,
-            rail_commanded_m = f4(target_x),
-            rail_measured_m = f4(pose.rail_x),
-            rail_commanded_minus_measured_m = f4(target_x - pose.rail_x),
-            "시작 레일 범위 확인 완료"
-        );
-    }
-    return Ok(pose);
+    let Some(wrist) = arm
+        .joint_origins_world(pose.rail_x, &pose.joints)
+        .and_then(|origins| origins.last().copied())
+    else {
+        warn!("초기 라켓 기하 진단 손목축 계산 실패");
+        return;
+    };
+
+    let [w, x, y, z] = racket.orientation;
+    let rotation = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(w, x, y, z));
+    // RacketPose 계약: local Y=블레이드 장축, local Z=면 법선.
+    let axis_x = rotation * nalgebra::Vector3::x();
+    let blade_axis = rotation * nalgebra::Vector3::y();
+    let axis_normal = rotation * nalgebra::Vector3::z();
+    let angle_from_vertical_deg = blade_axis.z.abs().clamp(-1.0, 1.0).acos().to_degrees();
+    let face_above_horizontal_deg = racket
+        .normal
+        .z
+        .atan2(racket.normal.x.hypot(racket.normal.y))
+        .to_degrees();
+    let vertical_half_extent = axis_x.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_X
+        + blade_axis.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_Y
+        + axis_normal.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_Z;
+    let table_z = pingpong_bot::constants::table::SURFACE_Z;
+    let model_wrist_above_table_m = wrist.z - table_z;
+    let model_reference_above_table_m = racket.position.z - table_z;
+    let model_lowest_above_table_m = model_reference_above_table_m - vertical_half_extent;
+    let model_highest_above_table_m = model_reference_above_table_m + vertical_half_extent;
+    let joints_measured_deg: Vec<f64> = pose
+        .joints
+        .values
+        .iter()
+        .map(|angle| angle.to_degrees())
+        .collect();
+
+    info!(
+        rail_measured_m = f4(pose.rail_x),
+        joints_measured_rad = %format!("{:?}", pose.joints.values),
+        joints_measured_deg = %format!("{joints_measured_deg:?}"),
+        model_wrist_above_table_m = f4(model_wrist_above_table_m),
+        bench_wrist_above_table_m = f4(BENCH_WRIST_ABOVE_TABLE_M),
+        wrist_model_minus_bench_m = f4(model_wrist_above_table_m - BENCH_WRIST_ABOVE_TABLE_M),
+        model_racket_reference_above_table_m = f4(model_reference_above_table_m),
+        model_racket_lowest_above_table_m = f4(model_lowest_above_table_m),
+        bench_racket_lowest_above_table_m = f4(BENCH_RACKET_LOWEST_ABOVE_TABLE_M),
+        lowest_model_minus_bench_m = f4(model_lowest_above_table_m - BENCH_RACKET_LOWEST_ABOVE_TABLE_M),
+        model_racket_highest_above_table_m = f4(model_highest_above_table_m),
+        bench_handle_end_above_table_m = f4(BENCH_HANDLE_END_ABOVE_TABLE_M),
+        model_axis_from_vertical_deg = f2(angle_from_vertical_deg),
+        bench_axis_from_vertical_deg = f2(BENCH_RACKET_AXIS_FROM_VERTICAL_DEG),
+        axis_model_minus_bench_deg = f2(angle_from_vertical_deg - BENCH_RACKET_AXIS_FROM_VERTICAL_DEG),
+        model_face_above_horizontal_deg = f2(face_above_horizontal_deg),
+        model_collision_blade_length_m = f4(2.0 * pingpong_bot::constants::geometry::RACKET_HALF_Y),
+        bench_total_racket_length_m = f4(BENCH_RACKET_TOTAL_LENGTH_M),
+        "초기 라켓 기하 검증 — 모델 계산값과 벤치 실측 비교"
+    );
 }
 
 fn initialize_pose_attempt(
