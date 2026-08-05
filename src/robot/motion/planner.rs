@@ -85,6 +85,16 @@ impl Planner {
         return physics::plan_return_to_center(arm, start);
     }
 
+    /// [`Self::return_to_center`]과 같지만 목표 레일 x를 호출측이 고른다 —
+    /// 좌/센터/우 존 테스트 컨트롤이 쓴다.
+    pub fn return_to_center_at(
+        arm: &Arm,
+        start: &robot::Pose,
+        rail_x: f64,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_return_to_center_at(arm, start, rail_x);
+    }
+
     pub fn ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
         return physics::plan_ready_prewind(arm, start);
     }
