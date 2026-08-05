@@ -57,8 +57,8 @@ pub use dxl_limits::{
 };
 pub use estimator::EstimatorParams;
 pub use hardware::{
-    RAIL_PHYSICAL_X_MAX_M, RAIL_PHYSICAL_X_MIN_M, RAIL_READY_X_M, RAIL_X_MAX_M, RAIL_X_MIN_M,
-    RAIL_ZONE_SAFETY_MARGIN_RATIO,
+    RAIL_END_MARGIN_M, RAIL_PHYSICAL_X_MAX_M, RAIL_PHYSICAL_X_MIN_M, RAIL_READY_X_M, RAIL_X_MAX_M,
+    RAIL_X_MIN_M, RAIL_ZONE_SAFETY_MARGIN_RATIO,
 };
 pub use impact::ImpactParams;
 pub use motion::{
@@ -117,7 +117,11 @@ mod tests {
         let model_rail = robot.arm.rail.expect("기본 로봇 리니어 레일");
         assert_eq!(model_rail.x_min, rail_config.x_min_m);
         assert_eq!(model_rail.x_max, rail_config.x_max_m);
-        assert!((model_rail.default_x() - 0.705).abs() < 1e-12);
+        assert!((model_rail.x_min - 0.0705).abs() < 1e-12);
+        assert!((model_rail.x_max - 1.4495).abs() < 1e-12);
+        assert!((model_rail.default_x() - 0.7600).abs() < 1e-12);
+        assert!((rail_config.x_min_m - model_rail.x_min).abs() < 1e-12);
+        assert!((rail_config.x_max_m - model_rail.x_max).abs() < 1e-12);
         let c = ControlParams::default();
         assert!((c.max_joint_torques[0] - 12.0).abs() < 1e-12);
         assert!((c.max_joint_torques[1] - 6.0).abs() < 1e-12);

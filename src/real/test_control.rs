@@ -7,7 +7,8 @@ use pingpong_bot::robot::LinearRail;
 
 /// 슈터가 겨누는 존 — 이 존의 레일 x가 다음 준비 자세 목표가 된다.
 ///
-/// `LinearRail::x_min/x_max` 자체가 물리 양 끝에서 5% 안쪽인 공통 안전 범위다.
+/// `LinearRail::x_min/x_max` 자체가 물리 양 끝에서 0.0705 m 안쪽인
+/// 공통 안전 범위(0.0705~1.4495 m)다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestZone {
     Left,

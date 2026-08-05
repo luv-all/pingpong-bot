@@ -531,7 +531,10 @@ mod tests {
     fn ready_racket_mount_matches_bench_geometry() {
         let robot = urdf_4dof().expect("4-dof");
         let arm = robot.arm.as_ref();
-        let rail_x = arm.rail.as_ref().map_or(0.705, |rail| rail.default_x());
+        let rail_x = arm
+            .rail
+            .as_ref()
+            .map_or(RAIL_READY_X_M, |rail| rail.default_x());
         let pose = arm
             .forward_kinematics_with_rail(rail_x, &arm.default_joints)
             .expect("ready FK");

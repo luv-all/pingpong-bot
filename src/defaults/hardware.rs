@@ -5,15 +5,16 @@ use crate::hardware::rail::RailConfig;
 
 use super::motion::RAIL_ACCEL_M_S2;
 
-/// 좌/우 존 준비 위치가 레일 양 끝에서 안쪽으로 확보하는 안전 여유 — 레일
-/// 물리 전체 구간 대비 비율.
-pub const RAIL_ZONE_SAFETY_MARGIN_RATIO: f64 = 0.05;
-/// 실측 물리 레일 전체 범위 [m].
+/// 실기 양쪽 안전 마진 [m].
+///
+/// 좌측에서 검증된 0.0705 m를 양쪽에 동일하게 적용한다.
+pub const RAIL_END_MARGIN_M: f64 = 0.0705;
+/// 물리 전체 길이 대비 안전 마진 비율(약 4.64%).
+pub const RAIL_ZONE_SAFETY_MARGIN_RATIO: f64 = RAIL_END_MARGIN_M / RAIL_PHYSICAL_X_MAX_M;
+/// 중앙 0.76 m를 기준으로 재산정한 물리 레일 전체 범위 [m].
 pub const RAIL_PHYSICAL_X_MIN_M: f64 = 0.0;
-pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
-const RAIL_PHYSICAL_SPAN_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_PHYSICAL_X_MIN_M;
-const RAIL_END_MARGIN_M: f64 = RAIL_PHYSICAL_SPAN_M * RAIL_ZONE_SAFETY_MARGIN_RATIO;
-/// 물리 양 끝 5%를 제외한 공통 사용 가능 범위 [m].
+pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.52;
+/// 물리 양 끝에서 0.0705 m를 제외한 sim·real 공통 이동 범위 [m].
 pub const RAIL_X_MIN_M: f64 = RAIL_PHYSICAL_X_MIN_M + RAIL_END_MARGIN_M;
 pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_END_MARGIN_M;
 /// 물리 레일 전체의 정확한 50% 준비 위치 [m].
