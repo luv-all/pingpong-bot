@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use pingpong_bot::Point3;
 use pingpong_bot::robot;
-use pingpong_bot::robot::control::PredictionStage;
 
 /// 프리뷰 상태 패널이 그릴 현재 공 처리 상태 스냅샷.
 #[derive(Debug, Clone, Copy)]
@@ -22,7 +21,7 @@ pub enum ControlStateSnapshot {
 pub enum RuntimeEvent {
     /// 하드웨어 초기화가 끝나 예측 요청을 받을 수 있다.
     Ready { pose: robot::Pose },
-    /// EKF가 새 공의 위치와 속도를 추정하기 시작했다.
+    /// 새 `vision::Fit`이 공의 위치와 속도를 추정하기 시작했다.
     Tracking {
         track_seq: u64,
         position: Point3,
@@ -31,7 +30,6 @@ pub enum RuntimeEvent {
     /// 한 단계의 레일·라켓 조준 명령을 하드웨어에 전달했다.
     Commanded {
         track_seq: u64,
-        stage: PredictionStage,
         target: Point3,
         rail_x: f64,
         aim_rad: f64,

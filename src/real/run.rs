@@ -7,12 +7,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, ensure};
 use crossbeam_channel::{Receiver, bounded, unbounded};
 use pingpong_bot::camera::{Calibration, CamCliArgs, CamStreamArgs, StereoOfflineArgs};
-use pingpong_bot::defaults::detector::detector_for;
+use pingpong_bot::defaults::vision::detector_for;
 use pingpong_bot::defaults::{self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, robot};
 use pingpong_bot::hardware::RealHardware;
 use pingpong_bot::hardware::dynamixel::DynamixelConfig;
 use pingpong_bot::hardware::rail::RailConfig;
-use pingpong_bot::robot::motion::InterceptWindow;
 use tracing::{debug, info, warn};
 
 use crate::cli::Args;
@@ -56,7 +55,7 @@ pub fn run(args: &Args) -> Result<()> {
     let sources = open_cameras(&options)?;
     ensure!(
         sources.len() >= calibration.min_cameras_for_triangulation(),
-        "삼각측량에 카메라 {}대가 필요한데 {}대만 열렸다",
+        "새 픽셀 궤적 적합에 카메라 {}대가 필요한데 {}대만 열렸다",
         calibration.min_cameras_for_triangulation(),
         sources.len()
     );
@@ -106,7 +105,6 @@ pub fn run(args: &Args) -> Result<()> {
     let estimator_handle = estimator_worker::spawn(
         vision_rx,
         calibration,
-        InterceptWindow::default(),
         commit_tx,
         commit_evict_rx,
         preview_tx,
@@ -273,12 +271,11 @@ fn result_lines(event: &RuntimeEvent) -> Option<Vec<String>> {
     return match event {
         RuntimeEvent::Commanded {
             track_seq,
-            stage,
             target,
             rail_x,
             aim_rad,
         } => Some(vec![
-            format!("COMMAND track {track_seq} {stage:?}"),
+            format!("COMMAND track {track_seq}"),
             format!(
                 "target x{} y{} z{}",
                 f2(target.coords.x),
@@ -403,13 +400,11 @@ fn log_event(event: &RuntimeEvent) {
         ),
         RuntimeEvent::Commanded {
             track_seq,
-            stage,
             target,
             rail_x,
             aim_rad,
         } => info!(
             track = track_seq,
-            ?stage,
             target_x = f2(target.coords.x),
             target_y = f2(target.coords.y),
             target_z = f2(target.coords.z),
@@ -442,14 +437,6 @@ fn log_summary(outcome: &Outcome, cameras: &[CameraStats], estimator: Option<&Es
             accepted = stats.accepted,
             rejected = stats.rejected,
             seeded = stats.seeded,
-            reset = stats.reset,
-            skew_p50_ms = stats.skew_percentile(0.50).map(|s| f2(s * 1e3)),
-            skew_p95_ms = stats.skew_percentile(0.95).map(|s| f2(s * 1e3)),
-            reproj_p50_px = stats.reprojection_percentile(0.50).map(f2),
-            reproj_p95_px = stats.reprojection_percentile(0.95).map(f2),
-            reprojection_rejected = stats.reprojection_rejected,
-            workspace_rejected = stats.workspace_rejected,
-            stale_skipped = stats.stale_skipped,
             commit_dropped = stats.commit_dropped,
             preview_dropped = stats.preview_dropped,
             "real shot: end — 추정"

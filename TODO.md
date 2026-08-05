@@ -6,8 +6,8 @@
 ## 현재 상태 (2026-08-04)
 
 - **1.1~1.3 핵심 구현 완료:** `N×7` 규약, 채택 관측 버퍼, 미래 궤적 샘플링.
-- **1.4 제어 전환 완료:** real `CommitRequest`가 `BallTrajectory`와
-  `Provisional | Refined` 단계를 전달한다.
+- **1.4 제어 전환 완료:** real `CommitRequest`가 새 `vision::Trajectory` 계약을
+  그대로 전달하고 제어가 접수 평면을 선택한다.
 - **공 위치·높이 정렬 공통 제어 완료:** real·GUI sim이
   `HitTargetSelector`와 `Planner::ball_alignment`를 공유한다.
 - **중립 준비·복귀 완료:** 레일 0.710m와 기본 관절각에서 시작하고,
@@ -202,31 +202,21 @@ sim의 직접 제어 경로에서는 호출하지 않는다.
   실패 시 중단은 현재 실기에서 발동하지 않는다. 부활·제거 결정은 보류.
   `docs/superpowers/specs/2026-08-05-control-worker-state-machine-design.md` 참고.
 - [x] **한 공에 정렬 명령은 최대 한 번 — 2026-08-05 latch로 명시화.**
-  명령이 하나 성공하면 단계와 무관하게 그 `track_seq`의 이후 요청을 전부
+  명령이 하나 성공하면 그 `vision::Trajectory::seq`의 이후 요청을 전부
   막는다. 리팩터 중 `BallControlState::Idle` 복귀 후 이 차단이 풀리는 틈이
   잠깐 생겼었는데, `CommandLatch::mark_finished()`가 latch를
   track_seq당 계속 막도록 한다(`src/real/control_worker.rs`).
-  `Provisional`이 거의 즉시 도착하므로 `Refined`(0.25초 관측 후)는 도착
-  전에 이미 막히는 것도 확정된 동작이다 — 한 공에는 정렬 명령을 다시
-  보내지 않는다. `src/real/README.md`도 이에
-  맞춰 갱신함.
-- [ ] **vision control integration — `main`의 새 비전 스택을 제어 경로에 연결.**
+  새 Fit은 관측마다 계약을 갱신하지만 한 공에는 정렬 명령을 다시 보내지 않는다.
+  `src/real/README.md`도 이에 맞춰 갱신함.
+- [x] **vision control integration — `main`의 새 비전 스택을 제어 경로에 연결.**
   `main`이 `detector`/`estimator`(재귀 EKF)를 전부 지우고 `vision::Fit`
   (배치 Gauss-Newton 곡선 피팅) + `vision::Trajectory` 계약으로 새로 짰다
-  (2026-08-05 merge). 지금 `control_worker.rs`·`estimator_worker.rs`는
-  옛 `estimator::Ekf`/`detector::Detector` 스택 위에 그대로 얹혀 있고,
-  이번 merge는 그 스택을 `defaults::estimator`/`defaults::detector`로
-  이름만 분리해 나란히 살려 둔 것 — 통합은 보류했다. 작업 범위:
-  1. `estimator_worker.rs`를 `Ekf` 대신 `vision::Fit`으로 갈아끼운다.
-  2. `CommitRequest`가 나르는 타입을 `estimator::BallTrajectory`에서
-     `vision::Trajectory`로 바꾸고, `robot::control.rs`(`DirectController`,
-     `HitTargetSelector`)의 필드 접근을 거기 맞춘다.
-  3. `PredictionStage::{Provisional, Refined}` 게이팅을 다시 설계한다 —
-     지금은 "관측 구간 길이"(옛 EKF의 점진적 관측 누적)로 판단하는데,
-     `vision::Fit`은 배치 피팅(`Outcome::{Seeded,Accepted,Rejected,Idle}`)이라
-     그대로 옮겨지지 않는다.
-  끝나면 `src/detector/`·`src/estimator/`·`defaults::detector`·
-  `defaults::estimator`를 통째로 지운다.
+  (2026-08-05 merge). 실기 카메라·추정 경로를 `defaults::vision::detector_for`,
+  `defaults::vision::trigger`, `vision::Fit`으로 전환했다. `CommitRequest`는
+  `vision::Trajectory` 전체를 나르고, 제어 워커가 요청 지연을 `at_time`으로
+  보정한 뒤 접수 평면을 고른다. 구 `PredictionStage`는 활성 실기 경로에서 제거했다.
+  구 `src/detector`·`src/estimator`는 시뮬레이션과 진단의 기존 호출부가 남아 있어
+  이번 통합에서는 삭제하지 않는다.
 
 ---
 

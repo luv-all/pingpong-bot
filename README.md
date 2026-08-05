@@ -10,17 +10,18 @@ Rapier·실물 하드웨어 경계는 feature와 모듈로 격리한다.
 
 ## 현재 개발 상태
 
-`Estimator` 계층은 검출·삼각측량·EKF 결과를 다음 형식으로 반환할 수 있다.
+새 실기 비전 계층은 카메라별 픽셀 관측 전체를 일괄 적합해 다음 계약을 반환한다.
 
 ```text
-BallTrajectory {
-    observed:  N×7  [x, y, z, vx, vy, vz, t],  t ≤ 0
-    predicted: M×7  [x, y, z, vx, vy, vz, t],  t > 0
-    reference_time
+vision::Trajectory {
+    seq,
+    origin,
+    measured: Track<State>,
+    predicted: Track<State>,
 }
 ```
 
-real 제어는 `BallTrajectory → CommitRequest → HitTargetSelector →
+real 제어는 `vision::Trajectory → CommitRequest → control 접수 평면 선택 →
 Planner::ball_alignment` 경로로 정렬 궤적을 계산한다. 레일과 팔이 함께 움직여
 라켓 중심을 예측 x·y·z에 맞추고 라켓 면은 상대 네트 중앙을 향한다. 별도 스윙과
 팔로스루 없이 정지 정렬한 뒤 중립 자세로 복귀하며 GUI sim도 같은 계획기를 쓴다.
@@ -142,7 +143,7 @@ cargo run -p jog -- --port COM8 --debug
 jog 창에서 **Sync → Preview → Apply** 순서를 지킨다. 다음으로 실제 카메라와 런타임을 쓰되 모터만 정지한 리허설을 한다.
 
 ```bash
-# 실캠·검출·삼각측량·EKF·플래너, 모터/레일만 정지
+# 실캠·새 검출 캐스케이드·일괄 탄도 적합·플래너, 모터/레일만 정지
 cargo run -p pingpong-bot -- --mode real --dry-run --debug
 
 # 녹화 클립으로 재현
@@ -302,7 +303,7 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 스레드와 하드웨어 경계는 [`src/real/README.md`](src/real/README.md)에 정리돼 있다.
 
 ```bash
-# 리허설 — 실캠·검출·EKF·플래너까지 다 돌리고 모터·레일만 안 움직인다 (macOS에서도 됨)
+# 리허설 — 실캠·새 비전 Fit·플래너까지 다 돌리고 모터·레일만 안 움직인다 (macOS에서도 됨)
 cargo run -p pingpong-bot -- --mode real --dry-run
 
 # 실기
@@ -330,16 +331,16 @@ AXL의 `ActPos`와 `CmdPos` 원점이 다르면 시작 로그에 두 값과 차�
 모든 절대 목표와 CmdPos 기준 소프트 리밋에 그 차이를 자동 보정한다.
 
 카메라 2대(`data/calibration.json`)와 `data/colormask.json`이 있어야 한다.
-`Ekf`·`Calibration`·`Hardware`를 스레드별로 단독 소유하고 crossbeam 채널로만 잇는다.
+`vision::Fit`·`Calibration`·`Hardware`를 스레드별로 단독 소유하고 crossbeam 채널로만 잇는다.
 추정 워커는 최신 목표를 보내고 제어 워커만 하드웨어를 소유한다.
 
 ---
 
 ## 아키텍처
 
-현재 활성 제어의 공통 경계는 `BallTrajectory → HitTargetSelector →
-Planner::ball_alignment → Hardware`다. `sim`과 `real`은 같은 목표 선택과
-정지 정렬 궤적 계산을 사용한다. 실기는 `Hardware::command`로 레일·전체 관절에
+현재 활성 실기 제어의 경계는 `vision::Trajectory → control 접수 평면 선택 →
+Planner::ball_alignment → Hardware`다. `sim`은 월드 궤적, `real`은 새 비전 궤적에서
+각자 목표를 고르되 같은 정지 정렬 플래너를 사용한다. 실기는 `Hardware::command`로 레일·전체 관절에
 전송하고 GUI sim은 같은 궤적을 `robot::State`에 적용한다. GUI sim 엔트리(`main`)는
 뷰어와 `SimSession`을 함께 실행한다.
 
@@ -359,8 +360,8 @@ flowchart TB
     direction LR
     camera["<b>camera</b><br/>calib · tri · io"]
     detector["<b>detector</b><br/>appearance · fuse · motion"]
-    estimator["<b>estimator</b><br/>EKF · measure"]
-    target["<b>target</b><br/>BallTrajectory · 목표 선택"]
+    estimator["<b>vision::Fit</b><br/>픽셀 일괄 탄도 적합"]
+    target["<b>control target</b><br/>vision::Trajectory · 접수 평면 선택"]
     control["<b>control</b><br/>DirectController · 단계 판정"]
     hardware["<b>apply</b><br/>RealHardware / sim State"]
     camera --> detector --> estimator --> target --> control --> hardware
@@ -400,7 +401,7 @@ flowchart LR
   ctrlT["Control × 1"]
   actuator["Hardware"]
 
-  frames --> camT -->|"Observation"| estT -->|"BallTrajectory / CommitRequest"| ctrlT --> actuator
+  frames --> camT -->|"Candidate"| estT -->|"vision::Trajectory / CommitRequest"| ctrlT --> actuator
 ```
 
 실기(`--mode real`)는 [`src/real/`](src/real/)이 돌린다. 현재는 공마다 레일과

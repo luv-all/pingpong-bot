@@ -12,17 +12,15 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use pingpong_bot::error::{DomainError, HwError};
 use pingpong_bot::hardware::dynamixel::{DynamixelConfig, MotorMapping};
 use pingpong_bot::hardware::{AppliedRailRacketCommand, Hardware};
-use pingpong_bot::robot::{Arm, Joints};
-use pingpong_bot::robot::control::{
-    DirectControlCommand, DirectControlMeasurement, DirectController, PredictionStage,
-};
+use pingpong_bot::robot::control::{DirectControlCommand, DirectControlMeasurement};
 use pingpong_bot::robot::motion::{self, Planner};
+use pingpong_bot::robot::{Arm, Joints};
+use pingpong_bot::vision::State as VisionState;
 use tracing::{debug, info, info_span, warn};
 
 use super::fmt::{f2, f4};
 use super::{CommitRequest, ControlStateSnapshot, PoseMsg, RuntimeEvent, Shutdown, SimUpdate};
 
-const MAX_REQUEST_AGE_SECS: f64 = 0.050;
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const BUSY_POLL: Duration = Duration::from_millis(5);
@@ -44,34 +42,64 @@ const STARTUP_STABLE_SAMPLES: u8 = 2;
 #[derive(Default)]
 struct CommandLatch {
     track_seq: Option<u64>,
-    provisional_sent: bool,
-    refined_sent: bool,
+    finished: bool,
 }
 
 impl CommandLatch {
-    fn should_send(&mut self, track_seq: u64, stage: PredictionStage) -> bool {
+    fn should_send(&mut self, track_seq: u64) -> bool {
         if self.track_seq != Some(track_seq) {
             *self = Self::default();
             self.track_seq = Some(track_seq);
         }
-        return match stage {
-            PredictionStage::Provisional => !self.provisional_sent,
-            PredictionStage::Refined => !self.refined_sent,
-        };
-    }
-
-    fn mark_sent(&mut self, stage: PredictionStage) {
-        match stage {
-            PredictionStage::Provisional => self.provisional_sent = true,
-            PredictionStage::Refined => self.refined_sent = true,
-        }
+        return !self.finished;
     }
 
     /// 이 공의 처리가 끝났다 — 성공·계획 생략 모두 같은 track의 재시도를 막는다.
     fn mark_finished(&mut self) {
-        self.provisional_sent = true;
-        self.refined_sent = true;
+        self.finished = true;
     }
+}
+
+/// 새 비전의 전체 예측 궤적에서 제어가 사용할 접수 평면을 고른다.
+///
+/// 요청이 큐에서 기다린 시간만큼 `at_time(last_measured + age)`로 공을 전진시킨 뒤,
+/// 아직 미래인 평면만 남긴다. 비전은 접수 범위를 모르고 제어만 이 정책을 가진다.
+fn select_alignment_target(
+    request: &CommitRequest,
+    window: motion::InterceptWindow,
+) -> Result<VisionState, &'static str> {
+    let measured_t = request
+        .trajectory
+        .measured
+        .last()
+        .map(|state| state.t)
+        .ok_or("관측 궤적이 비어 있음")?;
+    let age = Duration::try_from_secs_f64(request.age_secs())
+        .map_err(|_| "요청 지연 시간이 유효하지 않음")?;
+    let effective_now = measured_t.saturating_add(age);
+    // 낡았다는 이유로 요청 전체를 버리지 않고 현재 상태를 전진시킨다.
+    request
+        .trajectory
+        .predicted
+        .at_time(effective_now)
+        .ok_or("요청 지연 뒤 예측 궤적이 이미 끝남")?;
+
+    let center_y = 0.5 * (window.y_min + window.y_max);
+    return window
+        .hit_planes()
+        .into_iter()
+        .filter_map(|plane| request.trajectory.predicted.at_plane(plane.y))
+        .filter(|state| state.t > effective_now)
+        .min_by(|left, right| {
+            let left_center = (left.position.y - center_y).abs();
+            let right_center = (right.position.y - center_y).abs();
+            left_center.total_cmp(&right_center).then_with(|| {
+                left.sigma_position
+                    .max()
+                    .total_cmp(&right.sigma_position.max())
+            })
+        })
+        .ok_or("접수 구간에 아직 도달 가능한 미래 예측이 없음");
 }
 
 /// 위치 정렬 완료 후 실측 비교용 — 복귀 직전에 로그로 남긴다.
@@ -155,8 +183,6 @@ pub fn spawn(
             }
         };
         let window = motion::InterceptWindow::default();
-        let controller = DirectController::new(window.y_min, window.y_max)
-            .expect("기본 레일·라켓 조준 제어 설정");
 
         if let Some(sim_tx) = &sim_tx {
             let _ = sim_tx.try_send(SimUpdate {
@@ -288,9 +314,9 @@ pub fn spawn(
                 Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => continue,
             };
-            if !latch.should_send(request.track_seq, request.stage)
-                || state.blocks(request.track_seq)
-                || request.age_secs() > MAX_REQUEST_AGE_SECS
+            let track_seq = request.track_seq();
+            if !latch.should_send(track_seq)
+                || state.blocks(track_seq)
                 || last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
             {
                 continue;
@@ -299,14 +325,18 @@ pub fn spawn(
             let start = match hardware.read_pose() {
                 Ok(pose) => pose,
                 Err(error) => {
-                    warn!(track_seq = request.track_seq, %error, "명령 직전 포즈 읽기 실패");
+                    warn!(track_seq, %error, "명령 직전 포즈 읽기 실패");
                     continue;
                 }
             };
-            let target = match controller.select_target(&request.trajectory) {
+            let target = match select_alignment_target(&request, window) {
                 Ok(target) => target,
                 Err(error) => {
-                    debug!(track_seq = request.track_seq, %error, "공 위치 정렬 목표 선택 생략");
+                    debug!(
+                        track_seq,
+                        reason = error,
+                        "새 비전 궤적에서 정렬 목표 선택 생략"
+                    );
                     continue;
                 }
             };
@@ -319,7 +349,7 @@ pub fn spawn(
                 Err(error) => {
                     latch.mark_finished();
                     let _ = event_tx.send(RuntimeEvent::Failed {
-                        track_seq: Some(request.track_seq),
+                        track_seq: Some(track_seq),
                         reason: format!("이번 공 건너뜀 — 위치·방향 정렬 계획 불가: {error}"),
                     });
                     continue;
@@ -334,37 +364,41 @@ pub fn spawn(
                 .unwrap_or(0.0);
             if let Err(error) = hardware.command(&alignment) {
                 let _ = event_tx.send(RuntimeEvent::Failed {
-                    track_seq: Some(request.track_seq),
+                    track_seq: Some(track_seq),
                     reason: format!("위치·방향 정렬 명령 실패: {error}"),
                 });
                 break;
             }
-            latch.mark_sent(request.stage);
+            latch.mark_finished();
             last_command = Some(issued_at);
             let _ = event_tx.send(RuntimeEvent::Commanded {
-                track_seq: request.track_seq,
-                stage: request.stage,
+                track_seq,
                 target: target.position,
                 rail_x: rail_commanded_m,
                 aim_rad: aim_commanded_rad,
             });
+            if let Some(sim_tx) = &sim_tx {
+                let _ = sim_tx.try_send(SimUpdate {
+                    target: Some(target.position),
+                    ..SimUpdate::default()
+                });
+            }
 
             let return_due_at = issued_at + Duration::from_secs_f64(alignment.duration_secs);
             state = BallControlState::Aligning {
-                track_seq: request.track_seq,
+                track_seq,
                 return_due_at,
                 measurement: PendingAlignmentMeasurement {
-                    track_seq: request.track_seq,
+                    track_seq,
                     rail_commanded_m,
                     joints_commanded: alignment.follow_through.clone(),
                 },
             };
             // 같은 공의 반복 정렬 명령은 막고, 새 track에서 다시 정렬한다.
-            latch.mark_finished();
             pending_verification = None;
             let _ = event_tx.send(RuntimeEvent::ControlState {
                 state: ControlStateSnapshot::Aligning {
-                    track_seq: request.track_seq,
+                    track_seq,
                     return_due_at,
                     rail_commanded_m,
                     aim_commanded_rad,
@@ -372,7 +406,10 @@ pub fn spawn(
             });
 
             info!(
-                stage = ?request.stage,
+                track_seq,
+                request_age_secs = f4(request.age_secs()),
+                target_time_secs = f4(target.t.as_secs_f64()),
+                sigma_position_m = %format!("{:?}", target.sigma_position),
                 target_x = f4(target.position.x),
                 target_y = f4(target.position.y),
                 target_z = f4(target.position.z),
@@ -673,8 +710,8 @@ fn initialize_pose_attempt(
                 .zip(&ready_joints.values)
                 .map(|(commanded, target)| (commanded - target).to_degrees())
                 .collect();
-            let correction = Planner::move_to(arm, &pose, compensated, pose.rail_x)
-                .map_err(MoveError::Plan)?;
+            let correction =
+                Planner::move_to(arm, &pose, compensated, pose.rail_x).map_err(MoveError::Plan)?;
             trim_attempts += 1;
             info!(
                 attempt = trim_attempts,
@@ -881,8 +918,38 @@ impl std::fmt::Display for MoveError {
 mod tests {
     use super::*;
     use pingpong_bot::Point3;
-    use pingpong_bot::robot::control::HitTarget;
+    use pingpong_bot::robot::control::{HitTarget, PredictionStage};
     use pingpong_bot::robot::{Joints, Pose};
+    use pingpong_bot::vision::{State as VisionState, Track, Trajectory as VisionTrajectory};
+
+    fn vision_state(t_secs: f64, y: f64) -> VisionState {
+        return VisionState {
+            t: Duration::from_secs_f64(t_secs),
+            position: Point3::new(0.72, y, 0.94),
+            velocity: nalgebra::Vector3::new(0.0, -4.0, 0.0),
+            sigma_position: nalgebra::Vector3::repeat(0.02),
+            sigma_velocity: nalgebra::Vector3::repeat(0.1),
+            spin: None,
+        };
+    }
+
+    fn vision_request(age: Duration) -> CommitRequest {
+        return CommitRequest {
+            trajectory: VisionTrajectory {
+                seq: 9,
+                origin: Instant::now() - Duration::from_secs(1),
+                measured: Track(vec![vision_state(0.20, 0.80)]),
+                predicted: Track(vec![
+                    vision_state(0.20, 0.80),
+                    vision_state(0.35, 0.50),
+                    vision_state(0.45, 0.35),
+                    vision_state(0.55, 0.20),
+                    vision_state(0.65, 0.05),
+                ]),
+            },
+            at: Instant::now() - age,
+        };
+    }
 
     struct ReadCountingHardware {
         reads: usize,
@@ -956,36 +1023,46 @@ mod tests {
     }
 
     #[test]
-    fn each_prediction_stage_is_sent_only_once_per_ball() {
-        let mut latch = CommandLatch::default();
-        assert!(latch.should_send(1, PredictionStage::Provisional));
-        latch.mark_sent(PredictionStage::Provisional);
-        assert!(!latch.should_send(1, PredictionStage::Provisional));
-        assert!(latch.should_send(1, PredictionStage::Refined));
-        latch.mark_sent(PredictionStage::Refined);
-        assert!(!latch.should_send(1, PredictionStage::Refined));
+    fn delayed_vision_request_is_advanced_instead_of_dropped() {
+        let request = vision_request(Duration::from_millis(80));
+        let target = select_alignment_target(&request, motion::InterceptWindow::default())
+            .expect("80ms 지연 요청도 미래 궤적으로 보정");
 
-        assert!(latch.should_send(2, PredictionStage::Provisional));
+        assert!((target.position.y - 0.20).abs() < 0.031);
+        assert!(target.t > Duration::from_millis(280));
     }
 
     #[test]
-    fn new_track_resets_latch_before_refined_stage() {
+    fn vision_request_is_rejected_only_after_prediction_has_ended() {
+        let request = vision_request(Duration::from_secs(1));
+        assert!(select_alignment_target(&request, motion::InterceptWindow::default()).is_err());
+    }
+
+    #[test]
+    fn each_vision_track_is_sent_only_once() {
         let mut latch = CommandLatch::default();
-        assert!(latch.should_send(1, PredictionStage::Provisional));
-        latch.mark_sent(PredictionStage::Provisional);
-        assert!(latch.should_send(2, PredictionStage::Provisional));
+        assert!(latch.should_send(1));
+        latch.mark_finished();
+        assert!(!latch.should_send(1));
+        assert!(latch.should_send(2));
+    }
+
+    #[test]
+    fn new_track_resets_latch() {
+        let mut latch = CommandLatch::default();
+        assert!(latch.should_send(1));
+        latch.mark_finished();
+        assert!(latch.should_send(2));
     }
 
     #[test]
     fn aligned_track_is_permanently_blocked_even_after_returning_to_idle() {
         let mut latch = CommandLatch::default();
-        assert!(latch.should_send(3, PredictionStage::Provisional));
-        latch.mark_sent(PredictionStage::Provisional);
+        assert!(latch.should_send(3));
         latch.mark_finished();
-        assert!(!latch.should_send(3, PredictionStage::Provisional));
-        assert!(!latch.should_send(3, PredictionStage::Refined));
+        assert!(!latch.should_send(3));
 
-        assert!(latch.should_send(4, PredictionStage::Provisional));
+        assert!(latch.should_send(4));
     }
 
     #[test]

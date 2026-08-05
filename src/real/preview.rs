@@ -19,8 +19,8 @@ use super::PreviewEvent;
 const DETECTION_COLOR: Scalar = Scalar::new(64.0, 220.0, 64.0, 0.0);
 /// 제어 목표 위치 재투영 마커 — 검출과 헷갈리지 않게 다른 색·다른 크기.
 const TARGET_COLOR: Scalar = Scalar::new(80.0, 80.0, 255.0, 0.0);
-/// 생 삼각측량 점 재투영 — 초록(검출)과 벌어진 만큼이 재투영 오차다.
-const RAW_COLOR: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
+/// 새 일괄 적합 상태 재투영.
+const FITTED_COLOR: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
 const HUD_COLOR: Scalar = Scalar::new(0.0, 255.0, 255.0, 0.0);
 /// 최근 제어 명령이나 오류를 고정으로 남기는 결과 줄.
 const STICKY_COLOR: Scalar = Scalar::new(255.0, 200.0, 120.0, 0.0);
@@ -85,10 +85,14 @@ impl PreviewWindow {
         let camera_id = event.frame.camera_id;
         let mut image = event.frame.image;
 
-        // 초록 = 이 프레임에서 검출한 공, 흰색 = 생 삼각측량 점을 되쏜 자리.
-        // 둘이 벌어져 있으면 3D 복원(동기·캘리브)이 나쁜 것이지 검출 탓이 아니다.
+        // 초록 = 이 프레임의 검출 후보, 흰색 = 새 vision::Fit 상태 재투영.
         draw_marker(&mut image, event.pixel, MARKER_RADIUS_PX, DETECTION_COLOR);
-        draw_marker(&mut image, event.raw_pixel, MARKER_RADIUS_PX / 2, RAW_COLOR);
+        draw_marker(
+            &mut image,
+            event.fitted_pixel,
+            MARKER_RADIUS_PX / 2,
+            FITTED_COLOR,
+        );
 
         // 빨강 = 예측 도달 위치. 화면 밖이면 가장자리로 끌어와 방향만 보여준다 —
         // 안 그리면 "예측이 없다"와 구분이 안 된다.

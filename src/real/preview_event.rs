@@ -15,11 +15,8 @@ pub struct PreviewEvent {
     pub target_pixel: Option<camera::Pixel>,
     /// [`Self::target_pixel`]이 이 프레임 밖인가.
     pub target_offscreen: bool,
-    /// **필터를 거치지 않은** 생 삼각측량 점을 이 카메라로 되쏜 픽셀.
-    ///
-    /// 초록(검출)과 벌어진 거리가 곧 재투영 오차다 — 2D는 멀쩡한데 3D가 나쁜 경우를
-    /// 눈으로 잡는다.
-    pub raw_pixel: Option<camera::Pixel>,
+    /// 새 `vision::Fit`의 현재 3D 상태를 이 카메라로 되쏜 픽셀.
+    pub fitted_pixel: Option<camera::Pixel>,
     /// 화면 좌상단 HUD 줄들 (추정 상태·게이트 단계).
     pub hud: Vec<String>,
 }

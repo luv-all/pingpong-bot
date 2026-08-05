@@ -57,7 +57,7 @@ impl From<&PoseMsg> for robot::Pose {
 /// sim 창 한 프레임 갱신. 필드는 전부 선택적 — 준 것만 바꾼다.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SimUpdate {
-    /// EKF가 추정한 공 위치 — 주황 공.
+    /// 새 `vision::Fit`이 추정한 현재 공 위치 — 주황 공.
     #[serde(default)]
     pub ball: Option<Point3>,
     /// 현재 선택한 제어 목표 위치 — 하늘색 공.

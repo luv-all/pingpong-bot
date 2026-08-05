@@ -5,7 +5,7 @@
 //! ([`SimUpdate`])으로 먹인다. 이 창은 **아무것도 조작하지 않는다** — 실기가 무엇을 보고
 //! 무엇을 하려는지 그대로 비춰 보기만 한다.
 //!
-//! - **주황** 공 = EKF 추정 공 위치
+//! - **주황** 공 = 새 `vision::Fit` 추정 공 위치
 //! - **하늘색** 공 = 현재 선택한 제어 목표 위치
 //! - 로봇 = 실기에서 읽은 시작 포즈
 //!
@@ -45,7 +45,7 @@ pub fn run() -> Result<()> {
         .with_robot(Arc::clone(&world))
         .with_ball()
         .with_ghost_ball()
-        // `ghost_ball(true)`는 **본 공까지** ghost 색으로 만든다 — 그러면 EKF 공과 도달점이
+        // `ghost_ball(true)`는 **본 공까지** ghost 색으로 만든다 — 그러면 Fit 공과 도달점이
         // 똑같은 하늘색이 돼 구분이 안 된다. 본 공은 주황(`spawn`) 그대로 둔다.
         .urdf(robot.urdf.clone())
         .build();

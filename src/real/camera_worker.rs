@@ -10,7 +10,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError};
 use opencv::prelude::MatTraitConst;
 use pingpong_bot::camera;
 use pingpong_bot::camera::FrameSource;
-use pingpong_bot::detector::Detector;
+use pingpong_bot::vision::Detector;
 use tracing::{debug, info_span, warn};
 
 use super::{Shutdown, Throttle, VisionEvent};
@@ -90,7 +90,7 @@ pub fn spawn(
             last_timestamp = Some(frame.timestamp);
 
             let frame = if needs_undistort {
-                match Detector::undistort(&frame, &params) {
+                match frame.undistorted(&params) {
                     Ok(undistorted) => undistorted,
                     Err(error) => {
                         stats.undistort_failures += 1;
@@ -122,12 +122,18 @@ pub fn spawn(
             }
 
             stats.frames += 1;
-            let pixel = detector.detect(&frame);
-            if pixel.is_some() {
+            let found = match detector.detect(&frame, None) {
+                Ok(found) => found,
+                Err(error) => {
+                    warn!(%error, "새 비전 캐스케이드 검출 실패 — 프레임 스킵");
+                    continue;
+                }
+            };
+            if found.is_some() {
                 stats.detections += 1;
             }
 
-            let event = VisionEvent { frame, pixel };
+            let event = VisionEvent { frame, found };
             match tx.try_send(event) {
                 Ok(()) => {}
                 // 실시간 경로: 버퍼가 차면 새 프레임을 버리지 말고

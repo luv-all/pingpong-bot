@@ -9,14 +9,19 @@
 
 ```text
 CommitRequest {
-    track_seq,
-    trajectory: BallTrajectory,
-    stage: Provisional | Refined,
+    trajectory: vision::Trajectory {
+        seq,
+        origin,
+        measured,
+        predicted,
+    },
     at,
 }
 ```
 
-목표 선택에는 `BallTrajectory`와 접수 구간 `y=0.08~0.35m`만 사용한다.
+비전은 접수 평면을 정하지 않고 전체 궤적과 축별 불확실성을 넘긴다. 제어 워커가
+`vision::Track::at_time`으로 채널 지연만큼 현재 상태를 전진시킨 뒤 접수 구간
+`y=0.08~0.35m`의 평면을 선택한다.
 공 도착까지 남은 시간은 현재 결합 궤적의 실행 가능 여부를 제한하지 않는다.
 
 ## 출력

@@ -6,8 +6,8 @@
 //!
 //! | 상태 | 유일한 소유자 |
 //! |------|--------------|
-//! | `FrameSource` + `Detector` | [`camera_worker`] (캠당 1 스레드) |
-//! | `Ekf` · `Calibration` · 1/2차 분류 | [`estimator_worker`] |
+//! | `FrameSource` + 새 `vision::Detector` | [`camera_worker`] (캠당 1 스레드) |
+//! | `vision::Fit` · `Calibration` | [`estimator_worker`] |
 //! | `Hardware` (Dynamixel · AXL 레일) | [`control_worker`] |
 //! | highgui 창 | 메인 스레드 ([`PreviewWindow`]) |
 //!
@@ -24,7 +24,6 @@ pub mod camera_worker;
 pub mod control_worker;
 pub mod estimator_worker;
 
-mod ball_receding;
 mod commit_request;
 pub mod fmt;
 mod options;
