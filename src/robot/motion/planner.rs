@@ -139,7 +139,7 @@ impl Planner {
         return physics::plan_aligned_impact_sequence(arm, start, ball, time_to_impact_secs);
     }
 
-    /// 정렬 자세에서 0.1초 고정 관절 스윙을 만든다.
+    /// 정렬 자세에서 q3만 돌려 타격 시점 라켓 면을 25°로 만든다.
     pub fn fixed_joint_swing(
         arm: &Arm,
         start: &robot::Pose,

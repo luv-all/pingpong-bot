@@ -67,11 +67,6 @@ pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 1.80;
 pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.250;
 /// 임팩트 이후에도 같은 방향으로 계속 밀고 멈추는 시간 [s].
 pub const FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS: f64 = 0.120;
-/// 정렬 자세 기준 고정 관절 변화량 [rad].
-/// q0·q1은 좌우 정렬을 유지하고 q2·q3만 짧게 편다.
-pub const FIXED_JOINT_SWING_DELTA_RAD: [f64; 4] =
-    [0.0, 0.0, -6.0_f64.to_radians(), -12.0_f64.to_radians()];
-
 impl Default for InterceptWindow {
     fn default() -> Self {
         // rail_frame behind≈0.10 기준 접수 창.

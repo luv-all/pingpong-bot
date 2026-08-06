@@ -2,7 +2,7 @@
 //!
 //! `run`이 워커 시작 전에 레일과 4축 Dynamixel을 최초 중립 자세에 둔다.
 //! 이후 공 하나당 보정된 접촉점에 라켓을 정지 정렬하고, 예상 타격
-//! 0.25초 전에 백스윙 없는 고정 관절 스윙을 시작한다. 스윙이 불가하면 그 동작만 생략하고
+//! 0.25초 전에 q3 손목만 움직여 타격 순간 라켓 면을 25°로 만든다. 손목 동작이 불가하면 그 동작만 생략하고
 //! 정렬 자세를 유지한 뒤 현재 모드의 준비 자세로 복귀한다.
 
 use std::sync::Arc;
@@ -273,7 +273,7 @@ pub fn spawn(
             home_rail_x,
             filtering: false,
         });
-        info!("공 위치·방향 정렬 준비 — 예상 타격 0.25초 전 고정 관절 스윙");
+        info!("공 위치·방향 정렬 준비 — 예상 타격 0.25초 전 q3 손목 25° 스냅");
 
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
@@ -420,65 +420,56 @@ pub fn spawn(
                     // 한 공에 대해 성공·실패와 관계없이 한 번만 시도한다.
                     *swing_attempted = true;
                 }
-                if hardware.is_busy() {
-                    warn!(
-                        track_seq,
-                        late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
-                        "타격 0.25초 전에 정렬 동작이 아직 진행 중 — 고정 스윙만 생략"
-                    );
-                } else {
-                    match hardware.read_pose() {
-                        Ok(swing_start) => match Planner::fixed_joint_swing(&arm, &swing_start) {
-                            Ok(planned) => {
-                                let swing = &planned.trajectory;
-                                let command_send_started = Instant::now();
-                                let command_result = hardware.command_joints(swing);
-                                let command_send_ms =
-                                    command_send_started.elapsed().as_secs_f64() * 1e3;
-                                match command_result {
-                                    Ok(()) => {
-                                        if let BallControlState::Aligning { measurement, .. } =
-                                            &mut state
-                                        {
-                                            measurement.rail_commanded_m = swing_start.rail_x;
-                                            measurement.joints_commanded =
-                                                swing.follow_through.clone();
-                                        }
-                                        motion_watch =
-                                            Some((track_seq, command_send_started, "fixed_swing"));
-                                        info!(
-                                            target: "latency",
-                                            track_seq,
-                                            scheduled_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
-                                            start_late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
-                                            command_send_ms = f2(command_send_ms),
-                                            swing_duration_secs = f4(swing.duration_secs),
-                                            joints_start = %format!("{:?}", swing.start.values),
-                                            joints_impact = %format!("{:?}", swing.end.values),
-                                            joints_follow_through = %format!("{:?}", swing.follow_through.values),
-                                            skipped_joint_indices = ?planned.skipped_joint_indices,
-                                            "백스윙 없는 고정 관절 스윙 시작"
-                                        );
+                match hardware.read_pose() {
+                    Ok(swing_start) => match Planner::fixed_joint_swing(&arm, &swing_start) {
+                        Ok(planned) => {
+                            let swing = &planned.trajectory;
+                            let command_send_started = Instant::now();
+                            let command_result = hardware.command_joints(swing);
+                            let command_send_ms =
+                                command_send_started.elapsed().as_secs_f64() * 1e3;
+                            match command_result {
+                                Ok(()) => {
+                                    if let BallControlState::Aligning { measurement, .. } =
+                                        &mut state
+                                    {
+                                        measurement.rail_commanded_m = swing_start.rail_x;
+                                        measurement.joints_commanded = swing.follow_through.clone();
                                     }
-                                    Err(error) => warn!(
+                                    motion_watch =
+                                        Some((track_seq, command_send_started, "fixed_swing"));
+                                    info!(
+                                        target: "latency",
                                         track_seq,
-                                        %error,
-                                        "고정 스윙 명령 실패 — 스윙만 생략"
-                                    ),
+                                        scheduled_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
+                                        start_late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
+                                        command_send_ms = f2(command_send_ms),
+                                        swing_duration_secs = f4(swing.duration_secs),
+                                        joints_start = %format!("{:?}", swing.start.values),
+                                        joints_impact = %format!("{:?}", swing.end.values),
+                                        joints_follow_through = %format!("{:?}", swing.follow_through.values),
+                                        skipped_joint_indices = ?planned.skipped_joint_indices,
+                                        "q3 손목 전용 25° 타격 스냅 시작"
+                                    );
                                 }
+                                Err(error) => warn!(
+                                    track_seq,
+                                    %error,
+                                    "q3 손목 스냅 명령 실패 — 손목 동작만 생략"
+                                ),
                             }
-                            Err(error) => warn!(
-                                track_seq,
-                                %error,
-                                "고정 스윙 계획 불가 — 스윙만 생략"
-                            ),
-                        },
+                        }
                         Err(error) => warn!(
                             track_seq,
                             %error,
-                            "고정 스윙 직전 포즈 읽기 실패 — 스윙만 생략"
+                            "q3 손목 25° 계획 불가 — 손목 동작만 생략"
                         ),
-                    }
+                    },
+                    Err(error) => warn!(
+                        track_seq,
+                        %error,
+                        "q3 손목 스냅 직전 포즈 읽기 실패 — 손목 동작만 생략"
+                    ),
                 }
             }
             let due_for_return = match &state {
