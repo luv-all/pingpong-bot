@@ -33,7 +33,7 @@ const SIM_CAPACITY: usize = 2;
 /// 프리뷰가 없을 때 메인 루프 tick.
 const IDLE_TICK: Duration = Duration::from_millis(5);
 
-/// 라켓 헤드 x를 추정한 공 x에 맞추고 상대편 끝선 중앙을 조준한다.
+/// 보정된 공 접촉점에 라켓을 맞추고 상대편 반코트의 무게중심을 조준한다.
 /// 종료는 ESC·`q`(preview) 또는 제어 워커 `Done`이다.
 pub fn run(args: &Args) -> Result<()> {
     let options = Options::from_args(args);

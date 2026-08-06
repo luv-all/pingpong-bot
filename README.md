@@ -24,8 +24,9 @@ vision::Trajectory {
 real 제어는 `vision::Trajectory → CommitRequest → control 접수 평면 선택 →
 Planner::ball_alignment` 경로로 본 예측의 레일·팔 정렬 궤적을 계산한다. 이후 갱신은 이미
 계산된 레일 위치에서 팔만 미세 보정해
-라켓 중심을 예측 x·y·z에 맞추고 라켓 면은 상대편 탁구대 끝선 중앙을 향한다. 별도 스윙과
-팔로스루 없이 정지 정렬한 뒤 중립 자세로 복귀한다.
+보정된 공 접촉점을 라켓 블레이드에 맞추고, 라켓 면은 네트 너머 상대편
+탁구대 반코트의 무게중심을 향한다. 별도 스윙과 팔로스루 없이 정지 정렬한 뒤
+현재 제어 모드의 준비 자세로 복귀한다.
 
 ---
 
@@ -33,7 +34,7 @@ Planner::ball_alignment` 경로로 본 예측의 레일·팔 정렬 궤적을 �
 
 - [Rust](https://rustup.rs/) (edition 2024)
 - 시스템 **OpenCV 4.x** + `libclang` (`opencv` crate **0.98.2+**)
-- sim: macOS/Linux. real(카메라·모터): Windows — 2단계
+- sim: macOS/Linux. real(카메라·Dynamixel·AXL): Windows
 
 **주의:** OpenCV **5.x** 금지. Homebrew는 `opencv@4`. crate 0.98.2 미만이면 LLVM 22에서 바인딩이 깨진다.
 
@@ -112,17 +113,18 @@ cargo run -p pingpong-bot -- --mode sim --debug
 3. 우측 **Status**에서 직접 제어 명령과 실패 사유를 확인한다. **View → Debug overlays**는 예측 탄도와 보존 중인 계획기 진단값을 표시한다.
 4. **Park**는 공을 회수한다. 마우스 드래그/스크롤은 시점 회전/줌이다.
 
-기본 sim은 카메라 추정값이 아닌 월드 ground-truth로 `BallTrajectory`를 만들지만,
-그 뒤의 목표 선택·공 위치 정렬·타격 궤적 계산은 실기와 같은 코드를 쓴다.
+기본 sim은 카메라 추정값이 아닌 월드 ground-truth로 `BallTrajectory`를 만든다.
+목표 선택 정책은 real과 다르지만, 선택 후 위치·방향 정렬은 실기와 같은
+`Planner::ball_alignment`을 쓴다.
 **Eval**과 bang-bang 스윙 토글은 보존 중인 시뮬레이션 진단 기능이며 현재 실기
 직접 제어 경로에는 대응하지 않는다.
 
 ### 실기 실행 순서
 
-실기는 **Windows 2단계** 환경을 기준으로 한다. 카메라와 공 추적을 시작하기 전에
+실기는 **Windows 실캄·Dynamixel·AXL** 환경을 기준으로 한다. 카메라와 공 추적을 시작하기 전에
 시작 시 레일 0.675m와 기본 관절각의 중립 자세를 만든다. 공 검출 시
-비전이 계속 궤적을 갱신하더라도 관측 시간과 불확실성 기준을 모두 통과한
-본 예측에서만 정렬을 시작하며 1차 예비 예측은 모터 명령에 사용하지 않는다. 첫 본 예측에서
+비전이 계속 궤적을 갱신하더라도 제어 워커의 위치·속도 불확실성 기준을 통과한
+본 예측에서만 정렬을 시작한다. 첫 본 예측에서
 리니어 레일과 Dynamixel 팔을 함께 계산·이동한다. 같은 공의 후속 갱신은 도착한 레일 위치를
 기준으로 Dynamixel 관절만 최신 타격점으로 미세 보정한다. 목표 x는 발사기 기준 오른쪽
 3cm를 보정하고 테이블·관절·토크·레일 한계를 통과한 IK 해만 실행한다.
@@ -149,7 +151,7 @@ cargo run -p pingpong-bot -- --mode sim --debug
 | `4` | 전체 구간(기본) | 구간 필터 없음 | 중앙 `0.6750m` |
 
 선택한 구간 밖의 공은 레일·팔 명령을 보내지 않고, 같은 공에 대해 생략 로그를 한 번만 남긴다.
-모드와 관계없이 라켓 면은 상대편 탁구대 끝선 중앙을 향한다.
+모드와 관계없이 라켓 면은 네트 너머 상대편 탁구대 반쪽의 무게중심을 향한다.
 근사 IK 결과가 위를 보면 그대로 사용하고, 아래를 보는 경우에만 수직 법선으로 다시 계산한다. 수직 보정 후에도 아래를 보면 명령을 보내지 않는다.
 
 ```bash
@@ -285,7 +287,7 @@ jog의 `ik`/`pose`/`swing` 등은 툴이 궤적·포즈로 만든 뒤 `scene.rob
 | `control` | `ControlParams::default()` | 스윙·관절 추종 |
 | `impact` | `ImpactParams::default()` | 랠리 리턴 휴리스틱 |
 | `estimator` | `EstimatorParams::default()` | EKF·탄도 |
-| `planner` | `InterceptWindow::default()` | 인터셉트 y 창 |
+| `motion` | `InterceptWindow::default()` | 인터셉트 y 창·정렬·스윙 계획 |
 | `vision` | `*Params::default()` / `detector_for` | fuse 조립 |
 | `hardware` | `DynamixelConfig` / `RailConfig::default()` | 실기 버스·레일 |
 | `robot` | `robot()` | **지금 쓰는** `Robot` (바꾸려면 이 함수 본문만) |
@@ -312,11 +314,11 @@ cargo run -p jog -- --port COM8 --debug
 cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 ```
 
-### `--mode real` — 공 위치·높이 정렬 제어
+### `--mode real` — 공 위치·방향 정렬 제어
 
 공 궤적에서 선택한 목표 x·y·z를 임팩트 지점으로 사용한다. 본 예측 첫 명령에서 레일과
 Dynamixel을 함께 움직이고, 후속 갱신은 팔 관절만 반복 보정한다.
-별도 스윙 없이 정렬한 뒤 중앙 중립 자세로 복귀한다.
+별도 스윙 없이 정렬한 뒤 현재 모드의 준비 레일 x와 중립 관절 자세로 복귀한다.
 스레드와 하드웨어 경계는 [`src/real/README.md`](src/real/README.md)에 정리돼 있다.
 
 ```bash
@@ -394,7 +396,7 @@ flowchart TB
     detector["<b>detector</b><br/>appearance · fuse · motion"]
     estimator["<b>vision::Fit</b><br/>픽셀 일괄 탄도 적합"]
     target["<b>control target</b><br/>vision::Trajectory · 접수 평면 선택"]
-    control["<b>control</b><br/>DirectController · 단계 판정"]
+    control["<b>control</b><br/>접수 평면 선택 · Planner 정렬"]
     hardware["<b>apply</b><br/>RealHardware / sim State"]
     camera --> detector --> estimator --> target --> control --> hardware
   end
@@ -411,18 +413,16 @@ flowchart TB
 
   subgraph support ["③ 지원"]
     direction LR
-    pipeline["pipeline"]
     telemetry["telemetry"]
     constants["constants"]
   end
 
-  pipeline -.->|오케스트레이션| hot
   constants -.-> hot
 ```
 
 ### 파이프라인 스레드
 
-아래 워커 구성은 real 런타임과 호출부 없는 generic pipeline의 구조다.
+아래 워커 구성은 real 런타임의 구조다.
 기본 GUI sim은 이 카메라 워커 체인을 거치지 않고 물리 월드 상태로 궤적을 만든다.
 
 ```mermaid
@@ -440,8 +440,6 @@ flowchart LR
 이후 갱신은 전체 Dynamixel 관절의 위치·높이 미세 보정에 사용하는 제어 경로다.
 상태를 스레드별로 단독 소유하며 crossbeam 채널로만 잇는다
 ([`src/real/README.md`](src/real/README.md)).
-[`src/pipeline/`](src/pipeline/)도 `DirectController`를 사용하도록 맞춰져 있지만
-**현재 호출부는 없다**.
 
 ```mermaid
 flowchart LR
@@ -454,15 +452,13 @@ flowchart LR
     simHw --> physics
   end
 
-  subgraph realSide ["real — 공 위치·높이 정렬"]
+  subgraph realSide ["real — 공 위치·방향 정렬"]
     realCamera["UVC × 2"]
     realWorkers["src/real 워커<br/>cam × 2 · 추정 · 제어"]
     realHw["RealHardware"]
     realCamera --> realWorkers --> realHw
   end
 
-  dead["src/pipeline · 호출부 없음"]
-  style dead stroke-dasharray: 5 5
 ```
 
 ---
@@ -476,14 +472,13 @@ src/
   camera/       calib/ · tri/ · io/
   detector/     appearance/ · scoring/ · motion/ · spatial/
   estimator/    ekf · ballistics · measure/
-  planner/      보존 중인 스윙·임팩트·충돌 계획 라이브러리 (현재 직접 제어에서 미사용)
-  robot/        build/ · urdf/ · Arm · state
+  robot/        build/ · urdf/ · motion/ · Arm · state
   sim/          physics/ · session/ · gui/
-  real/         실기 공 위치·높이 정렬 제어 런타임 (bin 전용 · README.md)
+  real/         실기 공 위치·방향 정렬 제어 런타임 (bin 전용 · README.md)
   hardware/     rail/ · SimHardware · RealHardware
-  pipeline/     카메라→추정→DirectController 골격 (현재 호출부 없음)
   telemetry/
-  main.rs       CLI · sim 뷰어 / real 스모크
+  vision/       픽셀 일괄 적합 · 관측/예측 궤적 계약
+  main.rs       CLI · sim 뷰어 / real 런타임
 
 tools/          실험·캘리브·검증 바이너리 (각 README)
 assets/         로봇 URDF · 폰트
@@ -579,7 +574,7 @@ cargo build -p pingpong-bot --release
 | fuse 검출 · measure_* → defaults 스니펫 | ✅ |
 | EKF (sim 기본은 ground truth) | ✅ |
 | Dynamixel 4축 · AXL 레일 · `jog` | ✅ (Windows 재검증) |
-| real 비전→공 위치·높이 정렬 제어 | ✅ 코드 완료, Windows 실물 재검증 필요 |
+| real 비전→공 위치·방향 정렬·후속 팔 보정 | ✅ 코드 완료, Windows 실물 재검증 필요 |
 
 **로드맵:** [`TODO.md`](TODO.md) · [`docs/decisions.md`](docs/decisions.md)
 

@@ -141,6 +141,7 @@ impl Settings {
     /// 양 끝을 잇는 선까지의 각도. 이 범위 안에서 뽑으면 좌우 위치가 다른
     /// 두 샷이 진짜로 다른 궤적(다른 각도)이 된다 — `lateral_offset_m`만
     /// 바꾸는 평행이동과 달리.
+    #[cfg(test)]
     pub(crate) fn yaw_range_for_lateral_deg(lateral_offset_m: f64) -> (f64, f64) {
         return Self::yaw_range_for_mount_deg(
             layout::Layout::MOUNT_X + lateral_offset_m,
