@@ -14,8 +14,11 @@ pub const RAIL_PHYSICAL_X_MIN_M: f64 = 0.0;
 pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
 /// AXL 보드 실측 원점(보드 0.0m)에 대응하는 제어 좌표 [m].
 ///
-/// 기하학적 원점 0.705m에 발사기 기준 오른쪽 정렬 보정 2.5cm를 더한
-/// 기존 0.730m에, 2026-08-07 실물 레일이 +X 마진 밖에 서 있던 영점
+/// 레일 기하학적 원점에 더하는 논리 +X 좌표계 보정 [m].
+/// 타격 목표나 IK 결과가 아니라 AXL board↔domain 좌표 변환에 한 번만 적용한다.
+pub const RAIL_COORDINATE_POSITIVE_X_OFFSET_M: f64 = 0.025;
+/// 기하학적 원점 0.705m에 레일 좌표계 +2.5cm를 더한
+/// 0.730m에, 2026-08-07 실물 레일이 +X 마진 밖에 서 있던 영점
 /// 오류를 보정하려고 전체 레일 길이의 절반에서 +X 3cm를 되돌린
 /// 0.675m를 더했다.
 /// `reverse=true`에서 이 값을 늘리면 모든 실물 명령이 물리 -X
@@ -23,7 +26,8 @@ pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
 pub const RAIL_POSITIVE_X_TRIM_M: f64 = 0.030;
 pub const RAIL_NEGATIVE_X_ZERO_SHIFT_M: f64 =
     (RAIL_PHYSICAL_X_MAX_M - RAIL_PHYSICAL_X_MIN_M) / 2.0 - RAIL_POSITIVE_X_TRIM_M;
-pub const RAIL_BOARD_ZERO_DOMAIN_M: f64 = 0.7300 + RAIL_NEGATIVE_X_ZERO_SHIFT_M;
+pub const RAIL_BOARD_ZERO_DOMAIN_M: f64 =
+    0.7050 + RAIL_COORDINATE_POSITIVE_X_OFFSET_M + RAIL_NEGATIVE_X_ZERO_SHIFT_M;
 /// sim·real 공통 이동 범위 [m].
 pub const RAIL_X_MIN_M: f64 = RAIL_PHYSICAL_X_MIN_M + RAIL_LEFT_END_MARGIN_M;
 pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_RIGHT_END_MARGIN_M;

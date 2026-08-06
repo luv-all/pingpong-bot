@@ -643,12 +643,10 @@ pub fn spawn(
             {
                 let first_corrected_x = targets.first().map(|target| {
                     target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M
-                        + pingpong_bot::defaults::ALIGNMENT_RAIL_POSITIVE_X_CORRECTION_M
                 });
                 targets.retain(|target| {
                     let corrected_x = target.position.x
-                        - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M
-                        + pingpong_bot::defaults::ALIGNMENT_RAIL_POSITIVE_X_CORRECTION_M;
+                        - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M;
                     zone.contains_x(rail, corrected_x)
                 });
                 if targets.is_empty() && last_filtered_track_seq != Some(track_seq) {
@@ -760,8 +758,7 @@ pub fn spawn(
             }
             let rail_commanded_m = alignment.rail.end;
             let corrected_target_position = pingpong_bot::Point3::new(
-                target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M
-                    + pingpong_bot::defaults::ALIGNMENT_RAIL_POSITIVE_X_CORRECTION_M,
+                target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
                 target.position.y,
                 target.position.z + pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
             );
