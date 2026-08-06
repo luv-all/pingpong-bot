@@ -21,10 +21,6 @@ pub const RACKET_HALF_Z: f64 = 0.005;
 /// tip isometry: `(0, −HALF_Z, −HANDLE)` — local −Z가 홈 포즈에서 면내 손잡이.
 pub const RACKET_HANDLE_LENGTH: f64 = 0.10;
 
-/// `assets/robots/4-dof` URDF EE(`pingpong_paddle_v5_1`) local tip Y [m] (법선 축).
-/// URDF 원점 보정용. primitive 손잡이 축은 local +Z — [`RACKET_HANDLE_LENGTH`].
-pub const RACKET_URDF_TIP_Y: f64 = 0.0513;
-
 /// 실측 라켓 장착 피치 보정 [rad].
 ///
 /// 2026-08-05 시작 자세에서 엔코더 FK는 라켓 장축을 수직에서 18.55°로

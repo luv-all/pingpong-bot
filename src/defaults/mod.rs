@@ -59,7 +59,6 @@ pub use estimator::EstimatorParams;
 pub use hardware::{
     RAIL_BOARD_ZERO_DOMAIN_M, RAIL_LEFT_END_MARGIN_M, RAIL_PHYSICAL_X_MAX_M, RAIL_PHYSICAL_X_MIN_M,
     RAIL_READY_X_M, RAIL_RIGHT_END_MARGIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M,
-    RAIL_ZONE_SAFETY_MARGIN_RATIO,
 };
 pub use impact::ImpactParams;
 pub use motion::{

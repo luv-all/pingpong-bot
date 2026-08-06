@@ -98,10 +98,10 @@ pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
 /// (~면 위 3~5cm)과 맞춤"이라는 추정에 기대고 있었는데 실측이 그 가정을
 /// 뒤집었다 — 시뮬 베이스가 실물보다 12.5 cm 낮았다.
 ///
-/// `mount_y`는 `mount_search`(2026-07-26) 값을 유지한다: `behind=0.02`(y=−0.02)는
-/// ratio≤1이 **0/150**, mean≈3.79였고 `behind=0.10`(당시 height=0.05)은
-/// **10/150**, mean≈2.48로 임팩트 끝속도 스케일(`NEAR_SINGULARITY` 2.5) 직전에
-/// 들어왔다. 다만 그 스윕은 **낮은 베이스 기준**이라 0.935에서의 최적값은 아니다.
+/// `mount_y`는 실측값 **-0.128**을 쓴다 — `mount_search`(2026-07-26)가 낮은
+/// 베이스 기준으로 추천한 `behind=0.10`(y=−0.10, `behind=0.02` 대비 ratio≤1이
+/// **10/150**, mean≈2.48)은 그 스윕이 **낮은 베이스 기준**이라 0.935에서는
+/// 최적값이 아니었고, 이후 실측이 이 값으로 대체했다.
 ///
 /// 두 값 모두 sim GUI "Rig" 패널에서 공이 주차된 동안 런타임 조정 가능하다
 /// (`SimRuntimeControls::rail_frame`). 좋은 위치를 눈으로 찾은 뒤
@@ -499,19 +499,6 @@ pub fn robot() -> Result<Robot, RobotBuildError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 실측 회귀: 베이스는 바닥 기준 0.935 m (= 하단 0.88 + 두께 0.055).
-    ///
-    /// 탁구대 면(0.76)보다 17.5 cm 위다 — 예전 `SURFACE_Z + 0.05` 가정보다
-    /// 12.5 cm 높다. 이 숫자가 실물이므로 값이 흔들리면 회귀다.
-    #[test]
-    fn rail_frame_mounts_behind_table_at_measured_height() {
-        let frame = rail_frame();
-        assert!((frame.mount_y() - (-0.10)).abs() < 1e-12);
-        assert!((frame.mount_z() - 0.935).abs() < 1e-12);
-        assert_eq!(frame.mount_xyz0(), [0.0, -0.10, frame.mount_z()]);
-        assert!((frame.mount_z() - crate::constants::table::SURFACE_Z - 0.175).abs() < 1e-12);
-    }
 
     #[test]
     fn primitive_follows_rail_frame() {

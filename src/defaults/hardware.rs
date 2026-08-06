@@ -9,8 +9,6 @@ use super::motion::RAIL_ACCEL_M_S2;
 pub const RAIL_LEFT_END_MARGIN_M: f64 = 0.0100;
 /// 실기 우측 안전 마진 [m].
 pub const RAIL_RIGHT_END_MARGIN_M: f64 = 0.0705;
-/// 1.41 m 기준 우측 마진 비율(5%).
-pub const RAIL_ZONE_SAFETY_MARGIN_RATIO: f64 = 0.05;
 /// 실기에서 확인한 레일 좌표 범위 [m].
 pub const RAIL_PHYSICAL_X_MIN_M: f64 = 0.0;
 pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
