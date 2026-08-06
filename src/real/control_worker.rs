@@ -36,8 +36,6 @@ const VERIFY_POLL_PERIOD: Duration = Duration::from_millis(20);
 const VERIFY_STABLE_SAMPLES: u8 = 2;
 const MAX_CONSECUTIVE_MISSES: u8 = 3;
 const RAIL_ERROR_WARN_M: f64 = 0.020;
-/// 안전 마진 밖 목표를 허용할 때 현재 위치에서 움직일 수 있는 최대 거리.
-const RAIL_MARGIN_OVERRIDE_MAX_TRAVEL_M: f64 = 0.30;
 const AIM_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
 const STARTUP_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
 // 시작 얼라인은 관절별 1° 이내가 5회 연속 측정돼야 완료로 본다.
@@ -108,36 +106,20 @@ fn arm_for_rail_position(arm: &Arm, rail_x: f64) -> Arm {
 struct RailTargetSelection {
     target_m: f64,
     joints: Joints,
-    margin_override: bool,
-    planning_arm: Arm,
 }
 
-fn rail_margin_override_allowed(
-    target_m: f64,
-    start_m: f64,
-    outside_safe_range: bool,
-    can_hit: bool,
-) -> bool {
-    return can_hit
-        && outside_safe_range
-        && (target_m - start_m).abs() <= RAIL_MARGIN_OVERRIDE_MAX_TRAVEL_M;
-}
-
-/// 평소에는 안전 범위를 사용한다. 안전 범위의 끝에서는 칠 수 없고, 마진 밖의
-/// 기계적 범위에서는 칠 수 있으며 이동량이 30 cm 이하일 때만 예외를 연다.
+/// 설정된 안전 범위 안에서만 상대 탁구대 중앙 방향 자세를 찾는다.
 fn select_primary_rail_target(
     arm: &Arm,
     start: &pingpong_bot::robot::Pose,
     ball: pingpong_bot::Point3,
 ) -> Result<RailTargetSelection, DomainError> {
-    let Some(safe_rail) = arm.rail else {
+    if arm.rail.is_none() {
         return Ok(RailTargetSelection {
             target_m: start.rail_x,
             joints: start.joints.clone(),
-            margin_override: false,
-            planning_arm: arm.clone(),
         });
-    };
+    }
 
     // 공 x만 복사하지 않고 위치+상대 코트 중앙 방향을 함께 만족하는 레일 좌표를 쓴다.
     // 이 계산은 첫 안정 예측에 한 번만 실행된다.
@@ -154,35 +136,10 @@ fn select_primary_rail_target(
             return Ok(RailTargetSelection {
                 target_m: aligned_pose.rail_x,
                 joints: aligned_pose.joints,
-                margin_override: false,
-                planning_arm: arm.clone(),
             });
         }
         Err(error) => error,
     };
-
-    // 안전 범위 전체에서 중앙 방향 자세가 안 나올 때만 물리 범위로 한 번 더 푼다.
-    let physical_arm = arm_with_physical_rail_range(arm);
-    let Ok(aligned_pose) = Planner::ball_alignment_pose(&physical_arm, start, ball) else {
-        return Err(safe_error);
-    };
-    let outside_safe_range =
-        aligned_pose.rail_x < safe_rail.x_min || aligned_pose.rail_x > safe_rail.x_max;
-    if rail_margin_override_allowed(aligned_pose.rail_x, start.rail_x, outside_safe_range, true) {
-        let fixed_start = pingpong_bot::robot::Pose::new(aligned_pose.rail_x, start.joints.clone());
-        Planner::move_to(
-            &physical_arm,
-            &fixed_start,
-            aligned_pose.joints.clone(),
-            aligned_pose.rail_x,
-        )?;
-        return Ok(RailTargetSelection {
-            target_m: aligned_pose.rail_x,
-            joints: aligned_pose.joints,
-            margin_override: true,
-            planning_arm: physical_arm,
-        });
-    }
     return Err(safe_error);
 }
 
@@ -918,7 +875,7 @@ pub fn spawn(
             let issued_at = Instant::now();
             let mut rail_command_ms = 0.0;
             let mut rail_move_duration_secs = 0.0;
-            let mut alignment_arm = arm_for_rail_position(&arm, start.rail_x);
+            let alignment_arm = arm_for_rail_position(&arm, start.rail_x);
             let mut primary_alignment_joints: Option<Joints> = None;
             let planning_start = match action {
                 RefinedAction::ProvisionalRailAndArm => {
@@ -974,24 +931,20 @@ pub fn spawn(
                     };
                     let rail_target = selection.target_m;
                     primary_alignment_joints = Some(selection.joints.clone());
-                    alignment_arm = selection.planning_arm;
                     rail_move_duration_secs =
                         fast_rail_move_duration(&alignment_arm, start.rail_x, rail_target);
                     let rail_command_started = Instant::now();
-                    let applied_rail = match if selection.margin_override {
-                        hardware.command_rail_margin_override(rail_target, rail_move_duration_secs)
-                    } else {
-                        hardware.command_rail(rail_target, rail_move_duration_secs)
-                    } {
-                        Ok(applied) => applied,
-                        Err(error) => {
-                            let _ = event_tx.send(RuntimeEvent::Failed {
-                                track_seq: Some(track_seq),
-                                reason: format!("레일 선행 명령 실패: {error}"),
-                            });
-                            break 'control;
-                        }
-                    };
+                    let applied_rail =
+                        match hardware.command_rail(rail_target, rail_move_duration_secs) {
+                            Ok(applied) => applied,
+                            Err(error) => {
+                                let _ = event_tx.send(RuntimeEvent::Failed {
+                                    track_seq: Some(track_seq),
+                                    reason: format!("레일 선행 명령 실패: {error}"),
+                                });
+                                break 'control;
+                            }
+                        };
                     rail_command_ms = rail_command_started.elapsed().as_secs_f64() * 1e3;
                     latch.mark_primary_sent();
                     info!(
@@ -1003,11 +956,8 @@ pub fn spawn(
                         rail_move_duration_secs = f4(rail_move_duration_secs),
                         rail_start_m = f4(start.rail_x),
                         rail_target_m = f4(applied_rail),
-                        rail_margin_override = selection.margin_override,
                         safe_min_m = f4(arm.rail.map_or(applied_rail, |rail| rail.x_min)),
                         safe_max_m = f4(arm.rail.map_or(applied_rail, |rail| rail.x_max)),
-                        physical_min_m = f4(pingpong_bot::defaults::RAIL_PHYSICAL_X_MIN_M),
-                        physical_max_m = f4(pingpong_bot::defaults::RAIL_PHYSICAL_X_MAX_M),
                         "본 예측 기준 통과 — 중앙 방향 팔·레일 통합해로 레일 1회 명령"
                     );
                     pingpong_bot::robot::Pose::new(applied_rail, start.joints.clone())
@@ -2125,14 +2075,6 @@ mod tests {
     }
 
     #[test]
-    fn rail_margin_override_requires_reachable_target_within_thirty_centimeters() {
-        assert!(rail_margin_override_allowed(1.40, 1.11, true, true));
-        assert!(!rail_margin_override_allowed(1.40, 1.09, true, true));
-        assert!(!rail_margin_override_allowed(1.40, 1.11, true, false));
-        assert!(!rail_margin_override_allowed(1.30, 1.11, false, true));
-    }
-
-    #[test]
     fn primary_rail_selection_keeps_racket_aimed_at_opponent_center() {
         let robot = pingpong_bot::defaults::robot().expect("active robot");
         let arm = &robot.arm;
@@ -2147,12 +2089,8 @@ mod tests {
             let selection =
                 select_primary_rail_target(arm, &start, ball).expect("center-facing selection");
             let aligned_pose = Pose::new(selection.target_m, selection.joints);
-            let bearing_error = Planner::ball_alignment_bearing_error_deg(
-                &selection.planning_arm,
-                &aligned_pose,
-                ball,
-            )
-            .expect("bearing");
+            let bearing_error = Planner::ball_alignment_bearing_error_deg(arm, &aligned_pose, ball)
+                .expect("bearing");
             assert!(
                 bearing_error <= 12.0,
                 "x_fraction={x_fraction}, bearing_error={bearing_error:.2}°"

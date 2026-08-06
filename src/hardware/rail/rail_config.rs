@@ -24,7 +24,8 @@ pub struct RailConfig {
     pub x_min_m: f64,
     pub x_max_m: f64,
     /// 안전 마진을 포함하지 않은 기계적 최소/최대 좌표 [m].
-    /// 일반 명령은 `x_min_m..=x_max_m`, 명시적 마진 예외만 이 범위를 쓴다.
+    /// AXL 보드 소프트 리밋과 시작 좌표 진단에만 사용한다. 이동 명령은 항상
+    /// `x_min_m..=x_max_m` 안전 범위로 제한한다.
     pub physical_x_min_m: f64,
     pub physical_x_max_m: f64,
     pub vel: f64,
@@ -84,10 +85,6 @@ impl RailConfig {
 
     pub fn clamp_m(&self, x: f64) -> f64 {
         return x.clamp(self.x_min_m, self.x_max_m);
-    }
-
-    pub fn clamp_physical_m(&self, x: f64) -> f64 {
-        return x.clamp(self.physical_x_min_m, self.physical_x_max_m);
     }
 
     /// 절대 위치를 도메인 좌표에서 보드 좌표로 변환한다.

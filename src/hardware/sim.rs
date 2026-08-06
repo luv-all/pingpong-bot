@@ -109,39 +109,6 @@ impl Hardware for SimHardware {
         return Ok(applied);
     }
 
-    fn command_rail_margin_override(
-        &mut self,
-        rail_x: f64,
-        duration_secs: f64,
-    ) -> Result<f64, HwError> {
-        if !rail_x.is_finite() || !duration_secs.is_finite() || duration_secs <= 0.0 {
-            return Err(HwError::InvalidConfig {
-                reason: "sim 레일 마진 예외 명령에 유효하지 않은 값이 있음".into(),
-            });
-        }
-        let mut world = self.world.lock().expect("sim 월드");
-        let applied = rail_x.clamp(
-            crate::defaults::RAIL_PHYSICAL_X_MIN_M,
-            crate::defaults::RAIL_PHYSICAL_X_MAX_M,
-        );
-        let mut physical_arm = (*world.arm).clone();
-        if let Some(rail) = physical_arm.rail.as_mut() {
-            rail.x_min = crate::defaults::RAIL_PHYSICAL_X_MIN_M;
-            rail.x_max = crate::defaults::RAIL_PHYSICAL_X_MAX_M;
-        }
-        world
-            .robot_mut()
-            .set_rail_target_in_secs(&physical_arm, applied, duration_secs);
-        self.command_count += 1;
-        debug!(
-            commands = self.command_count,
-            rail_commanded_m = applied,
-            duration_secs,
-            "sim 레일 안전 마진 예외 명령 적용"
-        );
-        return Ok(applied);
-    }
-
     fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
         let world = self.world.lock().expect("sim 월드");
         let robot = world.robot();
