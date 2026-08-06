@@ -1,8 +1,10 @@
 # Better Vision
 
-> detector → estimator를 **지우고 다시 짠다.** 이 문서가 SSOT다.
+> 상태: 2026-08-05 비전 재작성 당시의 구현 설계 기록이다. 현재 구조의
+> 기준 문서는 `README.md`, `src/real/README.md`,
+> `docs/two-stage-position-control.md`다.
 >
-> 담당: 비전(detector→estimator). 하드웨어·기구학은 별도 담당.
+> 당시 범위: 비전(detector→estimator). 하드웨어·기구학은 별도 담당.
 
 ---
 

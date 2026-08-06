@@ -3,7 +3,7 @@
 //! SSOT: `test-manipulator`의 `DynamixelConfig` / `DynamixelController`.
 //! - `radians_to_ticks` / `ticks_to_radians` = Python 동일 식
 //! - Goal/Torque/Profile SyncWrite = Python `_pack_u32` / `_pack_u8`
-//! - `enable_torque(true)` = profile 재적용 → (추가) Goal=Present → Torque ON
+//! - `enable_torque(true)` = profile 재적용 → (각 버스 ID별) Goal=Present → Torque ON
 
 mod bus_backend;
 mod dynamixel_bus;

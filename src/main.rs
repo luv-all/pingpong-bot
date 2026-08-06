@@ -4,10 +4,10 @@
 //!
 //! ```bash
 //! cargo run -p pingpong-bot
-//! # 실기 연속 급구 (완주·센터 복귀 후 다음 공). 모터를 안 움직이는 리허설은 --dry-run.
+//! # 실기 레일·팔 정렬 후 고정 레일 팔 보정. 모터를 안 움직이는 리허설은 --dry-run.
 //! cargo run -p pingpong-bot -- --mode real --dxl-port COM8
 //! cargo run -p pingpong-bot -- --mode real --dry-run
-//! # 샷별 launch/commit/포기 로그 (기본 info). 더 자세히:
+//! # 샷별 목표 선택·직접 명령 로그 (기본 info). 더 자세히:
 //! cargo run -p pingpong-bot -- --debug
 //! ```
 
@@ -36,12 +36,17 @@ fn main() -> Result<()> {
     // 한 프로세스에 못 띄운다. clap 파싱 전에 가로챈다 (사용자 대상 플래그가 아니다).
     #[cfg(feature = "real")]
     if std::env::args().any(|arg| arg == real::SIM_CHILD_FLAG) {
-        init_tracing(false, &["pingpong_bot"]);
+        // 관전용 뷰어 자식일 뿐 카메라·하드웨어 파이프라인을 돌리지 않는다.
+        init_tracing(false, &["pingpong_bot"], false);
         return real::run_sim_child();
     }
 
     let args = Args::parse();
-    init_tracing(args.debug, &["pingpong_bot"]);
+    init_tracing(
+        args.debug,
+        &["pingpong_bot"],
+        matches!(args.mode, ModeArg::Real),
+    );
     if args.debug {
         info!("debug 로그 활성");
     }

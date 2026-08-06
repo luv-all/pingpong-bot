@@ -39,6 +39,33 @@ impl RealBackend {
         })
     }
 
+    /// 단일 ID 레지스터는 broadcast SyncRead 대신 일반 Read로 읽는다.
+    /// USB half-duplex 어댑터에서 단일 ID SyncRead가 첫 패킷 에코와
+    /// 섞여 Parsing error를 내는 경로를 피한다.
+    pub(super) fn read_with_retry(
+        &mut self,
+        id: u8,
+        address: u8,
+        length: u8,
+        retries: u32,
+        retry_delay_ms: u64,
+    ) -> Result<Vec<u8>, String> {
+        self.run_with_retry(retries, retry_delay_ms, "read", |protocol, port| {
+            protocol.read(port, id, address, length)
+        })
+    }
+
+    pub(super) fn reboot_with_retry(
+        &mut self,
+        id: u8,
+        retries: u32,
+        retry_delay_ms: u64,
+    ) -> Result<(), String> {
+        self.run_with_retry(retries, retry_delay_ms, "reboot", |protocol, port| {
+            protocol.reboot(port, id).map(|_| ())
+        })
+    }
+
     fn run_with_retry<T>(
         &mut self,
         retries: u32,

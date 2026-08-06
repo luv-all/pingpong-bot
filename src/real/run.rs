@@ -1,20 +1,20 @@
-//! `--mode real` 연속 급구 진입점 — 조립 · 메인 루프 · 요약.
+//! `--mode real` 라켓 헤드·리니어 레일 제어 진입점 — 조립 · 메인 루프 · 요약.
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
-use crossbeam_channel::{Receiver, bounded, unbounded};
-use pingpong_bot::camera::{Calibration, CamCliArgs, CamStreamArgs, StereoOfflineArgs};
-use pingpong_bot::defaults::{
-    self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, detector_for, robot,
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+use pingpong_bot::camera::{
+    Calibration, CamCliArgs, CamStreamArgs, PreviewAction, StereoOfflineArgs,
 };
+use pingpong_bot::defaults::vision::detector_for;
+use pingpong_bot::defaults::{self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, robot};
 use pingpong_bot::hardware::RealHardware;
 use pingpong_bot::hardware::dynamixel::DynamixelConfig;
 use pingpong_bot::hardware::rail::RailConfig;
-use pingpong_bot::robot::motion::InterceptWindow;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::cli::Args;
 
@@ -22,58 +22,61 @@ use super::camera_worker::{self, CameraStats};
 use super::estimator_worker::{self, EstimatorStats};
 use super::fmt::{f2, f2_slice};
 use super::{
-    ControlStatus, Options, PacedSource, PreviewEvent, PreviewWindow, ShotEvent, ShutdownGuard,
-    control_worker, shutdown_channel, sim_host,
+    Options, PacedSource, PreviewEvent, PreviewWindow, RuntimeEvent, ShutdownGuard, TestControl,
+    control_worker, shutdown_channel,
 };
 
 /// 카메라 → 추정 버퍼. 실시간이라 크게 잡을 이유가 없다 (밀리면 어차피 버린다).
 const VISION_CAPACITY: usize = 8;
 const PREVIEW_CAPACITY: usize = 2;
-const SIM_CAPACITY: usize = 2;
 /// 프리뷰가 없을 때 메인 루프 tick.
 const IDLE_TICK: Duration = Duration::from_millis(5);
 
-/// 연속 급구: 스윙 완주·센터 복귀 후 다음 공을 다시 친다.
-///
-/// 종료는 ESC·`q`(preview) 또는 제어 워커 `Done`(치명 실패·셧다운).  
-/// `Committed` / `Infeasible`로 프로세스를 끝내지 않는다.
+/// 보정된 공 접촉점에 라켓을 맞추고 상대편 반코트의 무게중심을 조준한다.
+/// 종료는 ESC·`q`(preview) 또는 제어 워커 `Done`이다.
 pub fn run(args: &Args) -> Result<()> {
     let options = Options::from_args(args);
     let robot = robot().context("defaults::robot")?;
     let arm = Arc::clone(&robot.arm);
 
-    let hardware = open_hardware(&options, &arm)?;
+    let mut hardware = open_hardware(&options)?;
+    // 카메라·추정·제어 스레드를 시작하기 전에 실기 자세부터 확정한다. 초기화 중에
+    // 공을 잘못 추적하거나, 정렬 전 포즈를 sim에 보내는 일을 막는다.
+    if options.home {
+        info!("시작 자세 초기화 — 레일·관절을 준비 자세로 이동");
+        let pose = control_worker::initialize_pose(&mut hardware, &arm)
+            .map_err(|error| anyhow::anyhow!("시작 자세 초기화 실패: {error}"))?;
+        info!(
+            rail_x = f2(pose.rail_x),
+            joints = %f2_slice(&pose.joints.values),
+            "시작 자세 초기화 완료"
+        );
+    }
     let calibration = load_calibration()?;
     let sources = open_cameras(&options)?;
     ensure!(
         sources.len() >= calibration.min_cameras_for_triangulation(),
-        "삼각측량에 카메라 {}대가 필요한데 {}대만 열렸다",
+        "새 픽셀 궤적 적합에 카메라 {}대가 필요한데 {}대만 열렸다",
         calibration.min_cameras_for_triangulation(),
         sources.len()
     );
 
     let (guard, shutdown) = shutdown_channel();
     let (vision_tx, vision_rx) = bounded(VISION_CAPACITY);
+    let vision_evict_rx = vision_rx.clone();
+    // 제어 워커가 계획 중일 때는 이전 요청을 버리고 최신 한 건만 남긴다.
     let (commit_tx, commit_rx) = bounded(1);
-    // 선추종은 커밋과 채널을 나눈다 — 같은 bounded(1)에 끼면 커밋이 밀려 버려진다.
-    let (track_tx, track_rx) = bounded(1);
-    let (status_tx, status_rx) = unbounded::<ControlStatus>();
+    let commit_evict_rx = commit_rx.clone();
     let (event_tx, event_rx) = unbounded();
+    let (test_control_tx, test_control_rx) = unbounded();
     let (preview_tx, preview_rx) = if options.preview {
         let (tx, rx) = bounded(PREVIEW_CAPACITY);
         (Some(tx), Some(rx))
     } else {
         (None, None)
     };
-    let (sim_tx, sim_handle) = if options.sim {
-        let (tx, rx) = bounded(SIM_CAPACITY);
-        match sim_host::spawn(rx) {
-            Some(handle) => (Some(tx), Some(handle)),
-            None => (None, None),
-        }
-    } else {
-        (None, None)
-    };
+    // 실기 모드는 카메라·추정·하드웨어 제어만 실행한다. 관전용 3D sim 자식
+    // 프로세스는 CPU/GPU를 점유하고 제어 지연 측정을 흐리므로 생성하지 않는다.
 
     let mut camera_handles: Vec<JoinHandle<CameraStats>> = Vec::with_capacity(sources.len());
     for (resolved, source) in sources {
@@ -87,6 +90,7 @@ pub fn run(args: &Args) -> Result<()> {
             Box::new(detector),
             params,
             vision_tx.clone(),
+            vision_evict_rx.clone(),
             shutdown.clone(),
         ));
     }
@@ -96,30 +100,24 @@ pub fn run(args: &Args) -> Result<()> {
     let estimator_handle = estimator_worker::spawn(
         vision_rx,
         calibration,
-        InterceptWindow::default(),
         commit_tx,
-        track_tx,
-        status_rx,
+        commit_evict_rx,
         preview_tx,
-        sim_tx.clone(),
+        None,
         event_tx.clone(),
         shutdown.clone(),
     );
     let control_handle = control_worker::spawn(
         Box::new(hardware),
         Arc::clone(&arm),
-        options.home,
-        options.coarse_track,
-        InterceptWindow::default(),
         commit_rx,
-        track_rx,
-        status_tx,
-        sim_tx,
+        test_control_rx,
+        None,
         event_tx,
         shutdown,
     );
 
-    let outcome = main_loop(&options, &event_rx, preview_rx, guard);
+    let outcome = main_loop(&options, &event_rx, preview_rx, test_control_tx, guard);
 
     let camera_stats: Vec<CameraStats> = camera_handles
         .drain(..)
@@ -129,24 +127,20 @@ pub fn run(args: &Args) -> Result<()> {
     if control_handle.join().is_err() {
         warn!("제어 워커 패닉");
     }
-    if let Some(handle) = sim_handle {
-        let _ = handle.join();
-    }
-
     log_summary(&outcome, &camera_stats, estimator_stats.as_ref());
     return Ok(());
 }
 
-/// 세션 요약용 — 마지막 주목 이벤트 + 본 샷 수.
+/// 세션 요약용 — 추적한 공과 보낸 제어 명령 수.
 struct Outcome {
-    shots_seen: u64,
-    last: LastShot,
+    tracks_seen: u64,
+    commands_sent: u64,
+    last: LastState,
 }
 
-enum LastShot {
+enum LastState {
     None,
-    Committed,
-    Infeasible(String),
+    Commanded,
     Failed(String),
     TimedOut,
     Quit,
@@ -155,30 +149,34 @@ enum LastShot {
 impl Outcome {
     fn label(&self) -> String {
         let last = match &self.last {
-            LastShot::None => "없음".to_owned(),
-            LastShot::Committed => "커밋".to_owned(),
-            LastShot::Infeasible(reason) => format!("포기 - {reason}"),
-            LastShot::Failed(reason) => format!("실패 - {reason}"),
-            LastShot::TimedOut => "타임아웃 - 공이 오지 않음".to_owned(),
-            LastShot::Quit => "사용자 종료".to_owned(),
+            LastState::None => "없음".to_owned(),
+            LastState::Commanded => "레일·라켓 조준 명령".to_owned(),
+            LastState::Failed(reason) => format!("실패 - {reason}"),
+            LastState::TimedOut => "타임아웃 - 공이 오지 않음".to_owned(),
+            LastState::Quit => "사용자 종료".to_owned(),
         };
-        return format!("shots={} last={last}", self.shots_seen);
+        return format!(
+            "tracks={} commands={} last={last}",
+            self.tracks_seen, self.commands_sent
+        );
     }
 }
 
-/// 샷 이벤트를 찍고 프리뷰를 돌린다. 세션은 ESC/`q` 또는 제어 `Done`까지 유지.
+/// 런타임 이벤트를 찍고 프리뷰를 돌린다.
 fn main_loop(
     options: &Options,
-    event_rx: &Receiver<ShotEvent>,
+    event_rx: &Receiver<RuntimeEvent>,
     preview_rx: Option<Receiver<PreviewEvent>>,
+    test_control_tx: Sender<TestControl>,
     guard: ShutdownGuard,
 ) -> Outcome {
     let mut preview = options.preview.then(|| PreviewWindow::new("real shot"));
     let mut guard = Some(guard);
     let mut wait_deadline = Instant::now() + Duration::from_secs_f64(options.timeout_secs);
     let mut outcome = Outcome {
-        shots_seen: 0,
-        last: LastShot::None,
+        tracks_seen: 0,
+        commands_sent: 0,
+        last: LastState::None,
     };
     let mut timed_out_warned = false;
 
@@ -192,20 +190,37 @@ fn main_loop(
                 preview.set_result(lines);
             }
             match &event {
-                ShotEvent::Armed { shot_seq, .. } => {
-                    outcome.shots_seen = (*shot_seq).max(outcome.shots_seen);
+                RuntimeEvent::Ready { .. } => {
                     wait_deadline = Instant::now() + Duration::from_secs_f64(options.timeout_secs);
                     timed_out_warned = false;
                 }
-                ShotEvent::Committed { .. } => outcome.last = LastShot::Committed,
-                ShotEvent::Infeasible { reason, .. } => {
-                    outcome.last = LastShot::Infeasible(reason.clone());
+                RuntimeEvent::Tracking { track_seq, .. } => {
+                    outcome.tracks_seen = outcome.tracks_seen.max(*track_seq);
+                    wait_deadline = Instant::now() + Duration::from_secs_f64(options.timeout_secs);
+                    timed_out_warned = false;
                 }
-                ShotEvent::Failed { reason, .. } => {
-                    outcome.last = LastShot::Failed(reason.clone());
+                RuntimeEvent::Commanded { .. } => {
+                    outcome.commands_sent += 1;
+                    outcome.last = LastState::Commanded;
                 }
-                ShotEvent::Done => control_done = true,
-                _ => {}
+                RuntimeEvent::ControlState { state } => {
+                    if let Some(preview) = &mut preview {
+                        preview.set_control_state(*state);
+                    }
+                }
+                RuntimeEvent::TestZoneChanged {
+                    zone,
+                    home_rail_x,
+                    filtering,
+                } => {
+                    if let Some(preview) = &mut preview {
+                        preview.set_zone(*zone, *home_rail_x, *filtering);
+                    }
+                }
+                RuntimeEvent::Failed { reason, .. } => {
+                    outcome.last = LastState::Failed(reason.clone());
+                }
+                RuntimeEvent::Done => control_done = true,
             }
         }
 
@@ -219,9 +234,9 @@ fn main_loop(
         if !timed_out_warned && Instant::now() >= wait_deadline {
             warn!(
                 timeout_secs = f2(options.timeout_secs),
-                "공을 기다리다 시간 초과 — 세션은 유지 (다음 Armed에서 재장전)"
+                "공을 기다리다 시간 초과 — 세션은 유지"
             );
-            outcome.last = LastShot::TimedOut;
+            outcome.last = LastState::TimedOut;
             timed_out_warned = true;
         }
 
@@ -232,9 +247,17 @@ fn main_loop(
                         preview.push(event);
                     }
                 }
-                if preview.show() {
-                    outcome.last = LastShot::Quit;
-                    break outcome;
+                match preview.show() {
+                    PreviewAction::Quit => {
+                        outcome.last = LastState::Quit;
+                        break outcome;
+                    }
+                    PreviewAction::Key(key) => {
+                        if let Some(control) = TestControl::from_key(key) {
+                            let _ = test_control_tx.send(control);
+                        }
+                    }
+                    PreviewAction::Continue => {}
                 }
             }
             None => {
@@ -253,46 +276,32 @@ fn main_loop(
     return result;
 }
 
-/// 샷 결과 HUD (ASCII — Hershey 폰트 제약). 최신 샷으로 덮어쓴다.
-fn result_lines(event: &ShotEvent) -> Option<Vec<String>> {
+/// 최근 제어 결과 HUD (ASCII — Hershey 폰트 제약).
+fn result_lines(event: &RuntimeEvent) -> Option<Vec<String>> {
     return match event {
-        ShotEvent::Committed {
-            shot_seq,
-            time_to_impact_secs,
-            duration_secs,
-            impact,
-            rail_start,
-            rail_end,
-            peak_joint_speed,
+        RuntimeEvent::Commanded {
+            track_seq,
+            target,
+            rail_x,
+            aim_rad,
         } => Some(vec![
-            format!("COMMITTED shot {shot_seq}"),
+            format!("COMMAND track {track_seq}"),
             format!(
-                "impact x{} y{} z{}  tti {}s",
-                f2(impact.coords.x),
-                f2(impact.coords.y),
-                f2(impact.coords.z),
-                f2(*time_to_impact_secs)
+                "target x{} y{} z{}",
+                f2(target.coords.x),
+                f2(target.coords.y),
+                f2(target.coords.z)
             ),
-            format!(
-                "swing  {}s  rail {} -> {}  peak {} rad/s",
-                f2(*duration_secs),
-                f2(*rail_start),
-                f2(*rail_end),
-                f2(*peak_joint_speed)
-            ),
+            format!("rail {}  aim {} deg", f2(*rail_x), f2(aim_rad.to_degrees())),
         ]),
-        ShotEvent::Infeasible { shot_seq, reason } => Some(vec![
-            format!("ABANDONED shot {shot_seq} - infeasible"),
-            reason.clone(),
-        ]),
-        ShotEvent::Failed { shot_seq, reason } => {
-            Some(vec![format!("FAILED shot {shot_seq}"), reason.clone()])
+        RuntimeEvent::Failed { track_seq, reason } => {
+            Some(vec![format!("FAILED track {track_seq:?}"), reason.clone()])
         }
         _ => None,
     };
 }
 
-fn open_hardware(options: &Options, arm: &Arc<pingpong_bot::robot::Arm>) -> Result<RealHardware> {
+fn open_hardware(options: &Options) -> Result<RealHardware> {
     let mut dxl = DynamixelConfig::default();
     if let Some(port) = &options.dxl_port {
         dxl.port = port.clone();
@@ -307,9 +316,9 @@ fn open_hardware(options: &Options, arm: &Arc<pingpong_bot::robot::Arm>) -> Resu
         "real 하드웨어 (mirror ID1↔ID2)"
     );
     let hardware = if options.dry_run {
-        RealHardware::dry_run_with_arm(dxl, Some(rail), Arc::clone(arm))
+        RealHardware::dry_run(dxl, Some(rail))
     } else {
-        RealHardware::new(dxl, Some(rail), Arc::clone(arm))
+        RealHardware::new(dxl, Some(rail))
     };
     return hardware.context("하드웨어 초기화");
 }
@@ -335,7 +344,7 @@ type OpenedCameras = Vec<(
 /// 라이브 캠, 또는 `--clip`이면 녹화 클립.
 ///
 /// 클립은 **녹화 당시 fps로 페이싱**해서 재생한다 ([`PacedSource`]) — 그래야 계획 스로틀·
-/// 커밋 신선도·하드웨어 `stream_hz` 같은 벽시계 로직이 라이브와 같은 조건에서 돈다.
+/// 요청 신선도·하드웨어 `stream_hz` 같은 벽시계 로직이 라이브와 같은 조건에서 돈다.
 fn open_cameras(options: &Options) -> Result<OpenedCameras> {
     let cams = CamCliArgs {
         cam: DEFAULT_STEREO_CAM_ROLES.to_vec(),
@@ -380,59 +389,54 @@ fn open_cameras(options: &Options) -> Result<OpenedCameras> {
         .collect());
 }
 
-fn log_event(event: &ShotEvent) {
+fn log_event(event: &RuntimeEvent) {
     match event {
-        ShotEvent::Armed { shot_seq, pose } => info!(
-            shot = shot_seq,
+        RuntimeEvent::Ready { pose } => info!(
             rail_x = f2(pose.rail_x),
             joints = f2_slice(&pose.joints.values),
-            "real shot: armed"
+            "실기 단순 제어 준비"
         ),
-        ShotEvent::Tracking {
-            shot_seq,
+        RuntimeEvent::Tracking {
+            track_seq,
             position,
             speed,
         } => info!(
-            shot = shot_seq,
+            track = track_seq,
             x = f2(position.coords.x),
             y = f2(position.coords.y),
             z = f2(position.coords.z),
             speed = f2(*speed),
-            "real shot: track"
+            "공 궤적 추적 시작"
         ),
-        ShotEvent::Committed {
-            shot_seq,
-            time_to_impact_secs,
-            duration_secs,
-            impact,
-            rail_start,
-            rail_end,
-            peak_joint_speed,
+        RuntimeEvent::Commanded {
+            track_seq,
+            target,
+            rail_x,
+            aim_rad,
         } => info!(
-            shot = shot_seq,
-            duration_secs = f2(*duration_secs),
-            rail_start = f2(*rail_start),
-            rail_end = f2(*rail_end),
-            impact_x = f2(impact.coords.x),
-            impact_y = f2(impact.coords.y),
-            impact_z = f2(impact.coords.z),
-            tti = f2(*time_to_impact_secs),
-            peak_joint_speed = f2(*peak_joint_speed),
-            "real shot: swing commit"
+            track = track_seq,
+            target_x = f2(target.coords.x),
+            target_y = f2(target.coords.y),
+            target_z = f2(target.coords.z),
+            rail_x = f2(*rail_x),
+            aim_deg = f2(aim_rad.to_degrees()),
+            "레일·라켓 조준 명령 전송"
         ),
-        ShotEvent::Infeasible { shot_seq, reason } => {
-            info!(
-                shot = shot_seq,
-                reason, "real shot: 포기 — 관절·토크 한계 (모터 보호)"
-            )
+        RuntimeEvent::ControlState { state } => debug!(?state, "제어 상태 전이"),
+        RuntimeEvent::TestZoneChanged {
+            zone,
+            home_rail_x,
+            filtering,
+        } => info!(
+            ?zone,
+            home_rail_x = f2(*home_rail_x),
+            filtering,
+            "제어 모드 변경 — 준비 자세 레일 x·존 필터 갱신"
+        ),
+        RuntimeEvent::Failed { track_seq, reason } => {
+            warn!(track = track_seq, reason, "실기 단순 제어 실패")
         }
-        ShotEvent::PlanFailed { shot_seq, reason } => {
-            tracing::debug!(shot = shot_seq, reason, "real shot: 계획 실패")
-        }
-        ShotEvent::Failed { shot_seq, reason } => {
-            warn!(shot = shot_seq, reason, "real shot: 실패")
-        }
-        ShotEvent::Done => {}
+        RuntimeEvent::Done => {}
     }
 }
 

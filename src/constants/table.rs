@@ -6,6 +6,8 @@
 pub const WIDTH_X: f64 = 1.525;
 /// 플레이 면 길이 (y, 긴 변).
 pub const LENGTH_Y: f64 = 2.74;
+/// 네트 너머 상대편 반쪽 탁구대의 무게중심 y.
+pub const OPPONENT_HALF_CENTER_Y: f64 = LENGTH_Y * 0.75;
 /// 테이블 윗면 z 좌표 (바닥 z=0 기준).
 pub const SURFACE_Z: f64 = 0.76;
 /// 테이블 두께의 절반.

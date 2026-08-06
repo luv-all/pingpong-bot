@@ -19,8 +19,8 @@ use pingpong_bot::camera::{
 };
 use pingpong_bot::defaults::calibration_path;
 use pingpong_bot::defaults::detector_for;
-use pingpong_bot::vision::Detector;
 use pingpong_bot::defaults::vision::fit as fit_params;
+use pingpong_bot::vision::Detector;
 use pingpong_bot::vision::{Fit, Outcome, triggers};
 
 use crate::args::Args;

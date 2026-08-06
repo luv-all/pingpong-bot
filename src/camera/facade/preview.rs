@@ -3,10 +3,11 @@
 use crate::Point3;
 use crate::camera;
 use crate::camera::io::{
-    FittedBgr, ShowBgrResult, WorldGridParams, apply_grid_key, arrow_delta, destroy_window,
-    display_fit_bounds, draw_cam_label, draw_circle_px, draw_debug_lines, draw_help_lines,
-    draw_pixel_loupe, draw_world_grid, draw_world_track, draw_world_velocity, fit_bgr_downscale,
-    hstack_bgr, show_bgr, unscale_xy,
+    FittedBgr, PreviewAction, ShowBgrResult, WorldGridParams, apply_grid_key, arrow_delta,
+    destroy_window, display_fit_bounds, draw_cam_label, draw_circle_px, draw_debug_lines,
+    draw_help_lines, draw_pixel_loupe, draw_rect_px, draw_text_at_px, draw_world_grid,
+    draw_world_track, draw_world_velocity, fit_bgr_downscale, hstack_bgr, poll_key, show_bgr,
+    unscale_xy,
 };
 
 /// OpenCV 프리뷰/오버레이 공개 진입점.
@@ -41,6 +42,11 @@ impl Preview {
         destroy_window(window);
     }
 
+    /// 새 프레임 없이 키 입력만 뽑는다 (창을 다시 그리지 않음).
+    pub fn poll_key(wait_ms: i32) -> opencv::Result<PreviewAction> {
+        return poll_key(wait_ms);
+    }
+
     pub fn hstack_bgr(panels: &[opencv::core::Mat]) -> opencv::Result<opencv::core::Mat> {
         return hstack_bgr(panels);
     }
@@ -69,6 +75,28 @@ impl Preview {
         thickness: i32,
     ) -> opencv::Result<()> {
         return draw_circle_px(img, pixel, radius_px, color, thickness);
+    }
+
+    pub fn draw_rect_px(
+        img: &mut opencv::core::Mat,
+        top_left: camera::Pixel,
+        width: i32,
+        height: i32,
+        color: opencv::core::Scalar,
+        thickness: i32,
+    ) -> opencv::Result<()> {
+        return draw_rect_px(img, top_left, width, height, color, thickness);
+    }
+
+    pub fn draw_text_at_px(
+        img: &mut opencv::core::Mat,
+        origin: camera::Pixel,
+        text: &str,
+        font_scale: f64,
+        color: opencv::core::Scalar,
+        thickness: i32,
+    ) -> opencv::Result<()> {
+        return draw_text_at_px(img, origin, text, font_scale, color, thickness);
     }
 
     pub fn draw_world_velocity(

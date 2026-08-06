@@ -13,13 +13,13 @@
 //! | [`physics`] | `PhysicsParams` |
 //! | [`control`] | `ControlParams` |
 //! | [`impact`] | `ImpactParams` |
-//! | [`intercept`] | `EstimatorParams` |
+//! | [`estimator`] | `EstimatorParams` |
 //! | [`robot`] | URDF·primitive (`Result`) |
 //! | [`vision`] | 튜너블 + 캐스케이드·picker·트리거 조립, colormask/calib 로드 |
 //! | [`calib`] | Cam* / Charuco / Rig |
 //! | [`hardware`] | DynamixelConfig / RailConfig |
 //! | [`dxl_limits`] | derate·속도·토크 배열 |
-//! | [`planner`] | InterceptWindow + bang-bang consts |
+//! | [`motion`] | InterceptWindow + 정렬·스윙·bang-bang consts |
 //! | [`sim`] | Settings + 랜덤/eval consts |
 //! | [`sim_motor`] | `SimMotorParams` |
 //!
@@ -27,10 +27,11 @@
 
 pub mod calib;
 mod control;
+pub mod detector;
 pub mod dxl_limits;
+mod estimator;
 mod hardware;
 mod impact;
-mod intercept;
 pub mod motion;
 mod physics;
 mod robot;
@@ -54,14 +55,22 @@ pub use dxl_limits::{
     joint_reflected_inertias_4dof_array, joint_torque_limits_4dof, joint_torque_limits_4dof_array,
     reflected_inertia,
 };
+pub use estimator::EstimatorParams;
+pub use hardware::{
+    RAIL_BOARD_ZERO_DOMAIN_M, RAIL_LEFT_END_MARGIN_M, RAIL_PHYSICAL_X_MAX_M, RAIL_PHYSICAL_X_MIN_M,
+    RAIL_READY_X_M, RAIL_RIGHT_END_MARGIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M,
+    WRIST_JOINT_ZERO_OFFSET_RAD,
+};
 pub use impact::ImpactParams;
-pub use intercept::EstimatorParams;
 pub use motion::{
-    COARSE_TRACK_JOINT_FRACTION, JACOBIAN_DAMPING, JDOT_STEP, MAGNUS_OMEGA_MAX,
-    MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
-    POSITION_TOLERANCE_RAD_OR_M, RACKET_DIRECTION_TOLERANCE_DEG, RACKET_SPEED_RATIO_TOLERANCE,
-    RAIL_ACCEL_M_S2, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
-    TIME_TO_GO_BIAS,
+    ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+    ALIGNMENT_MIN_UPWARD_TILT_DEG, ALIGNMENT_TARGET_HEIGHT_OFFSET_M, COARSE_TRACK_JOINT_FRACTION,
+    FIRST_CONTROL_AFTER_DETECTION_SECS, FIXED_JOINT_SNAP_SPEED_RATIO,
+    FIXED_JOINT_SWING_DURATION_SECS, HOME_RETURN_SPEED_RATIO, JACOBIAN_DAMPING, JDOT_STEP,
+    MAGNUS_OMEGA_MAX, MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
+    POSITION_TOLERANCE_RAD_OR_M, POST_ALIGNMENT_HOLD_SECS, RACKET_DIRECTION_TOLERANCE_DEG,
+    RACKET_SPEED_RATIO_TOLERANCE, RAIL_ACCEL_M_S2, RETURN_TO_CENTER_GROWTH,
+    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS, TIME_TO_GO_BIAS,
 };
 pub use physics::PhysicsParams;
 pub use robot::{
@@ -105,11 +114,32 @@ mod tests {
         InterceptWindow::default().validate().unwrap();
         DynamixelConfig::default().validate().unwrap();
         RailConfig::default().validate().unwrap();
+        let rail_config = RailConfig::default();
+        assert_eq!(rail_config.accel, RAIL_ACCEL_M_S2);
+        assert_eq!(rail_config.decel, RAIL_ACCEL_M_S2);
+        let robot = robot().unwrap();
+        let model_rail = robot.arm.rail.expect("기본 로봇 리니어 레일");
+        assert_eq!(model_rail.x_min, rail_config.x_min_m);
+        assert_eq!(model_rail.x_max, rail_config.x_max_m);
+        assert!((model_rail.x_min - 0.0100).abs() < 1e-12);
+        assert!((model_rail.x_max - 1.3395).abs() < 1e-12);
+        assert!((model_rail.default_x() - 0.6750).abs() < 1e-12);
+        assert!((rail_config.board_zero_domain_m - 0.7300).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(0.0100) - 0.7200).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(1.3395) - -0.6095).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(0.6750) - 0.0550).abs() < 1e-12);
+        assert!((ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M - 0.0050).abs() < 1e-12);
+        assert!((ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M - 0.0600).abs() < 1e-12);
+        assert!((ALIGNMENT_TARGET_HEIGHT_OFFSET_M - 0.0150).abs() < 1e-12);
+        assert!((ALIGNMENT_MIN_UPWARD_TILT_DEG - 25.0).abs() < 1e-12);
+        assert!((JOINT_SPEED_DERATE - 0.95).abs() < 1e-12);
+        assert!((rail_config.x_min_m - model_rail.x_min).abs() < 1e-12);
+        assert!((rail_config.x_max_m - model_rail.x_max).abs() < 1e-12);
         let c = ControlParams::default();
-        assert!((c.max_joint_torques[0] - 6.0).abs() < 1e-12);
-        assert!((c.max_joint_torques[1] - 3.0).abs() < 1e-12);
-        assert!((c.max_joint_torques[2] - 1.25).abs() < 1e-12);
-        assert!((c.max_joint_torques[3] - 1.25).abs() < 1e-12);
+        assert!((c.max_joint_torques[0] - 12.0).abs() < 1e-12);
+        assert!((c.max_joint_torques[1] - 6.0).abs() < 1e-12);
+        assert!((c.max_joint_torques[2] - 2.5).abs() < 1e-12);
+        assert!((c.max_joint_torques[3] - 2.5).abs() < 1e-12);
         assert!((ImpactParams::default().max_return_speed - 6.0).abs() < 1e-12);
     }
 

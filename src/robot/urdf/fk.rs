@@ -75,6 +75,7 @@ fn iso_to_pose_tuple(name: &str, iso: Isometry3<f64>) -> (String, [f64; 3], [f64
 }
 
 fn racket_pose_from_iso(iso: Isometry3<f64>) -> RacketPose {
+    let iso = iso * crate::constants::geometry::racket_urdf_mount_calibration();
     let position = Point3::new(iso.translation.x, iso.translation.y, iso.translation.z);
     let rot = iso.rotation.to_rotation_matrix();
     let normal = rot * Vector3::y();

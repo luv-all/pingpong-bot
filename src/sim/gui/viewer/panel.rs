@@ -187,7 +187,10 @@ pub fn draw(
         // Random은 슬라이더(`ui_state.shooter`)에도 반영한다 — 안 그러면 다음
         // 프레임에 원본으로 덮여 슈터 위치가 한 프레임만 깜빡인다.
         if random_shoot {
-            ui_state.shooter = ui_state.shooter.randomized(&mut rand::thread_rng());
+            // GUI Random도 로봇 접수 회귀에서 검증한 좌우·yaw·속도 범위를 쓴다.
+            // `randomized`의 높이·스핀 조합은 네트만 통과할 뿐 로봇 도달 시간은
+            // 보장하지 않아, 명령 직후 시간 부족으로 팔이 미동도 하지 않는 샷을 만든다.
+            ui_state.shooter = ui_state.shooter.randomized_aim(&mut rand::thread_rng());
             ctrl.request_shoot();
         }
         ctrl.shooter = ui_state.shooter.clone();
@@ -360,7 +363,7 @@ fn draw_view_panel(ui: &mut egui::Ui, ui_state: &mut PanelUiState) {
             });
             debug_checkbox(ui, &mut d.fail_status, "fail status", |ui| {
                 ui.strong("실패 사유 (Status)");
-                ui.label("스윙 포기·건너뛴 이유를 Status에 표시합니다.");
+                ui.label("직접 명령 또는 구형 계획기가 건너뛴 이유를 표시합니다.");
             });
             debug_checkbox(ui, &mut d.unreachable_x, "unreachable X", |ui| {
                 ui.strong("도달 불가 목표");
@@ -383,8 +386,8 @@ fn draw_view_panel(ui: &mut egui::Ui, ui_state: &mut PanelUiState) {
                 ui.label("주황 — 관절 가동범위 끝, 또는 토크 상한 초과");
             });
             debug_checkbox(ui, &mut d.commit_bar, "commit bar", |ui| {
-                ui.strong("스윙 결정 타이밍");
-                ui.label("tti가 commit 구간인지 Status 막대로 표시합니다.");
+                ui.strong("구형 스윙 결정 타이밍");
+                ui.label("보존 중인 계획기의 commit 구간을 표시합니다.");
             });
             debug_checkbox(ui, &mut d.table_obb, "table OBB", |ui| {
                 ui.strong("테이블 침투 OBB");
@@ -403,8 +406,8 @@ fn draw_view_panel(ui: &mut egui::Ui, ui_state: &mut PanelUiState) {
                 ui.label("실제 경로 (주황 점).");
             });
             debug_checkbox(ui, &mut d.swing_ghost, "swing ghost", |ui| {
-                ui.strong("스윙 경로");
-                ui.label("확정 스윙의 라켓 중심 경로.");
+                ui.strong("구형 스윙 경로");
+                ui.label("보존 중인 계획기가 만든 라켓 중심 경로.");
             });
             debug_checkbox(ui, &mut d.rail_stroke, "rail stroke", |ui| {
                 ui.strong("레일 이동 범위");
@@ -517,7 +520,7 @@ fn draw_eval_status(
                 let fill = points_color(shot.points);
                 let mut button = egui::Button::new(format!("{n}")).fill(fill);
                 if selected == Some(n) {
-                    button = button.stroke(egui::Stroke::new(1.5, egui::Color32::WHITE));
+                    button = button.stroke(egui::Stroke::new(1.5_f32, egui::Color32::WHITE));
                 }
                 if ui.add_sized([22.0, 20.0], button).clicked() {
                     *start_live_shot = Some(n);
@@ -665,11 +668,11 @@ fn draw_status_panel(ui: &mut egui::Ui, status: &StatusSnapshot, debug: &DebugOv
         .default_open(true)
         .show(ui, |ui| {
             ui.label(format!("관절각 [rad]  {}", status.joints.join("  ")));
-            ui.label(format!("스윙  {swing_ko}"));
+            ui.label(format!("로봇 동작  {swing_ko}"));
             ui.label(format!("단계  {}", status.commit_phase.label_ko()));
         });
 
-    egui::CollapsingHeader::new("Impact")
+    egui::CollapsingHeader::new("Prediction / legacy impact")
         .default_open(true)
         .show(ui, |ui| {
             if let Some(pred) = &status.debug_prediction {
@@ -851,21 +854,21 @@ fn draw_joint_anchor_windows(
             joint_pos,
             5.0,
             egui::Stroke::new(
-                1.0,
+                1.0_f32,
                 egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180),
             ),
         );
         painter.line_segment(
             [joint_pos, label],
             egui::Stroke::new(
-                1.0,
+                1.0_f32,
                 egui::Color32::from_rgba_unmultiplied(220, 220, 230, 180),
             ),
         );
 
         let frame = egui::Frame::NONE
             .fill(egui::Color32::from_rgba_unmultiplied(12, 14, 18, 200))
-            .stroke(egui::Stroke::new(1.0, accent))
+            .stroke(egui::Stroke::new(1.0_f32, accent))
             .corner_radius(5.0)
             .inner_margin(egui::Margin::symmetric(6, 4));
 
@@ -927,7 +930,7 @@ fn draw_range_bar(ui: &mut egui::Ui, min: Option<f64>, cur: f64, max: Option<f64
     let x = rect.left() + rect.width() * t;
     painter.line_segment(
         [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-        egui::Stroke::new(1.5, egui::Color32::WHITE),
+        egui::Stroke::new(1.5_f32, egui::Color32::WHITE),
     );
 }
 
@@ -969,7 +972,7 @@ fn draw_signed_bar(ui: &mut egui::Ui, min: f64, cur: f64, max: f64, hot: bool) {
             egui::pos2(zero_x, rect.top() - 1.0),
             egui::pos2(zero_x, rect.bottom() + 1.0),
         ],
-        egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+        egui::Stroke::new(1.0_f32, egui::Color32::from_gray(180)),
     );
 }
 
@@ -983,7 +986,7 @@ fn draw_commit_bar(ui: &mut egui::Ui, status: &StatusSnapshot) {
         .map(|p| p.time_to_impact_secs);
     let Some(tti) = tti else {
         ui.label(format!(
-            "스윙 확정 구간  {min_s:.2}–{max_s:.2} s (임팩트까지 남은 시간)"
+            "구형 스윙 확정 구간  {min_s:.2}–{max_s:.2} s (임팩트까지 남은 시간)"
         ));
         return;
     };

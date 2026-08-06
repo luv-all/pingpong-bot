@@ -1,18 +1,24 @@
 # 결정 사항 (decisions)
 
 코드에 “왜 이렇게 했지?”가 남을 만한 값·경로·폴백을 모아 둔다.  
-숫자는 가능하면 `src/constants/`(물리 상수) 또는 **`src/defaults.rs / `(앱 배선)** 이 SSOT이고, 여기는 **의도**를 적는다.
+숫자는 가능하면 `src/constants/`(물리 상수) 또는 `src/defaults/`(앱 배선)이
+SSOT이고, 여기는 **의도**를 적는다.
 TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 
-관련 공식(유지): `required_racket_velocity` — \(v_{out}, n, e \rightarrow v_r\) (`planner/impact.rs`).
+관련 공식(유지): `required_racket_velocity` — \(v_{out}, n, e \rightarrow v_r\) (`robot/motion/impact.rs`).
 
-마지막 정리: **2026-07-17** (단일 크레이트·동적 인터셉트·competition=4-dof 체인·OpenCV 필수).
+마지막 정리: **2026-08-06**.
+
+> A~J의 스윙·임팩트 결정은 보존 중인 계획 라이브러리와 시뮬레이션 진단 경로의
+> 설계 기록이다. 현재 활성 real·기본 GUI sim 제어는 전체 스윙을 호출하지 않으며,
+> [`two-stage-position-control.md`](two-stage-position-control.md)의 레일·팔 정렬과
+> 고정 레일 후속 보정 경로를 따른다.
 
 ---
 
 ## 한 줄로 보기
 
-| | 지금 하는 일 |
+| | 보존 중인 계획기 설계 |
 |--|-------------|
 | **A** | 어디로 공을 보낼지 — 상대 코트 중앙 바운드 |
 | **B** | 스윙 속도 0으로 포기하지 않음 · commit 창 |
@@ -75,7 +81,7 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 |----|------|------|------|
 | C1 | commit-once + 창 대기 | `sim/world`, `hardware/sim` | ✅ |
 | C2 | 기본 ground truth / 실험은 EKF | defaults / `SimWorld` | ✅ (EKF 기본 승격은 아래) |
-| C3 | 바쁠 때 타겟 버림 | `pipeline` | 유지 |
+| C3 | 바쁠 때 예측 최신 1건만 유지 | real bounded channel | ✅ |
 | C4 | 미드코트 게이트 `0.55·LENGTH` | `ball_past_midcourt_for_commit` | ✅ |
 
 ### C2 — EKF를 기본으로 올리려면
@@ -145,13 +151,13 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 | E1 | 다중 y 샘플 `InterceptWindow` | ✅ |
 | E2 | 평면 지난 공 → 예측 안 함 | ✅ |
 | E3 | 테이블 바운스 \(e\) = 공 \(e\) (≈0.88, ITTF 테이블) | ✅ |
-| E3b | 테이블–공 바운스 커널 SSOT: `estimator::table_bounce` (`e`, μ=`friction`, ω 유지). Rapier Average μ≈0.3과의 갭은 `rapier_table_ball_mu`로 문서화 — 재료/combine 정렬은 시뮬 그리드 재튜닝 후속 ([스펙](superpowers/specs/2026-07-26-table-bounce-ssot-design.md)) | ✅ 커널 / ⏳ Rapier 정렬 |
+| E3b | 테이블–공 바운스 커널 SSOT: `estimator::table_bounce` (`e`, μ=`friction`, ω 유지). Rapier Average μ≈0.3과의 갭은 `rapier_table_ball_mu`로 문서화. 재료/combine 정렬은 시뮬 그리드 재튜닝 후속 | ✅ 커널 / ⏳ Rapier 정렬 |
 | E4 | lead `0.05..1.2` s | ✅ |
 | E5 | Rapier 테이블·공 restitution = E3; 라켓은 A4 \(e_{eff}\)+Min | ✅ |
 | E6 | 접촉→리턴→네트→중앙 바운스 통합 테스트 | ✅ |
 | E7 | 선택 기준 = 거리 정렬 + 접촉 5 mm (점수식 없음) | ✅ |
 
-코드: `planner/mod.rs` (`InterceptWindow`), `planner/physics.rs` (`plan_best_swing`).
+코드: `robot/motion/intercept_window.rs`, `robot/motion/physics.rs` (`plan_best_swing`).
 
 ---
 
@@ -187,7 +193,7 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 단일 `pingpong-bot` + `src/` 기능 모듈.  
 트레잇·타입은 `ports.rs`/`types.rs` 대신 각 모듈에 둔다.
 
-**SSOT:** 앱 숫자·배선은 `src/defaults.rs`. 도메인 타입에는
+**SSOT:** 앱 숫자·배선은 `src/defaults/`. 도메인 타입에는
 `::competition` / competition `Default` / 임베디드 TOML 프리셋을 두지 않는다.
 머신 차이는 CLI(`--dxl-port` 등)만.
 
@@ -197,13 +203,13 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 | `camera` | 캡처·캘리브·삼각측량·sim 카메라 |
 | `detector` | 공 검출 DSL (`fuse` / `track`); `fuse_vision`은 툴 TOML 어댑터 |
 | `estimator` | EKF·탄도 |
-| `planner` | 인터셉트·스윙·충돌·임팩트 · 관절별 `τ_max` |
-| `robot` | Arm 빌더·URDF·카탈로그(이름표) |
+| `vision` | 실기 픽셀 일괄 적합·관측/예측 궤적 계약 |
+| `robot` | Arm 빌더·URDF·인터셉트·정렬·스윙·충돌·임팩트 |
 | `sim` | Rapier 다물체 암·뷰어·슈터 |
-| `hardware` / `telemetry` / `pipeline` | 실물·로그·루프 |
-| `local` | 머신 포트·경로 오버레이만 |
+| `real` | 실캄·비전 적합·제어 워커 조립 |
+| `hardware` / `telemetry` | 실물 구동·로그 |
 
-런타임: `cargo run` = defaults. CLI `--mode` / `--dxl-port` / `--local`.
+런타임: `cargo run` = defaults. CLI `--mode` / `--dxl-port`.
 
 네트 높이: ITTF **0.1525 m** (`constants/table::NET_HEIGHT`).
 
@@ -229,6 +235,17 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 
 ## 열린 과제 (TODO와 맞출 것)
 
+- `BallTrajectory` 반환 타입·EKF 관측 버퍼·미래 샘플러는 구현 완료.
+- real `CommitRequest`는 새 `vision::Trajectory`와 요청 생성 시각을 전달한다.
+- 현재 실기 경계는 `vision::Trajectory → 제어 접수 평면 선택 →
+  Planner::ball_alignment → Hardware::command`이다. 같은 공의 후속 갱신은
+  `ball_alignment_fixed_rail → command_joints`로 팔만 보정한다.
+- real과 GUI sim은 `Planner::ball_alignment`을 공유하지만 목표 선택과 갱신 정책은 각자의
+  런타임에 있다. `PositionController`와 기존 백스윙·임팩트 계획기는 보존 중이지만
+  활성 직접 정렬 경로에서는 호출하지 않는다.
+- 실물 장비에서 첫 정렬·후속 팔 보정·구간 복귀를 최종 검증해야 한다.
+- `PendingVerification`의 주기적 수렴 판정과 3회 연속 실패 중단은 현재 실기
+  루프에서 활성화되지 않으므로 부활·제거 결정이 필요하다.
 - 구름 공 / 포기 조건 명문화 (위 I)
 - EKF 타격 스모크 → C2 승격
 - A4 \(e\)·마찰·drag 실측값으로 constants 갱신
@@ -249,8 +266,6 @@ TOML·타입 `Default`·`Arm::competition` 프리셋은 앱 SSOT가 아니다.
 3. **FF (sim only)** — RNEA로 다물체 `motor_max_force` 상한 갱신.
    `ControlParams::default().torque_feedforward` 기본 **true** (시뮬).  
    **Real**은 Position Control Mode(3) + PWM Limit / Current Limit 최대. Goal Current FF 없음.
-
-스펙: [`superpowers/specs/2026-07-26-manipulator-dynamics-design.md`](superpowers/specs/2026-07-26-manipulator-dynamics-design.md).
 
 ---
 
@@ -283,7 +298,7 @@ let detect = detector_for(cam_id)?; // fuse(generators![…], scorer) + track
 ```
 
 툴: `detect-full` / `verify-stereo`는 선택적 `[vision]` TOML 어댑터(`fuse_vision`) 가능.  
-앱 조립 SSOT: `src/defaults.rs`. DSL 메커니즘: `fuse` / `track`.
+앱 조립 SSOT: `src/defaults/`. DSL 메커니즘: `fuse` / `track`.
 
 | ID | 내용 | 상태 |
 |----|------|------|

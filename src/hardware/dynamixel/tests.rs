@@ -52,6 +52,59 @@ fn motor_mapping_round_trips_and_clamps_to_motor_limits() {
 }
 
 #[test]
+fn wrist_zero_offset_rotates_id5_eight_degrees_toward_bench_alignment() {
+    let calibrated = MotorMapping::new(bench_config()).expect("calibrated mapping");
+    let mut zero_offset_config = bench_config();
+    zero_offset_config.joint_offsets_rad[3] = 0.0;
+    let zero_offset = MotorMapping::new(zero_offset_config).expect("zero-offset mapping");
+    let ready_wrist = crate::defaults::READY_JOINTS_4DOF[3];
+
+    let calibrated_tick = calibrated.radians_to_ticks(3, ready_wrist);
+    let old_tick = zero_offset.radians_to_ticks(3, ready_wrist);
+    assert_eq!(old_tick - calibrated_tick, 92, "8° 보정 tick 반올림");
+    assert!(
+        (calibrated.ticks_to_radians(3, calibrated_tick) - ready_wrist).abs() < 0.002,
+        "보정 후에도 논리 관절각 round-trip은 유지돼야 함"
+    );
+}
+
+#[test]
+fn dry_run_limit_escape_holds_outside_start_and_only_moves_inward() {
+    let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
+    let start = Joints::from_slice(&[100.0_f64.to_radians(), 0.0, -0.2, -0.4]);
+    bus.arm_limit_escape_from(&start).expect("arm escape");
+
+    bus.write_joints(&start).expect("hold outside start");
+    let start_master_tick = bus.mapping.radians_to_raw_ticks(0, start.values[0]);
+    let start_slave_tick = bus.mapping.config().mirror_tick(start_master_tick);
+    let goals = bus.last_bus_goals().expect("paired MX-64 goals");
+    assert!(goals.contains(&(1, start_master_tick)));
+    assert!(goals.contains(&(2, start_slave_tick)));
+    let held = bus.read_joints().expect("held pose");
+    assert!((held.values[0].to_degrees() - 100.0).abs() < 0.1);
+
+    let inward = Joints::from_slice(&[95.0_f64.to_radians(), 0.0, -0.2, -0.4]);
+    bus.write_joints(&inward).expect("move inward");
+    let moved = bus.read_joints().expect("inward pose");
+    assert!((moved.values[0].to_degrees() - 95.0).abs() < 0.1);
+
+    let outward_again = Joints::from_slice(&[101.0_f64.to_radians(), 0.0, -0.2, -0.4]);
+    bus.write_joints(&outward_again)
+        .expect("block outward reversal");
+    let blocked = bus.read_joints().expect("blocked pose");
+    assert!((blocked.values[0].to_degrees() - 95.0).abs() < 0.1);
+
+    let boundary = Joints::from_slice(&[90.0_f64.to_radians(), 0.0, -0.2, -0.4]);
+    bus.write_joints(&boundary).expect("enter normal range");
+    let normal = bus.read_joints().expect("normal pose");
+    assert!((normal.values[0].to_degrees() - 90.0).abs() < 0.1);
+
+    bus.write_joints(&start).expect("normal limit restored");
+    let reclamped = bus.read_joints().expect("reclamped pose");
+    assert!((reclamped.values[0].to_degrees() - 90.0).abs() < 0.1);
+}
+
+#[test]
 fn motor_mapping_rejects_mismatched_vector_lengths() {
     let mut config = bench_config();
     config.joint_signs.pop();
@@ -81,6 +134,18 @@ fn dry_run_bus_round_trips_last_written_joints() {
 }
 
 #[test]
+fn torque_enable_holds_every_bus_id_before_motion() {
+    let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
+
+    bus.enable_torque(true).expect("torque");
+
+    let goals = bus.last_bus_goals().expect("hold goals");
+    let ids: Vec<u8> = goals.iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids, vec![1, 3, 4, 5, 2]);
+    assert_eq!(goals.len(), bus.mapping.config().bus_ids().len());
+}
+
+#[test]
 fn dry_run_mirrors_slave_goal_around_zero_tick() {
     let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
     // joint0 sign=-1 → URDF +angle decreases ticks from 2048.
@@ -106,6 +171,23 @@ fn dry_run_mirrors_slave_goal_around_zero_tick() {
             .any(|(id, tick)| *id == 2 && *tick == expected_slave),
         "goals={goals:?} expected slave {expected_slave}"
     );
+}
+
+#[test]
+fn dry_run_single_joint_write_does_not_command_other_motors() {
+    let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
+    let before = bus.read_joints().expect("before");
+
+    bus.write_joint(3, -0.25).expect("wrist write");
+
+    let goals = bus.last_bus_goals().expect("dry-run goals");
+    assert_eq!(goals.len(), 1);
+    assert_eq!(goals[0].0, 5, "라켓 손목축 ID 5만 명령해야 함");
+    let after = bus.read_joints().expect("after");
+    for index in 0..3 {
+        assert!((after.values[index] - before.values[index]).abs() < 0.002);
+    }
+    assert!((after.values[3] - -0.25).abs() < 0.002);
 }
 
 #[test]

@@ -68,9 +68,9 @@ fn run(args: Args) -> Result<()> {
 
     let robot = robot().context("defaults::robot")?;
     let hardware = if args.dry_run {
-        RealHardware::dry_run_with_arm(dxl, Some(rail_cfg), Arc::clone(&robot.arm))
+        RealHardware::dry_run(dxl, Some(rail_cfg))
     } else {
-        RealHardware::new(dxl, Some(rail_cfg), Arc::clone(&robot.arm))
+        RealHardware::new(dxl, Some(rail_cfg))
     }
     .context("하드웨어 초기화 실패")?;
     let hardware = Arc::new(Mutex::new(hardware));

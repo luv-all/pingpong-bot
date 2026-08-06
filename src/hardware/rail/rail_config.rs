@@ -13,11 +13,21 @@ pub struct RailConfig {
     pub axis: i32,
     pub irq_no: i32,
     pub pulses_per_meter: u32,
-    /// `true`이면 앱 도메인과 보드 cmd/act 절대 좌표를 min↔max로 대응시킨다.
-    /// 상대 이동량만 부호 반전한다.
+    /// `true`이면 앱 도메인과 AXL 보드의 좌표축 방향이 반대이다.
+    /// AXL 보드의 0은 `board_zero_domain_m`에 대응한다.
     pub reverse: bool,
+    /// AXL 보드 절대좌표 0에 대응하는 앱 도메인 좌표 [m].
+    ///
+    /// 이 값은 가동 범위와 독립적인 실측 원점이다. 가동 범위의 양끝을 비대칭으로
+    /// 바꾸어도 좌표 원점이 따라 움직이면 안 된다.
+    pub board_zero_domain_m: f64,
     pub x_min_m: f64,
     pub x_max_m: f64,
+    /// 안전 마진을 포함하지 않은 기계적 최소/최대 좌표 [m].
+    /// AXL 보드 소프트 리밋과 시작 좌표 진단에만 사용한다. 이동 명령은 항상
+    /// `x_min_m..=x_max_m` 안전 범위로 제한한다.
+    pub physical_x_min_m: f64,
+    pub physical_x_max_m: f64,
     pub vel: f64,
     pub accel: f64,
     pub decel: f64,
@@ -48,7 +58,18 @@ impl RailConfig {
         if self.pulses_per_meter == 0 {
             return Err(RailConfigError::PulsesPerMeter);
         }
+        if !self.board_zero_domain_m.is_finite() {
+            return Err(RailConfigError::InvalidRange);
+        }
         if !self.x_min_m.is_finite() || !self.x_max_m.is_finite() || self.x_min_m >= self.x_max_m {
+            return Err(RailConfigError::InvalidRange);
+        }
+        if !self.physical_x_min_m.is_finite()
+            || !self.physical_x_max_m.is_finite()
+            || self.physical_x_min_m >= self.physical_x_max_m
+            || self.x_min_m < self.physical_x_min_m
+            || self.x_max_m > self.physical_x_max_m
+        {
             return Err(RailConfigError::InvalidRange);
         }
         for value in [self.vel, self.accel, self.decel, self.max_vel] {
@@ -66,11 +87,11 @@ impl RailConfig {
         return x.clamp(self.x_min_m, self.x_max_m);
     }
 
-    /// 절대 위치: 도메인 → 보드.
-    /// `reverse`면 구간 끝점을 서로 대응시킨다 (`domain_min ↔ board_max`).
+    /// 절대 위치를 도메인 좌표에서 보드 좌표로 변환한다.
+    /// `reverse`면 실제 AXL 엔코더 좌표처럼 부호를 반전한다.
     pub fn domain_to_board_abs(&self, domain_m: f64) -> f64 {
         if self.reverse {
-            return self.x_min_m + self.x_max_m - domain_m;
+            return self.board_zero_domain_m - domain_m;
         }
         return domain_m;
     }
@@ -78,7 +99,7 @@ impl RailConfig {
     /// 절대 위치: 보드(cmd/act) → 앱이 해석하는 도메인 좌표.
     pub fn board_to_domain_abs(&self, board_m: f64) -> f64 {
         if self.reverse {
-            return self.x_min_m + self.x_max_m - board_m;
+            return self.board_zero_domain_m - board_m;
         }
         return board_m;
     }
@@ -91,15 +112,43 @@ impl RailConfig {
         return domain_dx;
     }
 
-    /// Soft limit는 보드 물리 좌표의 이동 한도(도메인 해석과 무관).
+    /// 도메인 이동 범위를 AXL 보드 좌표계의 양/음 소프트 리밋으로 변환한다.
     pub fn soft_limit_args(&self) -> SoftLimitArgs {
+        let (positive_m, negative_m) = if self.reverse {
+            (
+                self.board_zero_domain_m - self.physical_x_min_m,
+                self.board_zero_domain_m - self.physical_x_max_m,
+            )
+        } else {
+            (self.physical_x_max_m, self.physical_x_min_m)
+        };
         return SoftLimitArgs {
             use_: 1,
             stop_mode: self.soft_limit_stop_mode,
             selection: self.soft_limit_selection,
-            positive_m: self.x_max_m,
-            negative_m: self.x_min_m,
+            positive_m,
+            negative_m,
         };
+    }
+
+    /// CmdPos 기준 소프트 리밋을 ActPos와 CmdPos의 원점 차이만큼 보정한다.
+    /// AXL selection=0은 명령 위치, selection=1은 실제 위치 기준이다.
+    pub fn soft_limit_args_for_command_offset(&self, command_minus_actual_m: f64) -> SoftLimitArgs {
+        let mut args = self.soft_limit_args();
+        if args.selection == 0 {
+            args.positive_m += command_minus_actual_m;
+            args.negative_m += command_minus_actual_m;
+        }
+        return args;
+    }
+
+    /// 원하는 ActPos를 현재 CmdPos 좌표계의 절대 명령으로 변환한다.
+    pub fn command_position_for_actual_target(
+        actual_target_m: f64,
+        actual_now_m: f64,
+        command_now_m: f64,
+    ) -> f64 {
+        return command_now_m + (actual_target_m - actual_now_m);
     }
 }
 
@@ -137,8 +186,11 @@ mod tests {
     #[test]
     fn soft_limit_args_mirror_meters() {
         let cfg = RailConfig {
+            reverse: false,
             x_min_m: -0.15,
             x_max_m: 0.40,
+            physical_x_min_m: -0.15,
+            physical_x_max_m: 0.40,
             soft_limit_stop_mode: 0,
             soft_limit_selection: 0,
             ..RailConfig::default()
@@ -150,23 +202,61 @@ mod tests {
     }
 
     #[test]
-    fn reverse_abs_reflects_min_max_rel_negates() {
+    fn reverse_abs_and_soft_limits_use_centered_board_axis() {
         let cfg = RailConfig {
             reverse: true,
+            board_zero_domain_m: 0.715,
             x_min_m: 0.0,
             x_max_m: 1.43,
+            physical_x_min_m: 0.0,
+            physical_x_max_m: 1.43,
             ..RailConfig::default()
         };
-        assert_eq!(cfg.domain_to_board_abs(0.0), 1.43);
-        assert_eq!(cfg.domain_to_board_abs(1.43), 0.0);
-        assert!((cfg.domain_to_board_abs(0.2) - 1.23).abs() < 1e-12);
-        assert!((cfg.board_to_domain_abs(1.23) - 0.2).abs() < 1e-12);
+        assert_eq!(cfg.domain_to_board_abs(0.0), 0.715);
+        assert_eq!(cfg.domain_to_board_abs(1.43), -0.715);
+        assert!((cfg.domain_to_board_abs(0.2) - 0.515).abs() < 1e-12);
+        assert!((cfg.board_to_domain_abs(0.515) - 0.2).abs() < 1e-12);
         assert_eq!(cfg.domain_to_board_rel(0.1), -0.1);
         assert_eq!(cfg.domain_to_board_rel(-0.05), 0.05);
-        // soft limit는 보드 물리 한도 그대로
+        // 도메인 [0, 1.43]은 중앙 원점 AXL 보드 좌표 [-0.715, 0.715]다.
         let args = cfg.soft_limit_args();
-        assert_eq!(args.positive_m, 1.43);
-        assert_eq!(args.negative_m, 0.0);
+        assert_eq!(args.positive_m, 0.715);
+        assert_eq!(args.negative_m, -0.715);
+    }
+
+    #[test]
+    fn real_axl_negative_position_maps_to_expected_domain_position() {
+        let cfg = RailConfig {
+            reverse: true,
+            board_zero_domain_m: 0.705,
+            x_min_m: 0.0,
+            x_max_m: 1.41,
+            ..RailConfig::default()
+        };
+        assert!((cfg.board_to_domain_abs(-0.647304) - 1.352304).abs() < 1e-12);
+        assert!((cfg.domain_to_board_abs(0.710) - -0.005).abs() < 1e-12);
+    }
+
+    #[test]
+    fn command_position_compensates_axl_actual_command_origin_gap() {
+        let command_target =
+            RailConfig::command_position_for_actual_target(-0.005, -0.5742, -0.055);
+        assert!((command_target - 0.5142).abs() < 1e-12);
+    }
+
+    #[test]
+    fn command_based_soft_limits_include_axl_origin_gap() {
+        let cfg = RailConfig {
+            reverse: true,
+            board_zero_domain_m: 0.705,
+            x_min_m: 0.0,
+            x_max_m: 1.41,
+            soft_limit_selection: 0,
+            ..RailConfig::default()
+        };
+        let args = cfg.soft_limit_args_for_command_offset(0.5192);
+        assert!((args.positive_m - 1.2242).abs() < 1e-12);
+        assert!((args.negative_m - -0.1858).abs() < 1e-12);
     }
 
     #[test]

@@ -356,7 +356,7 @@ mod tests {
         return (*crate::defaults::urdf_4dof().expect("urdf").arm).clone();
     }
 
-    /// 피처 브랜치가 실기 관절속도(~2.88 rad/s)로 검증한 마운트.
+    /// 피처 브랜치가 실기 관절속도(~5.18 rad/s)로 검증한 마운트.
     fn competition_arm() -> Arm {
         let mount_z = table::SURFACE_Z + 0.05;
         return (*crate::defaults::primitive_4dof_with_mount(-0.02, mount_z)

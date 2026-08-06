@@ -50,7 +50,7 @@ pub struct SimDebugSnapshot {
     /// `.omc/plans/2026-07-31-nonzero-impact-knot-acceleration.md`.
     pub impact_acceleration: Vec<f64>,
     /// `set_torque_now`용 RNEA 스크래치 — 매 틱(최대 1kHz) 재할당을 피하려고
-    /// 재사용한다 (`src/planner/swing/physics.rs`의 스크래치 재사용 패턴과 동일).
+    /// 재사용한다 (`src/robot/motion/physics.rs`의 스크래치 재사용 패턴과 동일).
     torque_scratch: crate::robot::dynamics::RneaScratch,
 }
 

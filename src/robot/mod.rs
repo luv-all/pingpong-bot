@@ -8,6 +8,7 @@
 
 pub mod build;
 pub mod collision;
+pub mod control;
 pub mod dynamics;
 pub mod motion;
 pub mod rail;

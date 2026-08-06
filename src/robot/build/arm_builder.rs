@@ -60,6 +60,7 @@ impl ArmBuilder {
         mount_z: f64,
         x_min: f64,
         x_max: f64,
+        default_x: f64,
         max_speed: f64,
     ) -> Self {
         return self.rail(LinearRail {
@@ -67,6 +68,7 @@ impl ArmBuilder {
             mount_z,
             x_min,
             x_max,
+            default_x,
             max_speed,
         });
     }

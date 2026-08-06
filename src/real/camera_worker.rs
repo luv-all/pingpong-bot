@@ -1,12 +1,12 @@
-//! 카메라 1대 워커 — 캡처 → 왜곡 보정 → 검출 → [`VisionEvent`].
+//! 카메라 1대 워커 — 캡처 → (왜곡 보정) → 검출 → [`VisionEvent`].
 //!
-//! `FrameSource`와 `Detector`를 **단독 소유**한다. 카메라마다 스레드가 따로라 검출이
-//! 병렬로 돈다 — 필터는 [`super::estimator_worker`]가 혼자 들고 결과만 받는다.
+//! `FrameSource`와 `Detector`를 **단독 소유**한다. 바깥에서 검출기 상태(ROI 추적 등)를 만질
+//! 방법이 없다.
 
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Sender, TrySendError};
+use crossbeam_channel::{Receiver, Sender, TrySendError};
 use opencv::prelude::MatTraitConst;
 use pingpong_bot::camera;
 use pingpong_bot::camera::FrameSource;
@@ -55,9 +55,12 @@ pub fn spawn(
     mut detector: Box<Detector>,
     params: camera::Params,
     tx: Sender<VisionEvent>,
+    evict_rx: Receiver<VisionEvent>,
     shutdown: Shutdown,
 ) -> JoinHandle<CameraStats> {
     let camera_id = source.camera_id();
+    // 커밋된 calibration은 dist가 비어 있다 (table-PnP). 그 경우 프레임당 remap을 통째로 건너뛴다.
+    let needs_undistort = !params.dist.is_empty();
 
     return thread::spawn(move || {
         let _span = info_span!("cam", id = camera_id.0).entered();
@@ -86,14 +89,17 @@ pub fn spawn(
             }
             last_timestamp = Some(frame.timestamp);
 
-            // dist 가 비어 있으면 (table-PnP 캘리브) 그대로 지나간다.
-            let frame = match frame.undistorted(&params) {
-                Ok(frame) => frame,
-                Err(error) => {
-                    stats.undistort_failures += 1;
-                    warn!(%error, "undistort 실패 — 프레임 스킵");
-                    continue;
+            let frame = if needs_undistort {
+                match frame.undistorted(&params) {
+                    Ok(undistorted) => undistorted,
+                    Err(error) => {
+                        stats.undistort_failures += 1;
+                        warn!(%error, "undistort 실패 — 프레임 스킵");
+                        continue;
+                    }
                 }
+            } else {
+                frame
             };
 
             // 캘리브 해상도와 실제 프레임 크기가 다르면 fx/fy/cx/cy가 이 이미지에 안 맞는다 —
@@ -119,7 +125,7 @@ pub fn spawn(
             let found = match detector.detect(&frame, None) {
                 Ok(found) => found,
                 Err(error) => {
-                    warn!(%error, "검출 실패 — 프레임 스킵");
+                    warn!(%error, "새 비전 캐스케이드 검출 실패 — 프레임 스킵");
                     continue;
                 }
             };
@@ -127,10 +133,16 @@ pub fn spawn(
                 stats.detections += 1;
             }
 
-            match tx.try_send(VisionEvent { frame, found }) {
+            let event = VisionEvent { frame, found };
+            match tx.try_send(event) {
                 Ok(()) => {}
-                // 실시간 경로 — 밀린 프레임은 쓸모가 없다. 버리고 센다.
-                Err(TrySendError::Full(_)) => stats.dropped += 1,
+                // 실시간 경로: 버퍼가 차면 새 프레임을 버리지 말고
+                // 가장 오래된 프레임 하나를 빼서 최신 캡처를 남긴다.
+                Err(TrySendError::Full(event)) => {
+                    let _ = evict_rx.try_recv();
+                    let _ = tx.try_send(event);
+                    stats.dropped += 1;
+                }
                 Err(TrySendError::Disconnected(_)) => break,
             }
 

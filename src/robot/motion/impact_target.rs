@@ -48,7 +48,7 @@ pub(crate) fn impact_target_from_candidate(arm: &Arm, candidate: ImpactCandidate
                 (0, 0.0_f64),
                 |acc, cur| if cur.1 > acc.1 { cur } else { acc },
             );
-        // 예전엔 여기서 NearSingularity로 하드 거절했다. 실기 관절속도(~2.88)
+        // 예전엔 여기서 NearSingularity로 하드 거절했다. 실기 관절속도(~5.18)
         // + 현재 마운트/슈터에서는 거의 모든 샷이 걸려 **스윙이 한 번도
         // commit되지 않았다**(시뮬 로그: streak→tti 포기). 목표 관절속도만
         // 한계로 스케일해 약한 스윙이라도 나가게 한다 — fit_end_velocity가

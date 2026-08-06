@@ -3,6 +3,32 @@
 use crate::hardware::dynamixel::{DynamixelConfig, MirrorSlave};
 use crate::hardware::rail::RailConfig;
 
+use super::motion::RAIL_ACCEL_M_S2;
+
+/// 실기 좌측 안전 마진 [m].
+pub const RAIL_LEFT_END_MARGIN_M: f64 = 0.0100;
+/// 실기 우측 안전 마진 [m].
+pub const RAIL_RIGHT_END_MARGIN_M: f64 = 0.0705;
+/// 실기에서 확인한 레일 좌표 범위 [m].
+pub const RAIL_PHYSICAL_X_MIN_M: f64 = 0.0;
+pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
+/// AXL 보드 실측 원점(보드 0.0m)에 대응하는 제어 좌표 [m].
+///
+/// 기하학적 원점 0.705m에 발사기 기준 오른쪽 정렬 보정 2.5cm를 더했다.
+/// `reverse=true`에서 이 값을 늘리면 모든 실물 명령이 보드 +방향으로 이동한다.
+pub const RAIL_BOARD_ZERO_DOMAIN_M: f64 = 0.7300;
+/// sim·real 공통 이동 범위 [m].
+pub const RAIL_X_MIN_M: f64 = RAIL_PHYSICAL_X_MIN_M + RAIL_LEFT_END_MARGIN_M;
+pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_RIGHT_END_MARGIN_M;
+/// 탁구대 실측 중앙 보정 위치 [m].
+pub const RAIL_READY_X_M: f64 = 0.6750;
+/// 손목 q3(ID 5) 실물 혼·라켓 장착 영점 보정 [rad].
+///
+/// 2026-08-06 시작 자세에서 Goal-Present는 5 tick으로 정상이었지만,
+/// 모델은 라켓 면 +6.76°를 예측하는 반면 실물은 거의 0°(수직)이었다.
+/// 원래 벤치 기준 +8°를 복원하도록 모터 목표를 -8° 더 돌린다.
+pub const WRIST_JOINT_ZERO_OFFSET_RAD: f64 = -8.0_f64.to_radians();
+
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.
     fn default() -> Self {
@@ -29,11 +55,13 @@ impl Default for DynamixelConfig {
             current_limit_max_by_id: vec![(1, 1941), (2, 1941), (3, 1941)],
             profile_acceleration: 0,
             profile_velocity: 0,
-            comm_retries: 5,
-            comm_retry_delay_ms: 20,
+            // 모터 구동 중 노이즈로 발생하는 일시적 timeout/checksum 오류를 흡수한다.
+            comm_retries: 8,
+            comm_retry_delay_ms: 30,
             stream_hz: 200.0,
             joint_signs: vec![-1, -1, 1, 1],
-            joint_offsets_rad: vec![0.0; 4],
+            // q0~q2는 엔코더 영점을 그대로 쓰고, q3는 실측 장착각을 보정한다.
+            joint_offsets_rad: vec![0.0, 0.0, 0.0, WRIST_JOINT_ZERO_OFFSET_RAD],
             // 모터 절대각 한계 [deg] — `motor_deg = 180 + sign·joint_deg` (zero_tick 2048 = 180°).
             //
             // **URDF 관절 한계에 맞춘다 (2026-07-31).** 예전 값은 파이썬 매니퓰레이터에서
@@ -83,13 +111,16 @@ impl Default for RailConfig {
             irq_no: 7,
             pulses_per_meter: 250_000,
             reverse: true,
-            x_min_m: 0.0,
-            x_max_m: 1.41,
-            vel: 5.0,
-            accel: 12.0,
-            decel: 12.0,
+            board_zero_domain_m: RAIL_BOARD_ZERO_DOMAIN_M,
+            x_min_m: RAIL_X_MIN_M,
+            x_max_m: RAIL_X_MAX_M,
+            physical_x_min_m: RAIL_PHYSICAL_X_MIN_M,
+            physical_x_max_m: RAIL_PHYSICAL_X_MAX_M,
+            vel: 11.25,
+            accel: RAIL_ACCEL_M_S2,
+            decel: RAIL_ACCEL_M_S2,
             min_vel: 0.001,
-            max_vel: 5.0,
+            max_vel: 11.25,
             pulse_out_method: 4,
             enc_input_method: 3,
             abs_rel_mode: 0,

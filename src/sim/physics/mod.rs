@@ -3,7 +3,6 @@
 pub mod arm_bodies;
 mod ball_state;
 mod bang_bang_worker;
-mod rapier_convert;
 mod step_input;
 pub mod world;
 
