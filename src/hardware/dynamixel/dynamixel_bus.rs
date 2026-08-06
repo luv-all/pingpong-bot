@@ -71,7 +71,8 @@ const CLAMP_WARN_PERIOD: std::time::Duration = std::time::Duration::from_secs(1)
 /// 듀얼 모터가 약 3.5° 이상 어긋나면 기계적으로 싸우거나 영점이 틀린 것으로 본다.
 const MIRROR_ALIGNMENT_MAX_ERROR_TICKS: i32 = 40;
 
-/// 전체 SyncRead가 불안정한 버스에서 모터별로 Present Position을 읽는다.
+/// 전체 SyncRead가 불안정한 버스에서 모터별 일반 Read로
+/// Present Position을 읽는다. ID 하나에 broadcast SyncRead를 쓰지 않는다.
 #[cfg(feature = "real")]
 fn read_present_positions_individually(
     real: &mut RealBackend,
@@ -83,21 +84,16 @@ fn read_present_positions_individually(
 ) -> Result<Vec<Vec<u8>>, HwError> {
     let mut recovered = Vec::with_capacity(ids.len());
     for id in ids {
-        let mut one = real
-            .sync_read_with_retry(&[*id], address, 4, retries, retry_delay_ms)
+        let bytes = real
+            .read_with_retry(*id, address, 4, retries, retry_delay_ms)
             .map_err(|error| {
                 let group_context = group_error.map_or_else(String::new, |group| {
                     format!(", group_error={group}")
                 });
                 read_transport_error(format!(
-                    "Present Position ID별 sync_read 실패 (addr={address}, id={id}{group_context}): {error}"
+                    "Present Position ID별 read 실패 (addr={address}, id={id}{group_context}): {error}"
                 ))
             })?;
-        let bytes = one.pop().ok_or_else(|| {
-            read_transport_error(format!(
-                "Present Position ID별 sync_read 빈 응답 (addr={address}, id={id})"
-            ))
-        })?;
         recovered.push(bytes);
     }
     return Ok(recovered);
@@ -261,6 +257,15 @@ impl DynamixelBus {
                     "시리얼 포트 열기 실패 ({} @ {} baud): {error}",
                     mapping.config.port, mapping.config.baudrate
                 ))
+            })?;
+        // Windows에서 COM 포트를 열면 USB 어댑터의 DTR/RTS 상태가
+        // 바뀌며 수신 버퍼에 불완전한 바이트가 남을 수 있다. 모터에
+        // 아무 명령도 보내지 않고 잠시 기다린 뒤 RX만 비워 첫 안전
+        // 정렬 검사가 잔여 패킷을 읽지 않게 한다.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        port.clear(serialport::ClearBuffer::Input)
+            .map_err(|error| {
+                read_transport_error(format!("시리얼 포트 초기 RX 버퍼 정리 실패: {error}"))
             })?;
         let bus = Self {
             mapping,
