@@ -42,7 +42,11 @@ fn main() -> Result<()> {
     }
 
     let args = Args::parse();
-    init_tracing(args.debug, &["pingpong_bot"], matches!(args.mode, ModeArg::Real));
+    init_tracing(
+        args.debug,
+        &["pingpong_bot"],
+        matches!(args.mode, ModeArg::Real),
+    );
     if args.debug {
         info!("debug 로그 활성");
     }

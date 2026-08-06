@@ -87,10 +87,8 @@ mod tests {
 
     #[test]
     fn open_latency_file_creates_directory_and_unique_jsonl() {
-        let base = std::env::temp_dir().join(format!(
-            "pingpong_latency_test_{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("pingpong_latency_test_{}", std::process::id()));
         let base_str = base.to_str().expect("temp 경로는 유효한 UTF-8").to_owned();
         let _ = std::fs::remove_dir_all(&base);
 

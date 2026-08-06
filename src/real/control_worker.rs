@@ -117,7 +117,11 @@ fn camera_to_fit_ms(request: &CommitRequest) -> f64 {
         return 0.0;
     };
     let capture_at = request.trajectory.origin + last.t;
-    return request.at.saturating_duration_since(capture_at).as_secs_f64() * 1e3;
+    return request
+        .at
+        .saturating_duration_since(capture_at)
+        .as_secs_f64()
+        * 1e3;
 }
 
 /// 새 비전의 전체 예측 궤적에서 제어가 사용할 접수 평면을 고른다.
@@ -1066,6 +1070,9 @@ pub(super) fn initialize_pose(
 ) -> Result<pingpong_bot::robot::Pose, MoveError> {
     let ready = initialize_pose_attempt(hardware, arm, true)?;
     log_startup_racket_geometry(arm, &ready);
+    // 엔코더상 정상이지만 실물 라켓 기울기가 다른 경우를 구분하려면
+    // 손목(ID 5)의 Goal/Present tick과 Torque/Error를 같은 시점에 봐야 한다.
+    hardware.log_joint_diagnostics();
     return Ok(ready);
 }
 
@@ -1118,6 +1125,34 @@ fn log_startup_racket_geometry(arm: &Arm, pose: &pingpong_bot::robot::Pose) {
         .z
         .atan2(racket.normal.x.hypot(racket.normal.y))
         .to_degrees();
+    let wrist_measured_deg = pose
+        .joints
+        .values
+        .get(3)
+        .copied()
+        .unwrap_or(0.0)
+        .to_degrees();
+    let wrist_target_deg = arm
+        .default_joints
+        .values
+        .get(3)
+        .copied()
+        .unwrap_or(0.0)
+        .to_degrees();
+    let model_face_with_wrist_delta = |delta_deg: f64| {
+        let mut joints = pose.joints.clone();
+        if let Some(wrist) = joints.values.get_mut(3) {
+            *wrist += delta_deg.to_radians();
+        }
+        arm.forward_kinematics_with_rail(pose.rail_x, &joints)
+            .map(|candidate| {
+                candidate
+                    .normal
+                    .z
+                    .atan2(candidate.normal.x.hypot(candidate.normal.y))
+                    .to_degrees()
+            })
+    };
     let vertical_half_extent = axis_x.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_X
         + blade_axis.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_Y
         + axis_normal.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_Z;
@@ -1153,6 +1188,17 @@ fn log_startup_racket_geometry(arm: &Arm, pose: &pingpong_bot::robot::Pose) {
         model_collision_blade_length_m = f4(2.0 * pingpong_bot::constants::geometry::RACKET_HALF_Y),
         bench_total_racket_length_m = f4(BENCH_RACKET_TOTAL_LENGTH_M),
         "초기 라켓 기하 검증 — 모델 계산값과 벤치 실측 비교"
+    );
+    info!(
+        wrist_joint_index = 3,
+        wrist_motor_id = 5,
+        wrist_target_deg = f2(wrist_target_deg),
+        wrist_measured_deg = f2(wrist_measured_deg),
+        wrist_target_minus_measured_deg = f2(wrist_target_deg - wrist_measured_deg),
+        model_face_now_deg = f2(face_above_horizontal_deg),
+        model_face_if_wrist_minus_8_deg = ?model_face_with_wrist_delta(-8.0).map(f2),
+        model_face_if_wrist_plus_8_deg = ?model_face_with_wrist_delta(8.0).map(f2),
+        "손목 영점 보정 진단 — 실물 라켓 면 기울기를 자로 확인해 비교"
     );
 }
 
