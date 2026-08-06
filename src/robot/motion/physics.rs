@@ -26,7 +26,11 @@ use super::quintic_segment::QuinticSegment;
 use super::rail::Rail;
 use super::trajectory::Trajectory;
 
-/// 수직으로 다시 풀었을 때 실수 연산 오차로 인정하는 법선 z.
+/// 실제 타격 정렬에서 라켓 면이 위를 보는 최소 각도.
+const ALIGNMENT_MIN_UPWARD_TILT_DEG: f64 = 15.0;
+/// `sin(15°)`. FK 법선 z가 이 값 이상이어야 실기 명령을 허용한다.
+const ALIGNMENT_MIN_UPWARD_NORMAL_Z: f64 = 0.258_819_045_102_520_74;
+/// 15° 자세가 불가해 기존 자세로 복귀했을 때 아래를 보지 않는지 판정하는 오차.
 const ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE: f64 = 1e-6;
 
 /// 임팩트까지 남은 시간이 스윙 commit 창 `(0, COMMIT_MAX]` 안인지.
@@ -583,7 +587,8 @@ pub fn plan_ball_alignment(
     } else {
         Vector3::y()
     };
-    let mut target_normal = horizontal_normal;
+    let tilt_rad = ALIGNMENT_MIN_UPWARD_TILT_DEG.to_radians();
+    let mut target_normal = horizontal_normal * tilt_rad.cos() + Vector3::z() * tilt_rad.sin();
     let contact_offset = crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z;
     let mut racket_center = Point3::from(
         corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
@@ -611,16 +616,20 @@ pub fn plan_ball_alignment(
                 target_z: corrected_ball.z,
             })
         })?;
-    // 위를 보는 해는 그대로 쓴다. 다만 근사 IK가 라켓 면을 아래로
-    // 뒤집으면, 그 해를 실기에 보내지 않고 수직 법선으로 정확히 다시 푼다.
-    if reached.normal.z < -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE {
+    // 15°를 만들 수 없으면 명령을 버리지 않고 기존 수평 법선 정렬로 복귀한다.
+    if reached.normal.z < ALIGNMENT_MIN_UPWARD_NORMAL_Z {
         target_normal = horizontal_normal;
         racket_center = Point3::from(
             corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
                 - target_normal * contact_offset,
         );
-        aligned_pose = arm
-            .inverse_pose_with_rail(racket_center, target_normal, &hint, robot::IkSearch::Global)
+        (aligned_pose, _) = arm
+            .inverse_pose_with_rail_best_normal(
+                racket_center,
+                target_normal,
+                &hint,
+                robot::IkSearch::Global,
+            )
             .map_err(DomainError::InfeasibleSwing)?;
         reached = arm
             .forward_kinematics_with_rail(aligned_pose.rail_x, &aligned_pose.joints)
@@ -631,6 +640,26 @@ pub fn plan_ball_alignment(
                     target_z: corrected_ball.z,
                 })
             })?;
+        // 기존 해도 아래를 보면 수직 법선을 엄격하게 맞춘다.
+        if reached.normal.z < -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE {
+            aligned_pose = arm
+                .inverse_pose_with_rail(
+                    racket_center,
+                    target_normal,
+                    &hint,
+                    robot::IkSearch::Global,
+                )
+                .map_err(DomainError::InfeasibleSwing)?;
+            reached = arm
+                .forward_kinematics_with_rail(aligned_pose.rail_x, &aligned_pose.joints)
+                .ok_or_else(|| {
+                    DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                        target_x: corrected_ball.x,
+                        target_y: corrected_ball.y,
+                        target_z: corrected_ball.z,
+                    })
+                })?;
+        }
     }
     if reached.normal.dot(&horizontal_normal) <= 0.0
         || reached.normal.z < -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE
@@ -666,7 +695,8 @@ pub fn plan_ball_alignment_fixed_rail(
     } else {
         Vector3::y()
     };
-    let mut target_normal = horizontal_normal;
+    let tilt_rad = ALIGNMENT_MIN_UPWARD_TILT_DEG.to_radians();
+    let mut target_normal = horizontal_normal * tilt_rad.cos() + Vector3::z() * tilt_rad.sin();
     let contact_offset = crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z;
     let mut racket_center = Point3::from(
         corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
@@ -691,8 +721,8 @@ pub fn plan_ball_alignment_fixed_rail(
                 target_z: corrected_ball.z,
             })
         })?;
-    // 레일을 고정한 실시간 보정도 아래를 보는 해만 수직으로 다시 푼다.
-    if reached.normal.z < -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE {
+    // 고정 레일 미세 보정에서 15°가 불가하면 기존 수평 법선 해를 사용한다.
+    if reached.normal.z < ALIGNMENT_MIN_UPWARD_NORMAL_Z {
         target_normal = horizontal_normal;
         racket_center = Point3::from(
             corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
@@ -1700,8 +1730,8 @@ mod tests {
             reached.normal
         );
         assert!(
-            reached.normal.z >= -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE,
-            "라켓 면이 아래를 보면 안 됨: normal={:?}",
+            reached.normal.z >= ALIGNMENT_MIN_UPWARD_NORMAL_Z,
+            "라켓 면이 최소 15° 위를 봐야 함: normal={:?}",
             reached.normal
         );
         let contact = reached.position.coords
@@ -1723,7 +1753,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_rail_ball_alignment_never_commands_a_downward_racket() {
+    fn fixed_rail_ball_alignment_uses_safe_original_pose_when_fifteen_degrees_is_unreachable() {
         let active = crate::defaults::robot().expect("active robot");
         let arm = &active.arm;
         let rail_x = arm.rail.expect("rail").default_x();
@@ -1743,15 +1773,14 @@ mod tests {
             Err(DomainError::InfeasibleSwing(SwingPlanError::RacketOrientationUnreachable {
                 ..
             })) => {
-                // 고정 레일에서 수직 면을 만들 수 없으면 아래를 보는
-                // 근사 해를 명령하지 않고 이 미세 보정을 건너뛴다.
+                // 15°와 기존 수직 자세 모두 불가할 때만 미세 보정을 건너뛴다.
             }
             Err(error) => panic!("unexpected fixed rail alignment error: {error}"),
         }
     }
 
     #[test]
-    fn high_ball_alignment_never_points_racket_face_downward() {
+    fn high_ball_alignment_keeps_at_least_fifteen_degrees_upward() {
         let active = crate::defaults::robot().expect("active robot");
         let arm = &active.arm;
         let start = robot::Pose::new(
@@ -1768,8 +1797,8 @@ mod tests {
             .expect("high alignment FK");
 
         assert!(
-            reached.normal.z >= -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE,
-            "높은 공에서도 라켓 면이 아래를 보면 안 됨: {:?}",
+            reached.normal.z >= ALIGNMENT_MIN_UPWARD_NORMAL_Z,
+            "높은 공에서도 라켓 면이 최소 15° 위를 봐야 함: {:?}",
             reached.normal
         );
     }
