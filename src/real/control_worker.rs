@@ -972,8 +972,56 @@ pub(super) fn initialize_pose(
     arm: &Arm,
 ) -> Result<pingpong_bot::robot::Pose, MoveError> {
     let ready = initialize_pose_attempt(hardware, arm, true)?;
+    let ready = run_startup_rail_jog(hardware, arm, ready)?;
     log_startup_racket_geometry(arm, &ready);
     return Ok(ready);
+}
+
+/// 중립 초기화가 끝난 뒤 관절은 고정하고 레일만 +X 안전 마진 끝까지 이동했다가
+/// 중앙으로 복귀한다. 두 구간 모두 기존 홈 복귀 속도 비율(1/3)을 사용한다.
+fn run_startup_rail_jog(
+    hardware: &mut dyn Hardware,
+    arm: &Arm,
+    ready: pingpong_bot::robot::Pose,
+) -> Result<pingpong_bot::robot::Pose, MoveError> {
+    let Some(rail) = arm.rail else {
+        return Ok(ready);
+    };
+    let center_x = rail.default_x();
+    let positive_x = rail.x_max;
+    if positive_x - center_x <= f64::EPSILON {
+        warn!(
+            center_x = f4(center_x),
+            "시작 레일 +X 왕복 생략 — 중앙이 +X 한계"
+        );
+        return Ok(ready);
+    }
+
+    let mut current = ready;
+    for (phase, target_x) in [("positive", positive_x), ("center", center_x)] {
+        let trajectory = Planner::move_to_at_speed_ratio(
+            arm,
+            &current,
+            current.joints.clone(),
+            target_x,
+            pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+        )
+        .map_err(MoveError::Plan)?;
+        info!(
+            phase,
+            rail_start_m = f4(current.rail_x),
+            rail_target_m = f4(target_x),
+            duration_secs = f4(trajectory.duration_secs),
+            speed_ratio = pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+            "시작 레일 +X 왕복"
+        );
+        hardware.command(&trajectory).map_err(MoveError::Hardware)?;
+        while hardware.is_busy() {
+            thread::sleep(BUSY_POLL);
+        }
+        current = hardware.read_pose().map_err(MoveError::Hardware)?;
+    }
+    return Ok(current);
 }
 
 /// 직전 모터 목표에 `commanded - measured`를 누적한다.
@@ -1639,6 +1687,7 @@ mod tests {
 
     struct PoseApplyingHardware {
         pose: Pose,
+        rail_targets: Vec<f64>,
     }
 
     impl Hardware for PoseApplyingHardware {
@@ -1646,6 +1695,7 @@ mod tests {
             &mut self,
             trajectory: &pingpong_bot::robot::motion::Trajectory,
         ) -> Result<(), HwError> {
+            self.rail_targets.push(trajectory.follow_through_rail_x);
             self.pose = Pose::new(
                 trajectory.follow_through_rail_x,
                 trajectory.end_joints().clone(),
@@ -1664,6 +1714,7 @@ mod tests {
         let rail = robot.arm.rail.expect("rail");
         let mut hardware = PoseApplyingHardware {
             pose: Pose::new(rail.x_min, Joints::from_slice(&[0.0; 4])),
+            rail_targets: Vec::new(),
         };
 
         let initialized = initialize_pose(&mut hardware, &robot.arm).expect("initialize");
@@ -1672,6 +1723,11 @@ mod tests {
 
         assert!((initialized.rail_x - rail.default_x()).abs() < 1e-12);
         assert_eq!(initialized.joints, expected.follow_through);
+        assert_eq!(
+            &hardware.rail_targets[hardware.rail_targets.len() - 2..],
+            &[rail.x_max, rail.default_x()],
+            "초기화 끝에 레일이 +X 안전 마진 끝까지 갔다가 중앙으로 복귀해야 함"
+        );
     }
 
     #[test]
@@ -1850,6 +1906,7 @@ mod tests {
         let rail = robot.arm.rail.expect("rail 있는 로봇");
         let mut hardware = PoseApplyingHardware {
             pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
+            rail_targets: Vec::new(),
         };
         let mut latch = CommandLatch::default();
         assert_eq!(
@@ -1917,6 +1974,7 @@ mod tests {
         let rail = robot.arm.rail.expect("rail 있는 로봇");
         let mut hardware = PoseApplyingHardware {
             pose: Pose::new(rail.x_max, robot.arm.default_joints.clone()),
+            rail_targets: Vec::new(),
         };
         let mut latch = CommandLatch::default();
         let mut state = BallControlState::Idle;
@@ -1958,6 +2016,7 @@ mod tests {
         let rail = robot.arm.rail.expect("rail 있는 로봇");
         let mut hardware = PoseApplyingHardware {
             pose: Pose::new(rail.x_max, robot.arm.default_joints.clone()),
+            rail_targets: Vec::new(),
         };
         let mut latch = CommandLatch::default();
         let mut state = BallControlState::Waiting;
@@ -1997,6 +2056,7 @@ mod tests {
         let rail = robot.arm.rail.expect("rail 있는 로봇");
         let mut hardware = PoseApplyingHardware {
             pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
+            rail_targets: Vec::new(),
         };
         let mut latch = CommandLatch::default();
         let mut state = BallControlState::Waiting;
@@ -2041,6 +2101,7 @@ mod tests {
         let rail = robot.arm.rail.expect("rail 있는 로봇");
         let mut hardware = PoseApplyingHardware {
             pose: Pose::new(rail.x_min, robot.arm.default_joints.clone()),
+            rail_targets: Vec::new(),
         };
         let mut latch = CommandLatch::default();
         let mut state = BallControlState::Idle;

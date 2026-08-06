@@ -14,14 +14,26 @@ pub const RAIL_PHYSICAL_X_MIN_M: f64 = 0.0;
 pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
 /// AXL 보드 실측 원점(보드 0.0m)에 대응하는 제어 좌표 [m].
 ///
-/// 기하학적 원점 0.705m에 발사기 기준 오른쪽 정렬 보정 2.5cm를 더했다.
-/// `reverse=true`에서 이 값을 늘리면 모든 실물 명령이 보드 +방향으로 이동한다.
-pub const RAIL_BOARD_ZERO_DOMAIN_M: f64 = 0.7300;
+/// 레일 기하학적 원점에 더하는 논리 +X 좌표계 보정 [m].
+/// 타격 목표나 IK 결과가 아니라 AXL board↔domain 좌표 변환에 한 번만 적용한다.
+pub const RAIL_COORDINATE_POSITIVE_X_OFFSET_M: f64 = 0.040;
+/// 보드 실측 0.745m를 준비 중앙 0.675m로 해석하는 영점 이동.
+pub const RAIL_POSITIVE_X_TRIM_M: f64 = 0.030;
+pub const RAIL_NEGATIVE_X_ZERO_SHIFT_M: f64 =
+    (RAIL_PHYSICAL_X_MAX_M - RAIL_PHYSICAL_X_MIN_M) / 2.0 - RAIL_POSITIVE_X_TRIM_M;
+pub const RAIL_BOARD_ZERO_DOMAIN_M: f64 =
+    0.7050 + RAIL_COORDINATE_POSITIVE_X_OFFSET_M + RAIL_NEGATIVE_X_ZERO_SHIFT_M;
 /// sim·real 공통 이동 범위 [m].
 pub const RAIL_X_MIN_M: f64 = RAIL_PHYSICAL_X_MIN_M + RAIL_LEFT_END_MARGIN_M;
 pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_RIGHT_END_MARGIN_M;
 /// 탁구대 실측 중앙 보정 위치 [m].
 pub const RAIL_READY_X_M: f64 = 0.6750;
+
+/// 손목 q3(ID 5) 실물 혼·라켓 장착 영점 보정 [rad].
+pub const WRIST_JOINT_ZERO_OFFSET_RAD: f64 = -8.0_f64.to_radians();
+
+/// 하단 듀얼 MX-64 q0(ID 1·2) 재조립 혼 영점 보정 [rad].
+pub const BASE_JOINT_ZERO_OFFSET_RAD: f64 = 45.0_f64.to_radians();
 
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.
@@ -54,7 +66,13 @@ impl Default for DynamixelConfig {
             comm_retry_delay_ms: 30,
             stream_hz: 200.0,
             joint_signs: vec![-1, -1, 1, 1],
-            joint_offsets_rad: vec![0.0; 4],
+            // q0는 하단 듀얼 혼 재조립각, q3는 라켓 장착각을 보정한다.
+            joint_offsets_rad: vec![
+                BASE_JOINT_ZERO_OFFSET_RAD,
+                0.0,
+                0.0,
+                WRIST_JOINT_ZERO_OFFSET_RAD,
+            ],
             // 모터 절대각 한계 [deg] — `motor_deg = 180 + sign·joint_deg` (zero_tick 2048 = 180°).
             //
             // **URDF 관절 한계에 맞춘다 (2026-07-31).** 예전 값은 파이썬 매니퓰레이터에서

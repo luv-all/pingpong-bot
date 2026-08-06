@@ -435,7 +435,7 @@ mod tests {
             RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
         let trajectory = motion::Trajectory::new(
             Joints::from_slice(&[0.0; 4]),
-            Joints::from_slice(&[0.05; 4]),
+            Joints::from_slice(&[0.10, 0.05, 0.05, 0.05]),
             vec![0.0; 4],
             vec![0.0; 4],
             0.04,
@@ -453,8 +453,9 @@ mod tests {
 
         let pose = hardware.read_pose().expect("pose");
         assert!((pose.rail_x - 0.25).abs() < 1e-9);
-        for angle in pose.joints.values {
-            assert!((angle - 0.05).abs() < 0.002);
+        assert!((pose.joints.values[0] - 0.10).abs() < 0.002);
+        for angle in &pose.joints.values[1..] {
+            assert!((*angle - 0.05).abs() < 0.002);
         }
     }
 
