@@ -90,7 +90,7 @@ JSON Lines 파일에 남긴다.
 
 - [ ] **Step 2: 컴파일 실패 확인**
 
-Run: `cargo test -p pingpong-bot --lib real::control_worker::tests::camera_to_fit_ms`
+Run: `cargo test -p pingpong-bot --bin pingpong-bot real::control_worker::tests::camera_to_fit_ms`
 
 Expected: FAIL — `cannot find function 'camera_to_fit_ms' in this scope`.
 
@@ -116,7 +116,7 @@ fn camera_to_fit_ms(request: &CommitRequest) -> f64 {
 
 - [ ] **Step 4: 테스트 통과 확인**
 
-Run: `cargo test -p pingpong-bot --lib real::control_worker::tests::camera_to_fit_ms`
+Run: `cargo test -p pingpong-bot --bin pingpong-bot real::control_worker::tests::camera_to_fit_ms`
 
 Expected: PASS (2 tests).
 
@@ -191,7 +191,7 @@ git commit -m "feat(real): add camera_to_fit_ms latency helper"
 
 - [ ] **Step 2: 컴파일 실패 확인**
 
-Run: `cargo test -p pingpong-bot --lib real::control_worker::tests::log_motion_done_if_idle`
+Run: `cargo test -p pingpong-bot --bin pingpong-bot real::control_worker::tests::log_motion_done_if_idle`
 
 Expected: FAIL — `cannot find function 'log_motion_done_if_idle' in this scope`.
 
@@ -231,7 +231,7 @@ fn log_motion_done_if_idle(
 
 - [ ] **Step 4: 테스트 통과 확인**
 
-Run: `cargo test -p pingpong-bot --lib real::control_worker::tests::log_motion_done_if_idle`
+Run: `cargo test -p pingpong-bot --bin pingpong-bot real::control_worker::tests::log_motion_done_if_idle`
 
 Expected: PASS.
 
