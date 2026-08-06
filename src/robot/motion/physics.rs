@@ -1011,18 +1011,59 @@ pub fn plan_move_to(
     center_joints: Joints,
     center_rail_x: f64,
 ) -> Result<Trajectory, DomainError> {
-    return plan_move_to_at_speed_ratio(arm, start, center_joints, center_rail_x, 1.0);
+    return plan_move_to_full_speed(arm, start, center_joints, center_rail_x);
 }
 
 /// [`plan_move_to`]와 같지만 관절·레일 속도를 `speed_ratio`(0보다 크고 1 이하)만큼
 /// 늦춘 궤적을 계획한다 — 홈 포지션 복귀처럼 랠리보다 느려도 되는 이동에 쓴다.
 /// `speed_ratio == 1.0`이면 [`plan_move_to`]와 완전히 같은 결과를 낸다.
+///
+/// 전속 탐색의 추정 시작값을 `speed_ratio`로 나눠 다시 탐색하지 않는다 — 레일
+/// 거리가 지배적인 이동에서는 그 추정값이 실제 물리적 최단 시간과 우연히
+/// 비슷해서, 탐색이 곧바로 성공해 버리면 사실상 느려지지 않는다(실측: 3배
+/// 느리길 기대했는데 1.09배). 대신 전속 탐색이 찾아낸 **실제** 최단 시간을
+/// `1/speed_ratio`로 늘려 그대로 쓴다 — 정지→정지 quintic은 시간을 늘릴수록
+/// 필요 속도·가속도·토크가 줄어들므로, 전속에서 성공한 궤적은 그보다 긴
+/// 시간에서도 성공한다.
 pub fn plan_move_to_at_speed_ratio(
     arm: &Arm,
     start: &robot::Pose,
     center_joints: Joints,
     center_rail_x: f64,
     speed_ratio: f64,
+) -> Result<Trajectory, DomainError> {
+    let full_speed = plan_move_to_full_speed(arm, start, center_joints.clone(), center_rail_x)?;
+    if speed_ratio >= 1.0 {
+        return Ok(full_speed);
+    }
+    let slow_duration = full_speed.duration_secs / speed_ratio;
+    let start_velocity = vec![0.0; start.joints.values.len()];
+    let end_velocity = vec![0.0; center_joints.values.len()];
+    let rail = Rail {
+        start: start.rail_x,
+        end: center_rail_x,
+        start_velocity: 0.0,
+        end_velocity: 0.0,
+    };
+    return build_feasible_trajectory(
+        arm,
+        &start.joints,
+        center_joints,
+        start_velocity,
+        end_velocity,
+        slow_duration,
+        rail,
+    )
+    .map_err(DomainError::InfeasibleSwing);
+}
+
+/// [`plan_move_to`]의 실제 탐색 로직 — 전속 결과가 [`plan_move_to_at_speed_ratio`]의
+/// 감속 기준(실제 최단 시간)으로도 쓰인다.
+fn plan_move_to_full_speed(
+    arm: &Arm,
+    start: &robot::Pose,
+    center_joints: Joints,
+    center_rail_x: f64,
 ) -> Result<Trajectory, DomainError> {
     let start_velocity = vec![0.0; start.joints.values.len()];
     let end_velocity = vec![0.0; center_joints.values.len()];
@@ -1040,25 +1081,23 @@ pub fn plan_move_to_at_speed_ratio(
         .fold(0.0_f64, f64::max);
     let rail_distance = (start.rail_x - center_rail_x).abs();
     let joint_time_estimate = if arm.max_joint_speed > 0.0 {
-        joint_distance / (arm.max_joint_speed * 0.5 * speed_ratio)
+        joint_distance / (arm.max_joint_speed * 0.5)
     } else {
         0.0
     };
     let rail_time_estimate = arm.rail.as_ref().map_or(0.0, |rail| {
         if rail.max_speed > 0.0 {
-            rail_distance / (rail.max_speed * 0.5 * speed_ratio)
+            rail_distance / (rail.max_speed * 0.5)
         } else {
             0.0
         }
     });
 
-    let min_duration = RETURN_TO_CENTER_MIN_SECS / speed_ratio;
-    let max_duration = RETURN_TO_CENTER_MAX_SECS / speed_ratio;
     let mut duration = joint_time_estimate
         .max(rail_time_estimate)
-        .max(min_duration);
+        .max(RETURN_TO_CENTER_MIN_SECS);
     let mut last_error = None;
-    while duration <= max_duration {
+    while duration <= RETURN_TO_CENTER_MAX_SECS {
         let rail = Rail {
             start: start.rail_x,
             end: center_rail_x,
@@ -1719,7 +1758,7 @@ mod tests {
         .expect("저속 이동 계획");
 
         assert!(
-            slow.duration_secs > full_speed.duration_secs * 2.0,
+            (slow.duration_secs - full_speed.duration_secs * 3.0).abs() < 1e-1,
             "slow={} full={}",
             slow.duration_secs,
             full_speed.duration_secs
