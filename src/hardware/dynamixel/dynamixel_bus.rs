@@ -262,7 +262,7 @@ impl DynamixelBus {
                     mapping.config.port, mapping.config.baudrate
                 ))
             })?;
-        let mut bus = Self {
+        let bus = Self {
             mapping,
             backend: BusBackend::Real(RealBackend::new(
                 rustypot::DynamixelProtocolHandler::v2(),
@@ -273,18 +273,19 @@ impl DynamixelBus {
             last_clamp_warn: None,
             limit_escapes: vec![None; joint_count],
         };
-        bus.apply_motion_profile()?;
         return Ok(bus);
     }
 
     /// Python `enable_torque`: Torque ON이면 profile 재적용 후 Torque Enable SyncWrite.
     ///
-    /// Rust 추가 안전: Torque ON 직전 Present를 Goal에 맞춰 잔여 Goal 급기동을 막는다.
+    /// Rust 추가 안전: Torque ON 직전 **버스의 각 모터** Present를 같은
+    /// 모터의 Goal에 복사해 잔여 Goal 급기동을 막는다. 미러 슬레이브도
+    /// 마스터에서 계산하지 않고 자신의 Present를 쓴다. 정렬 오류가 있는
+    /// 상태에서 계산된 미러 목표를 먼저 쓰면 Torque ON과 동시에 급회전한다.
     pub fn enable_torque(&mut self, enabled: bool) -> Result<(), HwError> {
         if enabled {
             self.apply_motion_profile()?;
-            let present = self.read_raw_ticks()?;
-            self.write_raw_goal_ticks(&present, 0.0)?;
+            self.hold_each_motor_at_present_position()?;
         }
         match &mut self.backend {
             BusBackend::DryRun { .. } => {}
@@ -304,6 +305,69 @@ impl DynamixelBus {
             }
         }
         self.torque_enabled = enabled;
+        Ok(())
+    }
+
+    /// Torque ON 직전 각 버스 ID의 Goal을 해당 ID의 Present로 맞춘다.
+    ///
+    /// 일반 관절 명령은 ID1에서 ID2 미러 목표를 만들어야 하지만, 토크를
+    /// 처음 걸 때는 구동이 아닌 현재 자세 유지가 목적이다. 따라서 ID2의
+    /// 실측값을 버리고 `mirror_tick(ID1)`을 쓰면 안 된다.
+    fn hold_each_motor_at_present_position(&mut self) -> Result<(), HwError> {
+        let dry_run_goals = match &self.backend {
+            BusBackend::DryRun { ticks, .. } => Some(self.expand_goal_ticks(ticks)),
+            #[cfg(feature = "real")]
+            BusBackend::Real(_) => None,
+        };
+        match &mut self.backend {
+            BusBackend::DryRun { last_bus_goals, .. } => {
+                // dry-run은 슬레이브 Present를 별도로 보관하지 않으므로 정렬된
+                // 실기와 같이 논리 관절값에서 미러 ID만 확장한다.
+                *last_bus_goals = dry_run_goals.expect("dry-run goals must be prepared");
+            }
+            #[cfg(feature = "real")]
+            BusBackend::Real(real) => {
+                let config = self.mapping.config.clone();
+                let ids = config.bus_ids();
+                let raw_positions = read_present_positions_individually(
+                    real,
+                    &ids,
+                    config.addr_present_position,
+                    config.comm_retries,
+                    config.comm_retry_delay_ms,
+                    None,
+                )?;
+                let data = raw_positions
+                    .into_iter()
+                    .map(|bytes| {
+                        let raw: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
+                            read_transport_error(format!(
+                                "Torque ON 전 Present Position 응답 길이 오류: got {} bytes, want 4",
+                                bytes.len()
+                            ))
+                        })?;
+                        Ok(pack_u32(u32::from_le_bytes(raw)))
+                    })
+                    .collect::<Result<Vec<_>, HwError>>()?;
+                real.sync_write_with_retry(
+                    &ids,
+                    config.addr_goal_position,
+                    &data,
+                    config.comm_retries,
+                    config.comm_retry_delay_ms,
+                )
+                .map_err(|error| {
+                    command_transport_error(
+                        0.0,
+                        ids.len(),
+                        format!(
+                            "Torque ON 전 ID별 Goal=Present sync_write 실패 (addr={}): {error}",
+                            config.addr_goal_position
+                        ),
+                    )
+                })?;
+            }
+        }
         Ok(())
     }
 

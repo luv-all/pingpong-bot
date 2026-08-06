@@ -33,6 +33,11 @@ impl RealHardware {
     pub fn new(config: DynamixelConfig, rail: Option<RailConfig>) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::open(config)?;
+        // Goal Position, Torque Enable, EEPROM 설정 중 어떤 것도 건드리기
+        // 전에 듀얼 모터 기계 정렬을 검사한다. 예전에는 enable_torque가
+        // ID2에 계산된 미러 목표를 먼저 쓴 뒤 여기서 실패해, 검사가
+        // 급동작을 막지 못했다.
+        bus.verify_mirror_alignment()?;
         bus.configure_position_mode_max_effort()?;
         bus.enable_torque(true)?;
         // 실포트: is_dry_run = false → AXL 실개방

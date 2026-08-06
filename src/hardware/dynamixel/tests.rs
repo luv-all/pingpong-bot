@@ -117,6 +117,18 @@ fn dry_run_bus_round_trips_last_written_joints() {
 }
 
 #[test]
+fn torque_enable_holds_every_bus_id_before_motion() {
+    let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
+
+    bus.enable_torque(true).expect("torque");
+
+    let goals = bus.last_bus_goals().expect("hold goals");
+    let ids: Vec<u8> = goals.iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids, vec![1, 3, 4, 5, 2]);
+    assert_eq!(goals.len(), bus.mapping.config().bus_ids().len());
+}
+
+#[test]
 fn dry_run_mirrors_slave_goal_around_zero_tick() {
     let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
     // joint0 sign=-1 → URDF +angle decreases ticks from 2048.

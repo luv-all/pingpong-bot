@@ -26,6 +26,9 @@ use super::quintic_segment::QuinticSegment;
 use super::rail::Rail;
 use super::trajectory::Trajectory;
 
+/// 수직으로 다시 풀었을 때 실수 연산 오차로 인정하는 법선 z.
+const ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE: f64 = 1e-6;
+
 /// 임팩트까지 남은 시간이 스윙 commit 창 `(0, COMMIT_MAX]` 안인지.
 ///
 /// 창보다 이르면 대기한다 (발사 직후 긴 궤적 금지 — 예측이 아직 안 여물었다).
@@ -580,10 +583,9 @@ pub fn plan_ball_alignment(
     } else {
         Vector3::y()
     };
-    let tilt_rad = IMPACT_UPWARD_TILT_DEG.to_radians();
-    let target_normal = horizontal_normal * tilt_rad.cos() + Vector3::z() * tilt_rad.sin();
+    let mut target_normal = horizontal_normal;
     let contact_offset = crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z;
-    let racket_center = Point3::from(
+    let mut racket_center = Point3::from(
         corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
             - target_normal * contact_offset,
     );
@@ -592,7 +594,7 @@ pub fn plan_ball_alignment(
         .as_ref()
         .map_or(start.rail_x, |rail| rail.clamp_x(racket_center.x));
     let hint = robot::Pose::new(hint_rail_x, start.joints.clone());
-    let (aligned_pose, _) = arm
+    let (mut aligned_pose, _) = arm
         .inverse_pose_with_rail_best_normal(
             racket_center,
             target_normal,
@@ -600,7 +602,7 @@ pub fn plan_ball_alignment(
             robot::IkSearch::Global,
         )
         .map_err(DomainError::InfeasibleSwing)?;
-    let reached = arm
+    let mut reached = arm
         .forward_kinematics_with_rail(aligned_pose.rail_x, &aligned_pose.joints)
         .ok_or_else(|| {
             DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
@@ -609,7 +611,30 @@ pub fn plan_ball_alignment(
                 target_z: corrected_ball.z,
             })
         })?;
-    if reached.normal.dot(&target_normal) <= 0.0 || reached.normal.z <= 0.0 {
+    // 위를 보는 해는 그대로 쓴다. 다만 근사 IK가 라켓 면을 아래로
+    // 뒤집으면, 그 해를 실기에 보내지 않고 수직 법선으로 정확히 다시 푼다.
+    if reached.normal.z < -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE {
+        target_normal = horizontal_normal;
+        racket_center = Point3::from(
+            corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
+                - target_normal * contact_offset,
+        );
+        aligned_pose = arm
+            .inverse_pose_with_rail(racket_center, target_normal, &hint, robot::IkSearch::Global)
+            .map_err(DomainError::InfeasibleSwing)?;
+        reached = arm
+            .forward_kinematics_with_rail(aligned_pose.rail_x, &aligned_pose.joints)
+            .ok_or_else(|| {
+                DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                    target_x: corrected_ball.x,
+                    target_y: corrected_ball.y,
+                    target_z: corrected_ball.z,
+                })
+            })?;
+    }
+    if reached.normal.dot(&horizontal_normal) <= 0.0
+        || reached.normal.z < -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE
+    {
         return Err(DomainError::InfeasibleSwing(
             SwingPlanError::RacketOrientationUnreachable {
                 target_x: corrected_ball.x,
@@ -641,15 +666,14 @@ pub fn plan_ball_alignment_fixed_rail(
     } else {
         Vector3::y()
     };
-    let tilt_rad = IMPACT_UPWARD_TILT_DEG.to_radians();
-    let target_normal = horizontal_normal * tilt_rad.cos() + Vector3::z() * tilt_rad.sin();
+    let mut target_normal = horizontal_normal;
     let contact_offset = crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z;
-    let racket_center = Point3::from(
+    let mut racket_center = Point3::from(
         corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
             - target_normal * contact_offset,
     );
     let hint = robot::Pose::new(start.rail_x, start.joints.clone());
-    let (aligned_pose, _) = arm
+    let (mut aligned_pose, _) = arm
         .inverse_pose_at_fixed_rail_best_normal(
             start.rail_x,
             racket_center,
@@ -658,7 +682,7 @@ pub fn plan_ball_alignment_fixed_rail(
             robot::IkSearch::Global,
         )
         .map_err(DomainError::InfeasibleSwing)?;
-    let reached = arm
+    let mut reached = arm
         .forward_kinematics_with_rail(start.rail_x, &aligned_pose.joints)
         .ok_or_else(|| {
             DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
@@ -667,7 +691,35 @@ pub fn plan_ball_alignment_fixed_rail(
                 target_z: corrected_ball.z,
             })
         })?;
-    if reached.normal.dot(&target_normal) <= 0.0 || reached.normal.z <= 0.0 {
+    // 레일을 고정한 실시간 보정도 아래를 보는 해만 수직으로 다시 푼다.
+    if reached.normal.z < -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE {
+        target_normal = horizontal_normal;
+        racket_center = Point3::from(
+            corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
+                - target_normal * contact_offset,
+        );
+        (aligned_pose, _) = arm
+            .inverse_pose_at_fixed_rail_best_normal(
+                start.rail_x,
+                racket_center,
+                target_normal,
+                &hint,
+                robot::IkSearch::Global,
+            )
+            .map_err(DomainError::InfeasibleSwing)?;
+        reached = arm
+            .forward_kinematics_with_rail(start.rail_x, &aligned_pose.joints)
+            .ok_or_else(|| {
+                DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                    target_x: corrected_ball.x,
+                    target_y: corrected_ball.y,
+                    target_z: corrected_ball.z,
+                })
+            })?;
+    }
+    if reached.normal.dot(&horizontal_normal) <= 0.0
+        || reached.normal.z < -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE
+    {
         return Err(DomainError::InfeasibleSwing(
             SwingPlanError::RacketOrientationUnreachable {
                 target_x: corrected_ball.x,
@@ -1636,23 +1688,20 @@ mod tests {
             )
             .expect("alignment FK");
 
-        let toward_opponent_end_horizontal = Vector3::new(
+        let toward_opponent_end = Vector3::new(
             table::WIDTH_X * 0.5 - corrected_ball.x,
             table::LENGTH_Y - corrected_ball.y,
             0.0,
         )
         .normalize();
-        let tilt_rad = IMPACT_UPWARD_TILT_DEG.to_radians();
-        let toward_opponent_end =
-            toward_opponent_end_horizontal * tilt_rad.cos() + Vector3::z() * tilt_rad.sin();
         assert!(
             reached.normal.dot(&toward_opponent_end) > 0.90,
             "라켓 면이 상대편 탁구대 끝선 중앙을 향해야 함: normal={:?}",
             reached.normal
         );
         assert!(
-            reached.normal.z > 0.0,
-            "라켓 면이 아래를 볼 수 없음: normal={:?}",
+            reached.normal.z >= -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE,
+            "라켓 면이 아래를 보면 안 됨: normal={:?}",
             reached.normal
         );
         let contact = reached.position.coords
@@ -1674,23 +1723,35 @@ mod tests {
     }
 
     #[test]
-    fn fixed_rail_ball_alignment_never_changes_rail_position() {
+    fn fixed_rail_ball_alignment_never_commands_a_downward_racket() {
         let active = crate::defaults::robot().expect("active robot");
         let arm = &active.arm;
         let rail_x = arm.rail.expect("rail").default_x();
         let start = robot::Pose::new(rail_x, arm.default_joints.clone());
         let ball = Point3::new(table::WIDTH_X * 0.5, READY_RACKET_Y_M, 0.95);
 
-        let alignment =
-            plan_ball_alignment_fixed_rail(arm, &start, ball).expect("fixed rail alignment");
-
-        assert!((alignment.rail.start - rail_x).abs() < 1e-12);
-        assert!((alignment.rail.end - rail_x).abs() < 1e-12);
-        assert!((alignment.follow_through_rail_x - rail_x).abs() < 1e-12);
+        match plan_ball_alignment_fixed_rail(arm, &start, ball) {
+            Ok(alignment) => {
+                assert!((alignment.rail.start - rail_x).abs() < 1e-12);
+                assert!((alignment.rail.end - rail_x).abs() < 1e-12);
+                assert!((alignment.follow_through_rail_x - rail_x).abs() < 1e-12);
+                let reached = arm
+                    .forward_kinematics_with_rail(rail_x, &alignment.follow_through)
+                    .expect("fixed rail alignment FK");
+                assert!(reached.normal.z >= -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE);
+            }
+            Err(DomainError::InfeasibleSwing(SwingPlanError::RacketOrientationUnreachable {
+                ..
+            })) => {
+                // 고정 레일에서 수직 면을 만들 수 없으면 아래를 보는
+                // 근사 해를 명령하지 않고 이 미세 보정을 건너뛴다.
+            }
+            Err(error) => panic!("unexpected fixed rail alignment error: {error}"),
+        }
     }
 
     #[test]
-    fn high_ball_alignment_keeps_racket_face_upward() {
+    fn high_ball_alignment_never_points_racket_face_downward() {
         let active = crate::defaults::robot().expect("active robot");
         let arm = &active.arm;
         let start = robot::Pose::new(
@@ -1707,8 +1768,8 @@ mod tests {
             .expect("high alignment FK");
 
         assert!(
-            reached.normal.z > 0.0,
-            "높은 공에서도 라켓 면이 위를 봐야 함: {:?}",
+            reached.normal.z >= -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE,
+            "높은 공에서도 라켓 면이 아래를 보면 안 됨: {:?}",
             reached.normal
         );
     }
