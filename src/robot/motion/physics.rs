@@ -7,11 +7,12 @@ use crate::constants::table;
 use crate::defaults;
 use crate::defaults::motion::{
     ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-    DETECTION_WINDUP_DISTANCE_M, DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S,
-    FIXED_JOINT_SWING_DELTA_RAD, FIXED_JOINT_SWING_DURATION_SECS,
-    FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS, IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG,
-    READY_PREWIND_DISTANCE_M, READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH,
-    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
+    ALIGNMENT_MIN_UPWARD_TILT_DEG, ALIGNMENT_TARGET_HEIGHT_OFFSET_M, DETECTION_WINDUP_DISTANCE_M,
+    DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S, FIXED_JOINT_SWING_DELTA_RAD,
+    FIXED_JOINT_SWING_DURATION_SECS, FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
+    IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M,
+    READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS,
+    RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
@@ -26,11 +27,9 @@ use super::quintic_segment::QuinticSegment;
 use super::rail::Rail;
 use super::trajectory::Trajectory;
 
-/// 실제 타격 정렬에서 라켓 면이 위를 보는 최소 각도.
-const ALIGNMENT_MIN_UPWARD_TILT_DEG: f64 = 15.0;
-/// `sin(15°)`. FK 법선 z가 이 값 이상이어야 실기 명령을 허용한다.
-const ALIGNMENT_MIN_UPWARD_NORMAL_Z: f64 = 0.258_819_045_102_520_74;
-/// 15° 자세가 불가해 기존 자세로 복귀했을 때 아래를 보지 않는지 판정하는 오차.
+/// `sin(25°)`. FK 법선 z가 이 값 이상이어야 25° 정렬 성공으로 본다.
+const ALIGNMENT_MIN_UPWARD_NORMAL_Z: f64 = 0.422_618_261_740_699_44;
+/// 25° 자세가 불가해 기존 자세로 복귀했을 때 아래를 보지 않는지 판정하는 오차.
 const ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE: f64 = 1e-6;
 
 /// 임팩트까지 남은 시간이 스윙 commit 창 `(0, COMMIT_MAX]` 안인지.
@@ -580,14 +579,18 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 /// 함께 푼 뒤 정지→정지 궤적 검사를 통과시킨다. 임팩트 속도와 공 도착 시각은 이
 /// 기초 정렬 모드에서 사용하지 않는다. 공 중심과 라켓 중심을 겹치지 않도록
 /// `공 반지름 + 라켓 반두께` 만큼 법선 반대쪽에 라켓 중심을 둔다.
-/// 공의 x는 발사기 기준 오른쪽으로 6 cm 보정한다. 공이 닿는 지점은
+/// 공의 x는 발사기 기준 오른쪽으로 6 cm, z는 아래로 1.5 cm 보정한다. 공이 닿는 지점은
 /// 블레이드 중심보다 0.5 cm 아래라서, 라켓 중심은 공 중심보다 0.5 cm 위로 올린다.
 pub fn plan_ball_alignment(
     arm: &Arm,
     start: &robot::Pose,
     ball: Point3,
 ) -> Result<Trajectory, DomainError> {
-    let corrected_ball = Point3::new(ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M, ball.y, ball.z);
+    let corrected_ball = Point3::new(
+        ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+        ball.y,
+        ball.z + ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
+    );
     let toward_opponent_center = Vector3::new(
         table::WIDTH_X * 0.5 - corrected_ball.x,
         table::OPPONENT_HALF_CENTER_Y - corrected_ball.y,
@@ -627,7 +630,7 @@ pub fn plan_ball_alignment(
                 target_z: corrected_ball.z,
             })
         })?;
-    // 15°를 만들 수 없으면 명령을 버리지 않고 기존 수평 법선 정렬로 복귀한다.
+    // 25°를 만들 수 없으면 명령을 버리지 않고 기존 수평 법선 정렬로 복귀한다.
     if reached.normal.z < ALIGNMENT_MIN_UPWARD_NORMAL_Z {
         target_normal = horizontal_normal;
         racket_center = Point3::from(
@@ -695,7 +698,11 @@ pub fn plan_ball_alignment_fixed_rail(
     start: &robot::Pose,
     ball: Point3,
 ) -> Result<Trajectory, DomainError> {
-    let corrected_ball = Point3::new(ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M, ball.y, ball.z);
+    let corrected_ball = Point3::new(
+        ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+        ball.y,
+        ball.z + ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
+    );
     let toward_opponent_center = Vector3::new(
         table::WIDTH_X * 0.5 - corrected_ball.x,
         table::OPPONENT_HALF_CENTER_Y - corrected_ball.y,
@@ -732,7 +739,7 @@ pub fn plan_ball_alignment_fixed_rail(
                 target_z: corrected_ball.z,
             })
         })?;
-    // 고정 레일 미세 보정에서 15°가 불가하면 기존 수평 법선 해를 사용한다.
+    // 고정 레일 미세 보정에서 25°가 불가하면 기존 수평 법선 해를 사용한다.
     if reached.normal.z < ALIGNMENT_MIN_UPWARD_NORMAL_Z {
         target_normal = horizontal_normal;
         racket_center = Point3::from(
@@ -1946,8 +1953,11 @@ mod tests {
         );
         // 중앙에서 벗어난 공으로 시험해 +Y만 보는 구현도 잡아낸다.
         let ball = Point3::new(table::WIDTH_X * 0.5 + 0.18, READY_RACKET_Y_M, 0.95);
-        let corrected_ball =
-            Point3::new(ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M, ball.y, ball.z);
+        let corrected_ball = Point3::new(
+            ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+            ball.y,
+            ball.z + ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
+        );
         let alignment = plan_ball_alignment(arm, &start, ball).expect("position alignment");
         let reached = arm
             .forward_kinematics_with_rail(
@@ -1969,7 +1979,7 @@ mod tests {
         );
         assert!(
             reached.normal.z >= ALIGNMENT_MIN_UPWARD_NORMAL_Z,
-            "라켓 면이 최소 15° 위를 봐야 함: normal={:?}",
+            "라켓 면이 최소 25° 위를 봐야 함: normal={:?}",
             reached.normal
         );
         let contact = reached.position.coords
@@ -1991,7 +2001,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_rail_ball_alignment_uses_safe_original_pose_when_fifteen_degrees_is_unreachable() {
+    fn fixed_rail_ball_alignment_uses_safe_original_pose_when_twenty_five_degrees_is_unreachable() {
         let active = crate::defaults::robot().expect("active robot");
         let arm = &active.arm;
         let rail_x = arm.rail.expect("rail").default_x();
@@ -2011,14 +2021,14 @@ mod tests {
             Err(DomainError::InfeasibleSwing(SwingPlanError::RacketOrientationUnreachable {
                 ..
             })) => {
-                // 15°와 기존 수직 자세 모두 불가할 때만 미세 보정을 건너뛴다.
+                // 25°와 기존 수직 자세 모두 불가할 때만 미세 보정을 건너뛴다.
             }
             Err(error) => panic!("unexpected fixed rail alignment error: {error}"),
         }
     }
 
     #[test]
-    fn high_ball_alignment_keeps_at_least_fifteen_degrees_upward() {
+    fn high_ball_alignment_keeps_at_least_twenty_five_degrees_upward() {
         let active = crate::defaults::robot().expect("active robot");
         let arm = &active.arm;
         let start = robot::Pose::new(
@@ -2036,7 +2046,7 @@ mod tests {
 
         assert!(
             reached.normal.z >= ALIGNMENT_MIN_UPWARD_NORMAL_Z,
-            "높은 공에서도 라켓 면이 최소 15° 위를 봐야 함: {:?}",
+            "높은 공에서도 라켓 면이 최소 25° 위를 봐야 함: {:?}",
             reached.normal
         );
     }

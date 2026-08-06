@@ -52,6 +52,23 @@ fn motor_mapping_round_trips_and_clamps_to_motor_limits() {
 }
 
 #[test]
+fn wrist_zero_offset_rotates_id5_eight_degrees_toward_bench_alignment() {
+    let calibrated = MotorMapping::new(bench_config()).expect("calibrated mapping");
+    let mut zero_offset_config = bench_config();
+    zero_offset_config.joint_offsets_rad[3] = 0.0;
+    let zero_offset = MotorMapping::new(zero_offset_config).expect("zero-offset mapping");
+    let ready_wrist = crate::defaults::READY_JOINTS_4DOF[3];
+
+    let calibrated_tick = calibrated.radians_to_ticks(3, ready_wrist);
+    let old_tick = zero_offset.radians_to_ticks(3, ready_wrist);
+    assert_eq!(old_tick - calibrated_tick, 92, "8° 보정 tick 반올림");
+    assert!(
+        (calibrated.ticks_to_radians(3, calibrated_tick) - ready_wrist).abs() < 0.002,
+        "보정 후에도 논리 관절각 round-trip은 유지돼야 함"
+    );
+}
+
+#[test]
 fn dry_run_limit_escape_holds_outside_start_and_only_moves_inward() {
     let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
     let start = Joints::from_slice(&[100.0_f64.to_radians(), 0.0, -0.2, -0.4]);

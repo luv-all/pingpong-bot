@@ -772,7 +772,7 @@ pub fn spawn(
             let corrected_target_position = pingpong_bot::Point3::new(
                 target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
                 target.position.y,
-                target.position.z,
+                target.position.z + pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
             );
             let aim_commanded_rad = alignment
                 .end

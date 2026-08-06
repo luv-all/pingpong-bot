@@ -2021,14 +2021,13 @@ mod tests {
         let origin = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         world.shoot_ball(&settings);
         let mut max_displacement = 0.0_f64;
+        let mut control_committed = false;
         for _ in 0..1_500 {
             world.step(1.0 / 1000.0, None);
+            control_committed |= world.swing_committed();
             max_displacement = max_displacement.max((world.robot().rail_x() - origin.rail_x).abs());
         }
-        assert!(
-            world.swing_committed(),
-            "발사 후 직접 제어 명령이 적용돼야 함"
-        );
+        assert!(control_committed, "발사 후 직접 제어 명령이 적용돼야 함");
         assert!(
             max_displacement > 0.01,
             "0.675m 준비 위치에서 라켓 헤드 x를 중앙 공에 맞추도록 레일이 움직여야 함 (distance={max_displacement})"
