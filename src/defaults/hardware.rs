@@ -16,10 +16,13 @@ pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
 ///
 /// 기하학적 원점 0.705m에 발사기 기준 오른쪽 정렬 보정 2.5cm를 더한
 /// 기존 0.730m에, 2026-08-07 실물 레일이 +X 마진 밖에 서 있던 영점
-/// 오류를 보정하려고 전체 레일 길이의 절반 0.705m를 더했다.
+/// 오류를 보정하려고 전체 레일 길이의 절반에서 +X 3cm를 되돌린
+/// 0.675m를 더했다.
 /// `reverse=true`에서 이 값을 늘리면 모든 실물 명령이 물리 -X
 /// (보드 +) 방향으로 이동한다.
-pub const RAIL_NEGATIVE_X_ZERO_SHIFT_M: f64 = (RAIL_PHYSICAL_X_MAX_M - RAIL_PHYSICAL_X_MIN_M) / 2.0;
+pub const RAIL_POSITIVE_X_TRIM_M: f64 = 0.030;
+pub const RAIL_NEGATIVE_X_ZERO_SHIFT_M: f64 =
+    (RAIL_PHYSICAL_X_MAX_M - RAIL_PHYSICAL_X_MIN_M) / 2.0 - RAIL_POSITIVE_X_TRIM_M;
 pub const RAIL_BOARD_ZERO_DOMAIN_M: f64 = 0.7300 + RAIL_NEGATIVE_X_ZERO_SHIFT_M;
 /// sim·real 공통 이동 범위 [m].
 pub const RAIL_X_MIN_M: f64 = RAIL_PHYSICAL_X_MIN_M + RAIL_LEFT_END_MARGIN_M;
