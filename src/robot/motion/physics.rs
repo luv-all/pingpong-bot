@@ -522,12 +522,23 @@ pub fn plan_return_to_center_at(
     start: &robot::Pose,
     rail_x: f64,
 ) -> Result<Trajectory, DomainError> {
+    return plan_return_to_center_at_speed_ratio(arm, start, rail_x, 1.0);
+}
+
+/// [`plan_return_to_center_at`]와 같지만 [`plan_move_to_at_speed_ratio`]로 계획해
+/// `speed_ratio`만큼 늦춘다 — 시작 자세 초기화·수동 홈 포지션 복귀가 쓴다.
+pub fn plan_return_to_center_at_speed_ratio(
+    arm: &Arm,
+    start: &robot::Pose,
+    rail_x: f64,
+    speed_ratio: f64,
+) -> Result<Trajectory, DomainError> {
     let center_joints = arm.default_joints.clone();
     let center_rail_x = arm
         .rail
         .as_ref()
         .map_or(start.rail_x, |rail| rail.clamp_x(rail_x));
-    return plan_move_to(arm, start, center_joints, center_rail_x);
+    return plan_move_to_at_speed_ratio(arm, start, center_joints, center_rail_x, speed_ratio);
 }
 
 /// 공이 없을 때 사용할 살짝 감긴 준비 자세로 이동한다.
@@ -1770,6 +1781,35 @@ mod tests {
             slow.duration_secs,
             full_speed.duration_secs
         );
+    }
+
+    #[test]
+    fn return_to_center_at_speed_ratio_one_matches_return_to_center_at() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let rail = arm.rail.expect("rail 있는 로봇");
+        let start = robot::Pose::new(rail.default_x(), arm.default_joints.clone());
+
+        let via_plain =
+            plan_return_to_center_at(arm, &start, rail.x_min).expect("plan_return_to_center_at");
+        let via_ratio = plan_return_to_center_at_speed_ratio(arm, &start, rail.x_min, 1.0)
+            .expect("plan_return_to_center_at_speed_ratio ratio=1.0");
+
+        assert_eq!(via_plain.duration_secs, via_ratio.duration_secs);
+    }
+
+    #[test]
+    fn return_to_center_at_speed_ratio_still_targets_given_rail_x() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let rail = arm.rail.expect("rail 있는 로봇");
+        let start = robot::Pose::new(rail.default_x(), arm.default_joints.clone());
+
+        let moved = plan_return_to_center_at_speed_ratio(arm, &start, rail.x_min, 1.0 / 3.0)
+            .expect("느린 복귀도 x_min에 도달");
+
+        assert!((moved.follow_through_rail_x - rail.x_min).abs() < 1e-9);
+        assert_eq!(moved.follow_through, arm.default_joints);
     }
 
     #[test]
