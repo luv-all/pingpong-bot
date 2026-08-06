@@ -1,6 +1,7 @@
 //! 순수 물리/스윙 계획.
 
 use nalgebra::Vector3;
+use rayon::prelude::*;
 
 use crate::Point3;
 use crate::constants::table;
@@ -579,11 +580,7 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 /// `공 반지름 + 라켓 반두께` 만큼 법선 반대쪽에 라켓 중심을 둔다.
 /// 공의 x는 발사기 기준 오른쪽으로 6 cm, z는 위로 1.5 cm 보정한다. 공이 닿는 지점은
 /// 블레이드 중심보다 0.5 cm 아래라서, 라켓 중심은 공 중심보다 0.5 cm 위로 올린다.
-pub fn plan_ball_alignment(
-    arm: &Arm,
-    start: &robot::Pose,
-    ball: Point3,
-) -> Result<Trajectory, DomainError> {
+fn ball_alignment_geometry(ball: Point3) -> (Point3, Vector3<f64>, Point3) {
     let corrected_ball = Point3::new(
         ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
         ball.y,
@@ -607,6 +604,28 @@ pub fn plan_ball_alignment(
         corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
             - target_normal * contact_offset,
     );
+    return (corrected_ball, target_normal, racket_center);
+}
+
+/// 공별 보정을 적용한 뒤 위치 정렬이 사용할 선행 레일 목표.
+///
+/// 실기에서는 이 값으로 AXL 이동을 먼저 시작하고, 같은 고정 레일 좌표에서
+/// 팔 IK를 계산한다. 따라서 IK 계산 시간이 레일 출발 지연으로 더해지지 않는다.
+pub fn ball_alignment_rail_target(arm: &Arm, ball: Point3) -> f64 {
+    let (_, _, racket_center) = ball_alignment_geometry(ball);
+    return arm
+        .rail
+        .as_ref()
+        .map_or(racket_center.x, |rail| rail.clamp_x(racket_center.x));
+}
+
+pub fn plan_ball_alignment(
+    arm: &Arm,
+    start: &robot::Pose,
+    ball: Point3,
+) -> Result<Trajectory, DomainError> {
+    let (corrected_ball, target_normal, racket_center) = ball_alignment_geometry(ball);
+    let horizontal_normal = target_normal;
     let hint_rail_x = arm
         .rail
         .as_ref()
@@ -652,27 +671,8 @@ pub fn plan_ball_alignment_fixed_rail(
     start: &robot::Pose,
     ball: Point3,
 ) -> Result<Trajectory, DomainError> {
-    let corrected_ball = Point3::new(
-        ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-        ball.y,
-        ball.z + ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
-    );
-    let toward_opponent_center = Vector3::new(
-        table::WIDTH_X * 0.5 - corrected_ball.x,
-        table::OPPONENT_HALF_CENTER_Y - corrected_ball.y,
-        0.0,
-    );
-    let horizontal_normal = if toward_opponent_center.norm_squared() > 1e-12 {
-        toward_opponent_center.normalize()
-    } else {
-        Vector3::y()
-    };
-    let target_normal = horizontal_normal;
-    let contact_offset = crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z;
-    let racket_center = Point3::from(
-        corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
-            - target_normal * contact_offset,
-    );
+    let (corrected_ball, target_normal, racket_center) = ball_alignment_geometry(ball);
+    let horizontal_normal = target_normal;
     let hint = robot::Pose::new(start.rail_x, start.joints.clone());
     let (aligned_pose, _) = arm
         .inverse_pose_at_fixed_rail_best_normal(
@@ -944,21 +944,21 @@ pub fn plan_fixed_joint_swing(
     };
     let target_tilt_rad = ALIGNMENT_MIN_UPWARD_TILT_DEG.to_radians();
     let sample_count = ((limit.max - limit.min) / SEARCH_STEP_DEG.to_radians()).ceil() as usize;
-    let mut candidates = Vec::with_capacity(sample_count + 1);
-    for sample_index in 0..=sample_count {
-        let wrist =
-            limit.min + (limit.max - limit.min) * sample_index as f64 / sample_count.max(1) as f64;
-        let mut impact = start.joints.clone();
-        impact.values[WRIST_JOINT_INDEX] = wrist;
-        let Some(racket) = arm.forward_kinematics_with_rail(start.rail_x, &impact) else {
-            continue;
-        };
-        let elevation = racket
-            .normal
-            .z
-            .atan2(racket.normal.x.hypot(racket.normal.y));
-        candidates.push(((elevation - target_tilt_rad).abs(), impact));
-    }
+    let mut candidates: Vec<_> = (0..=sample_count)
+        .into_par_iter()
+        .filter_map(|sample_index| {
+            let wrist = limit.min
+                + (limit.max - limit.min) * sample_index as f64 / sample_count.max(1) as f64;
+            let mut impact = start.joints.clone();
+            impact.values[WRIST_JOINT_INDEX] = wrist;
+            let racket = arm.forward_kinematics_with_rail(start.rail_x, &impact)?;
+            let elevation = racket
+                .normal
+                .z
+                .atan2(racket.normal.x.hypot(racket.normal.y));
+            return Some(((elevation - target_tilt_rad).abs(), impact));
+        })
+        .collect();
     candidates.sort_by(|(left_error, left), (right_error, right)| {
         left_error
             .partial_cmp(right_error)
@@ -1742,6 +1742,61 @@ mod tests {
             assert_eq!(
                 planned.trajectory.end.values[index],
                 start.joints.values[index]
+            );
+        }
+    }
+
+    #[test]
+    fn diag_alignment_bearing_before_and_after_wrist_snap() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        for x_fraction in [0.2, 0.5, 0.8] {
+            let ball = Point3::new(table::WIDTH_X * x_fraction, READY_RACKET_Y_M, 0.95);
+            let nominal = ball_alignment_rail_target(arm, ball);
+            let (_, desired, _) = ball_alignment_geometry(ball);
+            let bearing_error = |actual: Vector3<f64>| {
+                let actual_xy = Vector3::new(actual.x, actual.y, 0.0).normalize();
+                desired.dot(&actual_xy).clamp(-1.0, 1.0).acos().to_degrees()
+            };
+            let mut found = None;
+            for step in -30..=30 {
+                let rail_x = arm
+                    .rail
+                    .expect("rail")
+                    .clamp_x(nominal + f64::from(step) * 0.01);
+                let start = robot::Pose::new(rail_x, arm.default_joints.clone());
+                if let Ok(alignment) = plan_ball_alignment_fixed_rail(arm, &start, ball) {
+                    let aligned = arm
+                        .forward_kinematics_with_rail(rail_x, &alignment.follow_through)
+                        .expect("aligned candidate FK");
+                    let error = bearing_error(aligned.normal);
+                    if found
+                        .as_ref()
+                        .is_none_or(|(best_error, _, _)| error < *best_error)
+                    {
+                        found = Some((error, rail_x, alignment));
+                    }
+                }
+            }
+            let Some((_, rail_x, alignment)) = found else {
+                println!("x_fraction={x_fraction:.1} no feasible rail near nominal={nominal:.3}");
+                continue;
+            };
+            let aligned = arm
+                .forward_kinematics_with_rail(rail_x, &alignment.follow_through)
+                .expect("aligned FK");
+            let aligned_pose = robot::Pose::new(rail_x, alignment.follow_through.clone());
+            let snap = plan_fixed_joint_swing(arm, &aligned_pose).expect("snap");
+            let impact = arm
+                .forward_kinematics_with_rail(rail_x, &snap.trajectory.end)
+                .expect("impact FK");
+            println!(
+                "x_fraction={x_fraction:.1} nominal={nominal:.3} feasible_rail={rail_x:.3} offset={:.3} aligned_error_deg={:.3} impact_error_deg={:.3} aligned_normal={:?} impact_normal={:?}",
+                rail_x - nominal,
+                bearing_error(aligned.normal),
+                bearing_error(impact.normal),
+                aligned.normal,
+                impact.normal,
             );
         }
     }

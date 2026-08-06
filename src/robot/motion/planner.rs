@@ -2,6 +2,7 @@
 
 use nalgebra::Vector3;
 
+use crate::Point3;
 use crate::error::DomainError;
 use crate::robot::motion::Prediction;
 use crate::robot::{self, Arm};
@@ -119,6 +120,11 @@ impl Planner {
         ball: crate::Point3,
     ) -> Result<Trajectory, DomainError> {
         return physics::plan_ball_alignment(arm, start, ball);
+    }
+
+    /// IK보다 먼저 출발시킬 공별 안전 레일 목표를 계산한다.
+    pub fn ball_alignment_rail_target(arm: &Arm, ball: Point3) -> f64 {
+        return physics::ball_alignment_rail_target(arm, ball);
     }
 
     /// 레일은 현재 위치에 고정하고 Dynamixel 관절만 공 예측 위치로 정렬한다.

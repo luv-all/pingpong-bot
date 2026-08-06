@@ -87,6 +87,28 @@ impl Hardware for SimHardware {
         return Ok(());
     }
 
+    fn command_rail(&mut self, rail_x: f64, duration_secs: f64) -> Result<f64, HwError> {
+        if !rail_x.is_finite() || !duration_secs.is_finite() || duration_secs <= 0.0 {
+            return Err(HwError::InvalidConfig {
+                reason: "sim 레일 선행 명령에 유효하지 않은 값이 있음".into(),
+            });
+        }
+        let mut world = self.world.lock().expect("sim 월드");
+        let applied = world.arm.rail.map_or(rail_x, |rail| rail.clamp_x(rail_x));
+        let arm = Arc::clone(&world.arm);
+        world
+            .robot_mut()
+            .set_rail_target_in_secs(&arm, applied, duration_secs);
+        self.command_count += 1;
+        debug!(
+            commands = self.command_count,
+            rail_commanded_m = applied,
+            duration_secs,
+            "sim 레일 단독 선행 명령 적용"
+        );
+        return Ok(applied);
+    }
+
     fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
         let world = self.world.lock().expect("sim 월드");
         let robot = world.robot();

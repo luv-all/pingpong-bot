@@ -236,6 +236,19 @@ impl Hardware for RealHardware {
         return self.start_trajectory(trajectory, false);
     }
 
+    fn command_rail(&mut self, rail_x: f64, duration_secs: f64) -> Result<f64, HwError> {
+        self.reap_executor();
+        let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
+            duration_secs,
+            joint_count: 0,
+            reason: "레일 mutex poisoned".into(),
+        })?;
+        return match rail.as_mut() {
+            Some(rail) => rail.command_abs_in_secs(rail_x, duration_secs),
+            None => Ok(0.0),
+        };
+    }
+
     fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
         self.reap_executor();
         let joints = self

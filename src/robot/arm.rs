@@ -1,6 +1,7 @@
 //! 로봇 팔 불변 모델.
 
 use nalgebra::{DMatrix, DVector, Isometry3, Matrix3, UnitQuaternion, Vector3};
+use rayon::prelude::*;
 
 use crate::Point3;
 use crate::error::SwingPlanError;
@@ -389,33 +390,50 @@ impl Arm {
         const RAIL_SAMPLES: usize = 5;
         const RAIL_SPAN_M: f64 = 0.20;
         let center_rail_x = rail.clamp_x(target.coords.x);
-        let mut best: Option<(f64, Pose)> = None;
-        for rail_step in 0..RAIL_SAMPLES {
-            let fraction = (rail_step as f64) / ((RAIL_SAMPLES - 1) as f64) - 0.5;
-            let rail_x = rail.clamp_x(center_rail_x + RAIL_SPAN_M * fraction * 2.0);
-            for seed in self.pose_ik_seeds(hint, search) {
+        let seeds = self.pose_ik_seeds(hint, search);
+        let candidates: Vec<_> = (0..RAIL_SAMPLES)
+            .flat_map(|rail_step| {
+                seeds
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(move |(seed_index, seed)| (rail_step, seed_index, seed))
+            })
+            .collect();
+        let best = candidates
+            .into_par_iter()
+            .filter_map(|(rail_step, seed_index, seed)| {
+                let fraction = (rail_step as f64) / ((RAIL_SAMPLES - 1) as f64) - 0.5;
+                let rail_x = rail.clamp_x(center_rail_x + RAIL_SPAN_M * fraction * 2.0);
                 let Ok(joints) =
                     self.inverse_kinematics_with_rail(rail, rail_x, target, Some(&seed))
                 else {
-                    continue;
+                    return None;
                 };
                 let Some(pose) = self.forward_kinematics_with_rail(rail_x, &joints) else {
-                    continue;
+                    return None;
                 };
                 if (pose.position.coords - target.coords).norm() > Self::POSE_IK_POSITION_TOLERANCE
                 {
-                    continue;
+                    return None;
                 }
                 let normal_error = (target_normal - pose.normal).norm();
-                if best
-                    .as_ref()
-                    .is_none_or(|(best_error, _)| normal_error < *best_error)
+                let order = rail_step * seeds.len() + seed_index;
+                return Some((normal_error, order, Pose::new(rail_x, joints)));
+            })
+            .reduce_with(|left, right| {
+                if left
+                    .0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+                    .is_le()
                 {
-                    best = Some((normal_error, Pose::new(rail_x, joints)));
+                    left
+                } else {
+                    right
                 }
-            }
-        }
-        if let Some((normal_error, pose)) = best {
+            });
+        if let Some((normal_error, _, pose)) = best {
             return Ok((pose, normal_error));
         }
         return Err(SwingPlanError::InverseKinematicsNoSolution {
@@ -450,33 +468,44 @@ impl Arm {
         }
         let rail_x = rail.clamp_x(rail_x);
         let target_normal = target_normal.normalize();
-        let mut best: Option<(f64, Pose)> = None;
-        for seed in self.pose_ik_seeds(hint, search) {
-            let Ok(joints) = self.inverse_kinematics_with_rail(rail, rail_x, target, Some(&seed))
-            else {
-                continue;
-            };
-            let Some(racket) = self.forward_kinematics_with_rail(rail_x, &joints) else {
-                continue;
-            };
-            if (racket.position.coords - target.coords).norm() > Self::POSE_IK_POSITION_TOLERANCE {
-                continue;
-            }
-            let normal_error = (target_normal - racket.normal).norm();
-            if best
-                .as_ref()
-                .is_none_or(|(best_error, _)| normal_error < *best_error)
-            {
-                best = Some((normal_error, Pose::new(rail_x, joints)));
-            }
-        }
-        return best.map(|(normal_error, pose)| (pose, normal_error)).ok_or(
-            SwingPlanError::InverseKinematicsNoSolution {
+        let best = self
+            .pose_ik_seeds(hint, search)
+            .into_par_iter()
+            .enumerate()
+            .filter_map(|(seed_index, seed)| {
+                let Ok(joints) =
+                    self.inverse_kinematics_with_rail(rail, rail_x, target, Some(&seed))
+                else {
+                    return None;
+                };
+                let racket = self.forward_kinematics_with_rail(rail_x, &joints)?;
+                if (racket.position.coords - target.coords).norm()
+                    > Self::POSE_IK_POSITION_TOLERANCE
+                {
+                    return None;
+                }
+                let normal_error = (target_normal - racket.normal).norm();
+                return Some((normal_error, seed_index, Pose::new(rail_x, joints)));
+            })
+            .reduce_with(|left, right| {
+                if left
+                    .0
+                    .total_cmp(&right.0)
+                    .then_with(|| left.1.cmp(&right.1))
+                    .is_le()
+                {
+                    left
+                } else {
+                    right
+                }
+            });
+        return best
+            .map(|(normal_error, _, pose)| (pose, normal_error))
+            .ok_or(SwingPlanError::InverseKinematicsNoSolution {
                 target_x: target.x,
                 target_y: target.y,
                 target_z: target.z,
-            },
-        );
+            });
     }
 
     /// 자세 IK 시드 — 위치전용 폴백도 같은 분기 커버리지를 써야 한다.

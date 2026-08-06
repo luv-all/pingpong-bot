@@ -20,6 +20,18 @@ pub trait Hardware: Send {
         return self.command(trajectory);
     }
 
+    /// 관절 명령과 독립적으로 레일 목표만 먼저 보낸다.
+    ///
+    /// 공의 첫 안정 예측에서 AXL을 즉시 출발시키고, 같은 목표 레일 좌표를
+    /// 전제로 팔 IK를 계산할 때 사용한다.
+    fn command_rail(&mut self, _rail_x: f64, duration_secs: f64) -> Result<f64, HwError> {
+        return Err(HwError::CommandFailed {
+            duration_secs,
+            joint_count: 0,
+            reason: "레일 단독 선행 명령을 지원하지 않는 하드웨어입니다".into(),
+        });
+    }
+
     fn read_pose(&mut self) -> Result<robot::Pose, HwError>;
 
     /// 실측 자세가 모터 소프트 한계 밖일 때 첫 명령의 즉시 클램프를 막고,

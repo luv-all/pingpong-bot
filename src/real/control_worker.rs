@@ -61,6 +61,27 @@ const BENCH_HANDLE_END_ABOVE_TABLE_M: f64 = 0.410;
 const BENCH_RACKET_AXIS_FROM_VERTICAL_DEG: f64 = 8.0;
 const BENCH_RACKET_TOTAL_LENGTH_M: f64 = 0.255;
 
+/// 레일의 속도·가속 한계로 가능한 가장 짧은 정지→정지 이동시간.
+/// 수치 경계에서 AXL 속도 계산 판별식이 음수가 되지 않도록 2% 여유를 둔다.
+fn fast_rail_move_duration(arm: &Arm, start_x: f64, target_x: f64) -> f64 {
+    let Some(rail) = arm.rail else {
+        return pingpong_bot::defaults::RETURN_TO_CENTER_MIN_SECS;
+    };
+    let distance = (target_x - start_x).abs();
+    if distance <= f64::EPSILON {
+        return pingpong_bot::defaults::RETURN_TO_CENTER_MIN_SECS;
+    }
+    let acceleration = pingpong_bot::defaults::RAIL_ACCEL_M_S2;
+    let max_speed = rail.max_speed;
+    let ramp_distance = max_speed * max_speed / acceleration;
+    let minimum = if distance <= ramp_distance {
+        2.0 * (distance / acceleration).sqrt()
+    } else {
+        distance / max_speed + max_speed / acceleration
+    };
+    return (minimum * 1.02).max(0.02);
+}
+
 #[derive(Default)]
 struct CommandLatch {
     track_seq: Option<u64>,
@@ -69,6 +90,8 @@ struct CommandLatch {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RefinedAction {
+    /// 안정 기준 전 예비 예측: 현재 레일에서 팔만 먼저 따라간다.
+    ProvisionalArmCorrection,
     /// 본 예측 첫 명령: 레일과 팔을 함께 계산·이동한다.
     PrimaryRailAndArm,
     /// 같은 공의 후속 갱신: 이미 계산된 레일 위치에서 팔만 미세 보정한다.
@@ -82,7 +105,11 @@ impl CommandLatch {
             self.track_seq = Some(track_seq);
         }
         if !refined_ready {
-            return None;
+            return Some(if self.primary_sent {
+                RefinedAction::ArmCorrection
+            } else {
+                RefinedAction::ProvisionalArmCorrection
+            });
         }
         return Some(if self.primary_sent {
             RefinedAction::ArmCorrection
@@ -273,7 +300,10 @@ pub fn spawn(
             home_rail_x,
             filtering: false,
         });
-        info!("공 위치·방향 정렬 준비 — 예상 타격 0.25초 전 q3 손목 25° 스냅");
+        info!(
+            ik_parallel_threads = rayon::current_num_threads(),
+            "공 위치·방향 정렬 준비 — 예비 팔 보정, 본 예측 레일 1회, q3 25° 스냅"
+        );
 
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
@@ -282,8 +312,9 @@ pub fn spawn(
         let mut motion_watch: Option<(u64, Instant, &'static str)> = None;
         let mut pending_verification: Option<PendingVerification> = None;
         let mut state = BallControlState::Idle;
-        // Dynamixel 이동 중에 도착한 같은 공의 본 예측은 최신 하나만 유지하고,
-        // 현재 관절 이동이 끝나자마자 다음 미세 보정으로 적용한다.
+        // 20ms throttle 안에 도착한 같은 공의 예측은 최신 하나만 유지한다.
+        // 시간이 되면 진행 중 관절 궤적을 선점해 예비/본 예측 미세 보정을 이어가며,
+        // AXL에 먼저 내려간 레일 목표는 중단하지 않는다.
         let mut pending_refined: Option<CommitRequest> = None;
         let mut consecutive_misses: u8 = 0;
         let mut pending_test_control: Option<TestControl> = None;
@@ -616,8 +647,13 @@ pub fn spawn(
                 };
                 timeout = timeout.min(swing_wait).min(return_wait);
             }
+            if pending_refined.is_some() {
+                let throttle_wait = last_command.map_or(Duration::ZERO, |at| {
+                    COMMAND_THROTTLE.saturating_sub(at.elapsed())
+                });
+                timeout = timeout.min(throttle_wait);
+            }
             let can_apply_latest = pending_refined.is_some()
-                && !hardware.is_busy()
                 && last_command.is_none_or(|at| at.elapsed() >= COMMAND_THROTTLE);
             let request = if can_apply_latest {
                 pending_refined.take().expect("확인한 최신 본 예측")
@@ -661,8 +697,7 @@ pub fn spawn(
             let Some(action) = latch.next_action(track_seq, refined_ready) else {
                 continue;
             };
-            if hardware.is_busy() || last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
-            {
+            if last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE) {
                 pending_refined = Some(request);
                 continue;
             }
@@ -699,8 +734,14 @@ pub fn spawn(
                 continue;
             }
             last_filtered_track_seq = None;
+            let corrected_target_position = pingpong_bot::Point3::new(
+                target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+                target.position.y,
+                target.position.z + pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
+            );
             // 준비 자세 복귀 직후 읽어 둔 실측 자세를 재사용한다. 토크가 유지되는
             // 대기 중에는 자세가 바뀌지 않으므로 느린 4-ID 직렬 읽기를 없앤다.
+            let pose_read_started = Instant::now();
             let (start, start_pose_source) = if matches!(state, BallControlState::Idle) {
                 match cached_idle_pose.take() {
                     Some(pose) => (pose, "cached_ready"),
@@ -721,18 +762,58 @@ pub fn spawn(
                     }
                 }
             };
+            let pose_read_ms = pose_read_started.elapsed().as_secs_f64() * 1e3;
             if let Some(previous) = pending_verification.take() {
                 log_verification(&previous, &start, "superseded", false);
             }
             let issued_at = Instant::now();
-            let alignment = match action {
+            let mut rail_command_ms = 0.0;
+            let mut rail_move_duration_secs = 0.0;
+            let planning_start = match action {
                 RefinedAction::PrimaryRailAndArm => {
-                    Planner::ball_alignment(&arm, &start, target.position)
+                    // 본 예측이 처음 안정 기준을 넘은 순간에만 레일을 한 번
+                    // 먼저 출발시킨다. 이후 같은 공의 갱신은 ArmCorrection으로
+                    // 들어와 레일을 다시 명령하지 않는다.
+                    let rail_target = Planner::ball_alignment_rail_target(&arm, target.position);
+                    rail_move_duration_secs =
+                        fast_rail_move_duration(&arm, start.rail_x, rail_target);
+                    let rail_command_started = Instant::now();
+                    let applied_rail =
+                        match hardware.command_rail(rail_target, rail_move_duration_secs) {
+                            Ok(applied) => applied,
+                            Err(error) => {
+                                let _ = event_tx.send(RuntimeEvent::Failed {
+                                    track_seq: Some(track_seq),
+                                    reason: format!("레일 선행 명령 실패: {error}"),
+                                });
+                                break 'control;
+                            }
+                        };
+                    rail_command_ms = rail_command_started.elapsed().as_secs_f64() * 1e3;
+                    latch.mark_primary_sent();
+                    info!(
+                        target: "latency",
+                        track_seq,
+                        request_to_rail_command_ms = f2(request.at.elapsed().as_secs_f64() * 1e3),
+                        pose_read_ms = f2(pose_read_ms),
+                        rail_command_ms = f2(rail_command_ms),
+                        rail_move_duration_secs = f4(rail_move_duration_secs),
+                        rail_start_m = f4(start.rail_x),
+                        rail_target_m = f4(applied_rail),
+                        "본 예측 기준 통과 — IK 전 레일 1회 선행 명령"
+                    );
+                    pingpong_bot::robot::Pose::new(applied_rail, start.joints.clone())
                 }
-                RefinedAction::ArmCorrection => {
-                    Planner::ball_alignment_fixed_rail(&arm, &start, target.position)
+                RefinedAction::ProvisionalArmCorrection | RefinedAction::ArmCorrection => {
+                    start.clone()
                 }
             };
+            let alignment_plan_started = Instant::now();
+            // 레일은 이미 출발했으므로, 팔은 도착 예정 레일 좌표에 고정해
+            // 계산한다. 후속 보정도 같은 고정-레일 IK만 반복한다.
+            let alignment =
+                Planner::ball_alignment_fixed_rail(&arm, &planning_start, target.position);
+            let alignment_plan_ms = alignment_plan_started.elapsed().as_secs_f64() * 1e3;
             let alignment = match alignment {
                 Ok(alignment) => alignment,
                 Err(error) => {
@@ -760,11 +841,6 @@ pub fn spawn(
                 continue;
             }
             let rail_commanded_m = alignment.rail.end;
-            let corrected_target_position = pingpong_bot::Point3::new(
-                target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-                target.position.y,
-                target.position.z + pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
-            );
             let aim_commanded_rad = alignment
                 .end
                 .values
@@ -772,10 +848,7 @@ pub fn spawn(
                 .copied()
                 .unwrap_or(0.0);
             let command_send_started = Instant::now();
-            let command_result = match action {
-                RefinedAction::PrimaryRailAndArm => hardware.command(&alignment),
-                RefinedAction::ArmCorrection => hardware.command_joints(&alignment),
-            };
+            let command_result = hardware.command_joints(&alignment);
             let command_send_ms = command_send_started.elapsed().as_secs_f64() * 1e3;
             if let Err(error) = command_result {
                 let _ = event_tx.send(RuntimeEvent::Failed {
@@ -788,13 +861,11 @@ pub fn spawn(
                 track_seq,
                 command_send_started,
                 match action {
+                    RefinedAction::ProvisionalArmCorrection => "provisional_arm_alignment",
                     RefinedAction::PrimaryRailAndArm => "primary_alignment",
                     RefinedAction::ArmCorrection => "arm_correction",
                 },
             ));
-            if action == RefinedAction::PrimaryRailAndArm {
-                latch.mark_primary_sent();
-            }
             last_command = Some(issued_at);
             let _ = event_tx.send(RuntimeEvent::Commanded {
                 track_seq,
@@ -807,6 +878,26 @@ pub fn spawn(
                     target: Some(corrected_target_position),
                     ..SimUpdate::default()
                 });
+            }
+
+            if action == RefinedAction::ProvisionalArmCorrection {
+                info!(
+                    target: "latency",
+                    track_seq,
+                    stage = ?PredictionStage::Provisional,
+                    start_pose_source,
+                    request_age_secs = f4(request.age_secs()),
+                    camera_to_fit_ms = f2(camera_to_fit_ms(&request)),
+                    pose_read_ms = f2(pose_read_ms),
+                    alignment_plan_ms = f2(alignment_plan_ms),
+                    command_send_ms = f2(command_send_ms),
+                    target_time_secs = f4(target.t.as_secs_f64()),
+                    rail_held_m = f4(rail_commanded_m),
+                    aim_commanded_rad = f4(aim_commanded_rad),
+                    joints_commanded = %format!("{:?}", alignment.follow_through.values),
+                    "안정 기준 전 예비 예측 — 레일 고정, 팔 선행 보정"
+                );
+                continue;
             }
 
             let predicted_arrival_at = request.trajectory.origin + target.t;
@@ -842,6 +933,10 @@ pub fn spawn(
                 start_pose_source,
                 request_age_secs = f4(request.age_secs()),
                 camera_to_fit_ms = f2(camera_to_fit_ms(&request)),
+                pose_read_ms = f2(pose_read_ms),
+                alignment_plan_ms = f2(alignment_plan_ms),
+                rail_command_ms = f2(rail_command_ms),
+                rail_move_duration_secs = f4(rail_move_duration_secs),
                 command_send_ms = f2(command_send_ms),
                 target_time_secs = f4(target.t.as_secs_f64()),
                 predicted_arrival_in_secs = f4(
@@ -862,7 +957,7 @@ pub fn spawn(
                 post_alignment_hold_secs = pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS,
                 fixed_swing_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
                 joints_commanded = %format!("{:?}", alignment.follow_through.values),
-                "본 예측 레일·팔 정렬/팔 실시간 미세 보정 시작 — 고정 스윙 예약"
+                "본 예측 레일 1회 선행/팔 실시간 미세 보정 시작 — q3 손목 스냅 예약"
             );
         }
 
@@ -1803,6 +1898,11 @@ mod tests {
             self.reads += 1;
             return Ok(self.pose.clone());
         }
+
+        fn command_rail(&mut self, rail_x: f64, _duration_secs: f64) -> Result<f64, HwError> {
+            self.pose.rail_x = rail_x;
+            return Ok(rail_x);
+        }
     }
 
     struct PoseApplyingHardware {
@@ -1969,7 +2069,14 @@ mod tests {
     #[test]
     fn each_vision_track_sends_primary_then_arm_corrections() {
         let mut latch = CommandLatch::default();
-        assert_eq!(latch.next_action(1, false), None);
+        assert_eq!(
+            latch.next_action(1, false),
+            Some(RefinedAction::ProvisionalArmCorrection)
+        );
+        assert_eq!(
+            latch.next_action(1, false),
+            Some(RefinedAction::ProvisionalArmCorrection)
+        );
         assert_eq!(
             latch.next_action(1, true),
             Some(RefinedAction::PrimaryRailAndArm)
@@ -1978,6 +2085,11 @@ mod tests {
         assert_eq!(
             latch.next_action(1, true),
             Some(RefinedAction::ArmCorrection)
+        );
+        assert_eq!(
+            latch.next_action(1, false),
+            Some(RefinedAction::ArmCorrection),
+            "레일을 한 번 보낸 뒤 신뢰도가 잠깐 내려가도 레일을 재명령하지 않음"
         );
     }
 
@@ -2003,6 +2115,21 @@ mod tests {
         let mut provisional = vision_request(Duration::ZERO);
         provisional.trajectory.measured.0[0].sigma_position = nalgebra::Vector3::repeat(1.0);
         assert!(!refined_prediction_ready(&provisional));
+    }
+
+    #[test]
+    fn fast_rail_duration_is_shorter_for_a_nearer_target() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail");
+        let near = fast_rail_move_duration(&robot.arm, rail.default_x(), rail.default_x() + 0.05);
+        let far = fast_rail_move_duration(&robot.arm, rail.default_x(), rail.x_max);
+
+        assert!(near > 0.0);
+        assert!(far > near, "near={near} far={far}");
+        assert!(
+            far < 1.0,
+            "안전 범위 내 선행 레일 이동은 1초보다 짧아야 함: {far}"
+        );
     }
 
     #[test]
@@ -2570,6 +2697,11 @@ mod tests {
 
         fn read_pose(&mut self) -> Result<Pose, HwError> {
             return Ok(self.pose.lock().expect("lock").clone());
+        }
+
+        fn command_rail(&mut self, rail_x: f64, _duration_secs: f64) -> Result<f64, HwError> {
+            self.pose.lock().expect("lock").rail_x = rail_x;
+            return Ok(rail_x);
         }
     }
 

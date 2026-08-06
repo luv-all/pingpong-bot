@@ -3353,6 +3353,7 @@ dependencies = [
  "pollster",
  "rand 0.8.7",
  "rapier3d",
+ "rayon",
  "rustypot",
  "serde",
  "serde_json",
