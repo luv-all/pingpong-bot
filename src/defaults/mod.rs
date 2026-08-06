@@ -123,13 +123,13 @@ mod tests {
         assert!((model_rail.x_min - 0.0100).abs() < 1e-12);
         assert!((model_rail.x_max - 1.3395).abs() < 1e-12);
         assert!((model_rail.default_x() - 0.6750).abs() < 1e-12);
-        assert!((rail_config.board_zero_domain_m - 1.4450).abs() < 1e-12);
-        assert!((rail_config.domain_to_board_abs(0.0100) - 1.4350).abs() < 1e-12);
-        assert!((rail_config.domain_to_board_abs(1.3395) - 0.1055).abs() < 1e-12);
-        assert!((rail_config.domain_to_board_abs(0.6750) - 0.7700).abs() < 1e-12);
+        assert!((rail_config.board_zero_domain_m - 1.3950).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(0.0100) - 1.3850).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(1.3395) - 0.0555).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(0.6750) - 0.7200).abs() < 1e-12);
         assert!((ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M - 0.0050).abs() < 1e-12);
         assert!((ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M - 0.0600).abs() < 1e-12);
-        assert!((RAIL_COORDINATE_POSITIVE_X_OFFSET_M - 0.0650).abs() < 1e-12);
+        assert!((RAIL_COORDINATE_POSITIVE_X_OFFSET_M - 0.0150).abs() < 1e-12);
         assert!((JOINT_SPEED_DERATE - 0.9).abs() < 1e-12);
         assert!((rail_config.x_min_m - model_rail.x_min).abs() < 1e-12);
         assert!((rail_config.x_max_m - model_rail.x_max).abs() < 1e-12);

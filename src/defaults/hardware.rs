@@ -16,8 +16,9 @@ pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
 ///
 /// 레일 기하학적 원점에 더하는 논리 +X 좌표계 보정 [m].
 /// 타격 목표나 IK 결과가 아니라 AXL board↔domain 좌표 변환에 한 번만 적용한다.
-/// 기존 +4.0cm에 실물 좌우 편차 보정 +2.5cm를 더한 값이다.
-pub const RAIL_COORDINATE_POSITIVE_X_OFFSET_M: f64 = 0.065;
+/// `reverse=true`이므로 실물 +X 2.5cm 보정은 보드 목표에서 2.5cm를 뺀다.
+/// 기존 +4.0cm 기준에서 2.5cm를 뺀 최종 좌표 오프셋이다.
+pub const RAIL_COORDINATE_POSITIVE_X_OFFSET_M: f64 = 0.015;
 /// 보드 실측 0.745m를 준비 중앙 0.675m로 해석하는 영점 이동.
 pub const RAIL_POSITIVE_X_TRIM_M: f64 = 0.030;
 pub const RAIL_NEGATIVE_X_ZERO_SHIFT_M: f64 =
