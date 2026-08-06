@@ -58,8 +58,8 @@ pub use dxl_limits::{
 pub use estimator::EstimatorParams;
 pub use hardware::{
     BASE_JOINT_ZERO_OFFSET_RAD, RAIL_BOARD_ZERO_DOMAIN_M, RAIL_LEFT_END_MARGIN_M,
-    RAIL_PHYSICAL_X_MAX_M, RAIL_PHYSICAL_X_MIN_M, RAIL_READY_X_M, RAIL_RIGHT_END_MARGIN_M,
-    RAIL_X_MAX_M, RAIL_X_MIN_M, WRIST_JOINT_ZERO_OFFSET_RAD,
+    RAIL_NEGATIVE_X_ZERO_SHIFT_M, RAIL_PHYSICAL_X_MAX_M, RAIL_PHYSICAL_X_MIN_M, RAIL_READY_X_M,
+    RAIL_RIGHT_END_MARGIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M, WRIST_JOINT_ZERO_OFFSET_RAD,
 };
 pub use impact::ImpactParams;
 pub use motion::{
@@ -123,10 +123,10 @@ mod tests {
         assert!((model_rail.x_min - 0.0100).abs() < 1e-12);
         assert!((model_rail.x_max - 1.3395).abs() < 1e-12);
         assert!((model_rail.default_x() - 0.6750).abs() < 1e-12);
-        assert!((rail_config.board_zero_domain_m - 0.7300).abs() < 1e-12);
-        assert!((rail_config.domain_to_board_abs(0.0100) - 0.7200).abs() < 1e-12);
-        assert!((rail_config.domain_to_board_abs(1.3395) - -0.6095).abs() < 1e-12);
-        assert!((rail_config.domain_to_board_abs(0.6750) - 0.0550).abs() < 1e-12);
+        assert!((rail_config.board_zero_domain_m - 1.4350).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(0.0100) - 1.4250).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(1.3395) - 0.0955).abs() < 1e-12);
+        assert!((rail_config.domain_to_board_abs(0.6750) - 0.7600).abs() < 1e-12);
         assert!((ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M - 0.0050).abs() < 1e-12);
         assert!((ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M - 0.0600).abs() < 1e-12);
         assert!((ALIGNMENT_TARGET_HEIGHT_OFFSET_M - 0.0150).abs() < 1e-12);
