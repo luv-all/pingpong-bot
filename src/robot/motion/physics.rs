@@ -7,11 +7,11 @@ use crate::constants::table;
 use crate::defaults;
 use crate::defaults::motion::{
     ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-    DETECTION_WINDUP_DISTANCE_M, DETECTION_WINDUP_MIN_DURATION_SECS,
-    FIXED_IMPACT_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_DISTANCE_M, FIXED_IMPACT_PUSH_SPEED_M_S,
-    IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M,
-    READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS,
-    RETURN_TO_CENTER_MIN_SECS,
+    DETECTION_WINDUP_DISTANCE_M, DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S,
+    FIXED_JOINT_SWING_DELTA_RAD, FIXED_JOINT_SWING_DURATION_SECS,
+    FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS, IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG,
+    READY_PREWIND_DISTANCE_M, READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH,
+    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
@@ -963,22 +963,22 @@ fn plan_aligned_impact_sequence_for_target(
     });
 }
 
-/// 발사기 반복 시험용 고정 임팩트 푸시.
-///
-/// 이미 레일과 라켓 방향이 맞은 자세에서 라켓 면 법선 방향으로 짧게 전진하고,
-/// 임팩트 knot에 0이 아닌 관절 속도를 남겨 공을 실제로 밀어낸다. 레일은 타격 중
-/// 고정하며, 짧은 팔로스루 뒤 호출자가 기존 중앙 복귀 궤적을 이어 붙인다.
-pub fn plan_fixed_impact_push(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
-    return plan_fixed_impact_push_in(arm, start, FIXED_IMPACT_MIN_DURATION_SECS);
+/// 0.25초 고정 관절 스윙 결과.
+pub struct FixedJointSwing {
+    pub trajectory: Trajectory,
+    /// 한계·토크·충돌 검사 때문에 현재 각도로 고정한 관절.
+    pub skipped_joint_indices: Vec<usize>,
 }
 
-/// 레일 직접 이동과 동시에 시작해 지정 시간 뒤 공과 만나도록 관절 푸시를 만든다.
-pub fn plan_fixed_impact_push_in(
+/// 정렬된 현재 자세에 고정 관절 변화량을 더해 0.25초 스윙을 만든다.
+///
+/// IK와 Cartesian 푸시는 사용하지 않는다. 전체 조합이 한계·토크·테이블 검사를
+/// 통과하지 못하면 동작 관절이 많은 조합부터 재시도해, 가능한 관절만 움직인다.
+pub fn plan_fixed_joint_swing(
     arm: &Arm,
     start: &robot::Pose,
-    impact_duration_secs: f64,
-) -> Result<Trajectory, DomainError> {
-    let racket = arm
+) -> Result<FixedJointSwing, DomainError> {
+    let start_racket = arm
         .forward_kinematics_with_rail(start.rail_x, &start.joints)
         .ok_or_else(|| {
             DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
@@ -987,48 +987,84 @@ pub fn plan_fixed_impact_push_in(
                 target_z: table::SURFACE_Z,
             })
         })?;
-    let target =
-        Point3::from(racket.position.coords + racket.normal * FIXED_IMPACT_PUSH_DISTANCE_M);
-    let impact_joints = match arm.rail {
-        Some(rail) => {
-            arm.inverse_kinematics_with_rail(&rail, start.rail_x, target, Some(&start.joints))
+    let joint_count = start.joints.values.len();
+    let requested_count = FIXED_JOINT_SWING_DELTA_RAD.len().min(joint_count);
+    let requested_mask = (0..requested_count).fold(0_usize, |mask, index| {
+        if FIXED_JOINT_SWING_DELTA_RAD[index].abs() > f64::EPSILON {
+            mask | (1 << index)
+        } else {
+            mask
         }
-        None => arm.inverse_kinematics_near(target, Some(&start.joints)),
-    }
-    .map_err(DomainError::InfeasibleSwing)?;
-    let impact_pose = robot::Pose::new(start.rail_x, impact_joints.clone());
-    let (_, mut impact_velocity) = arm
-        .linear_velocities_for_racket_velocity(
-            &impact_pose,
-            racket.normal * FIXED_IMPACT_PUSH_SPEED_M_S,
-        )
-        .map_err(DomainError::InfeasibleSwing)?;
+    });
+    let mut masks: Vec<usize> = (1..(1_usize << requested_count))
+        .filter(|mask| mask & !requested_mask == 0)
+        .collect();
+    masks.sort_by_key(|mask| std::cmp::Reverse(mask.count_ones()));
+    let mut last_error = None;
 
-    let peak = impact_velocity
-        .iter()
-        .map(|value| value.abs())
-        .fold(0.0_f64, f64::max);
-    // `arm.max_joint_speed` 자체가 이미 Dynamixel 무부하 속도를 실기용으로
-    // 디레이트한 상한이다. 여기서 다시 0.8을 곱하면 이중 디레이트가 되므로,
-    // 발사기 최대 출력 시험에서는 모델이 허용하는 상한 전체를 사용한다.
-    let velocity_limit = arm.max_joint_speed;
-    if peak > velocity_limit && velocity_limit > 0.0 {
-        let scale = velocity_limit / peak;
-        for velocity in &mut impact_velocity {
-            *velocity *= scale;
+    for mask in masks {
+        let mut impact = start.joints.clone();
+        let mut impact_velocity = vec![0.0; joint_count];
+        let mut skipped = Vec::new();
+        for index in 0..requested_count {
+            let delta = FIXED_JOINT_SWING_DELTA_RAD[index];
+            if delta.abs() <= f64::EPSILON {
+                continue;
+            }
+            if mask & (1 << index) == 0 {
+                skipped.push(index);
+                continue;
+            }
+            let target = impact.values[index] + delta;
+            if arm
+                .joint_limit(index)
+                .is_some_and(|limit| target < limit.min || target > limit.max)
+            {
+                skipped.push(index);
+                continue;
+            }
+            impact.values[index] = target;
+            impact_velocity[index] = delta / FIXED_JOINT_SWING_DURATION_SECS;
+        }
+        if impact == start.joints {
+            continue;
+        }
+        match build_feasible_trajectory_with_follow_time(
+            arm,
+            &start.joints,
+            impact,
+            vec![0.0; joint_count],
+            impact_velocity,
+            FIXED_JOINT_SWING_DURATION_SECS,
+            Rail::fixed(start.rail_x),
+            FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
+        ) {
+            Ok(trajectory) => {
+                let Some(impact_racket) =
+                    arm.forward_kinematics_with_rail(start.rail_x, trajectory.impact_joints())
+                else {
+                    continue;
+                };
+                let forward_distance =
+                    (impact_racket.position - start_racket.position).dot(&start_racket.normal);
+                if forward_distance <= 0.0 {
+                    continue;
+                }
+                return Ok(FixedJointSwing {
+                    trajectory,
+                    skipped_joint_indices: skipped,
+                });
+            }
+            Err(error) => last_error = Some(error),
         }
     }
-
-    return build_feasible_trajectory(
-        arm,
-        &start.joints,
-        impact_joints,
-        vec![0.0; start.joints.values.len()],
-        impact_velocity,
-        impact_duration_secs.max(FIXED_IMPACT_MIN_DURATION_SECS),
-        Rail::fixed(start.rail_x),
-    )
-    .map_err(DomainError::InfeasibleSwing);
+    return Err(DomainError::InfeasibleSwing(last_error.unwrap_or(
+        SwingPlanError::JointOrTorqueLimit {
+            target_x: start.rail_x,
+            target_y: 0.0,
+            target_z: table::SURFACE_Z,
+        },
+    )));
 }
 
 /// 정지 → 정지로 임의의 포즈까지 잇는 최단 실행가능 궤적.
@@ -1118,6 +1154,29 @@ fn build_feasible_trajectory(
     duration: f64,
     rail: Rail,
 ) -> Result<Trajectory, SwingPlanError> {
+    return build_feasible_trajectory_with_follow_time(
+        arm,
+        start,
+        end,
+        start_velocity,
+        end_velocity,
+        duration,
+        rail,
+        defaults::ControlParams::default().swing_follow_through_secs,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_feasible_trajectory_with_follow_time(
+    arm: &Arm,
+    start: &Joints,
+    end: Joints,
+    start_velocity: Vec<f64>,
+    end_velocity: Vec<f64>,
+    duration: f64,
+    rail: Rail,
+    follow_time: f64,
+) -> Result<Trajectory, SwingPlanError> {
     let (fitted, fitted_rail) = fit_end_velocity(
         arm,
         start,
@@ -1127,7 +1186,7 @@ fn build_feasible_trajectory(
         duration,
         rail,
     );
-    let trajectory = trajectory_with_follow_through(
+    let trajectory = trajectory_with_follow_through_in(
         arm,
         start,
         &end,
@@ -1135,6 +1194,7 @@ fn build_feasible_trajectory(
         fitted,
         duration,
         fitted_rail,
+        follow_time,
     );
     // 두 원인(관절 각도/속도 vs 토크)을 나눠 보고한다 — 어느 쪽이 병목인지에
     // 따라 대응이 완전히 다르기 때문(전자는 기구학/마운트, 후자는 모터 선정).
@@ -1190,6 +1250,29 @@ pub(crate) fn trajectory_with_follow_through(
     rail: Rail,
 ) -> Trajectory {
     let follow_time = defaults::ControlParams::default().swing_follow_through_secs;
+    return trajectory_with_follow_through_in(
+        arm,
+        start,
+        impact,
+        start_velocity,
+        impact_velocity,
+        impact_time,
+        rail,
+        follow_time,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn trajectory_with_follow_through_in(
+    arm: &Arm,
+    start: &Joints,
+    impact: &Joints,
+    start_velocity: Vec<f64>,
+    impact_velocity: Vec<f64>,
+    impact_time: f64,
+    rail: Rail,
+    follow_time: f64,
+) -> Trajectory {
     let mut end_values = impact.values.clone();
     for (index, (value, velocity)) in end_values
         .iter_mut()
@@ -1577,70 +1660,81 @@ mod tests {
     const SAMPLE_IMPACT_HEIGHT_M: f64 = 0.18;
 
     #[test]
-    fn fixed_impact_push_is_short_and_has_nonzero_impact_speed() {
-        let arm = sample_three_dof_arm();
-        let start = sample_start(&arm);
+    fn fixed_joint_swing_starts_at_aligned_pose_and_moves_forward() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let ready = robot::Pose::new(
+            arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+            arm.default_joints.clone(),
+        );
+        let alignment = plan_ball_alignment(
+            arm,
+            &ready,
+            Point3::new(table::WIDTH_X * 0.5, READY_RACKET_Y_M, 0.95),
+        )
+        .expect("alignment");
+        let start = robot::Pose::new(
+            alignment.follow_through_rail_x,
+            alignment.follow_through.clone(),
+        );
         let before = arm
             .forward_kinematics_with_rail(start.rail_x, &start.joints)
             .expect("start FK");
-        let trajectory = plan_fixed_impact_push(&arm, &start).expect("fixed impact push");
+        let planned = plan_fixed_joint_swing(arm, &start).expect("fixed joint swing");
+        assert!(
+            planned.skipped_joint_indices.is_empty(),
+            "대표 타격 자세에서는 q2·q3 전체 스윙이 가능해야 함: {:?}",
+            planned.skipped_joint_indices
+        );
+        let trajectory = planned.trajectory;
         let impact = arm
             .forward_kinematics_with_rail(trajectory.rail.end, &trajectory.end)
             .expect("impact FK");
-        let impact_velocity = racket_velocity_fd(
-            &arm,
-            trajectory.rail.end,
-            trajectory.rail.end_velocity,
-            &trajectory.end,
-            &trajectory.end_velocity,
-        )
-        .expect("impact velocity");
-        let forward_speed = impact_velocity.dot(&impact.normal);
-        let impact_joint_peak = trajectory
-            .end_velocity
-            .iter()
-            .map(|speed| speed.abs())
-            .fold(0.0_f64, f64::max);
-
-        let expected_duration = FIXED_IMPACT_MIN_DURATION_SECS
-            + defaults::ControlParams::default().swing_follow_through_secs;
-        assert!((trajectory.duration_secs - expected_duration).abs() < 1e-9);
+        let follow_through = arm
+            .forward_kinematics_with_rail(
+                trajectory.follow_through_rail_x,
+                &trajectory.follow_through,
+            )
+            .expect("follow-through FK");
+        assert_eq!(
+            trajectory.start, start.joints,
+            "백스윙 포즈가 삽입되면 안 됨"
+        );
+        assert!((trajectory.impact_time_secs - FIXED_JOINT_SWING_DURATION_SECS).abs() < 1e-12);
         assert!(
-            trajectory
-                .end_velocity
-                .iter()
-                .any(|speed| speed.abs() > 1e-3)
+            (trajectory.duration_secs
+                - trajectory.impact_time_secs
+                - FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS)
+                .abs()
+                < 1e-12
         );
         assert!(
-            forward_speed > 0.10,
-            "라켓이 공을 밀 만큼의 전진 속도를 가져야 함: {forward_speed:.3}m/s"
+            (impact.position - before.position).dot(&before.normal) > 0.0,
+            "라켓이 타격점에서 법선 앞으로 밀려야 함: before={:?} impact={:?} normal={:?}",
+            before.position,
+            impact.position,
+            before.normal,
         );
         assert!(
-            impact_joint_peak > arm.max_joint_speed * 0.8,
-            "최대 출력 시험은 예전 이중 80% 상한을 넘어야 함: {impact_joint_peak:.3}rad/s"
-        );
-        assert!(
-            (impact.position - before.position).dot(&before.normal) > 0.01,
-            "라켓이 면 법선 방향으로 실제 전진해야 함"
+            (follow_through.position - impact.position).dot(&before.normal) > 0.0,
+            "임팩트 후에도 라켓이 같은 방향으로 계속 밀려야 함: impact={:?} follow={:?}",
+            impact.position,
+            follow_through.position,
         );
     }
 
     #[test]
-    fn fixed_impact_push_can_start_early_and_hit_at_requested_time() {
-        let arm = sample_three_dof_arm();
-        let start = sample_start(&arm);
-        let requested_impact_secs = 0.60;
-        let trajectory = plan_fixed_impact_push_in(&arm, &start, requested_impact_secs)
-            .expect("early fixed impact push");
+    fn fixed_joint_swing_keeps_unavailable_joint_still() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let rail_x = arm.rail.as_ref().map_or(0.0, |rail| rail.default_x());
+        let mut joints = arm.default_joints.clone();
+        joints.values[3] = arm.joint_limit(3).expect("q3 limit").min;
+        let start = robot::Pose::new(rail_x, joints);
+        let planned = plan_fixed_joint_swing(arm, &start).expect("partial fixed joint swing");
 
-        assert!((trajectory.impact_time_secs - requested_impact_secs).abs() < 1e-9);
-        assert!(
-            (trajectory.duration_secs
-                - requested_impact_secs
-                - defaults::ControlParams::default().swing_follow_through_secs)
-                .abs()
-                < 1e-9
-        );
+        assert_eq!(planned.trajectory.end.values[3], start.joints.values[3]);
+        assert!(planned.skipped_joint_indices.contains(&3));
     }
 
     #[test]
@@ -1847,7 +1941,10 @@ mod tests {
         let sequence = plan_aligned_impact_sequence(arm, &start, ball, 0.40)
             .expect("0.25초 임팩트 예약 없이 계획");
 
-        assert!(sequence.impact.impact_time_secs < FIXED_IMPACT_MIN_DURATION_SECS);
+        assert!(
+            sequence.impact.impact_time_secs
+                < crate::defaults::motion::FIXED_IMPACT_MIN_DURATION_SECS
+        );
         assert!(
             (sequence.windup.duration_secs + sequence.impact.impact_time_secs - 0.40).abs() < 1e-9
         );

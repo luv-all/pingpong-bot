@@ -128,18 +128,12 @@ impl Planner {
         return physics::plan_aligned_impact_sequence(arm, start, ball, time_to_impact_secs);
     }
 
-    /// 발사기 반복 시험용 짧은 고정 임팩트 푸시.
-    pub fn fixed_impact_push(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
-        return physics::plan_fixed_impact_push(arm, start);
-    }
-
-    /// 지금 관절 동작을 시작해 `impact_duration_secs` 뒤 임팩트에 도달한다.
-    pub fn fixed_impact_push_in(
+    /// 정렬 자세에서 0.1초 고정 관절 스윙을 만든다.
+    pub fn fixed_joint_swing(
         arm: &Arm,
         start: &robot::Pose,
-        impact_duration_secs: f64,
-    ) -> Result<Trajectory, DomainError> {
-        return physics::plan_fixed_impact_push_in(arm, start, impact_duration_secs);
+    ) -> Result<physics::FixedJointSwing, DomainError> {
+        return physics::plan_fixed_joint_swing(arm, start);
     }
 
     /// 정지 → 정지로 임의 포즈까지 잇는 최단 실행가능 궤적 (coarse 선추종용).

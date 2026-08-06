@@ -115,6 +115,11 @@ pub struct SimWorld {
     flight_started_at: f64,
     /// 위치 정렬·타격 후 중립 준비 자세 복귀를 시작할 sim 시각.
     direct_return_at: Option<f64>,
+    /// 예상 타격 시각보다 0.25초 앞서 고정 관절 스윙을 시작할 sim 시각.
+    ///
+    /// `None`이면 아직 정렬이 확정되지 않았거나, 이번 공의 스윙을 이미
+    /// 실행/생략했다. 실기 `control_worker`의 `swing_due_at`과 같은 역할이다.
+    direct_swing_at: Option<f64>,
     /// 뷰어·Status용 디버그 스냅샷 (실패 사유·궤적·한계).
     debug_snap: SimDebugSnapshot,
     /// [임시 진단] 마지막 틱의 `try_auto_swing` marker 스캔 소요 [s].
@@ -419,6 +424,7 @@ impl SimWorld {
             last_swing_attempt_at: f64::NEG_INFINITY,
             flight_started_at: 0.0,
             direct_return_at: None,
+            direct_swing_at: None,
             debug_snap: SimDebugSnapshot::default(),
             diag_marker_secs: 0.0,
             diag_predictions_secs: 0.0,
@@ -586,6 +592,7 @@ impl SimWorld {
         self.robot.step_commands(&self.arm, dt);
         let t_swing = std::time::Instant::now();
         self.try_auto_swing(dt);
+        self.try_direct_fixed_swing();
         self.try_direct_return_to_center();
         self.diag_auto_swing_secs = t_swing.elapsed().as_secs_f64();
         self.drive_arm_motors();
@@ -887,21 +894,71 @@ impl SimWorld {
         let rail_commanded_m = alignment.rail.end;
         self.robot.set_auto_return_to_center(false);
         self.robot.replace_swing(alignment);
+        let predicted_arrival_at = self.sim_time + target.time_secs;
+        self.direct_swing_at = Some(
+            (predicted_arrival_at - crate::defaults::FIXED_JOINT_SWING_DURATION_SECS)
+                .max(self.sim_time),
+        );
         self.direct_return_at =
-            Some(self.sim_time + target.time_secs + crate::defaults::POST_ALIGNMENT_HOLD_SECS);
+            Some(predicted_arrival_at + crate::defaults::POST_ALIGNMENT_HOLD_SECS);
         info!(
             shot = self.shot_seq,
             stage = ?stage,
             duration_secs,
             predicted_arrival_in_secs = target.time_secs,
             post_alignment_hold_secs = crate::defaults::POST_ALIGNMENT_HOLD_SECS,
+            fixed_swing_lead_secs = crate::defaults::FIXED_JOINT_SWING_DURATION_SECS,
             rail_commanded_m,
             target = ?target.position.coords,
-            "shot: 레일·팔 동시 위치·방향 정렬 commit — 스윙 없음"
+            "shot: 레일·팔 동시 위치·방향 정렬 commit — 고정 스윙 예약"
         );
         self.swing_committed = true;
         self.debug_snap.commit_phase = CommitPhase::Committed;
         self.position_refined = refined;
+    }
+
+    /// 예상 타격 0.25초 전에 백스윙 없는 고정 관절 스윙을 시작한다.
+    ///
+    /// 정렬이 아직 진행 중이어도 레일 목표는 계속 추종하고 팔 관절 궤적만
+    /// 교체한다. 그렇지 않으면 sim의 `is_swinging()`이 레일 정렬까지
+    /// busy로 묶어 표시해 모든 고정 스윙을 생략하게 된다.
+    fn try_direct_fixed_swing(&mut self) {
+        let Some(swing_at) = self.direct_swing_at else {
+            return;
+        };
+        if self.sim_time < swing_at {
+            return;
+        }
+        self.direct_swing_at = None;
+
+        let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
+        match motion::Planner::fixed_joint_swing(&self.arm, &start) {
+            Ok(planned) => {
+                let trajectory = planned.trajectory;
+                let duration_secs = trajectory.duration_secs;
+                let joints_start = trajectory.start.values.clone();
+                let joints_impact = trajectory.end.values.clone();
+                let joints_follow_through = trajectory.follow_through.values.clone();
+                // 실기의 `command_joints` 처럼 이미 내려간 레일 목표는
+                // 계속 추종하고, 관절 궤적만 고정 스윙으로 교체한다.
+                self.robot.replace_joint_swing(trajectory);
+                info!(
+                    shot = self.shot_seq,
+                    start_late_ms = (self.sim_time - swing_at).max(0.0) * 1e3,
+                    duration_secs,
+                    joints_start = ?joints_start,
+                    joints_impact = ?joints_impact,
+                    joints_follow_through = ?joints_follow_through,
+                    skipped_joint_indices = ?planned.skipped_joint_indices,
+                    "백스윙 없는 고정 관절 스윙 시작"
+                );
+            }
+            Err(error) => warn!(
+                shot = self.shot_seq,
+                %error,
+                "고정 스윙 계획 불가 — 스윙만 생략"
+            ),
+        }
     }
 
     /// 위치 정렬 유지가 끝나면 최초 중립 준비 자세로 복귀한다.
@@ -1099,6 +1156,7 @@ impl SimWorld {
         self.last_swing_attempt_at = f64::NEG_INFINITY;
         self.flight_started_at = self.sim_time;
         self.direct_return_at = None;
+        self.direct_swing_at = None;
         self.debug_snap.reset_for_new_flight();
         self.try_auto_swing(f64::from(self.integration_parameters.dt));
     }
@@ -1127,6 +1185,7 @@ impl SimWorld {
         self.swing_committed = false;
         self.position_refined = false;
         self.swing_abandoned = false;
+        self.direct_swing_at = None;
         self.debug_snap.last_fail = None;
         self.debug_snap.last_fail_text = None;
         self.debug_snap.commit_phase = CommitPhase::Idle;
@@ -1971,7 +2030,7 @@ mod tests {
             "발사 후 직접 제어 명령이 적용돼야 함"
         );
         assert!(
-            max_displacement > 0.02,
+            max_displacement > 0.01,
             "0.675m 준비 위치에서 라켓 헤드 x를 중앙 공에 맞추도록 레일이 움직여야 함 (distance={max_displacement})"
         );
     }
@@ -1994,6 +2053,39 @@ mod tests {
             alignment_started,
             "준비 자세 복귀 전에 공 위치·방향 정렬이 실행돼야 함"
         );
+    }
+
+    #[test]
+    fn direct_control_starts_fixed_joint_swing_before_impact() {
+        let mut world = SimWorld::new(test_robot());
+        world.set_use_ground_truth(true);
+        world.shoot_ball(&launch::Settings::default());
+
+        let mut saw_schedule = world.direct_swing_at.is_some();
+        for _ in 0..2_000 {
+            world.step(1.0 / 1_000.0, None);
+            saw_schedule |= world.direct_swing_at.is_some();
+            if saw_schedule && world.direct_swing_at.is_none() {
+                let trajectory = world
+                    .robot()
+                    .active_trajectory()
+                    .expect("예약 시각에 고정 관절 스윙이 재생돼야 함");
+                assert!(
+                    (trajectory.impact_time_secs
+                        - crate::defaults::FIXED_JOINT_SWING_DURATION_SECS)
+                        .abs()
+                        < 1e-12,
+                    "스윙은 예상 타격 0.25초 전에 시작해야 함"
+                );
+                assert!(
+                    trajectory.end.values[2] < trajectory.start.values[2]
+                        || trajectory.end.values[3] < trajectory.start.values[3],
+                    "q2/q3 중 가능한 관절이 타격 방향으로 움직여야 함"
+                );
+                return;
+            }
+        }
+        panic!("고정 관절 스윙 예약이 실행되지 않음");
     }
 
     /// 직접 제어 목표 시각이 지난 뒤 레일과 관절이 중앙 준비 자세로

@@ -52,10 +52,16 @@ pub const ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M: f64 = 0.060;
 pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 /// 검출 직후 추가 백스윙의 첫 시도 시간 [s].
 pub const DETECTION_WINDUP_MIN_DURATION_SECS: f64 = 0.120;
-/// 라켓 면 법선 방향의 짧은 임팩트 전진 거리 [m].
-pub const FIXED_IMPACT_PUSH_DISTANCE_M: f64 = 0.050;
 /// 임팩트 순간 목표 라켓 선속도 [m/s].
 pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 1.80;
+/// 실기 고정 스윙이 예상 타격점에 도달하는 시간 [s].
+pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.250;
+/// 임팩트 이후에도 같은 방향으로 계속 밀고 멈추는 시간 [s].
+pub const FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS: f64 = 0.120;
+/// 정렬 자세 기준 고정 관절 변화량 [rad].
+/// q0·q1은 좌우 정렬을 유지하고 q2·q3만 짧게 편다.
+pub const FIXED_JOINT_SWING_DELTA_RAD: [f64; 4] =
+    [0.0, 0.0, -6.0_f64.to_radians(), -12.0_f64.to_radians()];
 
 impl Default for InterceptWindow {
     fn default() -> Self {

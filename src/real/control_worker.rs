@@ -1,8 +1,9 @@
 //! 실물 공 위치·방향 정렬·후속 팔 보정 제어 워커.
 //!
 //! `run`이 워커 시작 전에 레일과 4축 Dynamixel을 최초 중립 자세에 둔다.
-//! 이후 공 하나당 보정된 접촉점에 라켓을 정지 정렬한다. 백스윙·임팩트 속도·
-//! 팔로스루는 사용하지 않고, 잠시 유지한 뒤 현재 모드의 준비 자세로 복귀한다.
+//! 이후 공 하나당 보정된 접촉점에 라켓을 정지 정렬하고, 예상 타격
+//! 0.25초 전에 백스윙 없는 고정 관절 스윙을 시작한다. 스윙이 불가하면 그 동작만 생략하고
+//! 정렬 자세를 유지한 뒤 현재 모드의 준비 자세로 복귀한다.
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -27,6 +28,7 @@ use super::{
 };
 
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
+const FIXED_SWING_LEAD: Duration = Duration::from_millis(250);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const BUSY_POLL: Duration = Duration::from_millis(5);
 const VERIFY_POLL_PERIOD: Duration = Duration::from_millis(20);
@@ -164,6 +166,8 @@ struct PendingAlignmentMeasurement {
 enum BallControlState {
     Idle,
     Aligning {
+        swing_due_at: Instant,
+        swing_attempted: bool,
         return_due_at: Instant,
         measurement: PendingAlignmentMeasurement,
     },
@@ -250,7 +254,7 @@ pub fn spawn(
             home_rail_x,
             filtering: false,
         });
-        info!("공 위치·방향 정렬 준비 — 스윙 없이 목표 자세로 이동");
+        info!("공 위치·방향 정렬 준비 — 예상 타격 0.25초 전 고정 관절 스윙");
 
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
@@ -348,6 +352,80 @@ pub fn spawn(
                     }
                 }
                 VerificationResult::Pending => {}
+            }
+            let due_swing = match &state {
+                BallControlState::Aligning {
+                    swing_due_at,
+                    swing_attempted,
+                    measurement,
+                    ..
+                } if !swing_attempted && Instant::now() >= *swing_due_at => {
+                    Some((measurement.track_seq, *swing_due_at))
+                }
+                BallControlState::Idle
+                | BallControlState::Waiting
+                | BallControlState::Aligning { .. } => None,
+            };
+            if let Some((track_seq, swing_due_at)) = due_swing {
+                if let BallControlState::Aligning {
+                    swing_attempted, ..
+                } = &mut state
+                {
+                    // 한 공에 대해 성공·실패와 관계없이 한 번만 시도한다.
+                    *swing_attempted = true;
+                }
+                if hardware.is_busy() {
+                    warn!(
+                        track_seq,
+                        late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
+                        "타격 0.25초 전에 정렬 동작이 아직 진행 중 — 고정 스윙만 생략"
+                    );
+                } else {
+                    match hardware.read_pose() {
+                        Ok(swing_start) => match Planner::fixed_joint_swing(&arm, &swing_start) {
+                            Ok(planned) => {
+                                let swing = &planned.trajectory;
+                                match hardware.command_joints(swing) {
+                                    Ok(()) => {
+                                        if let BallControlState::Aligning { measurement, .. } =
+                                            &mut state
+                                        {
+                                            measurement.rail_commanded_m = swing_start.rail_x;
+                                            measurement.joints_commanded =
+                                                swing.follow_through.clone();
+                                        }
+                                        info!(
+                                            track_seq,
+                                            scheduled_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
+                                            start_late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
+                                            swing_duration_secs = f4(swing.duration_secs),
+                                            joints_start = %format!("{:?}", swing.start.values),
+                                            joints_impact = %format!("{:?}", swing.end.values),
+                                            joints_follow_through = %format!("{:?}", swing.follow_through.values),
+                                            skipped_joint_indices = ?planned.skipped_joint_indices,
+                                            "백스윙 없는 고정 관절 스윙 시작"
+                                        );
+                                    }
+                                    Err(error) => warn!(
+                                        track_seq,
+                                        %error,
+                                        "고정 스윙 명령 실패 — 스윙만 생략"
+                                    ),
+                                }
+                            }
+                            Err(error) => warn!(
+                                track_seq,
+                                %error,
+                                "고정 스윙 계획 불가 — 스윙만 생략"
+                            ),
+                        },
+                        Err(error) => warn!(
+                            track_seq,
+                            %error,
+                            "고정 스윙 직전 포즈 읽기 실패 — 스윙만 생략"
+                        ),
+                    }
+                }
             }
             let due_for_return = match &state {
                 BallControlState::Aligning { return_due_at, .. } => {
@@ -471,14 +549,24 @@ pub fn spawn(
                         .min(RECV_TIMEOUT)
                 });
             if pending_verification.is_none()
-                && let BallControlState::Aligning { return_due_at, .. } = &state
+                && let BallControlState::Aligning {
+                    swing_due_at,
+                    swing_attempted,
+                    return_due_at,
+                    ..
+                } = &state
             {
+                let swing_wait = if !swing_attempted {
+                    swing_due_at.saturating_duration_since(now)
+                } else {
+                    RECV_TIMEOUT
+                };
                 let return_wait = if *return_due_at <= now && hardware.is_busy() {
                     BUSY_POLL
                 } else {
                     return_due_at.saturating_duration_since(now)
                 };
-                timeout = timeout.min(return_wait);
+                timeout = timeout.min(swing_wait).min(return_wait);
             }
             let can_apply_latest = pending_refined.is_some()
                 && !hardware.is_busy()
@@ -500,6 +588,17 @@ pub fn spawn(
                     info!(track_seq, "대기 중(n 대기) — 공 명령 생략");
                     last_waiting_ignored_track_seq = Some(track_seq);
                 }
+                continue;
+            }
+            if matches!(
+                state,
+                BallControlState::Aligning {
+                    swing_attempted: true,
+                    ..
+                }
+            ) {
+                // 스윙을 시작하거나 시간을 놓친 후에는 새 예측이 관절 명령을
+                // 덮어써서 타격 동작을 중단하지 못하게 한다.
                 continue;
             }
             // 한 공의 정렬·유지가 끝나기 전에 검출기가 만든 새 잡음 track이
@@ -653,9 +752,14 @@ pub fn spawn(
             }
 
             let predicted_arrival_at = request.trajectory.origin + target.t;
+            let swing_due_at = predicted_arrival_at
+                .checked_sub(FIXED_SWING_LEAD)
+                .unwrap_or(issued_at);
             let return_due_at = predicted_arrival_at
                 + Duration::from_secs_f64(pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS);
             state = BallControlState::Aligning {
+                swing_due_at,
+                swing_attempted: false,
                 return_due_at,
                 measurement: PendingAlignmentMeasurement {
                     track_seq,
@@ -695,8 +799,9 @@ pub fn spawn(
                 alignment_duration_secs = f4(alignment.duration_secs),
                 dual_base_step_deg = f2(dual_base_step_rad.to_degrees()),
                 post_alignment_hold_secs = pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS,
+                fixed_swing_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
                 joints_commanded = %format!("{:?}", alignment.follow_through.values),
-                "본 예측 레일·팔 정렬/팔 실시간 미세 보정 시작 — 스윙 없음"
+                "본 예측 레일·팔 정렬/팔 실시간 미세 보정 시작 — 고정 스윙 예약"
             );
         }
 
@@ -1715,6 +1820,8 @@ mod tests {
             Some(RefinedAction::PrimaryRailAndArm)
         );
         let mut state = BallControlState::Aligning {
+            swing_due_at: Instant::now(),
+            swing_attempted: false,
             return_due_at: Instant::now(),
             measurement: PendingAlignmentMeasurement {
                 track_seq: 9,
