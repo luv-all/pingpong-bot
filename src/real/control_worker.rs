@@ -106,6 +106,19 @@ fn refined_prediction_ready(request: &CommitRequest) -> bool {
     return last.sigma_position < position_limit && last.sigma_velocity < velocity_limit;
 }
 
+/// 카메라 캡처(마지막 채택 관측) → 비전 적합 완료까지 걸린 시간 [ms].
+///
+/// `select_alignment_target`이 이미 `measured.last()`의 존재를 요구하므로 이
+/// 함수가 실제로 호출되는 시점(정렬 목표를 이미 고른 뒤)에는 항상 `Some`이다 —
+/// 방어적으로만 빈 궤적에 0.0을 반환한다.
+fn camera_to_fit_ms(request: &CommitRequest) -> f64 {
+    let Some(last) = request.trajectory.measured.last() else {
+        return 0.0;
+    };
+    let capture_at = request.trajectory.origin + last.t;
+    return request.at.saturating_duration_since(capture_at).as_secs_f64() * 1e3;
+}
+
 /// 새 비전의 전체 예측 궤적에서 제어가 사용할 접수 평면을 고른다.
 ///
 /// 요청이 큐에서 기다린 시간만큼 `at_time(last_measured + age)`로 공을 전진시킨 뒤,
@@ -259,6 +272,9 @@ pub fn spawn(
 
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
+        // log_motion_done_if_idle이 채우고 비운다 — (track_seq, 명령 발행 시각,
+        // 이벤트 라벨).
+        let mut motion_watch: Option<(u64, Instant, &'static str)> = None;
         let mut pending_verification: Option<PendingVerification> = None;
         let mut state = BallControlState::Idle;
         // Dynamixel 이동 중에 도착한 같은 공의 본 예측은 최신 하나만 유지하고,
@@ -354,6 +370,7 @@ pub fn spawn(
                 }
                 VerificationResult::Pending => {}
             }
+            log_motion_done_if_idle(hardware.as_mut(), &mut motion_watch);
             let due_swing = match &state {
                 BallControlState::Aligning {
                     swing_due_at,
@@ -386,7 +403,11 @@ pub fn spawn(
                         Ok(swing_start) => match Planner::fixed_joint_swing(&arm, &swing_start) {
                             Ok(planned) => {
                                 let swing = &planned.trajectory;
-                                match hardware.command_joints(swing) {
+                                let command_send_started = Instant::now();
+                                let command_result = hardware.command_joints(swing);
+                                let command_send_ms =
+                                    command_send_started.elapsed().as_secs_f64() * 1e3;
+                                match command_result {
                                     Ok(()) => {
                                         if let BallControlState::Aligning { measurement, .. } =
                                             &mut state
@@ -395,10 +416,14 @@ pub fn spawn(
                                             measurement.joints_commanded =
                                                 swing.follow_through.clone();
                                         }
+                                        motion_watch =
+                                            Some((track_seq, command_send_started, "fixed_swing"));
                                         info!(
+                                            target: "latency",
                                             track_seq,
                                             scheduled_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
                                             start_late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
+                                            command_send_ms = f2(command_send_ms),
                                             swing_duration_secs = f4(swing.duration_secs),
                                             joints_start = %format!("{:?}", swing.start.values),
                                             joints_impact = %format!("{:?}", swing.end.values),
@@ -724,10 +749,12 @@ pub fn spawn(
                 .get(pingpong_bot::robot::control::DIRECT_AIM_JOINT_INDEX)
                 .copied()
                 .unwrap_or(0.0);
+            let command_send_started = Instant::now();
             let command_result = match action {
                 RefinedAction::PrimaryRailAndArm => hardware.command(&alignment),
                 RefinedAction::ArmCorrection => hardware.command_joints(&alignment),
             };
+            let command_send_ms = command_send_started.elapsed().as_secs_f64() * 1e3;
             if let Err(error) = command_result {
                 let _ = event_tx.send(RuntimeEvent::Failed {
                     track_seq: Some(track_seq),
@@ -735,6 +762,14 @@ pub fn spawn(
                 });
                 break;
             }
+            motion_watch = Some((
+                track_seq,
+                command_send_started,
+                match action {
+                    RefinedAction::PrimaryRailAndArm => "primary_alignment",
+                    RefinedAction::ArmCorrection => "arm_correction",
+                },
+            ));
             if action == RefinedAction::PrimaryRailAndArm {
                 latch.mark_primary_sent();
             }
@@ -779,10 +814,13 @@ pub fn spawn(
             });
 
             info!(
+                target: "latency",
                 track_seq,
                 stage = ?PredictionStage::Refined,
                 start_pose_source,
                 request_age_secs = f4(request.age_secs()),
+                camera_to_fit_ms = f2(camera_to_fit_ms(&request)),
+                command_send_ms = f2(command_send_ms),
                 target_time_secs = f4(target.t.as_secs_f64()),
                 predicted_arrival_in_secs = f4(
                     predicted_arrival_at
@@ -965,6 +1003,33 @@ fn log_verification(
             "명령 후 제어 괴리 측정"
         );
     }
+}
+
+/// `motion_watch`가 있고 하드웨어가 더 이상 바쁘지 않으면 명령 발행부터 걸린
+/// 시간을 한 번 로그하고 워치를 비운다.
+///
+/// `is_busy()`는 실물에서 atomic bool 읽기(`RealHardware::is_busy`,
+/// `src/hardware/real.rs:305`)라 버스 I/O가 아니다 — 이 호출로 하드웨어 부하가
+/// 늘지 않는다. 다만 이 값은 소프트웨어 실행기가 계획한 `duration_secs`가 지났다는
+/// 뜻일 뿐 엔코더로 확인한 실제 도달은 아니다(설계 문서의 "비목표" 참고).
+fn log_motion_done_if_idle(
+    hardware: &mut dyn Hardware,
+    motion_watch: &mut Option<(u64, Instant, &'static str)>,
+) {
+    let Some((track_seq, issued_at, event)) = *motion_watch else {
+        return;
+    };
+    if hardware.is_busy() {
+        return;
+    }
+    info!(
+        target: "latency",
+        track_seq,
+        event,
+        command_to_motion_done_ms = f2(issued_at.elapsed().as_secs_f64() * 1e3),
+        "명령 실행기 유휴 전환 — 소프트웨어 추정 소요 시간(엔코더 확인 아님)"
+    );
+    *motion_watch = None;
 }
 
 /// 런타임의 다른 스레드를 띄우기 전에 레일·전체 관절을 준비 자세로 초기화한다.
@@ -1619,6 +1684,23 @@ mod tests {
         };
     }
 
+    #[test]
+    fn camera_to_fit_ms_reflects_capture_to_fit_gap() {
+        // vision_request(age)는 origin = now-1s, measured[0].t = 0.20s(캡처 시각
+        // = now-0.8s), at = now-age로 CommitRequest를 만든다. 따라서
+        // camera_to_fit_ms ≈ 800 - age(ms)다.
+        let request = vision_request(Duration::from_millis(20));
+        let ms = camera_to_fit_ms(&request);
+        assert!((ms - 780.0).abs() < 50.0, "camera_to_fit_ms={ms}");
+    }
+
+    #[test]
+    fn camera_to_fit_ms_defensive_zero_when_measured_empty() {
+        let mut request = vision_request(Duration::from_millis(20));
+        request.trajectory.measured = Track(vec![]);
+        assert_eq!(camera_to_fit_ms(&request), 0.0);
+    }
+
     struct ReadCountingHardware {
         reads: usize,
         pose: Pose,
@@ -1657,6 +1739,44 @@ mod tests {
         fn read_pose(&mut self) -> Result<Pose, HwError> {
             return Ok(self.pose.clone());
         }
+    }
+
+    struct ToggleBusyHardware {
+        /// 첫 `is_busy()` 호출은 `true`, 이후 전부 `false` — 실행기가 한 번
+        /// "바쁨"을 보고한 뒤 다음 틱에 유휴로 바뀌는 상황을 흉내낸다.
+        busy_then_idle: std::cell::Cell<bool>,
+    }
+
+    impl Hardware for ToggleBusyHardware {
+        fn command(
+            &mut self,
+            _trajectory: &pingpong_bot::robot::motion::Trajectory,
+        ) -> Result<(), HwError> {
+            return Ok(());
+        }
+
+        fn read_pose(&mut self) -> Result<Pose, HwError> {
+            return Ok(Pose::new(0.0, Joints::from_slice(&[0.0; 4])));
+        }
+
+        fn is_busy(&mut self) -> bool {
+            return self.busy_then_idle.replace(false);
+        }
+    }
+
+    #[test]
+    fn log_motion_done_if_idle_keeps_watch_while_busy_then_clears_when_idle() {
+        let mut hardware = ToggleBusyHardware {
+            busy_then_idle: std::cell::Cell::new(true),
+        };
+        let mut watch: Option<(u64, Instant, &'static str)> =
+            Some((7, Instant::now(), "primary_alignment"));
+
+        log_motion_done_if_idle(&mut hardware, &mut watch);
+        assert!(watch.is_some(), "여전히 busy인 동안은 워치를 유지");
+
+        log_motion_done_if_idle(&mut hardware, &mut watch);
+        assert!(watch.is_none(), "busy가 풀리면 워치를 비움");
     }
 
     #[test]

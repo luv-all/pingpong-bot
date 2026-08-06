@@ -36,12 +36,13 @@ fn main() -> Result<()> {
     // 한 프로세스에 못 띄운다. clap 파싱 전에 가로챈다 (사용자 대상 플래그가 아니다).
     #[cfg(feature = "real")]
     if std::env::args().any(|arg| arg == real::SIM_CHILD_FLAG) {
-        init_tracing(false, &["pingpong_bot"]);
+        // 관전용 뷰어 자식일 뿐 카메라·하드웨어 파이프라인을 돌리지 않는다.
+        init_tracing(false, &["pingpong_bot"], false);
         return real::run_sim_child();
     }
 
     let args = Args::parse();
-    init_tracing(args.debug, &["pingpong_bot"]);
+    init_tracing(args.debug, &["pingpong_bot"], matches!(args.mode, ModeArg::Real));
     if args.debug {
         info!("debug 로그 활성");
     }
