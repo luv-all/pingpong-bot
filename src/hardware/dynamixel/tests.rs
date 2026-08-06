@@ -28,14 +28,16 @@ fn profile_velocity_to_rad_s_matches_hand_computed_value() {
 fn motor_mapping_matches_python_reference() {
     let mapping = MotorMapping::new(bench_config()).expect("valid mapping");
 
-    assert_eq!(mapping.radians_to_ticks(0, 0.0), 2048);
+    // q0은 혼 재조립 +45° 보정 후 0° 목표가 기존 절대 안전
+    // 한계 220°에 잘린다. q0=90°는 절대 모터각 135°이다.
+    assert_eq!(mapping.radians_to_ticks(0, 0.0), 2503);
     assert_eq!(
         mapping.radians_to_ticks(0, std::f64::consts::FRAC_PI_2),
-        1024
+        1536
     );
     assert_eq!(
         mapping.radians_to_ticks(1, std::f64::consts::FRAC_PI_2),
-        2560
+        1536
     );
 }
 
@@ -49,6 +51,27 @@ fn motor_mapping_round_trips_and_clamps_to_motor_limits() {
 
     assert_eq!(mapping.radians_to_ticks(0, 100.0), 1024);
     assert_eq!(mapping.radians_to_ticks(0, -100.0), 2503);
+}
+
+#[test]
+fn base_zero_offset_moves_ready_pair_forty_five_degrees_backward() {
+    let calibrated = MotorMapping::new(bench_config()).expect("calibrated mapping");
+    let mut zero_offset_config = bench_config();
+    zero_offset_config.joint_offsets_rad[0] = 0.0;
+    let zero_offset = MotorMapping::new(zero_offset_config).expect("zero-offset mapping");
+    let ready_base = crate::defaults::READY_JOINTS_4DOF[0];
+
+    let calibrated_master = calibrated.radians_to_ticks(0, ready_base);
+    let old_master = zero_offset.radians_to_ticks(0, ready_base);
+    let calibrated_slave = calibrated.config().mirror_tick(calibrated_master);
+
+    assert_eq!(calibrated_master - old_master, 512, "45° = 512tick");
+    assert_eq!(calibrated_master, 2217);
+    assert_eq!(calibrated_slave, 1879);
+    assert!(
+        (calibrated.ticks_to_radians(0, calibrated_master) - ready_base).abs() < 0.002,
+        "보정 후에도 논리 관절각 round-trip은 유지돼야 함"
+    );
 }
 
 #[test]
@@ -70,7 +93,10 @@ fn wrist_zero_offset_rotates_id5_eight_degrees_toward_bench_alignment() {
 
 #[test]
 fn dry_run_limit_escape_holds_outside_start_and_only_moves_inward() {
-    let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
+    // 기계 영점 보정과 무관하게 기존 절대 한계 탈출 동작을 검증한다.
+    let mut config = bench_config();
+    config.joint_offsets_rad[0] = 0.0;
+    let mut bus = DynamixelBus::dry_run(config).expect("dry-run bus");
     let start = Joints::from_slice(&[100.0_f64.to_radians(), 0.0, -0.2, -0.4]);
     bus.arm_limit_escape_from(&start).expect("arm escape");
 
@@ -122,7 +148,8 @@ fn motor_mapping_rejects_mismatched_vector_lengths() {
 #[test]
 fn dry_run_bus_round_trips_last_written_joints() {
     let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
-    let target = Joints::from_slice(&[-0.2, 0.1, -0.3, 0.2]);
+    // q0=-0.2rad은 +45° 혼 보정 후 절대 모터 안전 한계를 넘는다.
+    let target = Joints::from_slice(&[0.2, 0.1, -0.3, 0.2]);
 
     bus.enable_torque(true).expect("torque");
     bus.write_joints(&target).expect("write");

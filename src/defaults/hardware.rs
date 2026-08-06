@@ -29,6 +29,16 @@ pub const RAIL_READY_X_M: f64 = 0.6750;
 /// 원래 벤치 기준 +8°를 복원하도록 모터 목표를 -8° 더 돌린다.
 pub const WRIST_JOINT_ZERO_OFFSET_RAD: f64 = -8.0_f64.to_radians();
 
+/// 하단 듀얼 MX-64 q0(ID 1·2) 재조립 혼 영점 보정 [rad].
+///
+/// 2026-08-07 재조립 후 코드 준비 자세에서 하단 링크가 탁구대
+/// 상판 기준 약 15°로, 모델 목표 59.8°보다 약 45° 앞으로 누웠다.
+/// 논리 q0 목표는 그대로 유지하고 ID1 목표를 +45°, ID2 미러
+/// 목표를 -45° 옮겨 기계 체결 오프셋을 좌표 변환에서 보정한다.
+/// 준비 자세 q0=30.189°의 버스 목표는 기존 1705/2391tick에서
+/// 약 2217/1879tick으로 바뀐다.
+pub const BASE_JOINT_ZERO_OFFSET_RAD: f64 = 45.0_f64.to_radians();
+
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.
     fn default() -> Self {
@@ -60,8 +70,13 @@ impl Default for DynamixelConfig {
             comm_retry_delay_ms: 30,
             stream_hz: 200.0,
             joint_signs: vec![-1, -1, 1, 1],
-            // q0~q2는 엔코더 영점을 그대로 쓰고, q3는 실측 장착각을 보정한다.
-            joint_offsets_rad: vec![0.0, 0.0, 0.0, WRIST_JOINT_ZERO_OFFSET_RAD],
+            // q0는 하단 듀얼 혼 재조립각, q3는 라켓 장착각을 보정한다.
+            joint_offsets_rad: vec![
+                BASE_JOINT_ZERO_OFFSET_RAD,
+                0.0,
+                0.0,
+                WRIST_JOINT_ZERO_OFFSET_RAD,
+            ],
             // 모터 절대각 한계 [deg] — `motor_deg = 180 + sign·joint_deg` (zero_tick 2048 = 180°).
             //
             // **URDF 관절 한계에 맞춘다 (2026-07-31).** 예전 값은 파이썬 매니퓰레이터에서
@@ -72,7 +87,7 @@ impl Default for DynamixelConfig {
             //
             // | 관절 | URDF | 옛 모터 한계가 허용 | 새 값 |
             // |------|------|--------------------|-------|
-            // | j0 | continuous | −40°~+90° | 유지 (URDF에 한계가 없어 넓힐 근거가 없다) |
+            // | j0 | continuous | −40°~+90° | 절대 모터 안전 한계 90~220° 유지 |
             // | j1 | ±30° | −45°~+45° | 유지 (이미 URDF보다 넓다) |
             // | j2 | −115°~+85° | −88°~+50° | 65~265 (= URDF 전체) |
             // | j3 | ±120° | −60°~+40° | 60~300 (= URDF 전체) |
@@ -82,7 +97,7 @@ impl Default for DynamixelConfig {
             // 0~4095틱(360°)을 쓰므로 새 값은 전부 하드웨어 범위 안이다.
             //
             // j0은 URDF가 `continuous`라 기구적 한계(케이블·자기 간섭)를 모델이 말해주지 않는다.
-            // 근거 없이 넓히지 않고 그대로 둔다 — 벤치에서 실제 가동범위를 재면 갱신할 것.
+            // 혼 영점을 보정해도 실기에 설정된 절대 안전 범위는 넓히지 않는다.
             motor_angle_limits_deg: vec![
                 [90.0, 220.0],
                 [135.0, 225.0],
