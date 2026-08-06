@@ -32,6 +32,19 @@ pub trait Hardware: Send {
         });
     }
 
+    /// 안전 마진 밖이지만 기계적 전체 범위 안인 레일 목표를 명시적으로 허용한다.
+    fn command_rail_margin_override(
+        &mut self,
+        _rail_x: f64,
+        duration_secs: f64,
+    ) -> Result<f64, HwError> {
+        return Err(HwError::CommandFailed {
+            duration_secs,
+            joint_count: 0,
+            reason: "레일 안전 마진 예외 명령을 지원하지 않는 하드웨어입니다".into(),
+        });
+    }
+
     fn read_pose(&mut self) -> Result<robot::Pose, HwError>;
 
     /// 실측 자세가 모터 소프트 한계 밖일 때 첫 명령의 즉시 클램프를 막고,

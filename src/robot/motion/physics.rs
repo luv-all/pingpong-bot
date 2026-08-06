@@ -612,11 +612,14 @@ fn ball_alignment_geometry(ball: Point3) -> (Point3, Vector3<f64>, Point3) {
 /// 실기에서는 이 값으로 AXL 이동을 먼저 시작하고, 같은 고정 레일 좌표에서
 /// 팔 IK를 계산한다. 따라서 IK 계산 시간이 레일 출발 지연으로 더해지지 않는다.
 pub fn ball_alignment_rail_target(arm: &Arm, ball: Point3) -> f64 {
+    let raw = ball_alignment_rail_target_unclamped(ball);
+    return arm.rail.as_ref().map_or(raw, |rail| rail.clamp_x(raw));
+}
+
+/// 안전 마진을 적용하기 전 공별 레일 목표.
+pub fn ball_alignment_rail_target_unclamped(ball: Point3) -> f64 {
     let (_, _, racket_center) = ball_alignment_geometry(ball);
-    return arm
-        .rail
-        .as_ref()
-        .map_or(racket_center.x, |rail| rail.clamp_x(racket_center.x));
+    return racket_center.x;
 }
 
 pub fn plan_ball_alignment(

@@ -114,6 +114,8 @@ impl Default for RailConfig {
             board_zero_domain_m: RAIL_BOARD_ZERO_DOMAIN_M,
             x_min_m: RAIL_X_MIN_M,
             x_max_m: RAIL_X_MAX_M,
+            physical_x_min_m: RAIL_PHYSICAL_X_MIN_M,
+            physical_x_max_m: RAIL_PHYSICAL_X_MAX_M,
             vel: 11.25,
             accel: RAIL_ACCEL_M_S2,
             decel: RAIL_ACCEL_M_S2,

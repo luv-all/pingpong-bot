@@ -249,6 +249,23 @@ impl Hardware for RealHardware {
         };
     }
 
+    fn command_rail_margin_override(
+        &mut self,
+        rail_x: f64,
+        duration_secs: f64,
+    ) -> Result<f64, HwError> {
+        self.reap_executor();
+        let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
+            duration_secs,
+            joint_count: 0,
+            reason: "레일 mutex poisoned".into(),
+        })?;
+        return match rail.as_mut() {
+            Some(rail) => rail.command_abs_in_secs_margin_override(rail_x, duration_secs),
+            None => Ok(0.0),
+        };
+    }
+
     fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
         self.reap_executor();
         let joints = self

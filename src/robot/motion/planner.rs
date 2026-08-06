@@ -127,6 +127,10 @@ impl Planner {
         return physics::ball_alignment_rail_target(arm, ball);
     }
 
+    pub fn ball_alignment_rail_target_unclamped(ball: Point3) -> f64 {
+        return physics::ball_alignment_rail_target_unclamped(ball);
+    }
+
     /// 레일은 현재 위치에 고정하고 Dynamixel 관절만 공 예측 위치로 정렬한다.
     pub fn ball_alignment_fixed_rail(
         arm: &Arm,

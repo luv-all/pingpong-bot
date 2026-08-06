@@ -101,6 +101,24 @@ impl AxlRail {
 
     /// 가속·감속 램프를 포함해 `duration_secs`에 도착할 속도를 계산한다.
     pub fn command_abs_in_secs(&mut self, x: f64, duration_secs: f64) -> Result<f64, HwError> {
+        return self.command_abs_in_secs_with_clamp(x, duration_secs, false);
+    }
+
+    /// 공을 칠 수 있는 짧은 이동에 한해 안전 마진 밖, 기계적 범위 안으로 명령한다.
+    pub fn command_abs_in_secs_margin_override(
+        &mut self,
+        x: f64,
+        duration_secs: f64,
+    ) -> Result<f64, HwError> {
+        return self.command_abs_in_secs_with_clamp(x, duration_secs, true);
+    }
+
+    fn command_abs_in_secs_with_clamp(
+        &mut self,
+        x: f64,
+        duration_secs: f64,
+        allow_margin_override: bool,
+    ) -> Result<f64, HwError> {
         let prepare_started = std::time::Instant::now();
         #[cfg(all(windows, feature = "real"))]
         if let RailKind::Live(live) = &mut self.kind {
@@ -109,7 +127,11 @@ impl AxlRail {
         }
         let usable_duration =
             (duration_secs - prepare_started.elapsed().as_secs_f64()).max(f64::EPSILON);
-        let domain_m = normalize_m(self.config.clamp_m(x));
+        let domain_m = normalize_m(if allow_margin_override {
+            self.config.clamp_physical_m(x)
+        } else {
+            self.config.clamp_m(x)
+        });
         let current_m = self.read_x_m()?;
         let distance_m = (domain_m - current_m).abs();
         if distance_m <= 1e-9 || usable_duration <= f64::EPSILON {
@@ -244,6 +266,27 @@ mod tests {
         let commanded = rail.command_abs_in_secs(0.2, 0.4).unwrap();
         assert_eq!(commanded, 0.2);
         assert_eq!(rail.read_x_m().unwrap(), 0.2);
+    }
+
+    #[test]
+    fn margin_override_uses_physical_range_but_normal_command_keeps_margin() {
+        let cfg = RailConfig {
+            enabled: true,
+            dll_path: PathBuf::from("unused.dll"),
+            pulses_per_meter: 1000,
+            x_min_m: 0.01,
+            x_max_m: 1.3395,
+            physical_x_min_m: 0.0,
+            physical_x_max_m: 1.41,
+            ..RailConfig::default()
+        };
+        let mut rail = AxlRail::dry_run(cfg).unwrap();
+        assert_eq!(rail.command_abs_in_secs(1.40, 0.4).unwrap(), 1.3395);
+        assert_eq!(
+            rail.command_abs_in_secs_margin_override(1.40, 0.4).unwrap(),
+            1.40
+        );
+        assert_eq!(rail.read_x_m().unwrap(), 1.40);
     }
 
     #[test]
