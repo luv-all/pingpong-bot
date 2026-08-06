@@ -1011,6 +1011,19 @@ pub fn plan_move_to(
     center_joints: Joints,
     center_rail_x: f64,
 ) -> Result<Trajectory, DomainError> {
+    return plan_move_to_at_speed_ratio(arm, start, center_joints, center_rail_x, 1.0);
+}
+
+/// [`plan_move_to`]와 같지만 관절·레일 속도를 `speed_ratio`(0보다 크고 1 이하)만큼
+/// 늦춘 궤적을 계획한다 — 홈 포지션 복귀처럼 랠리보다 느려도 되는 이동에 쓴다.
+/// `speed_ratio == 1.0`이면 [`plan_move_to`]와 완전히 같은 결과를 낸다.
+pub fn plan_move_to_at_speed_ratio(
+    arm: &Arm,
+    start: &robot::Pose,
+    center_joints: Joints,
+    center_rail_x: f64,
+    speed_ratio: f64,
+) -> Result<Trajectory, DomainError> {
     let start_velocity = vec![0.0; start.joints.values.len()];
     let end_velocity = vec![0.0; center_joints.values.len()];
 
@@ -1027,23 +1040,25 @@ pub fn plan_move_to(
         .fold(0.0_f64, f64::max);
     let rail_distance = (start.rail_x - center_rail_x).abs();
     let joint_time_estimate = if arm.max_joint_speed > 0.0 {
-        joint_distance / (arm.max_joint_speed * 0.5)
+        joint_distance / (arm.max_joint_speed * 0.5 * speed_ratio)
     } else {
         0.0
     };
     let rail_time_estimate = arm.rail.as_ref().map_or(0.0, |rail| {
         if rail.max_speed > 0.0 {
-            rail_distance / (rail.max_speed * 0.5)
+            rail_distance / (rail.max_speed * 0.5 * speed_ratio)
         } else {
             0.0
         }
     });
 
+    let min_duration = RETURN_TO_CENTER_MIN_SECS / speed_ratio;
+    let max_duration = RETURN_TO_CENTER_MAX_SECS / speed_ratio;
     let mut duration = joint_time_estimate
         .max(rail_time_estimate)
-        .max(RETURN_TO_CENTER_MIN_SECS);
+        .max(min_duration);
     let mut last_error = None;
-    while duration <= RETURN_TO_CENTER_MAX_SECS {
+    while duration <= max_duration {
         let rail = Rail {
             start: start.rail_x,
             end: center_rail_x,
@@ -1666,6 +1681,49 @@ mod tests {
 
         assert!((moved.follow_through_rail_x - rail.x_min).abs() < 1e-9);
         assert_eq!(moved.follow_through, arm.default_joints);
+    }
+
+    #[test]
+    fn plan_move_to_at_speed_ratio_one_matches_plan_move_to() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let rail = arm.rail.expect("rail 있는 로봇");
+        let start = robot::Pose::new(rail.x_max, arm.default_joints.clone());
+
+        let via_plain = plan_move_to(arm, &start, arm.default_joints.clone(), rail.x_min)
+            .expect("plan_move_to");
+        let via_ratio =
+            plan_move_to_at_speed_ratio(arm, &start, arm.default_joints.clone(), rail.x_min, 1.0)
+                .expect("plan_move_to_at_speed_ratio ratio=1.0");
+
+        assert_eq!(via_plain.duration_secs, via_ratio.duration_secs);
+    }
+
+    #[test]
+    fn plan_move_to_at_speed_ratio_slows_down_for_ratio_below_one() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let rail = arm.rail.expect("rail 있는 로봇");
+        let start = robot::Pose::new(rail.x_max, arm.default_joints.clone());
+
+        let full_speed =
+            plan_move_to_at_speed_ratio(arm, &start, arm.default_joints.clone(), rail.x_min, 1.0)
+                .expect("전속 이동 계획");
+        let slow = plan_move_to_at_speed_ratio(
+            arm,
+            &start,
+            arm.default_joints.clone(),
+            rail.x_min,
+            1.0 / 3.0,
+        )
+        .expect("저속 이동 계획");
+
+        assert!(
+            slow.duration_secs > full_speed.duration_secs * 2.0,
+            "slow={} full={}",
+            slow.duration_secs,
+            full_speed.duration_secs
+        );
     }
 
     #[test]
