@@ -561,7 +561,7 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 
 /// 타격 속도 없이 라켓 면 중앙을 공의 예측 위치에 정렬한다.
 ///
-/// 라켓 면 법선은 현재 공 위치에서 상대편 탁구대 끝선 중앙을 향한다. 위치와 방향을
+/// 라켓 면 법선은 현재 공 위치에서 네트 너머 상대편 탁구대의 무게중심을 향한다. 위치와 방향을
 /// 함께 푼 뒤 정지→정지 궤적 검사를 통과시킨다. 임팩트 속도와 공 도착 시각은 이
 /// 기초 정렬 모드에서 사용하지 않는다. 공 중심과 라켓 중심을 겹치지 않도록
 /// `공 반지름 + 라켓 반두께` 만큼 법선 반대쪽에 라켓 중심을 둔다.
@@ -573,13 +573,13 @@ pub fn plan_ball_alignment(
     ball: Point3,
 ) -> Result<Trajectory, DomainError> {
     let corrected_ball = Point3::new(ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M, ball.y, ball.z);
-    let toward_opponent_end = Vector3::new(
+    let toward_opponent_center = Vector3::new(
         table::WIDTH_X * 0.5 - corrected_ball.x,
-        table::LENGTH_Y - corrected_ball.y,
+        table::OPPONENT_HALF_CENTER_Y - corrected_ball.y,
         0.0,
     );
-    let horizontal_normal = if toward_opponent_end.norm_squared() > 1e-12 {
-        toward_opponent_end.normalize()
+    let horizontal_normal = if toward_opponent_center.norm_squared() > 1e-12 {
+        toward_opponent_center.normalize()
     } else {
         Vector3::y()
     };
@@ -656,13 +656,13 @@ pub fn plan_ball_alignment_fixed_rail(
     ball: Point3,
 ) -> Result<Trajectory, DomainError> {
     let corrected_ball = Point3::new(ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M, ball.y, ball.z);
-    let toward_opponent_end = Vector3::new(
+    let toward_opponent_center = Vector3::new(
         table::WIDTH_X * 0.5 - corrected_ball.x,
-        table::LENGTH_Y - corrected_ball.y,
+        table::OPPONENT_HALF_CENTER_Y - corrected_ball.y,
         0.0,
     );
-    let horizontal_normal = if toward_opponent_end.norm_squared() > 1e-12 {
-        toward_opponent_end.normalize()
+    let horizontal_normal = if toward_opponent_center.norm_squared() > 1e-12 {
+        toward_opponent_center.normalize()
     } else {
         Vector3::y()
     };
@@ -1688,15 +1688,15 @@ mod tests {
             )
             .expect("alignment FK");
 
-        let toward_opponent_end = Vector3::new(
+        let toward_opponent_center = Vector3::new(
             table::WIDTH_X * 0.5 - corrected_ball.x,
-            table::LENGTH_Y - corrected_ball.y,
+            table::OPPONENT_HALF_CENTER_Y - corrected_ball.y,
             0.0,
         )
         .normalize();
         assert!(
-            reached.normal.dot(&toward_opponent_end) > 0.90,
-            "라켓 면이 상대편 탁구대 끝선 중앙을 향해야 함: normal={:?}",
+            reached.normal.dot(&toward_opponent_center) > 0.90,
+            "라켓 면이 상대편 탁구대 무게중심을 향해야 함: normal={:?}",
             reached.normal
         );
         assert!(
