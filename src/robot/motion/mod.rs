@@ -27,6 +27,7 @@ pub use feasibility::Feasibility;
 pub use hit_plane::HitPlane;
 pub use impact::Impact;
 pub use intercept_window::InterceptWindow;
+pub use physics::MAX_CONTACT_ERROR;
 pub use planned_intercept::PlannedIntercept;
 pub use planner::Planner;
 pub use prediction::Prediction;

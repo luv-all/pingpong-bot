@@ -57,6 +57,8 @@ pub const ALIGNMENT_MIN_UPWARD_TILT_DEG: f64 = 15.0;
 /// 발사기 기준 오른쪽으로 적용하는 공별 타격 예측 위치 보정 [m].
 /// 현재 실물 레일은 `reverse=true`이므로 오른쪽은 제어 x 감소 방향이다.
 pub const ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M: f64 = 0.060;
+/// 실기 타격점을 리니어 레일 제어 +x 방향으로 옮기는 보정 [m].
+pub const ALIGNMENT_RAIL_POSITIVE_X_CORRECTION_M: f64 = 0.025;
 /// 공을 상대편으로 넘기기 위한 라켓 면의 위쪽 기울기 [deg].
 pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 /// 검출 직후 추가 백스윙의 첫 시도 시간 [s].

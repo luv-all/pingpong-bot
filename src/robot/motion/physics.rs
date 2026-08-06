@@ -7,7 +7,8 @@ use crate::constants::table;
 use crate::defaults;
 use crate::defaults::motion::{
     ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-    ALIGNMENT_MIN_UPWARD_TILT_DEG, ALIGNMENT_TARGET_HEIGHT_OFFSET_M, DETECTION_WINDUP_DISTANCE_M,
+    ALIGNMENT_MIN_UPWARD_TILT_DEG, ALIGNMENT_RAIL_POSITIVE_X_CORRECTION_M,
+    ALIGNMENT_TARGET_HEIGHT_OFFSET_M, DETECTION_WINDUP_DISTANCE_M,
     DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S,
     FIXED_JOINT_SWING_DURATION_SECS, FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
     IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M,
@@ -33,7 +34,8 @@ const ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE: f64 = 1e-6;
 /// 발사기 장착 오프셋을 적용한 공 위치에서 상대편 코트 무게중심을 향하는
 /// 수평 라켓 면 법선.
 pub fn opponent_center_horizontal_normal(ball: Point3) -> Vector3<f64> {
-    let corrected_x = ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M;
+    let corrected_x =
+        ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M + ALIGNMENT_RAIL_POSITIVE_X_CORRECTION_M;
     let toward_opponent_center = Vector3::new(
         table::WIDTH_X * 0.5 - corrected_x,
         table::OPPONENT_HALF_CENTER_Y - ball.y,
@@ -609,7 +611,7 @@ pub fn plan_ball_alignment(
     ball: Point3,
 ) -> Result<Trajectory, DomainError> {
     let corrected_ball = Point3::new(
-        ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+        ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M + ALIGNMENT_RAIL_POSITIVE_X_CORRECTION_M,
         ball.y,
         ball.z + ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
     );
@@ -667,7 +669,7 @@ pub fn plan_ball_alignment_fixed_rail(
     ball: Point3,
 ) -> Result<Trajectory, DomainError> {
     let corrected_ball = Point3::new(
-        ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+        ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M + ALIGNMENT_RAIL_POSITIVE_X_CORRECTION_M,
         ball.y,
         ball.z + ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
     );
@@ -2166,7 +2168,7 @@ mod tests {
         // 중앙에서 벗어난 공으로 시험해 +Y만 보는 구현도 잡아낸다.
         let ball = Point3::new(table::WIDTH_X * 0.5 + 0.18, READY_RACKET_Y_M, 0.95);
         let corrected_ball = Point3::new(
-            ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+            ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M + ALIGNMENT_RAIL_POSITIVE_X_CORRECTION_M,
             ball.y,
             ball.z + ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
         );
@@ -2195,7 +2197,7 @@ mod tests {
                 * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z);
         assert!(
             (contact - corrected_ball.coords).norm() < 2e-3,
-            "오른쪽 6cm 보정 후 라켓 중심보다 0.5cm 아래 접촉점이 목표에 닿아야 함: contact={contact:?} corrected_ball={:?}",
+            "발사기 -6cm·레일 +2.5cm 보정 후 라켓 중심보다 0.5cm 아래 접촉점이 목표에 닿아야 함: contact={contact:?} corrected_ball={:?}",
             corrected_ball.coords
         );
         assert!(
