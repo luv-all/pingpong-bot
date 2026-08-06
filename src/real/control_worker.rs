@@ -37,12 +37,13 @@ const MAX_CONSECUTIVE_MISSES: u8 = 3;
 const RAIL_ERROR_WARN_M: f64 = 0.020;
 const AIM_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
 const STARTUP_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
-// 2° 수렴 기준은 유지하고, 편차를 허용하는 대신 아래 누적 폐루프
-// 보정으로 모터 목표를 실측 오차만큼 계속 더 이동시킨다.
-const STARTUP_JOINT_TOLERANCE_RAD: f64 = 2.0_f64.to_radians();
+// 시작 얼라인은 관절별 1° 이내가 5회 연속 측정돼야 완료로 본다.
+const STARTUP_JOINT_TOLERANCE_RAD: f64 = 1.0_f64.to_radians();
 const STARTUP_TRIM_DELAY: Duration = Duration::from_secs(1);
 const STARTUP_MAX_TRIM_ATTEMPTS: u8 = 6;
 const STARTUP_MAX_TRIM_STEP_RAD: f64 = 5.0_f64.to_radians();
+/// 실측 잔여 오차를 한 번에 전부 더해 j2가 목표를 지나치는 것을 막는 보정 이득.
+const STARTUP_TRIM_GAIN: f64 = 0.70;
 /// 엔코더 한두 틱의 진동은 보정하지 않는다.
 const STARTUP_TRIM_MIN_ERROR_RAD: f64 = 0.25_f64.to_radians();
 /// 전역 IK가 다른 팔 접힘 가지를 고르며 듀얼 MX-64 축을 급회전시키는 것을 막는다.
@@ -985,7 +986,7 @@ fn accumulate_startup_trim_goal(
     let mut incremental_correction_deg = Vec::with_capacity(joint_errors.len());
     for (index, error) in joint_errors.iter().copied().enumerate() {
         let correction = if error.abs() > STARTUP_TRIM_MIN_ERROR_RAD {
-            error.clamp(-STARTUP_MAX_TRIM_STEP_RAD, STARTUP_MAX_TRIM_STEP_RAD)
+            (error * STARTUP_TRIM_GAIN).clamp(-STARTUP_MAX_TRIM_STEP_RAD, STARTUP_MAX_TRIM_STEP_RAD)
         } else {
             0.0
         };
@@ -1675,7 +1676,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_trim_adds_each_measured_error_to_previous_motor_goal() {
+    fn startup_trim_adds_damped_measured_error_to_previous_motor_goal() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
         let mut goal = robot.arm.default_joints.values.clone();
         let original = goal.clone();
@@ -1684,7 +1685,7 @@ mod tests {
         accumulate_startup_trim_goal(&robot.arm, &mut goal, &errors);
         accumulate_startup_trim_goal(&robot.arm, &mut goal, &errors);
 
-        assert!((goal[2] - (original[2] - 4.0_f64.to_radians())).abs() < 1e-12);
+        assert!((goal[2] - (original[2] - 2.8_f64.to_radians())).abs() < 1e-12);
         assert_eq!(goal[3], original[3], "0.25° 미만 진동은 무시");
     }
 
