@@ -50,8 +50,8 @@ pub const IMPACT_CENTER_BELOW_BALL_M: f64 = 0.020;
 /// 기초 정렬 모드에서 공이 닿을 지점을 블레이드 중심보다 낮추는 거리 [m].
 /// 현재는 블레이드 중심보다 0.5cm 아래를 맞춘다.
 pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.005;
-/// 예측된 공 높이에서 실제 정렬 타격점을 낮추는 보정 [m].
-pub const ALIGNMENT_TARGET_HEIGHT_OFFSET_M: f64 = -0.015;
+/// 예측된 공 높이에서 실제 정렬 타격점을 올리는 보정 [m].
+pub const ALIGNMENT_TARGET_HEIGHT_OFFSET_M: f64 = 0.015;
 /// 타격 정렬 시 라켓 면이 수평에서 위로 보는 최소 각도 [deg].
 pub const ALIGNMENT_MIN_UPWARD_TILT_DEG: f64 = 25.0;
 /// 발사기 기준 오른쪽으로 적용하는 공별 타격 예측 위치 보정 [m].
