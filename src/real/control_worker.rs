@@ -30,6 +30,7 @@ use super::{
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const FIXED_SWING_LEAD: Duration = Duration::from_millis(250);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
+const AUTO_IDLE_AFTER_WAIT: Duration = Duration::from_secs(3);
 const BUSY_POLL: Duration = Duration::from_millis(5);
 const VERIFY_POLL_PERIOD: Duration = Duration::from_millis(20);
 const VERIFY_STABLE_SAMPLES: u8 = 2;
@@ -284,12 +285,16 @@ pub fn spawn(
         let mut pending_test_control: Option<TestControl> = None;
         let mut last_filtered_track_seq: Option<u64> = None;
         let mut last_waiting_ignored_track_seq: Option<u64> = None;
+        // 스윙 후 자동으로 들어간 Waiting에만 설정된다 — `w`로 수동 진입한
+        // Waiting은 이 타이머 없이 계속 `n`을 기다린다.
+        let mut waiting_auto_resume_at: Option<Instant> = None;
 
         'control: while !shutdown.is_down() {
             while let Ok(control) = test_control_rx.try_recv() {
                 match control {
                     TestControl::ResetPosition | TestControl::Wait => {
                         pending_test_control = None;
+                        waiting_auto_resume_at = None;
                         if hardware.is_busy() {
                             hardware.cancel();
                             while hardware.is_busy() && !shutdown.is_down() {
@@ -325,7 +330,14 @@ pub fn spawn(
                             pending_verification = None;
                             pending_refined = None;
                             consecutive_misses = 0;
-                            if apply_immediate_control(
+                            if waiting_auto_resume_at.take().is_some() {
+                                resume_waiting_in_place(
+                                    hardware.as_mut(),
+                                    &mut state,
+                                    &mut cached_idle_pose,
+                                    &event_tx,
+                                );
+                            } else if apply_immediate_control(
                                 TestControl::Next,
                                 hardware.as_mut(),
                                 &arm,
@@ -371,6 +383,13 @@ pub fn spawn(
                 VerificationResult::Pending => {}
             }
             log_motion_done_if_idle(hardware.as_mut(), &mut motion_watch);
+            if matches!(state, BallControlState::Waiting)
+                && waiting_auto_resume_at.is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                waiting_auto_resume_at = None;
+                resume_waiting_in_place(hardware.as_mut(), &mut state, &mut cached_idle_pose, &event_tx);
+                info!("대기 3초 경과 — 자동으로 idle 전환 (n 불필요)");
+            }
             let due_swing = match &state {
                 BallControlState::Aligning {
                     swing_due_at,
@@ -557,9 +576,10 @@ pub fn spawn(
                     }
                     Err(error) => warn!(%error, "준비 자세 복귀 후 포즈 읽기 실패"),
                 }
-                // 스윙(정렬→유지→중립 복귀)이 정상적으로 끝났다 — 운영자가 결과를
-                // 확인하고 `n`을 누를 때까지 새 공을 받지 않는다.
+                // 스윙(정렬→유지→중립 복귀)이 정상적으로 끝났다 — 3초 안에 `n`을
+                // 누르면 곧바로, 안 눌러도 3초 뒤 자동으로 다음 공을 받는다.
                 state = BallControlState::Waiting;
+                waiting_auto_resume_at = Some(Instant::now() + AUTO_IDLE_AFTER_WAIT);
                 pending_refined = None;
                 let _ = event_tx.send(RuntimeEvent::ControlState {
                     state: ControlStateSnapshot::Waiting,
@@ -1504,6 +1524,22 @@ fn apply_immediate_control(
     };
 }
 
+/// 스윙 후 자동 대기가 3초 만료됐거나 `n`으로 건너뛴 경우 적용한다 — 하드웨어를
+/// 다시 움직이지 않고 idle로만 전환한다. 레일·관절은 스윙 직후 복귀에서 이미
+/// 준비 자세로 들어와 있다(Task 2).
+fn resume_waiting_in_place(
+    hardware: &mut dyn Hardware,
+    state: &mut BallControlState,
+    cached_idle_pose: &mut Option<pingpong_bot::robot::Pose>,
+    event_tx: &Sender<RuntimeEvent>,
+) {
+    *state = BallControlState::Idle;
+    *cached_idle_pose = hardware.read_pose().ok();
+    let _ = event_tx.send(RuntimeEvent::ControlState {
+        state: ControlStateSnapshot::Idle,
+    });
+}
+
 /// 직접 복귀가 테이블을 스치면 안전한 상승 중간 자세를 거치는 2구간을 찾는다.
 /// 모든 구간은 실행 전에 속도·토크·테이블 충돌 검사를 통과해야 한다. 목표
 /// 레일 x는 호출측이 고른다 — 시작 자세 초기화는 항상 `rail.default_x()`를,
@@ -2292,6 +2328,63 @@ mod tests {
                 RuntimeEvent::Commanded { .. }
             )),
             "재개 후 세 번째 공은 다시 명령돼야 한다"
+        );
+
+        drop(guard);
+        handle.join().expect("워커 스레드가 정상 종료해야 한다");
+    }
+
+    #[test]
+    fn spawn_auto_resumes_from_waiting_after_three_seconds_without_next() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let hardware: Box<dyn Hardware> = Box::new(ReadCountingHardware {
+            reads: 0,
+            pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
+        });
+
+        let (commit_tx, commit_rx) = crossbeam_channel::unbounded();
+        let (_test_control_tx, test_control_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (guard, shutdown) = crate::real::shutdown_channel();
+
+        let handle = spawn(
+            hardware,
+            Arc::clone(&robot.arm),
+            commit_rx,
+            test_control_rx,
+            None,
+            event_tx,
+            shutdown,
+        );
+
+        let generous = Duration::from_secs(3);
+
+        commit_tx
+            .send(vision_request(Duration::ZERO))
+            .expect("보낼 수 있음");
+        assert!(
+            wait_for_event(&event_rx, generous, |event| matches!(
+                event,
+                RuntimeEvent::ControlState {
+                    state: ControlStateSnapshot::Waiting
+                }
+            )),
+            "스윙 완료 후 대기 상태로 들어가야 한다"
+        );
+
+        assert!(
+            wait_for_event(
+                &event_rx,
+                AUTO_IDLE_AFTER_WAIT + Duration::from_secs(1),
+                |event| matches!(
+                    event,
+                    RuntimeEvent::ControlState {
+                        state: ControlStateSnapshot::Idle
+                    }
+                )
+            ),
+            "n을 누르지 않아도 3초 뒤 자동으로 idle로 돌아와야 한다"
         );
 
         drop(guard);
