@@ -1,9 +1,9 @@
-//! 실물 공 위치·방향 정렬 제어 워커.
+//! 실물 공 위치·방향 정렬·후속 팔 보정 제어 워커.
 //!
 //! `run`이 워커 시작 전에 레일과 4축 Dynamixel을 최초 중립 자세에 둔다.
-//! 이후 공 하나당 보정된 접촉점에 라켓을 15° 상향·3/4 코트 중심
-//! 방향으로 정지 정렬한다. 타격 직전 관절 스냅은 접촉점을 깨뜨리므로
-//! 사용하지 않고, 예측 임팩트 후까지 정렬 자세를 유지한 뒤 준비 자세로 복귀한다.
+//! 이후 공 하나당 보정된 접촉점에 라켓을 정지 정렬하고, 예상 타격
+//! 0.25초 전에 백스윙 없는 고정 관절 스윙을 시작한다. 스윙이 불가하면 그 동작만 생략하고
+//! 정렬 자세를 유지한 뒤 현재 모드의 준비 자세로 복귀한다.
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -28,11 +28,8 @@ use super::{
 };
 
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
-/// 계획 시간과 공 도착 시간이 같으면 명령 전송·루프 지연만큼
-/// 실제 도달이 늦어진다. 정지 자세를 미리 만들 최소 여유를 둔다.
-const ALIGNMENT_ARRIVAL_MARGIN: Duration = Duration::from_millis(40);
+const FIXED_SWING_LEAD: Duration = Duration::from_millis(250);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
-const AUTO_IDLE_AFTER_WAIT: Duration = Duration::from_secs(3);
 const BUSY_POLL: Duration = Duration::from_millis(5);
 const VERIFY_POLL_PERIOD: Duration = Duration::from_millis(20);
 const VERIFY_STABLE_SAMPLES: u8 = 2;
@@ -70,35 +67,30 @@ struct CommandLatch {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AlignmentAction {
-    /// 정밀 기준을 처음 만족한 예측의 레일·팔 명령.
-    RefinedRailAndArm,
-    /// 같은 공의 후속 갱신: 3/4 코트 중심 방향을 유지하도록
-    /// 레일과 전체 팔 자세를 함께 다시 푼다.
-    RailAndArmCorrection,
+enum RefinedAction {
+    /// 본 예측 첫 명령: 레일과 팔을 함께 계산·이동한다.
+    PrimaryRailAndArm,
+    /// 같은 공의 후속 갱신: 이미 계산된 레일 위치에서 팔만 미세 보정한다.
+    ArmCorrection,
 }
 
 impl CommandLatch {
-    fn next_action(
-        &mut self,
-        track_seq: u64,
-        stage: Option<PredictionStage>,
-    ) -> Option<AlignmentAction> {
+    fn next_action(&mut self, track_seq: u64, refined_ready: bool) -> Option<RefinedAction> {
         if self.track_seq != Some(track_seq) {
             *self = Self::default();
             self.track_seq = Some(track_seq);
         }
-        return match stage {
-            None => None,
-            Some(PredictionStage::Provisional) => None,
-            Some(PredictionStage::Refined) if !self.primary_sent => {
-                Some(AlignmentAction::RefinedRailAndArm)
-            }
-            Some(PredictionStage::Refined) => Some(AlignmentAction::RailAndArmCorrection),
-        };
+        if !refined_ready {
+            return None;
+        }
+        return Some(if self.primary_sent {
+            RefinedAction::ArmCorrection
+        } else {
+            RefinedAction::PrimaryRailAndArm
+        });
     }
 
-    fn mark_sent(&mut self, _action: AlignmentAction) {
+    fn mark_primary_sent(&mut self) {
         self.primary_sent = true;
     }
 }
@@ -114,50 +106,14 @@ fn refined_prediction_ready(request: &CommitRequest) -> bool {
     return last.sigma_position < position_limit && last.sigma_velocity < velocity_limit;
 }
 
-/// 1/4 지점의 coarse 예측은 실기 명령에 사용하지 않고,
-/// 기존 불확실성 기준을 통과한 본 예측만 넘긴다.
-fn prediction_stage(request: &CommitRequest) -> Option<PredictionStage> {
-    return refined_prediction_ready(request).then_some(PredictionStage::Refined);
-}
-
-/// 카메라 캡처(마지막 채택 관측) → 비전 적합 완료까지 걸린 시간 [ms].
-///
-/// `select_alignment_target`이 이미 `measured.last()`의 존재를 요구하므로 이
-/// 함수가 실제로 호출되는 시점(정렬 목표를 이미 고른 뒤)에는 항상 `Some`이다 —
-/// 방어적으로만 빈 궤적에 0.0을 반환한다.
-fn camera_to_fit_ms(request: &CommitRequest) -> f64 {
-    let Some(last) = request.trajectory.measured.last() else {
-        return 0.0;
-    };
-    let capture_at = request.trajectory.origin + last.t;
-    return request
-        .at
-        .saturating_duration_since(capture_at)
-        .as_secs_f64()
-        * 1e3;
-}
-
 /// 새 비전의 전체 예측 궤적에서 제어가 사용할 접수 평면을 고른다.
 ///
 /// 요청이 큐에서 기다린 시간만큼 `at_time(last_measured + age)`로 공을 전진시킨 뒤,
 /// 아직 미래인 평면만 남긴다. 비전은 접수 범위를 모르고 제어만 이 정책을 가진다.
-#[cfg(test)]
 fn select_alignment_target(
     request: &CommitRequest,
     window: motion::InterceptWindow,
 ) -> Result<VisionState, &'static str> {
-    return alignment_target_candidates(request, window)?
-        .into_iter()
-        .next()
-        .ok_or("접수 구간에 아직 도달 가능한 미래 예측이 없음");
-}
-
-/// 중앙 접수 평면을 우선하되, 첫 점이 IK 불가일 때 다른 평면을 시도할 수
-/// 있도록 미래 접수 후보 전체를 우선순위 순으로 돌려준다.
-fn alignment_target_candidates(
-    request: &CommitRequest,
-    window: motion::InterceptWindow,
-) -> Result<Vec<VisionState>, &'static str> {
     let measured_t = request
         .trajectory
         .measured
@@ -175,25 +131,21 @@ fn alignment_target_candidates(
         .ok_or("요청 지연 뒤 예측 궤적이 이미 끝남")?;
 
     let center_y = 0.5 * (window.y_min + window.y_max);
-    let mut candidates: Vec<_> = window
+    return window
         .hit_planes()
         .into_iter()
         .filter_map(|plane| request.trajectory.predicted.at_plane(plane.y))
         .filter(|state| state.t > effective_now)
-        .collect();
-    candidates.sort_by(|left, right| {
-        let left_center = (left.position.y - center_y).abs();
-        let right_center = (right.position.y - center_y).abs();
-        left_center.total_cmp(&right_center).then_with(|| {
-            left.sigma_position
-                .max()
-                .total_cmp(&right.sigma_position.max())
+        .min_by(|left, right| {
+            let left_center = (left.position.y - center_y).abs();
+            let right_center = (right.position.y - center_y).abs();
+            left_center.total_cmp(&right_center).then_with(|| {
+                left.sigma_position
+                    .max()
+                    .total_cmp(&right.sigma_position.max())
+            })
         })
-    });
-    if candidates.is_empty() {
-        return Err("접수 구간에 아직 도달 가능한 미래 예측이 없음");
-    }
-    return Ok(candidates);
+        .ok_or("접수 구간에 아직 도달 가능한 미래 예측이 없음");
 }
 
 /// 위치 정렬 완료 후 실측 비교용 — 복귀 직전에 로그로 남긴다.
@@ -201,7 +153,6 @@ struct PendingAlignmentMeasurement {
     track_seq: u64,
     rail_commanded_m: f64,
     joints_commanded: pingpong_bot::robot::Joints,
-    target_contact_position: pingpong_bot::Point3,
 }
 
 /// 현재 공 하나의 처리 상태.
@@ -210,12 +161,14 @@ struct PendingAlignmentMeasurement {
 /// `Option` 세 개(`track_seq`, `return_due_at`,
 /// `pending_impact_measurement`)로 표현해 그 불변식이 관례로만 유지됐다.
 ///
-/// `Waiting`은 정렬→접촉 자세 유지→중립 복귀 완료 뒤 항상 들어가는 상태다 —
+/// `Waiting`은 스윙(정렬→유지→중립 복귀) 완료 뒤 항상 들어가는 상태다 —
 /// `TestControl::Next`(`n` 키)가 올 때까지 새 공을 무시한다. `w` 키로
 /// 언제든(정렬 중이라도) 수동으로도 들어갈 수 있다.
 enum BallControlState {
     Idle,
     Aligning {
+        swing_due_at: Instant,
+        swing_attempted: bool,
         return_due_at: Instant,
         measurement: PendingAlignmentMeasurement,
     },
@@ -302,13 +255,10 @@ pub fn spawn(
             home_rail_x,
             filtering: false,
         });
-        info!("공 위치·방향 정렬 준비 — 접촉점 유지·15° 상향·3/4 중심 정지 타격");
+        info!("공 위치·방향 정렬 준비 — 예상 타격 0.25초 전 고정 관절 스윙");
 
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
-        // log_motion_done_if_idle이 채우고 비운다 — (track_seq, 명령 발행 시각,
-        // 이벤트 라벨).
-        let mut motion_watch: Option<(u64, Instant, &'static str)> = None;
         let mut pending_verification: Option<PendingVerification> = None;
         let mut state = BallControlState::Idle;
         // Dynamixel 이동 중에 도착한 같은 공의 본 예측은 최신 하나만 유지하고,
@@ -318,16 +268,12 @@ pub fn spawn(
         let mut pending_test_control: Option<TestControl> = None;
         let mut last_filtered_track_seq: Option<u64> = None;
         let mut last_waiting_ignored_track_seq: Option<u64> = None;
-        // 스윙 후 자동으로 들어간 Waiting에만 설정된다 — `w`로 수동 진입한
-        // Waiting은 이 타이머 없이 계속 `n`을 기다린다.
-        let mut waiting_auto_resume_at: Option<Instant> = None;
 
         'control: while !shutdown.is_down() {
             while let Ok(control) = test_control_rx.try_recv() {
                 match control {
                     TestControl::ResetPosition | TestControl::Wait => {
                         pending_test_control = None;
-                        waiting_auto_resume_at = None;
                         if hardware.is_busy() {
                             hardware.cancel();
                             while hardware.is_busy() && !shutdown.is_down() {
@@ -363,14 +309,7 @@ pub fn spawn(
                             pending_verification = None;
                             pending_refined = None;
                             consecutive_misses = 0;
-                            if waiting_auto_resume_at.take().is_some() {
-                                resume_waiting_in_place(
-                                    hardware.as_mut(),
-                                    &mut state,
-                                    &mut cached_idle_pose,
-                                    &event_tx,
-                                );
-                            } else if apply_immediate_control(
+                            if apply_immediate_control(
                                 TestControl::Next,
                                 hardware.as_mut(),
                                 &arm,
@@ -415,18 +354,79 @@ pub fn spawn(
                 }
                 VerificationResult::Pending => {}
             }
-            log_motion_done_if_idle(hardware.as_mut(), &mut motion_watch);
-            if matches!(state, BallControlState::Waiting)
-                && waiting_auto_resume_at.is_some_and(|deadline| Instant::now() >= deadline)
-            {
-                waiting_auto_resume_at = None;
-                resume_waiting_in_place(
-                    hardware.as_mut(),
-                    &mut state,
-                    &mut cached_idle_pose,
-                    &event_tx,
-                );
-                info!("대기 3초 경과 — 자동으로 idle 전환 (n 불필요)");
+            let due_swing = match &state {
+                BallControlState::Aligning {
+                    swing_due_at,
+                    swing_attempted,
+                    measurement,
+                    ..
+                } if !swing_attempted && Instant::now() >= *swing_due_at => {
+                    Some((measurement.track_seq, *swing_due_at))
+                }
+                BallControlState::Idle
+                | BallControlState::Waiting
+                | BallControlState::Aligning { .. } => None,
+            };
+            if let Some((track_seq, swing_due_at)) = due_swing {
+                if let BallControlState::Aligning {
+                    swing_attempted, ..
+                } = &mut state
+                {
+                    // 한 공에 대해 성공·실패와 관계없이 한 번만 시도한다.
+                    *swing_attempted = true;
+                }
+                if hardware.is_busy() {
+                    warn!(
+                        track_seq,
+                        late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
+                        "타격 0.25초 전에 정렬 동작이 아직 진행 중 — 고정 스윙만 생략"
+                    );
+                } else {
+                    match hardware.read_pose() {
+                        Ok(swing_start) => match Planner::fixed_joint_swing(&arm, &swing_start) {
+                            Ok(planned) => {
+                                let swing = &planned.trajectory;
+                                match hardware.command_joints(swing) {
+                                    Ok(()) => {
+                                        if let BallControlState::Aligning { measurement, .. } =
+                                            &mut state
+                                        {
+                                            measurement.rail_commanded_m = swing_start.rail_x;
+                                            measurement.joints_commanded =
+                                                swing.follow_through.clone();
+                                        }
+                                        info!(
+                                            track_seq,
+                                            scheduled_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
+                                            start_late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
+                                            swing_duration_secs = f4(swing.duration_secs),
+                                            joints_start = %format!("{:?}", swing.start.values),
+                                            joints_impact = %format!("{:?}", swing.end.values),
+                                            joints_follow_through = %format!("{:?}", swing.follow_through.values),
+                                            skipped_joint_indices = ?planned.skipped_joint_indices,
+                                            "백스윙 없는 고정 관절 스윙 시작"
+                                        );
+                                    }
+                                    Err(error) => warn!(
+                                        track_seq,
+                                        %error,
+                                        "고정 스윙 명령 실패 — 스윙만 생략"
+                                    ),
+                                }
+                            }
+                            Err(error) => warn!(
+                                track_seq,
+                                %error,
+                                "고정 스윙 계획 불가 — 스윙만 생략"
+                            ),
+                        },
+                        Err(error) => warn!(
+                            track_seq,
+                            %error,
+                            "고정 스윙 직전 포즈 읽기 실패 — 스윙만 생략"
+                        ),
+                    }
+                }
             }
             let due_for_return = match &state {
                 BallControlState::Aligning { return_due_at, .. } => {
@@ -471,11 +471,9 @@ pub fn spawn(
                     }
                 }
             } else if idle_ready && due_for_return {
-                let mut swing_return_rail_x = home_rail_x;
                 if let BallControlState::Aligning { measurement, .. } = &state {
                     match hardware.read_pose() {
                         Ok(measured) => {
-                            swing_return_rail_x = measured.rail_x;
                             let joint_errors: Vec<f64> = measurement
                                 .joints_commanded
                                 .values
@@ -483,17 +481,6 @@ pub fn spawn(
                                 .zip(&measured.joints.values)
                                 .map(|(commanded, measured)| commanded - measured)
                                 .collect();
-                            let contact = arm
-                                .forward_kinematics_with_rail(measured.rail_x, &measured.joints)
-                                .map(|racket| {
-                                    racket.position.coords
-                                        + racket.normal
-                                            * (pingpong_bot::constants::BALL_RADIUS
-                                                + pingpong_bot::constants::geometry::RACKET_HALF_Z)
-                                });
-                            let contact_error_m = contact.map(|contact| {
-                                (contact - measurement.target_contact_position.coords).norm()
-                            });
                             info!(
                                 track_seq = measurement.track_seq,
                                 rail_commanded_m = f4(measurement.rail_commanded_m),
@@ -503,16 +490,13 @@ pub fn spawn(
                                 joints_commanded = %format!("{:?}", measurement.joints_commanded.values),
                                 joints_measured = %format!("{:?}", measured.joints.values),
                                 joints_commanded_minus_measured = %format!("{joint_errors:?}"),
-                                target_contact_position_m = %format!("{:?}", measurement.target_contact_position),
-                                measured_contact_position_m = %format!("{contact:?}"),
-                                contact_error_m = ?contact_error_m.map(f4),
-                                "접촉점 유지 정렬 완료 후 실측"
+                                "공 위치·방향 정렬 완료 후 실측"
                             );
                         }
                         Err(error) => warn!(%error, "공 위치·방향 정렬 완료 후 포즈 읽기 실패"),
                     }
                 }
-                if let Err(error) = move_to_ready(hardware.as_mut(), &arm, swing_return_rail_x) {
+                if let Err(error) = move_to_ready(hardware.as_mut(), &arm, home_rail_x) {
                     let reason = format!("제어 후 준비 자세 복귀 실패 — 현재 자세 유지: {error}");
                     warn!(%error, "안전한 준비 자세 복귀 궤적 없음 — 명령하지 않고 다음 공을 기다린다");
                     let fatal_hardware_error = matches!(error, MoveError::Hardware(_));
@@ -548,10 +532,9 @@ pub fn spawn(
                     }
                     Err(error) => warn!(%error, "준비 자세 복귀 후 포즈 읽기 실패"),
                 }
-                // 정렬→접촉 자세 유지→중립 복귀가 정상적으로 끝났다 — 3초 안에 `n`을
-                // 누르면 곧바로, 안 눌러도 3초 뒤 자동으로 다음 공을 받는다.
+                // 스윙(정렬→유지→중립 복귀)이 정상적으로 끝났다 — 운영자가 결과를
+                // 확인하고 `n`을 누를 때까지 새 공을 받지 않는다.
                 state = BallControlState::Waiting;
-                waiting_auto_resume_at = Some(Instant::now() + AUTO_IDLE_AFTER_WAIT);
                 pending_refined = None;
                 let _ = event_tx.send(RuntimeEvent::ControlState {
                     state: ControlStateSnapshot::Waiting,
@@ -567,14 +550,24 @@ pub fn spawn(
                         .min(RECV_TIMEOUT)
                 });
             if pending_verification.is_none()
-                && let BallControlState::Aligning { return_due_at, .. } = &state
+                && let BallControlState::Aligning {
+                    swing_due_at,
+                    swing_attempted,
+                    return_due_at,
+                    ..
+                } = &state
             {
+                let swing_wait = if !swing_attempted {
+                    swing_due_at.saturating_duration_since(now)
+                } else {
+                    RECV_TIMEOUT
+                };
                 let return_wait = if *return_due_at <= now && hardware.is_busy() {
                     BUSY_POLL
                 } else {
                     return_due_at.saturating_duration_since(now)
                 };
-                timeout = timeout.min(return_wait);
+                timeout = timeout.min(swing_wait).min(return_wait);
             }
             let can_apply_latest = pending_refined.is_some()
                 && !hardware.is_busy()
@@ -598,9 +591,15 @@ pub fn spawn(
                 }
                 continue;
             }
-            if matches!(state, BallControlState::Aligning { .. }) {
-                // 접촉 위치를 확정한 후에는 새 예측이 정렬 명령을 덮어써서
-                // 충돌 직전 라켓을 움직이지 못하게 한다.
+            if matches!(
+                state,
+                BallControlState::Aligning {
+                    swing_attempted: true,
+                    ..
+                }
+            ) {
+                // 스윙을 시작하거나 시간을 놓친 후에는 새 예측이 관절 명령을
+                // 덮어써서 타격 동작을 중단하지 못하게 한다.
                 continue;
             }
             // 한 공의 정렬·유지가 끝나기 전에 검출기가 만든 새 잡음 track이
@@ -611,24 +610,18 @@ pub fn spawn(
             {
                 continue;
             }
-            let stage = prediction_stage(&request);
-            let Some(action) = latch.next_action(track_seq, stage) else {
+            let refined_ready = refined_prediction_ready(&request);
+            let Some(action) = latch.next_action(track_seq, refined_ready) else {
                 continue;
             };
-            if hardware.is_busy() {
-                if matches!(stage, Some(PredictionStage::Refined)) {
-                    pending_refined = Some(request);
-                }
-                continue;
-            } else if last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE) {
-                if matches!(stage, Some(PredictionStage::Refined)) {
-                    pending_refined = Some(request);
-                }
+            if hardware.is_busy() || last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
+            {
+                pending_refined = Some(request);
                 continue;
             }
 
-            let mut targets = match alignment_target_candidates(&request, window) {
-                Ok(targets) => targets,
+            let target = match select_alignment_target(&request, window) {
+                Ok(target) => target,
                 Err(error) => {
                     debug!(
                         track_seq,
@@ -638,32 +631,25 @@ pub fn spawn(
                     continue;
                 }
             };
+            let corrected_target_x =
+                target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M;
             if let Some(zone) = zone_filter
                 && let Some(rail) = arm.rail
+                && !zone.contains_x(rail, corrected_target_x)
             {
-                let first_corrected_x = targets.first().map(|target| {
-                    target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M
-                });
-                targets.retain(|target| {
-                    let corrected_x = target.position.x
-                        - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M;
-                    zone.contains_x(rail, corrected_x)
-                });
-                if targets.is_empty() && last_filtered_track_seq != Some(track_seq) {
+                if last_filtered_track_seq != Some(track_seq) {
                     let (zone_min_m, zone_max_m) = zone.bounds(rail);
                     info!(
                         track_seq,
                         zone = zone.label(),
-                        corrected_target_x = ?first_corrected_x.map(f4),
+                        corrected_target_x = f4(corrected_target_x),
                         zone_min_m = f4(zone_min_m),
                         zone_max_m = f4(zone_max_m),
-                        "모든 접수 후보가 선택한 제어 구간 밖 — 명령 생략"
+                        "선택한 제어 구간 밖의 공 — 명령 생략"
                     );
                     last_filtered_track_seq = Some(track_seq);
                 }
-                if targets.is_empty() {
-                    continue;
-                }
+                continue;
             }
             last_filtered_track_seq = None;
             // 준비 자세 복귀 직후 읽어 둔 실측 자세를 재사용한다. 토크가 유지되는
@@ -692,50 +678,20 @@ pub fn spawn(
                 log_verification(&previous, &start, "superseded", false);
             }
             let issued_at = Instant::now();
-            let candidate_count = targets.len();
-            let mut last_plan_error = None;
-            let mut last_timing_error = None;
-            let mut planned = None;
-            for target in targets {
-                let alignment = match action {
-                    AlignmentAction::RefinedRailAndArm => {
-                        Planner::ball_alignment(&arm, &start, target.position)
-                    }
-                    AlignmentAction::RailAndArmCorrection => {
-                        Planner::ball_alignment(&arm, &start, target.position)
-                    }
-                };
-                match alignment {
-                    Ok(alignment) => {
-                        let arrival_at = request.trajectory.origin + target.t;
-                        let remaining_secs = arrival_at
-                            .saturating_duration_since(Instant::now())
-                            .as_secs_f64();
-                        let required_secs =
-                            alignment.duration_secs + ALIGNMENT_ARRIVAL_MARGIN.as_secs_f64();
-                        if required_secs > remaining_secs {
-                            last_timing_error = Some(format!(
-                                "도착까지 {remaining_secs:.3}s, 정렬+여유에 {required_secs:.3}s 필요"
-                            ));
-                            continue;
-                        }
-                        planned = Some((target, alignment));
-                        break;
-                    }
-                    Err(error) => last_plan_error = Some(error),
+            let alignment = match action {
+                RefinedAction::PrimaryRailAndArm => {
+                    Planner::ball_alignment(&arm, &start, target.position)
                 }
-            }
-            let (target, alignment) = match planned {
-                Some(planned) => planned,
-                None => {
-                    let error = last_timing_error
-                        .or_else(|| last_plan_error.map(|e| e.to_string()))
-                        .unwrap_or_else(|| "후보 없음".to_owned());
+                RefinedAction::ArmCorrection => {
+                    Planner::ball_alignment_fixed_rail(&arm, &start, target.position)
+                }
+            };
+            let alignment = match alignment {
+                Ok(alignment) => alignment,
+                Err(error) => {
                     let _ = event_tx.send(RuntimeEvent::Failed {
                         track_seq: Some(track_seq),
-                        reason: format!(
-                            "본 예측 {action:?} 접수 후보 {candidate_count}개 모두 정렬 불가: {error}"
-                        ),
+                        reason: format!("본 예측 {action:?} 정렬 계획 불가: {error}"),
                     });
                     continue;
                 }
@@ -760,49 +716,18 @@ pub fn spawn(
             let corrected_target_position = pingpong_bot::Point3::new(
                 target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
                 target.position.y,
-                target.position.z + pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
+                target.position.z,
             );
-            let target_horizontal_normal =
-                Planner::opponent_center_horizontal_normal(target.position);
-            let target_contact_position = pingpong_bot::Point3::from(
-                corrected_target_position.coords
-                    + nalgebra::Vector3::z()
-                        * pingpong_bot::defaults::ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M,
-            );
-            let planned_contact = arm
-                .forward_kinematics_with_rail(alignment.rail.end, &alignment.end)
-                .map(|racket| {
-                    racket.position.coords
-                        + racket.normal
-                            * (pingpong_bot::constants::BALL_RADIUS
-                                + pingpong_bot::constants::geometry::RACKET_HALF_Z)
-                });
-            let Some(planned_contact) = planned_contact else {
-                warn!(track_seq, "정렬 종단 FK 실패 — 명령 생략");
-                continue;
-            };
-            let planned_contact_error_m = (planned_contact - target_contact_position.coords).norm();
-            if planned_contact_error_m > pingpong_bot::robot::motion::MAX_CONTACT_ERROR {
-                warn!(
-                    track_seq,
-                    planned_contact_error_m = f4(planned_contact_error_m),
-                    max_contact_error_m = f4(pingpong_bot::robot::motion::MAX_CONTACT_ERROR),
-                    "정렬 접촉점 오차 초과 — 명령 생략"
-                );
-                continue;
-            }
             let aim_commanded_rad = alignment
                 .end
                 .values
                 .get(pingpong_bot::robot::control::DIRECT_AIM_JOINT_INDEX)
                 .copied()
                 .unwrap_or(0.0);
-            let command_send_started = Instant::now();
             let command_result = match action {
-                AlignmentAction::RefinedRailAndArm => hardware.command(&alignment),
-                AlignmentAction::RailAndArmCorrection => hardware.command(&alignment),
+                RefinedAction::PrimaryRailAndArm => hardware.command(&alignment),
+                RefinedAction::ArmCorrection => hardware.command_joints(&alignment),
             };
-            let command_send_ms = command_send_started.elapsed().as_secs_f64() * 1e3;
             if let Err(error) = command_result {
                 let _ = event_tx.send(RuntimeEvent::Failed {
                     track_seq: Some(track_seq),
@@ -810,15 +735,9 @@ pub fn spawn(
                 });
                 break;
             }
-            motion_watch = Some((
-                track_seq,
-                command_send_started,
-                match action {
-                    AlignmentAction::RefinedRailAndArm => "refined_alignment",
-                    AlignmentAction::RailAndArmCorrection => "rail_arm_correction",
-                },
-            ));
-            latch.mark_sent(action);
+            if action == RefinedAction::PrimaryRailAndArm {
+                latch.mark_primary_sent();
+            }
             last_command = Some(issued_at);
             let _ = event_tx.send(RuntimeEvent::Commanded {
                 track_seq,
@@ -834,19 +753,19 @@ pub fn spawn(
             }
 
             let predicted_arrival_at = request.trajectory.origin + target.t;
-            let alignment_slack_secs = predicted_arrival_at
-                .saturating_duration_since(Instant::now())
-                .as_secs_f64()
-                - alignment.duration_secs;
+            let swing_due_at = predicted_arrival_at
+                .checked_sub(FIXED_SWING_LEAD)
+                .unwrap_or(issued_at);
             let return_due_at = predicted_arrival_at
                 + Duration::from_secs_f64(pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS);
             state = BallControlState::Aligning {
+                swing_due_at,
+                swing_attempted: false,
                 return_due_at,
                 measurement: PendingAlignmentMeasurement {
                     track_seq,
                     rail_commanded_m,
                     joints_commanded: alignment.follow_through.clone(),
-                    target_contact_position,
                 },
             };
             pending_verification = None;
@@ -860,13 +779,10 @@ pub fn spawn(
             });
 
             info!(
-                target: "latency",
                 track_seq,
-                stage = ?stage.expect("action이 있으면 stage도 있음"),
+                stage = ?PredictionStage::Refined,
                 start_pose_source,
                 request_age_secs = f4(request.age_secs()),
-                camera_to_fit_ms = f2(camera_to_fit_ms(&request)),
-                command_send_ms = f2(command_send_ms),
                 target_time_secs = f4(target.t.as_secs_f64()),
                 predicted_arrival_in_secs = f4(
                     predicted_arrival_at
@@ -882,15 +798,11 @@ pub fn spawn(
                 control_action = ?action,
                 aim_commanded_rad = f4(aim_commanded_rad),
                 alignment_duration_secs = f4(alignment.duration_secs),
-                alignment_slack_secs = f4(alignment_slack_secs),
-                alignment_arrival_margin_secs = f4(ALIGNMENT_ARRIVAL_MARGIN.as_secs_f64()),
                 dual_base_step_deg = f2(dual_base_step_rad.to_degrees()),
                 post_alignment_hold_secs = pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS,
-                planned_contact_position_m = %format!("{planned_contact:?}"),
-                planned_contact_error_m = f4(planned_contact_error_m),
+                fixed_swing_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
                 joints_commanded = %format!("{:?}", alignment.follow_through.values),
-                racket_target_horizontal_normal = %format!("{:?}", target_horizontal_normal),
-                "접촉점 유지 레일·전체 팔 정지 타격 정렬 시작"
+                "본 예측 레일·팔 정렬/팔 실시간 미세 보정 시작 — 고정 스윙 예약"
             );
         }
 
@@ -1055,33 +967,6 @@ fn log_verification(
     }
 }
 
-/// `motion_watch`가 있고 하드웨어가 더 이상 바쁘지 않으면 명령 발행부터 걸린
-/// 시간을 한 번 로그하고 워치를 비운다.
-///
-/// `is_busy()`는 실물에서 atomic bool 읽기(`RealHardware::is_busy`,
-/// `src/hardware/real.rs:305`)라 버스 I/O가 아니다 — 이 호출로 하드웨어 부하가
-/// 늘지 않는다. 다만 이 값은 소프트웨어 실행기가 계획한 `duration_secs`가 지났다는
-/// 뜻일 뿐 엔코더로 확인한 실제 도달은 아니다(설계 문서의 "비목표" 참고).
-fn log_motion_done_if_idle(
-    hardware: &mut dyn Hardware,
-    motion_watch: &mut Option<(u64, Instant, &'static str)>,
-) {
-    let Some((track_seq, issued_at, event)) = *motion_watch else {
-        return;
-    };
-    if hardware.is_busy() {
-        return;
-    }
-    info!(
-        target: "latency",
-        track_seq,
-        event,
-        command_to_motion_done_ms = f2(issued_at.elapsed().as_secs_f64() * 1e3),
-        "명령 실행기 유휴 전환 — 소프트웨어 추정 소요 시간(엔코더 확인 아님)"
-    );
-    *motion_watch = None;
-}
-
 /// 런타임의 다른 스레드를 띄우기 전에 레일·전체 관절을 준비 자세로 초기화한다.
 pub(super) fn initialize_pose(
     hardware: &mut dyn Hardware,
@@ -1089,9 +974,6 @@ pub(super) fn initialize_pose(
 ) -> Result<pingpong_bot::robot::Pose, MoveError> {
     let ready = initialize_pose_attempt(hardware, arm, true)?;
     log_startup_racket_geometry(arm, &ready);
-    // 엔코더상 정상이지만 실물 라켓 기울기가 다른 경우를 구분하려면
-    // 손목(ID 5)의 Goal/Present tick과 Torque/Error를 같은 시점에 봐야 한다.
-    hardware.log_joint_diagnostics();
     return Ok(ready);
 }
 
@@ -1144,34 +1026,6 @@ fn log_startup_racket_geometry(arm: &Arm, pose: &pingpong_bot::robot::Pose) {
         .z
         .atan2(racket.normal.x.hypot(racket.normal.y))
         .to_degrees();
-    let wrist_measured_deg = pose
-        .joints
-        .values
-        .get(3)
-        .copied()
-        .unwrap_or(0.0)
-        .to_degrees();
-    let wrist_target_deg = arm
-        .default_joints
-        .values
-        .get(3)
-        .copied()
-        .unwrap_or(0.0)
-        .to_degrees();
-    let model_face_with_wrist_delta = |delta_deg: f64| {
-        let mut joints = pose.joints.clone();
-        if let Some(wrist) = joints.values.get_mut(3) {
-            *wrist += delta_deg.to_radians();
-        }
-        arm.forward_kinematics_with_rail(pose.rail_x, &joints)
-            .map(|candidate| {
-                candidate
-                    .normal
-                    .z
-                    .atan2(candidate.normal.x.hypot(candidate.normal.y))
-                    .to_degrees()
-            })
-    };
     let vertical_half_extent = axis_x.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_X
         + blade_axis.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_Y
         + axis_normal.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_Z;
@@ -1208,17 +1062,6 @@ fn log_startup_racket_geometry(arm: &Arm, pose: &pingpong_bot::robot::Pose) {
         bench_total_racket_length_m = f4(BENCH_RACKET_TOTAL_LENGTH_M),
         "초기 라켓 기하 검증 — 모델 계산값과 벤치 실측 비교"
     );
-    info!(
-        wrist_joint_index = 3,
-        wrist_motor_id = 5,
-        wrist_target_deg = f2(wrist_target_deg),
-        wrist_measured_deg = f2(wrist_measured_deg),
-        wrist_target_minus_measured_deg = f2(wrist_target_deg - wrist_measured_deg),
-        model_face_now_deg = f2(face_above_horizontal_deg),
-        model_face_if_wrist_minus_8_deg = ?model_face_with_wrist_delta(-8.0).map(f2),
-        model_face_if_wrist_plus_8_deg = ?model_face_with_wrist_delta(8.0).map(f2),
-        "손목 영점 보정 진단 — 실물 라켓 면 기울기를 자로 확인해 비교"
-    );
 }
 
 fn initialize_pose_attempt(
@@ -1227,7 +1070,8 @@ fn initialize_pose_attempt(
     allow_motor_recovery: bool,
 ) -> Result<pingpong_bot::robot::Pose, MoveError> {
     let measured = hardware.read_pose().map_err(MoveError::Hardware)?;
-    verify_coupled_joints_with_recovery(hardware, allow_motor_recovery)
+    hardware
+        .verify_coupled_joints()
         .map_err(MoveError::Hardware)?;
     hardware
         .arm_joint_limit_escape(&measured.joints)
@@ -1289,7 +1133,8 @@ fn initialize_pose_attempt(
             thread::sleep(BUSY_POLL);
         }
     }
-    verify_coupled_joints_with_recovery(hardware, allow_motor_recovery)
+    hardware
+        .verify_coupled_joints()
         .map_err(MoveError::Hardware)?;
     // executor 종료는 마지막 Goal Position을 보냈다는 뜻일 뿐, 모터가 실제로
     // 도착했다는 뜻은 아니다. 실측이 준비 자세에 연속 두 번 들어올 때까지 기다린다.
@@ -1437,17 +1282,9 @@ fn initialize_pose_attempt(
 
 /// 시작 자세 초기화와 공 제어 후 복귀·수동 테스트 컨트롤이 같은 전체축 이동을 쓴다.
 fn move_to_ready(hardware: &mut dyn Hardware, arm: &Arm, rail_x: f64) -> Result<(), MoveError> {
-    return move_to_ready_attempt(hardware, arm, rail_x, true);
-}
-
-fn move_to_ready_attempt(
-    hardware: &mut dyn Hardware,
-    arm: &Arm,
-    rail_x: f64,
-    allow_motor_recovery: bool,
-) -> Result<(), MoveError> {
     let start = hardware.read_pose().map_err(MoveError::Hardware)?;
-    verify_coupled_joints_with_recovery(hardware, allow_motor_recovery)
+    hardware
+        .verify_coupled_joints()
         .map_err(MoveError::Hardware)?;
     hardware
         .arm_joint_limit_escape(&start.joints)
@@ -1466,47 +1303,10 @@ fn move_to_ready_attempt(
             thread::sleep(BUSY_POLL);
         }
     }
-    let recovered = verify_coupled_joints_with_recovery(hardware, allow_motor_recovery)
+    hardware
+        .verify_coupled_joints()
         .map_err(MoveError::Hardware)?;
-    if recovered {
-        info!("듀얼 MX-64 복구 후 준비 자세 복귀 명령을 한 번 다시 실행");
-        return move_to_ready_attempt(hardware, arm, rail_x, false);
-    }
     return Ok(());
-}
-
-/// 정착 재측정으로도 듀얼 모터 오차가 남으면 Torque/Error 상태를
-/// 진단해 기존 안전 재부팅 복구를 한 번만 시도한다.
-fn verify_coupled_joints_with_recovery(
-    hardware: &mut dyn Hardware,
-    allow_motor_recovery: bool,
-) -> Result<bool, HwError> {
-    let original_error = match hardware.verify_coupled_joints() {
-        Ok(()) => return Ok(false),
-        Err(error) => error,
-    };
-    if !allow_motor_recovery {
-        return Err(original_error);
-    }
-
-    warn!(%original_error, "듀얼 MX-64 재측정 복구 실패 — 모터 상태 진단 및 자동 복구 시도");
-    hardware.log_joint_diagnostics();
-    match hardware.recover_joint_control() {
-        Ok(true) => {
-            thread::sleep(Duration::from_millis(300));
-            hardware.verify_coupled_joints()?;
-            info!("듀얼 MX-64 모터 자동 복구 및 대칭 재검사 완료");
-            Ok(true)
-        }
-        Ok(false) => {
-            warn!("재부팅할 Torque OFF/Hardware Error 모터가 없어 안전 차단");
-            Err(original_error)
-        }
-        Err(recovery_error) => {
-            warn!(%recovery_error, "듀얼 MX-64 모터 자동 복구 실패 — 안전 차단");
-            Err(original_error)
-        }
-    }
 }
 
 /// 존 변경(있다면) → 준비 자세 이동 → latch·상태 초기화 → 이벤트 발행까지 한 번에 한다.
@@ -1637,27 +1437,6 @@ fn apply_immediate_control(
             std::ops::ControlFlow::Continue(())
         }
     };
-}
-
-/// 스윙 후 자동 대기가 3초 만료됐거나 `n`으로 건너뛴 경우 적용한다 — 하드웨어를
-/// 다시 움직이지 않고 idle로만 전환한다. 관절은 스윙 직후 복귀에서 이미 준비
-/// 자세로 들어왔고, 레일은 공을 친 자리에 그대로 둔다(Task 2).
-///
-/// `apply_test_control`과 달리 `CommandLatch`는 리셋하지 않는다 — 리셋하지
-/// 않아도 안전한 이유는, 이 시점에 남아있을 수 있는 같은 track_seq의 오래된
-/// 요청이 있더라도 `select_alignment_target`이 예측 궤적 만료 판정에서 이미
-/// 걸러내기 때문이다.
-fn resume_waiting_in_place(
-    hardware: &mut dyn Hardware,
-    state: &mut BallControlState,
-    cached_idle_pose: &mut Option<pingpong_bot::robot::Pose>,
-    event_tx: &Sender<RuntimeEvent>,
-) {
-    *state = BallControlState::Idle;
-    *cached_idle_pose = hardware.read_pose().ok();
-    let _ = event_tx.send(RuntimeEvent::ControlState {
-        state: ControlStateSnapshot::Idle,
-    });
 }
 
 /// 직접 복귀가 테이블을 스치면 안전한 상승 중간 자세를 거치는 2구간을 찾는다.
@@ -1826,37 +1605,18 @@ mod tests {
         return CommitRequest {
             trajectory: VisionTrajectory {
                 seq: 9,
-                // 마지막 관측이 현재(0.20s), 접수 후보는 약
-                // 0.3~1.2초 뒤에 오는 실제적인 테스트 시계를 쓴다.
-                origin: Instant::now() - Duration::from_millis(200),
+                origin: Instant::now() - Duration::from_secs(1),
                 measured: Track(vec![vision_state(0.20, 0.80)]),
                 predicted: Track(vec![
                     vision_state(0.20, 0.80),
-                    vision_state(0.50, 0.50),
-                    vision_state(0.80, 0.35),
-                    vision_state(1.10, 0.20),
-                    vision_state(1.40, 0.05),
+                    vision_state(0.35, 0.50),
+                    vision_state(0.45, 0.35),
+                    vision_state(0.55, 0.20),
+                    vision_state(0.65, 0.05),
                 ]),
             },
             at: Instant::now() - age,
         };
-    }
-
-    #[test]
-    fn camera_to_fit_ms_reflects_capture_to_fit_gap() {
-        let mut request = vision_request(Duration::from_millis(20));
-        // 이 테스트만 캡처 시각을 0.8초 전으로 되돌려 카메라→fit
-        // 계산을 검증한다. 제어 테스트는 미래 접촉 시각을 유지한다.
-        request.trajectory.origin = Instant::now() - Duration::from_secs(1);
-        let ms = camera_to_fit_ms(&request);
-        assert!((ms - 780.0).abs() < 50.0, "camera_to_fit_ms={ms}");
-    }
-
-    #[test]
-    fn camera_to_fit_ms_defensive_zero_when_measured_empty() {
-        let mut request = vision_request(Duration::from_millis(20));
-        request.trajectory.measured = Track(vec![]);
-        assert_eq!(camera_to_fit_ms(&request), 0.0);
     }
 
     struct ReadCountingHardware {
@@ -1897,100 +1657,6 @@ mod tests {
         fn read_pose(&mut self) -> Result<Pose, HwError> {
             return Ok(self.pose.clone());
         }
-    }
-
-    struct ToggleBusyHardware {
-        /// 첫 `is_busy()` 호출은 `true`, 이후 전부 `false` — 실행기가 한 번
-        /// "바쁨"을 보고한 뒤 다음 틱에 유휴로 바뀌는 상황을 흉내낸다.
-        busy_then_idle: std::cell::Cell<bool>,
-    }
-
-    impl Hardware for ToggleBusyHardware {
-        fn command(
-            &mut self,
-            _trajectory: &pingpong_bot::robot::motion::Trajectory,
-        ) -> Result<(), HwError> {
-            return Ok(());
-        }
-
-        fn read_pose(&mut self) -> Result<Pose, HwError> {
-            return Ok(Pose::new(0.0, Joints::from_slice(&[0.0; 4])));
-        }
-
-        fn is_busy(&mut self) -> bool {
-            return self.busy_then_idle.replace(false);
-        }
-    }
-
-    #[derive(Default)]
-    struct CoupledRecoveryHardware {
-        checks: usize,
-        recoveries: usize,
-        recovery_available: bool,
-    }
-
-    impl Hardware for CoupledRecoveryHardware {
-        fn command(
-            &mut self,
-            _trajectory: &pingpong_bot::robot::motion::Trajectory,
-        ) -> Result<(), HwError> {
-            return Ok(());
-        }
-
-        fn read_pose(&mut self) -> Result<Pose, HwError> {
-            return Ok(Pose::new(0.0, Joints::from_slice(&[0.0; 4])));
-        }
-
-        fn verify_coupled_joints(&mut self) -> Result<(), HwError> {
-            self.checks += 1;
-            if self.checks == 1 {
-                return Err(HwError::ReadFailed {
-                    reason: "듀얼 대칭 오차".into(),
-                });
-            }
-            return Ok(());
-        }
-
-        fn recover_joint_control(&mut self) -> Result<bool, HwError> {
-            self.recoveries += 1;
-            return Ok(self.recovery_available);
-        }
-    }
-
-    #[test]
-    fn coupled_joint_error_recovers_once_then_rechecks() {
-        let mut hardware = CoupledRecoveryHardware {
-            recovery_available: true,
-            ..CoupledRecoveryHardware::default()
-        };
-
-        assert!(verify_coupled_joints_with_recovery(&mut hardware, true).expect("복구 성공"));
-        assert_eq!(hardware.checks, 2);
-        assert_eq!(hardware.recoveries, 1);
-    }
-
-    #[test]
-    fn coupled_joint_error_blocks_when_no_motor_can_be_recovered() {
-        let mut hardware = CoupledRecoveryHardware::default();
-
-        assert!(verify_coupled_joints_with_recovery(&mut hardware, true).is_err());
-        assert_eq!(hardware.checks, 1);
-        assert_eq!(hardware.recoveries, 1);
-    }
-
-    #[test]
-    fn log_motion_done_if_idle_keeps_watch_while_busy_then_clears_when_idle() {
-        let mut hardware = ToggleBusyHardware {
-            busy_then_idle: std::cell::Cell::new(true),
-        };
-        let mut watch: Option<(u64, Instant, &'static str)> =
-            Some((7, Instant::now(), "primary_alignment"));
-
-        log_motion_done_if_idle(&mut hardware, &mut watch);
-        assert!(watch.is_some(), "여전히 busy인 동안은 워치를 유지");
-
-        log_motion_done_if_idle(&mut hardware, &mut watch);
-        assert!(watch.is_none(), "busy가 풀리면 워치를 비움");
     }
 
     #[test]
@@ -2091,25 +1757,22 @@ mod tests {
 
     #[test]
     fn vision_request_is_rejected_only_after_prediction_has_ended() {
-        let request = vision_request(Duration::from_secs(2));
+        let request = vision_request(Duration::from_secs(1));
         assert!(select_alignment_target(&request, motion::InterceptWindow::default()).is_err());
     }
 
     #[test]
-    fn each_vision_track_ignores_provisional_then_sends_refined_and_arm_corrections() {
+    fn each_vision_track_sends_primary_then_arm_corrections() {
         let mut latch = CommandLatch::default();
+        assert_eq!(latch.next_action(1, false), None);
         assert_eq!(
-            latch.next_action(1, Some(PredictionStage::Provisional)),
-            None
+            latch.next_action(1, true),
+            Some(RefinedAction::PrimaryRailAndArm)
         );
+        latch.mark_primary_sent();
         assert_eq!(
-            latch.next_action(1, Some(PredictionStage::Refined)),
-            Some(AlignmentAction::RefinedRailAndArm)
-        );
-        latch.mark_sent(AlignmentAction::RefinedRailAndArm);
-        assert_eq!(
-            latch.next_action(1, Some(PredictionStage::Refined)),
-            Some(AlignmentAction::RailAndArmCorrection)
+            latch.next_action(1, true),
+            Some(RefinedAction::ArmCorrection)
         );
     }
 
@@ -2117,13 +1780,13 @@ mod tests {
     fn new_track_resets_latch() {
         let mut latch = CommandLatch::default();
         assert_eq!(
-            latch.next_action(1, Some(PredictionStage::Refined)),
-            Some(AlignmentAction::RefinedRailAndArm)
+            latch.next_action(1, true),
+            Some(RefinedAction::PrimaryRailAndArm)
         );
-        latch.mark_sent(AlignmentAction::RefinedRailAndArm);
+        latch.mark_primary_sent();
         assert_eq!(
-            latch.next_action(2, Some(PredictionStage::Refined)),
-            Some(AlignmentAction::RefinedRailAndArm)
+            latch.next_action(2, true),
+            Some(RefinedAction::PrimaryRailAndArm)
         );
     }
 
@@ -2135,7 +1798,6 @@ mod tests {
         let mut provisional = vision_request(Duration::ZERO);
         provisional.trajectory.measured.0[0].sigma_position = nalgebra::Vector3::repeat(1.0);
         assert!(!refined_prediction_ready(&provisional));
-        assert_eq!(prediction_stage(&provisional), None);
     }
 
     #[test]
@@ -2192,16 +1854,17 @@ mod tests {
         };
         let mut latch = CommandLatch::default();
         assert_eq!(
-            latch.next_action(9, Some(PredictionStage::Refined)),
-            Some(AlignmentAction::RefinedRailAndArm)
+            latch.next_action(9, true),
+            Some(RefinedAction::PrimaryRailAndArm)
         );
         let mut state = BallControlState::Aligning {
+            swing_due_at: Instant::now(),
+            swing_attempted: false,
             return_due_at: Instant::now(),
             measurement: PendingAlignmentMeasurement {
                 track_seq: 9,
                 rail_commanded_m: rail.default_x(),
                 joints_commanded: robot.arm.default_joints.clone(),
-                target_contact_position: pingpong_bot::Point3::origin(),
             },
         };
         let mut home_rail_x = rail.default_x();
@@ -2228,8 +1891,8 @@ mod tests {
         assert!((home_rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-9);
         assert!(matches!(state, BallControlState::Idle));
         assert_eq!(
-            latch.next_action(9, Some(PredictionStage::Refined)),
-            Some(AlignmentAction::RefinedRailAndArm)
+            latch.next_action(9, true),
+            Some(RefinedAction::PrimaryRailAndArm)
         );
         assert!((hardware.pose.rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-6);
 
@@ -2430,30 +2093,6 @@ mod tests {
         }
     }
 
-    /// `wait_for_event`처럼 이벤트를 소진하지만, `extract`가 `Some`을 반환하는
-    /// 첫 값을 돌려준다. `timeout` 안에 못 찾으면(채널 disconnect 포함) `None`.
-    fn wait_for_event_value<T>(
-        event_rx: &crossbeam_channel::Receiver<RuntimeEvent>,
-        timeout: Duration,
-        mut extract: impl FnMut(&RuntimeEvent) -> Option<T>,
-    ) -> Option<T> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return None;
-            }
-            match event_rx.recv_timeout(remaining) {
-                Ok(event) => {
-                    if let Some(value) = extract(&event) {
-                        return Some(value);
-                    }
-                }
-                Err(_) => return None,
-            }
-        }
-    }
-
     #[test]
     fn spawn_ignores_balls_while_waiting_and_resumes_after_next() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
@@ -2497,7 +2136,7 @@ mod tests {
                     state: ControlStateSnapshot::Waiting
                 }
             )),
-            "정렬→유지→복귀 완료 후 대기 상태로 들어가야 한다"
+            "스윙(정렬→유지→복귀) 완료 후 대기 상태로 들어가야 한다"
         );
 
         commit_tx
@@ -2534,375 +2173,6 @@ mod tests {
             )),
             "재개 후 세 번째 공은 다시 명령돼야 한다"
         );
-
-        drop(guard);
-        handle.join().expect("워커 스레드가 정상 종료해야 한다");
-    }
-
-    #[test]
-    fn spawn_auto_resumes_from_waiting_after_three_seconds_without_next() {
-        let robot = pingpong_bot::defaults::robot().expect("robot");
-        let rail = robot.arm.rail.expect("rail 있는 로봇");
-        let hardware: Box<dyn Hardware> = Box::new(ReadCountingHardware {
-            reads: 0,
-            pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
-        });
-
-        let (commit_tx, commit_rx) = crossbeam_channel::unbounded();
-        let (_test_control_tx, test_control_rx) = crossbeam_channel::unbounded();
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
-        let (guard, shutdown) = crate::real::shutdown_channel();
-
-        let handle = spawn(
-            hardware,
-            Arc::clone(&robot.arm),
-            commit_rx,
-            test_control_rx,
-            None,
-            event_tx,
-            shutdown,
-        );
-
-        let generous = Duration::from_secs(3);
-
-        commit_tx
-            .send(vision_request(Duration::ZERO))
-            .expect("보낼 수 있음");
-        assert!(
-            wait_for_event(&event_rx, generous, |event| matches!(
-                event,
-                RuntimeEvent::ControlState {
-                    state: ControlStateSnapshot::Waiting
-                }
-            )),
-            "스윙 완료 후 대기 상태로 들어가야 한다"
-        );
-
-        assert!(
-            wait_for_event(
-                &event_rx,
-                AUTO_IDLE_AFTER_WAIT + Duration::from_secs(1),
-                |event| matches!(
-                    event,
-                    RuntimeEvent::ControlState {
-                        state: ControlStateSnapshot::Idle
-                    }
-                )
-            ),
-            "n을 누르지 않아도 3초 뒤 자동으로 idle로 돌아와야 한다"
-        );
-
-        drop(guard);
-        handle.join().expect("워커 스레드가 정상 종료해야 한다");
-    }
-
-    #[test]
-    fn spawn_manual_wait_does_not_auto_expire_and_next_uses_full_path() {
-        let robot = pingpong_bot::defaults::robot().expect("robot");
-        let rail = robot.arm.rail.expect("rail 있는 로봇");
-        let hardware: Box<dyn Hardware> = Box::new(ReadCountingHardware {
-            reads: 0,
-            pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
-        });
-
-        let (_commit_tx, commit_rx) = crossbeam_channel::unbounded();
-        let (test_control_tx, test_control_rx) = crossbeam_channel::unbounded();
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
-        let (guard, shutdown) = crate::real::shutdown_channel();
-
-        let handle = spawn(
-            hardware,
-            Arc::clone(&robot.arm),
-            commit_rx,
-            test_control_rx,
-            None,
-            event_tx,
-            shutdown,
-        );
-
-        let generous = Duration::from_secs(1);
-
-        // 수동 Wait 명령으로 Waiting에 진입 (스윙 없음 — Idle에서 직접)
-        test_control_tx
-            .send(TestControl::Wait)
-            .expect("보낼 수 있음");
-        assert!(
-            wait_for_event(&event_rx, generous, |event| matches!(
-                event,
-                RuntimeEvent::ControlState {
-                    state: ControlStateSnapshot::Waiting
-                }
-            )),
-            "Wait 명령으로 Waiting 상태에 진입해야 한다"
-        );
-
-        // 3초 + 1초 타이머 범위 동안 Idle로 자동 전환되지 않는지 확인
-        // (수동 Wait은 자동 만료 없음 — 이것이 Finding 1을 증명한다)
-        assert!(
-            !wait_for_event(
-                &event_rx,
-                AUTO_IDLE_AFTER_WAIT + Duration::from_secs(1),
-                |event| matches!(
-                    event,
-                    RuntimeEvent::ControlState {
-                        state: ControlStateSnapshot::Idle
-                    }
-                )
-            ),
-            "수동 Wait은 n을 누를 때까지 자동으로 만료되면 안 된다"
-        );
-
-        // Next 명령 전송
-        test_control_tx
-            .send(TestControl::Next)
-            .expect("보낼 수 있음");
-
-        // Idle 상태 전환 확인
-        assert!(
-            wait_for_event(&event_rx, generous, |event| matches!(
-                event,
-                RuntimeEvent::ControlState {
-                    state: ControlStateSnapshot::Idle
-                }
-            )),
-            "Next 이후 Idle로 돌아와야 한다"
-        );
-
-        // TestZoneChanged 이벤트 확인 — 이는 apply_test_control 경로를 증명한다
-        // (resume_waiting_in_place는 절대 TestZoneChanged를 보내지 않음 — Finding 2 증명)
-        assert!(
-            wait_for_event(&event_rx, generous, |event| matches!(
-                event,
-                RuntimeEvent::TestZoneChanged { .. }
-            )),
-            "Next가 apply_test_control 경로(전체 경로)를 통해야 TestZoneChanged가 발생한다"
-        );
-
-        drop(guard);
-        handle.join().expect("워커 스레드가 정상 종료해야 한다");
-    }
-
-    /// 여러 스레드에서 최신 포즈를 관찰할 수 있는 `PoseApplyingHardware`의
-    /// 공유 버전 — 테스트가 워커 스레드 종료 없이도 최종 레일 위치를 읽는다.
-    struct SharedPoseHardware {
-        pose: Arc<std::sync::Mutex<Pose>>,
-    }
-
-    impl Hardware for SharedPoseHardware {
-        fn command(
-            &mut self,
-            trajectory: &pingpong_bot::robot::motion::Trajectory,
-        ) -> Result<(), HwError> {
-            *self.pose.lock().expect("lock") = Pose::new(
-                trajectory.follow_through_rail_x,
-                trajectory.end_joints().clone(),
-            );
-            return Ok(());
-        }
-
-        fn read_pose(&mut self) -> Result<Pose, HwError> {
-            return Ok(self.pose.lock().expect("lock").clone());
-        }
-    }
-
-    #[derive(Default)]
-    struct PreemptionStats {
-        full_commands: usize,
-        joint_commands: usize,
-        cancels: usize,
-    }
-
-    struct PreemptionHardware {
-        pose: Arc<std::sync::Mutex<Pose>>,
-        stats: Arc<std::sync::Mutex<PreemptionStats>>,
-        busy: Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    impl Hardware for PreemptionHardware {
-        fn command(
-            &mut self,
-            trajectory: &pingpong_bot::robot::motion::Trajectory,
-        ) -> Result<(), HwError> {
-            *self.pose.lock().expect("pose lock") = Pose::new(
-                trajectory.follow_through_rail_x,
-                trajectory.end_joints().clone(),
-            );
-            let mut stats = self.stats.lock().expect("stats lock");
-            stats.full_commands += 1;
-            // 첫 본 예측 명령을 이동 중으로 유지해 후속 명령을 받지 않는다.
-            self.busy.store(
-                stats.full_commands == 1,
-                std::sync::atomic::Ordering::Release,
-            );
-            return Ok(());
-        }
-
-        fn command_joints(
-            &mut self,
-            trajectory: &pingpong_bot::robot::motion::Trajectory,
-        ) -> Result<(), HwError> {
-            let rail_x = self.pose.lock().expect("pose lock").rail_x;
-            *self.pose.lock().expect("pose lock") =
-                Pose::new(rail_x, trajectory.end_joints().clone());
-            self.stats.lock().expect("stats lock").joint_commands += 1;
-            return Ok(());
-        }
-
-        fn read_pose(&mut self) -> Result<Pose, HwError> {
-            return Ok(self.pose.lock().expect("pose lock").clone());
-        }
-
-        fn is_busy(&mut self) -> bool {
-            return self.busy.load(std::sync::atomic::Ordering::Acquire);
-        }
-
-        fn cancel(&mut self) {
-            self.stats.lock().expect("stats lock").cancels += 1;
-            self.busy.store(false, std::sync::atomic::Ordering::Release);
-        }
-    }
-
-    #[test]
-    fn provisional_prediction_is_ignored_until_refined_prediction_arrives() {
-        let robot = pingpong_bot::defaults::robot().expect("robot");
-        let rail = robot.arm.rail.expect("rail 있는 로봇");
-        let pose = Arc::new(std::sync::Mutex::new(Pose::new(
-            rail.default_x(),
-            robot.arm.default_joints.clone(),
-        )));
-        let stats = Arc::new(std::sync::Mutex::new(PreemptionStats::default()));
-        let busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let hardware: Box<dyn Hardware> = Box::new(PreemptionHardware {
-            pose,
-            stats: Arc::clone(&stats),
-            busy,
-        });
-
-        let (commit_tx, commit_rx) = crossbeam_channel::unbounded();
-        let (_test_control_tx, test_control_rx) = crossbeam_channel::unbounded();
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
-        let (guard, shutdown) = crate::real::shutdown_channel();
-        let handle = spawn(
-            hardware,
-            Arc::clone(&robot.arm),
-            commit_rx,
-            test_control_rx,
-            None,
-            event_tx,
-            shutdown,
-        );
-        let generous = Duration::from_secs(3);
-
-        let mut coarse = vision_request(Duration::ZERO);
-        coarse.trajectory.measured.0[0].sigma_position = nalgebra::Vector3::repeat(1.0);
-        commit_tx.send(coarse).expect("coarse 전송");
-        assert!(
-            !wait_for_event(&event_rx, Duration::from_millis(200), |event| matches!(
-                event,
-                RuntimeEvent::Commanded { .. }
-            )),
-            "1/4 지점 coarse 예측은 실기 명령으로 나가면 안 된다"
-        );
-        assert_eq!(
-            stats.lock().expect("stats lock").joint_commands,
-            0,
-            "정밀 예측 전에는 관절 명령을 시작하면 안 된다"
-        );
-
-        commit_tx
-            .send(vision_request(Duration::ZERO))
-            .expect("refined 전송");
-        assert!(
-            wait_for_event(&event_rx, generous, |event| matches!(
-                event,
-                RuntimeEvent::Commanded { .. }
-            )),
-            "refined 레일·팔 명령이 처음으로 나가야 한다"
-        );
-
-        let stats = stats.lock().expect("stats lock");
-        assert_eq!(
-            stats.cancels, 0,
-            "coarse 명령이 없으므로 선점도 없어야 한다"
-        );
-        assert_eq!(stats.full_commands, 1, "refined 명령만 나가야 한다");
-        drop(stats);
-
-        drop(guard);
-        handle.join().expect("워커 스레드가 정상 종료해야 한다");
-    }
-
-    #[test]
-    fn spawn_keeps_rail_at_contact_position_after_return_to_ready() {
-        let robot = pingpong_bot::defaults::robot().expect("robot");
-        let rail = robot.arm.rail.expect("rail 있는 로봇");
-        let shared_pose = Arc::new(std::sync::Mutex::new(Pose::new(
-            rail.default_x(),
-            robot.arm.default_joints.clone(),
-        )));
-        let hardware: Box<dyn Hardware> = Box::new(SharedPoseHardware {
-            pose: Arc::clone(&shared_pose),
-        });
-
-        let (commit_tx, commit_rx) = crossbeam_channel::unbounded();
-        let (_test_control_tx, test_control_rx) = crossbeam_channel::unbounded();
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
-        let (guard, shutdown) = crate::real::shutdown_channel();
-
-        let handle = spawn(
-            hardware,
-            Arc::clone(&robot.arm),
-            commit_rx,
-            test_control_rx,
-            None,
-            event_tx,
-            shutdown,
-        );
-
-        let generous = Duration::from_secs(3);
-
-        commit_tx
-            .send(vision_request(Duration::ZERO))
-            .expect("보낼 수 있음");
-
-        let commanded_rail_x = wait_for_event_value(&event_rx, generous, |event| match event {
-            RuntimeEvent::Commanded { rail_x, .. } => Some(*rail_x),
-            _ => None,
-        })
-        .expect("정렬 명령이 와야 한다");
-
-        assert!(
-            wait_for_event(&event_rx, generous, |event| matches!(
-                event,
-                RuntimeEvent::ControlState {
-                    state: ControlStateSnapshot::Waiting
-                }
-            )),
-            "스윙 완료 후 대기 상태로 들어가야 한다"
-        );
-
-        let final_pose = shared_pose.lock().expect("lock").clone();
-        let final_rail_x = final_pose.rail_x;
-        assert!(
-            (final_rail_x - commanded_rail_x).abs() < 1e-6,
-            "복귀 후 레일은 정렬 위치({commanded_rail_x})에 그대로 있어야 하는데 {final_rail_x}"
-        );
-        assert!(
-            (final_rail_x - rail.default_x()).abs() > 1e-3,
-            "정렬 위치가 홈과 달라야 검증 의미가 있다: final_rail_x={final_rail_x} default_x={}",
-            rail.default_x()
-        );
-        for (measured, expected) in final_pose
-            .joints
-            .values
-            .iter()
-            .zip(&robot.arm.default_joints.values)
-        {
-            assert!(
-                (measured - expected).abs() < 1e-6,
-                "복귀 후 관절은 준비 자세와 일치해야 하는데 measured={measured} expected={expected}"
-            );
-        }
 
         drop(guard);
         handle.join().expect("워커 스레드가 정상 종료해야 한다");
