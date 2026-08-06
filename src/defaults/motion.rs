@@ -57,6 +57,11 @@ pub const ALIGNMENT_MIN_UPWARD_TILT_DEG: f64 = 25.0;
 /// 발사기 기준 오른쪽으로 적용하는 공별 타격 예측 위치 보정 [m].
 /// 현재 실물 레일은 `reverse=true`이므로 오른쪽은 제어 x 감소 방향이다.
 pub const ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M: f64 = 0.060;
+/// 공을 처음 검출한 뒤 첫 정렬 명령을 허용하기까지 기다리는 시간 [s].
+///
+/// 너무 이른 단일 관측으로 레일과 팔이 출발하지 않도록 0.15초 동안 관측을
+/// 모은 뒤, 그 이후 들어온 첫 유효 예측부터 제어에 사용한다.
+pub const FIRST_CONTROL_AFTER_DETECTION_SECS: f64 = 0.150;
 /// 공을 상대편으로 넘기기 위한 라켓 면의 위쪽 기울기 [deg].
 pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 /// 검출 직후 추가 백스윙의 첫 시도 시간 [s].
@@ -64,8 +69,8 @@ pub const DETECTION_WINDUP_MIN_DURATION_SECS: f64 = 0.120;
 /// 임팩트 순간 목표 라켓 선속도 [m/s].
 pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 1.80;
 /// j3 손목 스윙 명령 시작부터 예상 타격점에 도달하는 시간 [s].
-/// 기존 0.25초보다 0.15초 먼저 시작하되 임팩트 시각은 그대로 맞춘다.
-pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.400;
+/// 기존 0.25초보다 0.25초 먼저 시작하되 임팩트 시각은 그대로 맞춘다.
+pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.500;
 /// 임팩트 순간 j3가 사용할 설정상 관절 속도 상한 비율.
 /// 설정상 상한 자체가 모터 무부하 최고속의 95%이므로 여기서는 전부 사용한다.
 pub const FIXED_JOINT_SNAP_SPEED_RATIO: f64 = 1.0;
