@@ -271,6 +271,9 @@ pub fn spawn(
 
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
+        // log_motion_done_if_idle이 채우고 비운다 — (track_seq, 명령 발행 시각,
+        // 이벤트 라벨).
+        let mut motion_watch: Option<(u64, Instant, &'static str)> = None;
         let mut pending_verification: Option<PendingVerification> = None;
         let mut state = BallControlState::Idle;
         // Dynamixel 이동 중에 도착한 같은 공의 본 예측은 최신 하나만 유지하고,
@@ -366,6 +369,7 @@ pub fn spawn(
                 }
                 VerificationResult::Pending => {}
             }
+            log_motion_done_if_idle(hardware.as_mut(), &mut motion_watch);
             let due_swing = match &state {
                 BallControlState::Aligning {
                     swing_due_at,
@@ -398,7 +402,11 @@ pub fn spawn(
                         Ok(swing_start) => match Planner::fixed_joint_swing(&arm, &swing_start) {
                             Ok(planned) => {
                                 let swing = &planned.trajectory;
-                                match hardware.command_joints(swing) {
+                                let command_send_started = Instant::now();
+                                let command_result = hardware.command_joints(swing);
+                                let command_send_ms =
+                                    command_send_started.elapsed().as_secs_f64() * 1e3;
+                                match command_result {
                                     Ok(()) => {
                                         if let BallControlState::Aligning { measurement, .. } =
                                             &mut state
@@ -407,10 +415,14 @@ pub fn spawn(
                                             measurement.joints_commanded =
                                                 swing.follow_through.clone();
                                         }
+                                        motion_watch =
+                                            Some((track_seq, command_send_started, "fixed_swing"));
                                         info!(
+                                            target: "latency",
                                             track_seq,
                                             scheduled_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
                                             start_late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
+                                            command_send_ms = f2(command_send_ms),
                                             swing_duration_secs = f4(swing.duration_secs),
                                             joints_start = %format!("{:?}", swing.start.values),
                                             joints_impact = %format!("{:?}", swing.end.values),
@@ -736,10 +748,12 @@ pub fn spawn(
                 .get(pingpong_bot::robot::control::DIRECT_AIM_JOINT_INDEX)
                 .copied()
                 .unwrap_or(0.0);
+            let command_send_started = Instant::now();
             let command_result = match action {
                 RefinedAction::PrimaryRailAndArm => hardware.command(&alignment),
                 RefinedAction::ArmCorrection => hardware.command_joints(&alignment),
             };
+            let command_send_ms = command_send_started.elapsed().as_secs_f64() * 1e3;
             if let Err(error) = command_result {
                 let _ = event_tx.send(RuntimeEvent::Failed {
                     track_seq: Some(track_seq),
@@ -747,6 +761,14 @@ pub fn spawn(
                 });
                 break;
             }
+            motion_watch = Some((
+                track_seq,
+                command_send_started,
+                match action {
+                    RefinedAction::PrimaryRailAndArm => "primary_alignment",
+                    RefinedAction::ArmCorrection => "arm_correction",
+                },
+            ));
             if action == RefinedAction::PrimaryRailAndArm {
                 latch.mark_primary_sent();
             }
@@ -791,10 +813,13 @@ pub fn spawn(
             });
 
             info!(
+                target: "latency",
                 track_seq,
                 stage = ?PredictionStage::Refined,
                 start_pose_source,
                 request_age_secs = f4(request.age_secs()),
+                camera_to_fit_ms = f2(camera_to_fit_ms(&request)),
+                command_send_ms = f2(command_send_ms),
                 target_time_secs = f4(target.t.as_secs_f64()),
                 predicted_arrival_in_secs = f4(
                     predicted_arrival_at
