@@ -124,9 +124,8 @@ cargo run -p pingpong-bot -- --mode sim --debug
 
 실기는 **Windows 실캄·Dynamixel·AXL** 환경을 기준으로 한다. 카메라와 공 추적을 시작하기 전에
 시작 시 레일 0.675m와 기본 관절각의 중립 자세를 만든다. 공 검출 시
-비전이 계속 궤적을 갱신하면 공이 테이블의 1/4을 지난 coarse 예측에서
-리니어 레일과 Dynamixel 팔을 먼저 계산·이동한다. 위치·속도 불확실성 기준을 통과한
-본 예측이 들어오면 진행 중인 coarse 이동을 선점하고 레일·팔 목표를 함께 갱신한다.
+비전이 계속 궤적을 갱신해도 테이블 1/4 지점의 coarse 예측은 실기 명령에 사용하지 않는다.
+위치·속도 불확실성 기준을 통과한 본 예측이 들어오면 리니어 레일과 Dynamixel 팔을 처음 이동한다.
 같은 공의 이후 갱신은 도착한 레일 위치를
 기준으로 Dynamixel 관절만 최신 타격점으로 미세 보정한다. 목표 x는 발사기 기준 오른쪽
 6cm를 보정하고 테이블·관절·토크·레일 한계를 통과한 IK 해만 실행한다.
@@ -318,8 +317,8 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 
 ### `--mode real` — 공 위치·방향 정렬 제어
 
-공 궤적에서 선택한 목표 x·y·z를 임팩트 지점으로 사용한다. 테이블 1/4 지점의 coarse
-예측으로 레일과 Dynamixel을 먼저 움직이고, 본 예측이 확정되면 둘 다 갱신한다.
+공 궤적에서 선택한 목표 x·y·z를 임팩트 지점으로 사용한다. 1/4 지점 coarse 예측은 무시하고,
+본 예측이 확정되면 레일과 Dynamixel을 움직인다.
 후속 갱신은 팔 관절만 반복 보정한다.
 타격 0.25초 전에 정렬 자세에서 q3 손목만 회전해 타격 시점 라켓 면을 25°로 맞추고, 임팩트 후 0.12초 팔로스루 후 현재 모드의 준비 자세로 복귀한다.
 정렬 중이어도 q3 손목 명령이 관절 스트림을 선점하며, q3 한계·토크·테이블 검사를 통과하지 못하면 손목 동작만 생략한다.
@@ -342,9 +341,8 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 | `--release-torque` | off | 종료 시 토크 해제. 기본은 켠 채로 둬서 팔이 안 주저앉게 한다 |
 | `--timeout-secs` | 60 | 공 대기 경고 간격. 초과해도 세션은 계속 |
 
-새 공은 `track_seq`로 구분한다. 공이 발사기 쪽에서 테이블 길이의 1/4을 지나면
-coarse 예측으로 레일·팔을 먼저 출발시킨다. 기존 본 예측 유효 기준을 통과하면 진행 중인
-coarse 명령을 선점하고 최신 정밀 예측으로 레일·팔 목표를 둘 다 갱신한다.
+새 공은 `track_seq`로 구분한다. 1/4 지점 coarse 예측은 무시하고,
+기존 본 예측 유효 기준을 통과하면 최신 정밀 예측으로 레일·팔 목표를 계산한다.
 정밀 예측이 확정되기 전에는 타격 손목 스윙을 시작하지 않는다. 이후 최신 궤적마다 팔 자세를 보정한다.
 직전 보정 중 도착한 요청은 최신 하나만 보관해 이동 완료 직후 적용하며, 정렬·복귀 중 생긴
 다른 잡음 트랙은 현재 제어 상태를 덮어쓰지 못한다.
@@ -382,9 +380,9 @@ AXL의 `ActPos`와 `CmdPos` 원점이 다르면 시작 로그에 두 값과 차�
 
 ## 아키텍처
 
-현재 활성 실기 제어의 선행 이동 경계는 `vision::Trajectory → 1/4 진행 coarse 판정 →
+현재 활성 실기 제어 경계는 `vision::Trajectory → 본 예측 불확실성 판정 →
 control 접수 평면 선택 → Planner::ball_alignment → Hardware::command`다.
-본 예측 확정 시 같은 전체 명령으로 갱신하고, 후속 팔 보정은 `ball_alignment_fixed_rail → command_joints`를 쓴다. GUI sim은 월드 궤적에서
+후속 팔 보정은 `ball_alignment_fixed_rail → command_joints`를 쓴다. GUI sim은 월드 궤적에서
 `Planner::ball_alignment`를 사용하는 독립 진단 경로다. GUI sim 엔트리(`main`)는
 뷰어와 `SimSession`을 함께 실행한다.
 
@@ -446,8 +444,8 @@ flowchart LR
   frames --> camT -->|"Candidate"| estT -->|"vision::Trajectory / CommitRequest"| ctrlT --> actuator
 ```
 
-실기(`--mode real`)는 [`src/real/`](src/real/)이 돌린다. 1/4 진행 coarse 예측으로
-레일·팔을 선행 정렬하고 본 예측에서 둘 다 갱신한 뒤, 이후 갱신은 전체 Dynamixel
+실기(`--mode real`)는 [`src/real/`](src/real/)이 돌린다. 1/4 지점 coarse 예측은 무시하고
+본 예측에서 레일·팔을 정렬한 뒤, 이후 갱신은 전체 Dynamixel
 관절의 위치·높이 미세 보정에 사용하는 제어 경로다.
 상태를 스레드별로 단독 소유하며 crossbeam 채널로만 잇는다
 ([`src/real/README.md`](src/real/README.md)).
