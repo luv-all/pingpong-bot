@@ -46,6 +46,16 @@ pub const WRIST_JOINT_ZERO_OFFSET_RAD: f64 = -8.0_f64.to_radians();
 /// 약 2217/1879tick으로 바뀐다.
 pub const BASE_JOINT_ZERO_OFFSET_RAD: f64 = 45.0_f64.to_radians();
 
+/// 하단 듀얼 MX-64(ID 1·2) 실측 대칭 허용 오차 [tick].
+///
+/// 4096 tick/rev 기준 60 tick은 약 5.27°이다. 타격 후 하중·유격으로
+/// 관측된 42 tick은 허용하되, 그보다 큰 체결·혼 어괋남은 계속 차단한다.
+pub const MIRROR_ALIGNMENT_MAX_ERROR_TICKS: i32 = 60;
+/// 대칭 오차 초과 시 추가로 재측정할 횟수.
+pub const MIRROR_ALIGNMENT_RECOVERY_RETRIES: u32 = 3;
+/// 대칭 오차 재측정 사이의 기계 정착 대기 [ms].
+pub const MIRROR_ALIGNMENT_RECOVERY_DELAY_MS: u64 = 100;
+
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.
     fn default() -> Self {

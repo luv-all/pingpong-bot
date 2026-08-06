@@ -1272,8 +1272,7 @@ fn initialize_pose_attempt(
     allow_motor_recovery: bool,
 ) -> Result<pingpong_bot::robot::Pose, MoveError> {
     let measured = hardware.read_pose().map_err(MoveError::Hardware)?;
-    hardware
-        .verify_coupled_joints()
+    verify_coupled_joints_with_recovery(hardware, allow_motor_recovery)
         .map_err(MoveError::Hardware)?;
     hardware
         .arm_joint_limit_escape(&measured.joints)
@@ -1335,8 +1334,7 @@ fn initialize_pose_attempt(
             thread::sleep(BUSY_POLL);
         }
     }
-    hardware
-        .verify_coupled_joints()
+    verify_coupled_joints_with_recovery(hardware, allow_motor_recovery)
         .map_err(MoveError::Hardware)?;
     // executor 종료는 마지막 Goal Position을 보냈다는 뜻일 뿐, 모터가 실제로
     // 도착했다는 뜻은 아니다. 실측이 준비 자세에 연속 두 번 들어올 때까지 기다린다.
@@ -1484,9 +1482,17 @@ fn initialize_pose_attempt(
 
 /// 시작 자세 초기화와 공 제어 후 복귀·수동 테스트 컨트롤이 같은 전체축 이동을 쓴다.
 fn move_to_ready(hardware: &mut dyn Hardware, arm: &Arm, rail_x: f64) -> Result<(), MoveError> {
+    return move_to_ready_attempt(hardware, arm, rail_x, true);
+}
+
+fn move_to_ready_attempt(
+    hardware: &mut dyn Hardware,
+    arm: &Arm,
+    rail_x: f64,
+    allow_motor_recovery: bool,
+) -> Result<(), MoveError> {
     let start = hardware.read_pose().map_err(MoveError::Hardware)?;
-    hardware
-        .verify_coupled_joints()
+    verify_coupled_joints_with_recovery(hardware, allow_motor_recovery)
         .map_err(MoveError::Hardware)?;
     hardware
         .arm_joint_limit_escape(&start.joints)
@@ -1505,10 +1511,47 @@ fn move_to_ready(hardware: &mut dyn Hardware, arm: &Arm, rail_x: f64) -> Result<
             thread::sleep(BUSY_POLL);
         }
     }
-    hardware
-        .verify_coupled_joints()
+    let recovered = verify_coupled_joints_with_recovery(hardware, allow_motor_recovery)
         .map_err(MoveError::Hardware)?;
+    if recovered {
+        info!("듀얼 MX-64 복구 후 준비 자세 복귀 명령을 한 번 다시 실행");
+        return move_to_ready_attempt(hardware, arm, rail_x, false);
+    }
     return Ok(());
+}
+
+/// 정착 재측정으로도 듀얼 모터 오차가 남으면 Torque/Error 상태를
+/// 진단해 기존 안전 재부팅 복구를 한 번만 시도한다.
+fn verify_coupled_joints_with_recovery(
+    hardware: &mut dyn Hardware,
+    allow_motor_recovery: bool,
+) -> Result<bool, HwError> {
+    let original_error = match hardware.verify_coupled_joints() {
+        Ok(()) => return Ok(false),
+        Err(error) => error,
+    };
+    if !allow_motor_recovery {
+        return Err(original_error);
+    }
+
+    warn!(%original_error, "듀얼 MX-64 재측정 복구 실패 — 모터 상태 진단 및 자동 복구 시도");
+    hardware.log_joint_diagnostics();
+    match hardware.recover_joint_control() {
+        Ok(true) => {
+            thread::sleep(Duration::from_millis(300));
+            hardware.verify_coupled_joints()?;
+            info!("듀얼 MX-64 모터 자동 복구 및 대칭 재검사 완료");
+            Ok(true)
+        }
+        Ok(false) => {
+            warn!("재부팅할 Torque OFF/Hardware Error 모터가 없어 안전 차단");
+            Err(original_error)
+        }
+        Err(recovery_error) => {
+            warn!(%recovery_error, "듀얼 MX-64 모터 자동 복구 실패 — 안전 차단");
+            Err(original_error)
+        }
+    }
 }
 
 /// 존 변경(있다면) → 준비 자세 이동 → latch·상태 초기화 → 이벤트 발행까지 한 번에 한다.
@@ -1920,6 +1963,62 @@ mod tests {
         fn is_busy(&mut self) -> bool {
             return self.busy_then_idle.replace(false);
         }
+    }
+
+    #[derive(Default)]
+    struct CoupledRecoveryHardware {
+        checks: usize,
+        recoveries: usize,
+        recovery_available: bool,
+    }
+
+    impl Hardware for CoupledRecoveryHardware {
+        fn command(
+            &mut self,
+            _trajectory: &pingpong_bot::robot::motion::Trajectory,
+        ) -> Result<(), HwError> {
+            return Ok(());
+        }
+
+        fn read_pose(&mut self) -> Result<Pose, HwError> {
+            return Ok(Pose::new(0.0, Joints::from_slice(&[0.0; 4])));
+        }
+
+        fn verify_coupled_joints(&mut self) -> Result<(), HwError> {
+            self.checks += 1;
+            if self.checks == 1 {
+                return Err(HwError::ReadFailed {
+                    reason: "듀얼 대칭 오차".into(),
+                });
+            }
+            return Ok(());
+        }
+
+        fn recover_joint_control(&mut self) -> Result<bool, HwError> {
+            self.recoveries += 1;
+            return Ok(self.recovery_available);
+        }
+    }
+
+    #[test]
+    fn coupled_joint_error_recovers_once_then_rechecks() {
+        let mut hardware = CoupledRecoveryHardware {
+            recovery_available: true,
+            ..CoupledRecoveryHardware::default()
+        };
+
+        assert!(verify_coupled_joints_with_recovery(&mut hardware, true).expect("복구 성공"));
+        assert_eq!(hardware.checks, 2);
+        assert_eq!(hardware.recoveries, 1);
+    }
+
+    #[test]
+    fn coupled_joint_error_blocks_when_no_motor_can_be_recovered() {
+        let mut hardware = CoupledRecoveryHardware::default();
+
+        assert!(verify_coupled_joints_with_recovery(&mut hardware, true).is_err());
+        assert_eq!(hardware.checks, 1);
+        assert_eq!(hardware.recoveries, 1);
     }
 
     #[test]
