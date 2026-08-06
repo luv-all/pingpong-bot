@@ -147,6 +147,19 @@ impl Planner {
         return physics::plan_fixed_joint_swing(arm, start);
     }
 
+    /// 상대 코트 중심 방향과 25° 상향각을 함께 가장 잘 맞추는 q3 스윙.
+    pub fn fixed_joint_swing_toward(
+        arm: &Arm,
+        start: &robot::Pose,
+        target_horizontal_normal: nalgebra::Vector3<f64>,
+    ) -> Result<physics::FixedJointSwing, DomainError> {
+        return physics::plan_fixed_joint_swing_toward(arm, start, target_horizontal_normal);
+    }
+
+    pub fn opponent_center_horizontal_normal(ball: crate::Point3) -> nalgebra::Vector3<f64> {
+        return physics::opponent_center_horizontal_normal(ball);
+    }
+
     /// 정지 → 정지로 임의 포즈까지 잇는 최단 실행가능 궤적 (coarse 선추종용).
     pub fn move_to(
         arm: &Arm,

@@ -171,6 +171,7 @@ struct PendingAlignmentMeasurement {
     track_seq: u64,
     rail_commanded_m: f64,
     joints_commanded: pingpong_bot::robot::Joints,
+    target_horizontal_normal: nalgebra::Vector3<f64>,
 }
 
 /// 현재 공 하나의 처리 상태.
@@ -405,14 +406,16 @@ pub fn spawn(
                     swing_attempted,
                     measurement,
                     ..
-                } if !swing_attempted && Instant::now() >= *swing_due_at => {
-                    Some((measurement.track_seq, *swing_due_at))
-                }
+                } if !swing_attempted && Instant::now() >= *swing_due_at => Some((
+                    measurement.track_seq,
+                    *swing_due_at,
+                    measurement.target_horizontal_normal,
+                )),
                 BallControlState::Idle
                 | BallControlState::Waiting
                 | BallControlState::Aligning { .. } => None,
             };
-            if let Some((track_seq, swing_due_at)) = due_swing {
+            if let Some((track_seq, swing_due_at, target_horizontal_normal)) = due_swing {
                 if let BallControlState::Aligning {
                     swing_attempted, ..
                 } = &mut state
@@ -421,7 +424,11 @@ pub fn spawn(
                     *swing_attempted = true;
                 }
                 match hardware.read_pose() {
-                    Ok(swing_start) => match Planner::fixed_joint_swing(&arm, &swing_start) {
+                    Ok(swing_start) => match Planner::fixed_joint_swing_toward(
+                        &arm,
+                        &swing_start,
+                        target_horizontal_normal,
+                    ) {
                         Ok(planned) => {
                             let swing = &planned.trajectory;
                             let command_send_started = Instant::now();
@@ -449,7 +456,12 @@ pub fn spawn(
                                         joints_impact = %format!("{:?}", swing.end.values),
                                         joints_follow_through = %format!("{:?}", swing.follow_through.values),
                                         skipped_joint_indices = ?planned.skipped_joint_indices,
-                                        "q3 손목 전용 25° 타격 스냅 시작"
+                                        racket_target_normal = %format!("{:?}", planned.target_normal),
+                                        racket_achieved_normal = %format!("{:?}", planned.achieved_normal),
+                                        racket_normal_error_deg = f2(planned.normal_error_deg),
+                                        racket_elevation_error_deg = f2(planned.elevation_error_deg),
+                                        racket_azimuth_error_deg = f2(planned.azimuth_error_deg),
+                                        "q3 손목 전용 25° 우선·상대 코트 중심 최선 타격 스냅 시작"
                                     );
                                 }
                                 Err(error) => warn!(
@@ -765,6 +777,8 @@ pub fn spawn(
                 target.position.y,
                 target.position.z + pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
             );
+            let target_horizontal_normal =
+                Planner::opponent_center_horizontal_normal(target.position);
             let aim_commanded_rad = alignment
                 .end
                 .values
@@ -823,6 +837,7 @@ pub fn spawn(
                     track_seq,
                     rail_commanded_m,
                     joints_commanded: alignment.follow_through.clone(),
+                    target_horizontal_normal,
                 },
             };
             pending_verification = None;
@@ -862,6 +877,7 @@ pub fn spawn(
                 post_alignment_hold_secs = pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS,
                 fixed_swing_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
                 joints_commanded = %format!("{:?}", alignment.follow_through.values),
+                racket_target_horizontal_normal = %format!("{:?}", target_horizontal_normal),
                 "본 예측 레일·팔 정렬/팔 실시간 미세 보정 시작 — 고정 스윙 예약"
             );
         }
@@ -2070,6 +2086,7 @@ mod tests {
                 track_seq: 9,
                 rail_commanded_m: rail.default_x(),
                 joints_commanded: robot.arm.default_joints.clone(),
+                target_horizontal_normal: nalgebra::Vector3::y(),
             },
         };
         let mut home_rail_x = rail.default_x();
