@@ -2390,4 +2390,90 @@ mod tests {
         drop(guard);
         handle.join().expect("워커 스레드가 정상 종료해야 한다");
     }
+
+    #[test]
+    fn spawn_manual_wait_does_not_auto_expire_and_next_uses_full_path() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let hardware: Box<dyn Hardware> = Box::new(ReadCountingHardware {
+            reads: 0,
+            pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
+        });
+
+        let (_commit_tx, commit_rx) = crossbeam_channel::unbounded();
+        let (test_control_tx, test_control_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (guard, shutdown) = crate::real::shutdown_channel();
+
+        let handle = spawn(
+            hardware,
+            Arc::clone(&robot.arm),
+            commit_rx,
+            test_control_rx,
+            None,
+            event_tx,
+            shutdown,
+        );
+
+        let generous = Duration::from_secs(1);
+
+        // 수동 Wait 명령으로 Waiting에 진입 (스윙 없음 — Idle에서 직접)
+        test_control_tx
+            .send(TestControl::Wait)
+            .expect("보낼 수 있음");
+        assert!(
+            wait_for_event(&event_rx, generous, |event| matches!(
+                event,
+                RuntimeEvent::ControlState {
+                    state: ControlStateSnapshot::Waiting
+                }
+            )),
+            "Wait 명령으로 Waiting 상태에 진입해야 한다"
+        );
+
+        // 3초 + 1초 타이머 범위 동안 Idle로 자동 전환되지 않는지 확인
+        // (수동 Wait은 자동 만료 없음 — 이것이 Finding 1을 증명한다)
+        assert!(
+            !wait_for_event(
+                &event_rx,
+                AUTO_IDLE_AFTER_WAIT + Duration::from_secs(1),
+                |event| matches!(
+                    event,
+                    RuntimeEvent::ControlState {
+                        state: ControlStateSnapshot::Idle
+                    }
+                )
+            ),
+            "수동 Wait은 n을 누를 때까지 자동으로 만료되면 안 된다"
+        );
+
+        // Next 명령 전송
+        test_control_tx
+            .send(TestControl::Next)
+            .expect("보낼 수 있음");
+
+        // Idle 상태 전환 확인
+        assert!(
+            wait_for_event(&event_rx, generous, |event| matches!(
+                event,
+                RuntimeEvent::ControlState {
+                    state: ControlStateSnapshot::Idle
+                }
+            )),
+            "Next 이후 Idle로 돌아와야 한다"
+        );
+
+        // TestZoneChanged 이벤트 확인 — 이는 apply_test_control 경로를 증명한다
+        // (resume_waiting_in_place는 절대 TestZoneChanged를 보내지 않음 — Finding 2 증명)
+        assert!(
+            wait_for_event(&event_rx, generous, |event| matches!(
+                event,
+                RuntimeEvent::TestZoneChanged { .. }
+            )),
+            "Next가 apply_test_control 경로(전체 경로)를 통해야 TestZoneChanged가 발생한다"
+        );
+
+        drop(guard);
+        handle.join().expect("워커 스레드가 정상 종료해야 한다");
+    }
 }
