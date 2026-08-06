@@ -383,7 +383,13 @@ pub fn spawn(
                     );
                 } else {
                     match hardware.read_pose() {
-                        Ok(swing_start) => match Planner::fixed_joint_swing(&arm, &swing_start) {
+                        Ok(swing_start) => match Planner::fixed_joint_swing_in(
+                            &arm,
+                            &swing_start,
+                            (swing_due_at + FIXED_SWING_LEAD)
+                                .saturating_duration_since(Instant::now())
+                                .as_secs_f64(),
+                        ) {
                             Ok(planned) => {
                                 let swing = &planned.trajectory;
                                 match hardware.command_joints(swing) {
@@ -399,12 +405,16 @@ pub fn spawn(
                                             track_seq,
                                             scheduled_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
                                             start_late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
+                                            impact_duration_secs = f4(swing.impact_time_secs),
                                             swing_duration_secs = f4(swing.duration_secs),
                                             joints_start = %format!("{:?}", swing.start.values),
                                             joints_impact = %format!("{:?}", swing.end.values),
                                             joints_follow_through = %format!("{:?}", swing.follow_through.values),
                                             skipped_joint_indices = ?planned.skipped_joint_indices,
-                                            "백스윙 없는 고정 관절 스윙 시작"
+                                            racket_normal = %format!("{:?}", planned.achieved_normal),
+                                            impact_racket_velocity_m_s = %format!("{:?}", planned.impact_racket_velocity),
+                                            impact_normal_speed_m_s = f4(planned.impact_racket_velocity.dot(&planned.achieved_normal)),
+                                            "라켓 면 수직 방향 푸시 시작"
                                         );
                                     }
                                     Err(error) => warn!(
@@ -490,50 +500,25 @@ pub fn spawn(
                                 joints_commanded = %format!("{:?}", measurement.joints_commanded.values),
                                 joints_measured = %format!("{:?}", measured.joints.values),
                                 joints_commanded_minus_measured = %format!("{joint_errors:?}"),
-                                "공 위치·방향 정렬 완료 후 실측"
+                                "타격 완료 후 현재 자세 유지"
                             );
+                            cached_idle_pose = Some(measured.clone());
+                            if let Some(sim_tx) = &sim_tx {
+                                let _ = sim_tx.try_send(SimUpdate {
+                                    pose: Some(PoseMsg::from(&measured)),
+                                    ..SimUpdate::default()
+                                });
+                            }
                         }
-                        Err(error) => warn!(%error, "공 위치·방향 정렬 완료 후 포즈 읽기 실패"),
-                    }
-                }
-                if let Err(error) = move_to_ready(hardware.as_mut(), &arm, home_rail_x) {
-                    let reason = format!("제어 후 준비 자세 복귀 실패 — 현재 자세 유지: {error}");
-                    warn!(%error, "안전한 준비 자세 복귀 궤적 없음 — 명령하지 않고 다음 공을 기다린다");
-                    let fatal_hardware_error = matches!(error, MoveError::Hardware(_));
-                    let _ = event_tx.send(RuntimeEvent::Failed {
-                        track_seq: latch.track_seq,
-                        reason,
-                    });
-                    state = BallControlState::Idle;
-                    cached_idle_pose = None;
-                    pending_refined = None;
-                    let _ = event_tx.send(RuntimeEvent::ControlState {
-                        state: ControlStateSnapshot::Idle,
-                    });
-                    if fatal_hardware_error {
-                        break;
-                    }
-                    continue;
-                }
-                match hardware.read_pose() {
-                    Ok(pose) => {
-                        cached_idle_pose = Some(pose.clone());
-                        if let Some(sim_tx) = &sim_tx {
-                            let _ = sim_tx.try_send(SimUpdate {
-                                pose: Some(PoseMsg::from(&pose)),
-                                ..SimUpdate::default()
-                            });
+                        Err(error) => {
+                            cached_idle_pose = None;
+                            warn!(%error, "타격 완료 후 유지 포즈 읽기 실패")
                         }
-                        let returned_track_seq = state.active_track_seq();
-                        info!(
-                            track_seq = returned_track_seq,
-                            "제어 후 준비 자세 복귀 완료 — 대기 상태 진입 (n 대기)"
-                        );
                     }
-                    Err(error) => warn!(%error, "준비 자세 복귀 후 포즈 읽기 실패"),
                 }
-                // 스윙(정렬→유지→중립 복귀)이 정상적으로 끝났다 — 운영자가 결과를
-                // 확인하고 `n`을 누를 때까지 새 공을 받지 않는다.
+                info!("준비 자세 복귀 없이 타격 자세 유지 — n 대기");
+                // 타격 후 어떤 레일·관절 복귀 명령도 보내지 않는다.
+                // 운영자가 `n`을 누르면 이 자세에서 바로 다음 공을 받는다.
                 state = BallControlState::Waiting;
                 pending_refined = None;
                 let _ = event_tx.send(RuntimeEvent::ControlState {
@@ -1345,7 +1330,11 @@ fn apply_test_control(
             }
         }
     };
-    move_to_ready(hardware, arm, target_rail_x)?;
+    // `Next`는 타격 후 자세를 그대로 유지하고 제어만 재개한다.
+    // 명시적인 리셋·존 변경·기본 모드만 준비 자세로 이동한다.
+    if !matches!(control, TestControl::Next) {
+        move_to_ready(hardware, arm, target_rail_x)?;
+    }
     *current_zone = target_zone;
     *zone_filter = target_filter;
     *home_rail_x = target_rail_x;
@@ -1370,7 +1359,8 @@ fn apply_test_control(
         zone_filter = ?zone_filter,
         home_rail_x = f4(*home_rail_x),
         resulting_state = ?control_state_snapshot,
-        "테스트 컨트롤 적용 — 준비 자세 복귀"
+        held_impact_pose = matches!(control, TestControl::Next),
+        "테스트 컨트롤 적용"
     );
     let _ = event_tx.send(RuntimeEvent::ControlState {
         state: control_state_snapshot,
@@ -1957,8 +1947,9 @@ mod tests {
     fn apply_test_control_next_from_waiting_returns_to_idle() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
         let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let held_pose = Pose::new(rail.x_min, Joints::from_slice(&[0.35, -0.20, -0.45, 0.30]));
         let mut hardware = PoseApplyingHardware {
-            pose: Pose::new(rail.x_max, robot.arm.default_joints.clone()),
+            pose: held_pose.clone(),
         };
         let mut latch = CommandLatch::default();
         let mut state = BallControlState::Waiting;
@@ -1983,6 +1974,10 @@ mod tests {
 
         assert_eq!(current_zone, TestZone::Right, "next는 존을 바꾸지 않는다");
         assert!(matches!(state, BallControlState::Idle));
+        assert_eq!(
+            hardware.pose, held_pose,
+            "next는 타격 후 레일·관절 자세를 바꾸지 않아야 한다"
+        );
         let events: Vec<_> = event_rx.try_iter().collect();
         assert!(events.iter().any(|event| matches!(
             event,

@@ -16,9 +16,9 @@ pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
 ///
 /// 레일 기하학적 원점에 더하는 논리 +X 좌표계 보정 [m].
 /// 타격 목표나 IK 결과가 아니라 AXL board↔domain 좌표 변환에 한 번만 적용한다.
-pub const RAIL_COORDINATE_POSITIVE_X_OFFSET_M: f64 = 0.025;
-/// 기하학적 원점 0.705m에 레일 좌표계 +2.5cm를 더한
-/// 0.730m에, 2026-08-07 실물 레일이 +X 마진 밖에 서 있던 영점
+pub const RAIL_COORDINATE_POSITIVE_X_OFFSET_M: f64 = 0.040;
+/// 기하학적 원점 0.705m에 레일 좌표계 +4.0cm를 더한
+/// 0.745m에, 2026-08-07 실물 레일이 +X 마진 밖에 서 있던 영점
 /// 오류를 보정하려고 전체 레일 길이의 절반에서 +X 3cm를 되돌린
 /// 0.675m를 더했다.
 /// `reverse=true`에서 이 값을 늘리면 모든 실물 명령이 물리 -X

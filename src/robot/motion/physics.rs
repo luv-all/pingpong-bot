@@ -938,6 +938,16 @@ pub fn plan_fixed_joint_swing(
     arm: &Arm,
     start: &robot::Pose,
 ) -> Result<FixedJointSwing, DomainError> {
+    return plan_fixed_joint_swing_in(arm, start, FIXED_JOINT_SWING_DURATION_SECS);
+}
+
+/// 현재 라켓 면의 수평 방향을 유지하면서 `impact_duration_secs`
+/// 후 임팩트에 면 법선 방향 선속도를 만든다.
+pub fn plan_fixed_joint_swing_in(
+    arm: &Arm,
+    start: &robot::Pose,
+    impact_duration_secs: f64,
+) -> Result<FixedJointSwing, DomainError> {
     let start_racket = arm
         .forward_kinematics_with_rail(start.rail_x, &start.joints)
         .ok_or_else(|| {
@@ -953,7 +963,12 @@ pub fn plan_fixed_joint_swing(
     } else {
         Vector3::y()
     };
-    return plan_fixed_joint_swing_toward(arm, start, target_horizontal_normal);
+    return plan_fixed_joint_swing_toward_in(
+        arm,
+        start,
+        target_horizontal_normal,
+        impact_duration_secs,
+    );
 }
 
 /// q2·q3를 함께 사용해 15° 상향각과 상대 코트 3/4 중심 방위각을
@@ -1924,6 +1939,16 @@ mod tests {
             planned.impact_racket_velocity.dot(&planned.achieved_normal) > 0.1,
             "임팩트 순간 라켓은 면 법선을 따라 상대 코트로 전진해야 함: {:?}",
             planned.impact_racket_velocity,
+        );
+        let normal_speed = planned.impact_racket_velocity.dot(&planned.achieved_normal);
+        let tangential_speed =
+            (planned.impact_racket_velocity - planned.achieved_normal * normal_speed).norm();
+        let velocity_normal_error_deg = tangential_speed.atan2(normal_speed).to_degrees();
+        assert!(
+            velocity_normal_error_deg <= 10.0,
+            "임팩트 라켓 속도는 면 수직 방향에서 10° 이내여야 함: error={velocity_normal_error_deg:.2}° velocity={:?} normal={:?}",
+            planned.impact_racket_velocity,
+            planned.achieved_normal,
         );
         let trajectory = planned.trajectory;
         let impact = arm

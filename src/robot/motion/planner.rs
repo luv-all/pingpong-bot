@@ -148,6 +148,15 @@ impl Planner {
         return physics::plan_fixed_joint_swing(arm, start);
     }
 
+    /// 예측 충돌까지 실제 남은 시간에 맞춰 라켓 면 수직 푸시를 계획한다.
+    pub fn fixed_joint_swing_in(
+        arm: &Arm,
+        start: &robot::Pose,
+        impact_duration_secs: f64,
+    ) -> Result<physics::FixedJointSwing, DomainError> {
+        return physics::plan_fixed_joint_swing_in(arm, start, impact_duration_secs);
+    }
+
     /// 상대 코트 3/4 중심 방향과 15° 상향각을 함께 가장 잘 맞추는 q2·q3 스윙.
     pub fn fixed_joint_swing_toward(
         arm: &Arm,
