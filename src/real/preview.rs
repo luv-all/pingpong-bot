@@ -30,8 +30,8 @@ const TARGET_RADIUS_PX: i32 = 18;
 const MARKER_THICKNESS_PX: i32 = 2;
 
 /// 상태 패널 — 고정 크기, `--preview` 모자이크 우상단.
-const STATE_PANEL_W: i32 = 250;
-const STATE_PANEL_H: i32 = 150;
+const STATE_PANEL_W: i32 = 310;
+const STATE_PANEL_H: i32 = 170;
 const STATE_PANEL_MARGIN_PX: i32 = 14;
 const STATE_NODE_W: i32 = 80;
 const STATE_NODE_H: i32 = 32;
@@ -201,7 +201,7 @@ fn draw_marker(image: &mut Mat, pixel: Option<camera::Pixel>, radius: i32, color
     }
 }
 
-/// `IDLE`/`ALIGN` 두 노드 다이어그램을 모자이크 우상단에 그린다.
+/// `IDLE`/`ALIGN`/`WAIT` 세 노드 다이어그램을 모자이크 우상단에 그린다.
 fn draw_control_state_panel(
     image: &mut Mat,
     state: &ControlStateSnapshot,
@@ -218,21 +218,19 @@ fn draw_control_state_panel(
         -1,
     )?;
 
-    let align_active = !matches!(state, ControlStateSnapshot::Idle);
-    let idle_color = if align_active {
-        STATE_IDLE_COLOR
-    } else {
-        STATE_ACTIVE_COLOR
-    };
-    let align_color = if align_active {
-        STATE_ACTIVE_COLOR
-    } else {
-        STATE_IDLE_COLOR
+    // 세 상태는 서로 배타적이라 항상 정확히 하나만 강조된다.
+    let (idle_color, align_color, wait_color) = match state {
+        ControlStateSnapshot::Idle => (STATE_ACTIVE_COLOR, STATE_IDLE_COLOR, STATE_IDLE_COLOR),
+        ControlStateSnapshot::Aligning { .. } => {
+            (STATE_IDLE_COLOR, STATE_ACTIVE_COLOR, STATE_IDLE_COLOR)
+        }
+        ControlStateSnapshot::Waiting => (STATE_IDLE_COLOR, STATE_IDLE_COLOR, STATE_ACTIVE_COLOR),
     };
 
     let idle_x = panel_x + 14;
     let node_y = panel_y + STATE_NODE_Y_OFFSET;
-    let struck_x = idle_x + STATE_NODE_W + STATE_NODE_GAP;
+    let align_x = idle_x + STATE_NODE_W + STATE_NODE_GAP;
+    let wait_x = align_x + STATE_NODE_W + STATE_NODE_GAP;
 
     camera::Preview::draw_rect_px(
         image,
@@ -253,7 +251,7 @@ fn draw_control_state_panel(
 
     camera::Preview::draw_rect_px(
         image,
-        camera::Pixel::new(f64::from(struck_x), f64::from(node_y)),
+        camera::Pixel::new(f64::from(align_x), f64::from(node_y)),
         STATE_NODE_W,
         STATE_NODE_H,
         align_color,
@@ -261,9 +259,26 @@ fn draw_control_state_panel(
     )?;
     camera::Preview::draw_text_at_px(
         image,
-        camera::Pixel::new(f64::from(struck_x + 4), f64::from(node_y + 21)),
+        camera::Pixel::new(f64::from(align_x + 4), f64::from(node_y + 21)),
         "ALIGN",
         0.42,
+        Scalar::new(0.0, 0.0, 0.0, 0.0),
+        1,
+    )?;
+
+    camera::Preview::draw_rect_px(
+        image,
+        camera::Pixel::new(f64::from(wait_x), f64::from(node_y)),
+        STATE_NODE_W,
+        STATE_NODE_H,
+        wait_color,
+        -1,
+    )?;
+    camera::Preview::draw_text_at_px(
+        image,
+        camera::Pixel::new(f64::from(wait_x + 10), f64::from(node_y + 21)),
+        "WAIT",
+        0.5,
         Scalar::new(0.0, 0.0, 0.0, 0.0),
         1,
     )?;
@@ -302,6 +317,17 @@ fn draw_control_state_panel(
         )?;
     }
 
+    if matches!(state, ControlStateSnapshot::Waiting) {
+        camera::Preview::draw_text_at_px(
+            image,
+            camera::Pixel::new(f64::from(panel_x + 14), f64::from(panel_y + 80)),
+            "press 'n' for next ball",
+            0.4,
+            STATE_ACTIVE_COLOR,
+            1,
+        )?;
+    }
+
     if let Some((zone, home_rail_x, filtering)) = zone {
         let zone_line = if filtering {
             format!("MODE {}  x={home_rail_x:.3}", zone.label())
@@ -325,6 +351,14 @@ fn draw_control_state_panel(
         STATE_IDLE_COLOR,
         1,
     )?;
+    camera::Preview::draw_text_at_px(
+        image,
+        camera::Pixel::new(f64::from(panel_x + 14), f64::from(panel_y + 152)),
+        "w:pause  n:next  r:reset",
+        0.35,
+        STATE_IDLE_COLOR,
+        1,
+    )?;
     return Ok(());
 }
 
@@ -342,31 +376,45 @@ mod tests {
         assert_eq!(window.current_zone, Some((TestZone::Right, 1.34, true)));
     }
 
-    fn idle_pixel(img: &Mat) -> Vec3b {
-        return *img.at_2d::<Vec3b>(64, 290).unwrap();
+    fn active_pixel() -> Vec3b {
+        return Vec3b::from([20, 150, 235]);
     }
 
-    fn struck_pixel(img: &Mat) -> Vec3b {
-        return *img.at_2d::<Vec3b>(64, 390).unwrap();
+    fn idle_node_color() -> Vec3b {
+        return Vec3b::from([120, 110, 100]);
+    }
+
+    fn idle_pixel(img: &Mat) -> Vec3b {
+        return *img.at_2d::<Vec3b>(64, 230).unwrap();
+    }
+
+    fn align_pixel(img: &Mat) -> Vec3b {
+        return *img.at_2d::<Vec3b>(64, 330).unwrap();
+    }
+
+    fn wait_pixel(img: &Mat) -> Vec3b {
+        return *img.at_2d::<Vec3b>(64, 430).unwrap();
+    }
+
+    fn blank_image() -> Mat {
+        return Mat::zeros(200, 500, opencv::core::CV_8UC3)
+            .unwrap()
+            .to_mat()
+            .unwrap();
     }
 
     #[test]
     fn idle_state_highlights_the_idle_node() {
-        let mut img = Mat::zeros(200, 500, opencv::core::CV_8UC3)
-            .unwrap()
-            .to_mat()
-            .unwrap();
+        let mut img = blank_image();
         draw_control_state_panel(&mut img, &ControlStateSnapshot::Idle, None).unwrap();
-        assert_eq!(idle_pixel(&img), Vec3b::from([20, 150, 235]));
-        assert_eq!(struck_pixel(&img), Vec3b::from([120, 110, 100]));
+        assert_eq!(idle_pixel(&img), active_pixel());
+        assert_eq!(align_pixel(&img), idle_node_color());
+        assert_eq!(wait_pixel(&img), idle_node_color());
     }
 
     #[test]
     fn aligning_state_highlights_the_align_node() {
-        let mut img = Mat::zeros(200, 500, opencv::core::CV_8UC3)
-            .unwrap()
-            .to_mat()
-            .unwrap();
+        let mut img = blank_image();
         let state = ControlStateSnapshot::Aligning {
             track_seq: 7,
             return_due_at: Instant::now() + Duration::from_millis(300),
@@ -374,7 +422,17 @@ mod tests {
             aim_commanded_rad: -0.40,
         };
         draw_control_state_panel(&mut img, &state, None).unwrap();
-        assert_eq!(idle_pixel(&img), Vec3b::from([120, 110, 100]));
-        assert_eq!(struck_pixel(&img), Vec3b::from([20, 150, 235]));
+        assert_eq!(idle_pixel(&img), idle_node_color());
+        assert_eq!(align_pixel(&img), active_pixel());
+        assert_eq!(wait_pixel(&img), idle_node_color());
+    }
+
+    #[test]
+    fn waiting_state_highlights_the_wait_node() {
+        let mut img = blank_image();
+        draw_control_state_panel(&mut img, &ControlStateSnapshot::Waiting, None).unwrap();
+        assert_eq!(idle_pixel(&img), idle_node_color());
+        assert_eq!(align_pixel(&img), idle_node_color());
+        assert_eq!(wait_pixel(&img), active_pixel());
     }
 }

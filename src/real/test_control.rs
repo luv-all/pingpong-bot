@@ -1,7 +1,11 @@
-//! 실기 수동 테스트 컨트롤 — reset / wait / zone 버튼이 이 타입으로 들어온다.
+//! 실기 수동 테스트 컨트롤 — reset / wait / next / zone 버튼이 이 타입으로 들어온다.
 //!
 //! 슈터(발사기)가 좌/센터/우로 공을 쏘는 무랠리 테스트 프로토콜에서, 운영자가
 //! `--preview` 창의 키 입력으로 로봇의 준비 자세와 내부 상태를 직접 통제한다.
+//!
+//! 매 스윙(정렬→유지→중립 복귀) 뒤에는 항상 대기 상태로 들어가, 운영자가
+//! `n`을 눌러야 다음 공을 받는다 — 슈터가 쏘기 전에 결과를 확인할 시간을
+//! 보장한다.
 
 use pingpong_bot::robot::LinearRail;
 
@@ -62,23 +66,31 @@ impl TestZone {
 /// `--preview` 창 키 입력이 `control_worker`로 보내는 수동 컨트롤.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TestControl {
-    /// 즉시 적용 — 하드웨어가 움직이는 중이어도 멈추고 준비 자세로 복귀한다.
+    /// 즉시 적용 — 하드웨어가 움직이는 중이어도 멈추고 준비 자세로 복귀해
+    /// 계속 공을 받는(`Idle`) 상태로 만든다.
     ResetPosition,
-    /// 다음 idle 시점에 적용 — 존 변경 없이 latch·상태만 정리하고 현재
-    /// home 레일 x로 복귀한다.
+    /// 즉시 적용 — 하드웨어가 움직이는 중이어도 멈추고 준비 자세로 복귀한
+    /// 뒤, `Next`가 올 때까지 새 공을 무시하는 대기 상태(`Waiting`)로
+    /// 들어간다. 언제든(idle이든 정렬 중이든) 누를 수 있다.
     Wait,
-    /// 다음 idle 시점에 적용 — home 레일 x를 이 존으로 바꾸고 `Wait`과
-    /// 동일하게 정리한다.
+    /// 다음 idle 시점에 적용 — home 레일 x를 이 존으로 바꾼다. 그 외
+    /// idle/대기 여부는 바꾸지 않는다: 대기 중이었으면 대기를 유지하고,
+    /// 공을 받던 중이었으면 계속 받는다.
     SetZone(TestZone),
-    /// 다음 idle 시점에 중앙 준비 자세로 복귀하고 전체 구간의 공을 받는다.
+    /// 다음 idle 시점에 적용 — 중앙 준비 자세로 복귀하고 전체 구간의 공을
+    /// 받는다. `SetZone`과 마찬가지로 idle/대기 여부는 유지한다.
     DefaultMode,
+    /// 즉시 적용 — 대기(`Waiting`) 상태에서만 의미가 있다. 다음 공을 받는
+    /// 상태(`Idle`)로 되돌린다. 대기 중이 아닐 때 누르면 아무 일도 없다.
+    Next,
 }
 
 impl TestControl {
     /// highgui 키코드 → 수동 컨트롤. 매핑에 없는 키는 `None`(무시).
     ///
     /// `1`/`2`/`3` = 0~45% / 20~60% / 55~100% 존, `4` = 전체 구간 기본 모드.
-    /// `w` = wait(모드 유지), `r` = 즉시 리셋.
+    /// `w` = 수동으로 대기 상태 진입, `n` = 대기 해제(다음 공 받기),
+    /// `r` = 즉시 리셋.
     /// `q`/ESC는 프리뷰 창 자체가 Quit으로 소비하므로 여기 없다.
     pub fn from_key(key: i32) -> Option<Self> {
         return match key {
@@ -87,6 +99,7 @@ impl TestControl {
             k if k == i32::from(b'3') => Some(Self::SetZone(TestZone::Right)),
             k if k == i32::from(b'4') => Some(Self::DefaultMode),
             k if k == i32::from(b'w') || k == i32::from(b'W') => Some(Self::Wait),
+            k if k == i32::from(b'n') || k == i32::from(b'N') => Some(Self::Next),
             k if k == i32::from(b'r') || k == i32::from(b'R') => Some(Self::ResetPosition),
             _ => None,
         };
@@ -177,6 +190,18 @@ mod tests {
         assert_eq!(
             TestControl::from_key(i32::from(b'R')),
             Some(TestControl::ResetPosition)
+        );
+    }
+
+    #[test]
+    fn n_maps_to_next_case_insensitively() {
+        assert_eq!(
+            TestControl::from_key(i32::from(b'n')),
+            Some(TestControl::Next)
+        );
+        assert_eq!(
+            TestControl::from_key(i32::from(b'N')),
+            Some(TestControl::Next)
         );
     }
 

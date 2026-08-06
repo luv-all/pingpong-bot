@@ -157,18 +157,23 @@ struct PendingAlignmentMeasurement {
 /// `Aligning`의 세 필드는 항상 함께 만들어지고 함께 사라진다 — 예전에는 별도
 /// `Option` 세 개(`track_seq`, `return_due_at`,
 /// `pending_impact_measurement`)로 표현해 그 불변식이 관례로만 유지됐다.
+///
+/// `Waiting`은 스윙(정렬→유지→중립 복귀) 완료 뒤 항상 들어가는 상태다 —
+/// `TestControl::Next`(`n` 키)가 올 때까지 새 공을 무시한다. `w` 키로
+/// 언제든(정렬 중이라도) 수동으로도 들어갈 수 있다.
 enum BallControlState {
     Idle,
     Aligning {
         return_due_at: Instant,
         measurement: PendingAlignmentMeasurement,
     },
+    Waiting,
 }
 
 impl BallControlState {
     fn active_track_seq(&self) -> Option<u64> {
         return match self {
-            Self::Idle => None,
+            Self::Idle | Self::Waiting => None,
             Self::Aligning { measurement, .. } => Some(measurement.track_seq),
         };
     }
@@ -257,11 +262,12 @@ pub fn spawn(
         let mut consecutive_misses: u8 = 0;
         let mut pending_test_control: Option<TestControl> = None;
         let mut last_filtered_track_seq: Option<u64> = None;
+        let mut last_waiting_ignored_track_seq: Option<u64> = None;
 
         'control: while !shutdown.is_down() {
             while let Ok(control) = test_control_rx.try_recv() {
                 match control {
-                    TestControl::ResetPosition => {
+                    TestControl::ResetPosition | TestControl::Wait => {
                         pending_test_control = None;
                         if hardware.is_busy() {
                             hardware.cancel();
@@ -275,8 +281,8 @@ pub fn spawn(
                         pending_verification = None;
                         pending_refined = None;
                         consecutive_misses = 0;
-                        match apply_test_control(
-                            TestControl::ResetPosition,
+                        if apply_immediate_control(
+                            control,
                             hardware.as_mut(),
                             &arm,
                             &mut home_rail_x,
@@ -286,27 +292,37 @@ pub fn spawn(
                             &mut state,
                             sim_tx.as_ref(),
                             &event_tx,
-                        ) {
-                            Ok(()) => cached_idle_pose = hardware.read_pose().ok(),
-                            Err(MoveError::Hardware(error)) => {
-                                let _ = event_tx.send(RuntimeEvent::Failed {
-                                    track_seq: latch.track_seq,
-                                    reason: format!("수동 리셋 중 하드웨어 오류: {error}"),
-                                });
+                            &mut cached_idle_pose,
+                        )
+                        .is_break()
+                        {
+                            break 'control;
+                        }
+                    }
+                    TestControl::Next => {
+                        if matches!(state, BallControlState::Waiting) {
+                            pending_verification = None;
+                            pending_refined = None;
+                            consecutive_misses = 0;
+                            if apply_immediate_control(
+                                TestControl::Next,
+                                hardware.as_mut(),
+                                &arm,
+                                &mut home_rail_x,
+                                &mut current_zone,
+                                &mut zone_filter,
+                                &mut latch,
+                                &mut state,
+                                sim_tx.as_ref(),
+                                &event_tx,
+                                &mut cached_idle_pose,
+                            )
+                            .is_break()
+                            {
                                 break 'control;
                             }
-                            Err(error @ MoveError::Plan(_))
-                            | Err(error @ MoveError::StartupAlignmentTimeout { .. }) => {
-                                warn!(%error, "수동 리셋 중 준비 자세 계획 실패 — 세션은 유지");
-                                let _ = event_tx.send(RuntimeEvent::Failed {
-                                    track_seq: latch.track_seq,
-                                    reason: format!("수동 리셋 중 준비 자세 계획 실패: {error}"),
-                                });
-                                state = BallControlState::Idle;
-                                let _ = event_tx.send(RuntimeEvent::ControlState {
-                                    state: ControlStateSnapshot::Idle,
-                                });
-                            }
+                        } else {
+                            debug!("대기 상태가 아닐 때 'n' 입력 — 무시");
                         }
                     }
                     other => pending_test_control = Some(other),
@@ -337,7 +353,7 @@ pub fn spawn(
                 BallControlState::Aligning { return_due_at, .. } => {
                     Instant::now() >= *return_due_at
                 }
-                BallControlState::Idle => false,
+                BallControlState::Idle | BallControlState::Waiting => false,
             };
             let idle_ready = pending_verification.is_none() && !hardware.is_busy();
             if idle_ready && let Some(control) = pending_test_control.take() {
@@ -430,14 +446,19 @@ pub fn spawn(
                             });
                         }
                         let returned_track_seq = state.active_track_seq();
-                        info!(track_seq = returned_track_seq, "제어 후 중앙 복귀 완료");
+                        info!(
+                            track_seq = returned_track_seq,
+                            "제어 후 중앙 복귀 완료 — 대기 상태 진입 (n 대기)"
+                        );
                     }
                     Err(error) => warn!(%error, "중앙 복귀 후 포즈 읽기 실패"),
                 }
-                state = BallControlState::Idle;
+                // 스윙(정렬→유지→중립 복귀)이 정상적으로 끝났다 — 운영자가 결과를
+                // 확인하고 `n`을 누를 때까지 새 공을 받지 않는다.
+                state = BallControlState::Waiting;
                 pending_refined = None;
                 let _ = event_tx.send(RuntimeEvent::ControlState {
-                    state: ControlStateSnapshot::Idle,
+                    state: ControlStateSnapshot::Waiting,
                 });
             }
             let now = Instant::now();
@@ -472,6 +493,15 @@ pub fn spawn(
                 }
             };
             let track_seq = request.track_seq();
+            // 대기(`Waiting`) 중에는 `n`을 누르기 전까지 어떤 공도 명령하지
+            // 않는다 — 같은 track을 반복 로그하지 않도록 1회만 남긴다.
+            if matches!(state, BallControlState::Waiting) {
+                if last_waiting_ignored_track_seq != Some(track_seq) {
+                    info!(track_seq, "대기 중(n 대기) — 공 명령 생략");
+                    last_waiting_ignored_track_seq = Some(track_seq);
+                }
+                continue;
+            }
             // 한 공의 정렬·유지가 끝나기 전에 검출기가 만든 새 잡음 track이
             // latch와 복귀 상태를 덮어쓰지 못하게 한다.
             if state
@@ -1174,7 +1204,13 @@ fn move_to_ready(hardware: &mut dyn Hardware, arm: &Arm, rail_x: f64) -> Result<
 }
 
 /// 존 변경(있다면) → 준비 자세 이동 → latch·상태 초기화 → 이벤트 발행까지 한 번에 한다.
-/// `Wait`/`SetZone`은 idle일 때만 호출부가 부르고, `ResetPosition`은 즉시 부른다.
+/// `SetZone`/`DefaultMode`는 idle일 때만 호출부가 부르고, `ResetPosition`/`Wait`/`Next`는
+/// 즉시(`apply_immediate_control` 경유) 부른다.
+///
+/// 컨트롤 종류에 따라 적용 뒤 상태가 갈린다: `ResetPosition`/`Next`는 항상
+/// `Idle`(공을 받는 상태)로, `Wait`는 항상 `Waiting`(`n` 대기)으로 만든다.
+/// `SetZone`/`DefaultMode`는 존만 바꿀 뿐 — 호출 시점이 `Waiting`이었으면
+/// `Waiting`을 유지하고, 아니면(`Idle`/`Aligning`) `Idle`로 정리한다.
 fn apply_test_control(
     control: TestControl,
     hardware: &mut dyn Hardware,
@@ -1192,12 +1228,28 @@ fn apply_test_control(
         (TestControl::DefaultMode, Some(rail)) => (TestZone::Center, rail.default_x(), None),
         _ => (*current_zone, *home_rail_x, *zone_filter),
     };
+    let resulting_state = match control {
+        TestControl::ResetPosition | TestControl::Next => BallControlState::Idle,
+        TestControl::Wait => BallControlState::Waiting,
+        TestControl::SetZone(_) | TestControl::DefaultMode => {
+            if matches!(state, BallControlState::Waiting) {
+                BallControlState::Waiting
+            } else {
+                BallControlState::Idle
+            }
+        }
+    };
     move_to_ready(hardware, arm, target_rail_x)?;
     *current_zone = target_zone;
     *zone_filter = target_filter;
     *home_rail_x = target_rail_x;
     *latch = CommandLatch::default();
-    *state = BallControlState::Idle;
+    *state = resulting_state;
+    let control_state_snapshot = if matches!(state, BallControlState::Waiting) {
+        ControlStateSnapshot::Waiting
+    } else {
+        ControlStateSnapshot::Idle
+    };
     if let Ok(pose) = hardware.read_pose()
         && let Some(sim_tx) = sim_tx
     {
@@ -1211,10 +1263,11 @@ fn apply_test_control(
         zone = ?current_zone,
         zone_filter = ?zone_filter,
         home_rail_x = f4(*home_rail_x),
+        resulting_state = ?control_state_snapshot,
         "테스트 컨트롤 적용 — 준비 자세 복귀"
     );
     let _ = event_tx.send(RuntimeEvent::ControlState {
-        state: ControlStateSnapshot::Idle,
+        state: control_state_snapshot,
     });
     let _ = event_tx.send(RuntimeEvent::TestZoneChanged {
         zone: *current_zone,
@@ -1222,6 +1275,62 @@ fn apply_test_control(
         filtering: zone_filter.is_some(),
     });
     return Ok(());
+}
+
+/// `ResetPosition`/`Wait`/`Next`처럼 idle 대기 없이 즉시 적용하는 컨트롤의
+/// 공통 결과 처리 — 성공하면 idle 포즈를 캐시하고, 실패하면 이벤트를 보낸
+/// 뒤 세션을 끊어야 하는지(`ControlFlow::Break`) 계속해도 되는지
+/// (`ControlFlow::Continue`)를 알려준다.
+fn apply_immediate_control(
+    control: TestControl,
+    hardware: &mut dyn Hardware,
+    arm: &Arm,
+    home_rail_x: &mut f64,
+    current_zone: &mut TestZone,
+    zone_filter: &mut Option<TestZone>,
+    latch: &mut CommandLatch,
+    state: &mut BallControlState,
+    sim_tx: Option<&Sender<SimUpdate>>,
+    event_tx: &Sender<RuntimeEvent>,
+    cached_idle_pose: &mut Option<pingpong_bot::robot::Pose>,
+) -> std::ops::ControlFlow<()> {
+    return match apply_test_control(
+        control,
+        hardware,
+        arm,
+        home_rail_x,
+        current_zone,
+        zone_filter,
+        latch,
+        state,
+        sim_tx,
+        event_tx,
+    ) {
+        Ok(()) => {
+            *cached_idle_pose = hardware.read_pose().ok();
+            std::ops::ControlFlow::Continue(())
+        }
+        Err(MoveError::Hardware(error)) => {
+            let _ = event_tx.send(RuntimeEvent::Failed {
+                track_seq: latch.track_seq,
+                reason: format!("수동 컨트롤 적용 중 하드웨어 오류: {error}"),
+            });
+            std::ops::ControlFlow::Break(())
+        }
+        Err(error @ MoveError::Plan(_))
+        | Err(error @ MoveError::StartupAlignmentTimeout { .. }) => {
+            warn!(%error, "수동 컨트롤 적용 중 준비 자세 계획 실패 — 세션은 유지");
+            let _ = event_tx.send(RuntimeEvent::Failed {
+                track_seq: latch.track_seq,
+                reason: format!("수동 컨트롤 적용 중 준비 자세 계획 실패: {error}"),
+            });
+            *state = BallControlState::Idle;
+            let _ = event_tx.send(RuntimeEvent::ControlState {
+                state: ControlStateSnapshot::Idle,
+            });
+            std::ops::ControlFlow::Continue(())
+        }
+    };
 }
 
 /// 직접 복귀가 테이블을 스치면 안전한 상승 중간 자세를 거치는 2구간을 찾는다.
@@ -1659,7 +1768,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_test_control_wait_keeps_current_zone() {
+    fn apply_test_control_wait_keeps_zone_and_enters_waiting() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
         let rail = robot.arm.rail.expect("rail 있는 로봇");
         let mut hardware = PoseApplyingHardware {
@@ -1670,7 +1779,7 @@ mod tests {
         let mut home_rail_x = rail.x_max;
         let mut current_zone = TestZone::Right;
         let mut zone_filter = Some(TestZone::Right);
-        let (event_tx, _event_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
 
         apply_test_control(
             TestControl::Wait,
@@ -1689,6 +1798,97 @@ mod tests {
         assert_eq!(current_zone, TestZone::Right);
         assert_eq!(zone_filter, Some(TestZone::Right));
         assert!((home_rail_x - rail.x_max).abs() < 1e-9);
+        assert!(matches!(state, BallControlState::Waiting));
+        let events: Vec<_> = event_rx.try_iter().collect();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::ControlState {
+                state: ControlStateSnapshot::Waiting
+            }
+        )));
+    }
+
+    #[test]
+    fn apply_test_control_next_from_waiting_returns_to_idle() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let mut hardware = PoseApplyingHardware {
+            pose: Pose::new(rail.x_max, robot.arm.default_joints.clone()),
+        };
+        let mut latch = CommandLatch::default();
+        let mut state = BallControlState::Waiting;
+        let mut home_rail_x = rail.x_max;
+        let mut current_zone = TestZone::Right;
+        let mut zone_filter = Some(TestZone::Right);
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+
+        apply_test_control(
+            TestControl::Next,
+            &mut hardware,
+            &robot.arm,
+            &mut home_rail_x,
+            &mut current_zone,
+            &mut zone_filter,
+            &mut latch,
+            &mut state,
+            None,
+            &event_tx,
+        )
+        .expect("apply next");
+
+        assert_eq!(current_zone, TestZone::Right, "next는 존을 바꾸지 않는다");
+        assert!(matches!(state, BallControlState::Idle));
+        let events: Vec<_> = event_rx.try_iter().collect();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::ControlState {
+                state: ControlStateSnapshot::Idle
+            }
+        )));
+    }
+
+    #[test]
+    fn apply_test_control_set_zone_from_waiting_preserves_waiting() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let mut hardware = PoseApplyingHardware {
+            pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
+        };
+        let mut latch = CommandLatch::default();
+        let mut state = BallControlState::Waiting;
+        let mut home_rail_x = rail.default_x();
+        let mut current_zone = TestZone::Center;
+        let mut zone_filter = None;
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+
+        apply_test_control(
+            TestControl::SetZone(TestZone::Left),
+            &mut hardware,
+            &robot.arm,
+            &mut home_rail_x,
+            &mut current_zone,
+            &mut zone_filter,
+            &mut latch,
+            &mut state,
+            None,
+            &event_tx,
+        )
+        .expect("apply set zone while waiting");
+
+        assert_eq!(current_zone, TestZone::Left);
+        assert_eq!(zone_filter, Some(TestZone::Left));
+        assert!((home_rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-9);
+        assert!(
+            matches!(state, BallControlState::Waiting),
+            "존만 바뀌고 대기는 유지되어야 한다"
+        );
+        let events: Vec<_> = event_rx.try_iter().collect();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::ControlState {
+                state: ControlStateSnapshot::Waiting
+            }
+        )));
     }
 
     #[test]
@@ -1722,5 +1922,114 @@ mod tests {
         assert_eq!(current_zone, TestZone::Center);
         assert_eq!(zone_filter, None);
         assert!((home_rail_x - rail.default_x()).abs() < 1e-9);
+    }
+
+    /// `event_rx`를 소진하며 `predicate`를 만족하는 이벤트가 `timeout` 안에
+    /// 오면 `true`, 그 안에 안 오면(채널 disconnect 포함) `false`.
+    ///
+    /// 못 찾은 경우는 "이 시간 동안 그 이벤트가 한 번도 없었다"는 뜻이기도
+    /// 해서, "아무 일도 없어야 한다" 종류의 확인에도 그대로 쓴다.
+    fn wait_for_event(
+        event_rx: &crossbeam_channel::Receiver<RuntimeEvent>,
+        timeout: Duration,
+        mut predicate: impl FnMut(&RuntimeEvent) -> bool,
+    ) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            match event_rx.recv_timeout(remaining) {
+                Ok(event) if predicate(&event) => return true,
+                Ok(_) => {}
+                Err(_) => return false,
+            }
+        }
+    }
+
+    #[test]
+    fn spawn_ignores_balls_while_waiting_and_resumes_after_next() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let hardware: Box<dyn Hardware> = Box::new(ReadCountingHardware {
+            reads: 0,
+            pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
+        });
+
+        let (commit_tx, commit_rx) = crossbeam_channel::unbounded();
+        let (test_control_tx, test_control_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (guard, shutdown) = crate::real::shutdown_channel();
+
+        let handle = spawn(
+            hardware,
+            Arc::clone(&robot.arm),
+            commit_rx,
+            test_control_rx,
+            None,
+            event_tx,
+            shutdown,
+        );
+
+        let generous = Duration::from_secs(3);
+
+        commit_tx
+            .send(vision_request(Duration::ZERO))
+            .expect("보낼 수 있음");
+        assert!(
+            wait_for_event(&event_rx, generous, |event| matches!(
+                event,
+                RuntimeEvent::Commanded { .. }
+            )),
+            "첫 공은 명령돼야 한다"
+        );
+        assert!(
+            wait_for_event(&event_rx, generous, |event| matches!(
+                event,
+                RuntimeEvent::ControlState {
+                    state: ControlStateSnapshot::Waiting
+                }
+            )),
+            "스윙(정렬→유지→복귀) 완료 후 대기 상태로 들어가야 한다"
+        );
+
+        commit_tx
+            .send(vision_request(Duration::ZERO))
+            .expect("보낼 수 있음");
+        assert!(
+            !wait_for_event(&event_rx, Duration::from_millis(400), |event| matches!(
+                event,
+                RuntimeEvent::Commanded { .. }
+            )),
+            "대기 중에는 두 번째 공을 명령하면 안 된다"
+        );
+
+        test_control_tx
+            .send(TestControl::Next)
+            .expect("보낼 수 있음");
+        assert!(
+            wait_for_event(&event_rx, generous, |event| matches!(
+                event,
+                RuntimeEvent::ControlState {
+                    state: ControlStateSnapshot::Idle
+                }
+            )),
+            "'n' 이후에는 다시 공을 받는 상태로 돌아와야 한다"
+        );
+
+        commit_tx
+            .send(vision_request(Duration::ZERO))
+            .expect("보낼 수 있음");
+        assert!(
+            wait_for_event(&event_rx, generous, |event| matches!(
+                event,
+                RuntimeEvent::Commanded { .. }
+            )),
+            "재개 후 세 번째 공은 다시 명령돼야 한다"
+        );
+
+        drop(guard);
+        handle.join().expect("워커 스레드가 정상 종료해야 한다");
     }
 }

@@ -17,6 +17,8 @@ pub enum ControlStateSnapshot {
         rail_commanded_m: f64,
         aim_commanded_rad: f64,
     },
+    /// 스윙 완료 후 `n`(`TestControl::Next`)을 기다리는 중 — 다음 공을 받지 않는다.
+    Waiting,
 }
 
 /// 라켓 헤드·레일 단순 제어 런타임 이벤트.
