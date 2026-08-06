@@ -19,7 +19,7 @@
 //! | [`calib`] | Cam* / Charuco / Rig |
 //! | [`hardware`] | DynamixelConfig / RailConfig |
 //! | [`dxl_limits`] | derate·속도·토크 배열 |
-//! | [`planner`] | InterceptWindow + bang-bang consts |
+//! | [`motion`] | InterceptWindow + 정렬·스윙·bang-bang consts |
 //! | [`sim`] | Settings + 랜덤/eval consts |
 //! | [`sim_motor`] | `SimMotorParams` |
 //!

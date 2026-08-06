@@ -33,10 +33,10 @@ pub trait Hardware: Send {
         return Ok(());
     }
 
-    /// 2단계 제어 명령: 레일과 라켓 수평 조준축만 갱신한다.
+    /// 보존 직접 제어 명령: 레일과 라켓 수평 조준축만 갱신한다.
     ///
-    /// 기본 궤적 명령과 분리해, 중앙 정렬이 끝난 뒤 다른 Dynamixel 축에 Goal을
-    /// 다시 보내지 않는다는 실기 계약을 명시한다.
+    /// 현재 real 정렬 워커는 이 경로 대신 `command`/`command_joints`를 사용한다.
+    /// 레거시 하드웨어 진단과 회귀 테스트를 위해 유지한다.
     fn command_rail_and_racket(
         &mut self,
         _rail_x: f64,

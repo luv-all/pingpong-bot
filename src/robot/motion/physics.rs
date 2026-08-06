@@ -499,7 +499,7 @@ fn best_scored_prediction(
 /// = 실기 보정 준비 위치)로 되돌리는 궤적을 계획한다.
 ///
 /// 레일의 `home_x`(원점, x=0)는 "대기 위치"일 뿐 테이블 중앙이 아니다 —
-/// 여기서 되돌아갈 곳은 `LinearRail::default_x()`(현재 실기 보정값 0.710 m)다.
+/// 여기서 되돌아갈 곳은 `LinearRail::default_x()`(현재 실기 보정값 0.675 m)다.
 /// 실제 로봇은 모터 토크 한계 때문에 레일 한쪽
 /// 끝에서 반대쪽 끝으로 급하게 움직이는 궤적을 못 만든다 — 매 스윙 뒤 항상
 /// 중앙으로 복귀시켜 다음 스윙의 시작 조건을 일정하게 유지한다. 볼 예측이
@@ -546,7 +546,7 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
     let hint = robot::Pose::new(hint_rail_x, arm.default_joints.clone());
     // 자연스러운 관절 모양은 위치와 법선을 한 번에 푼 자세 IK에서 얻는다.
     // 그 관절 모양은 유지하고 레일만 실기 보정 중앙값으로 평행이동한다.
-    // 준비 중 라켓 x가 조금 달라져도 검출 직후 DirectController가 레일로
+    // 준비 중 라켓 x가 조금 달라져도 정렬 플래너가 레일로
     // 공 x를 맞추므로, x를 억지로 고정해 팔꿈치·손목을 뒤틀 필요가 없다.
     let (ready_pose, _) = arm
         .inverse_pose_with_rail_best_normal(
@@ -1392,7 +1392,7 @@ fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'sta
     // **2026-07-31 재활성화.** 시간 하한(`min_swing_secs`)을 없애 늦은 스윙까지 허용하면서,
     // 레일을 몰아붙이는 궤적을 막을 게 이 검사밖에 남지 않았다 — 시간 게이트가 하던 암묵적
     // 보호를 물리 한계로 옮긴 것이다 (사용자 결정). 위 경고는 그대로 유효하다:
-    // `RAIL_ACCEL_M_S2 = 16.0`은 여전히 **벤치 검증 중인 값**이고 실기 레일은 더 빠를
+    // `RAIL_ACCEL_M_S2 = 24.0`은 여전히 **벤치 검증 중인 값**이고 실기 레일은 더 빠를
     // 가능성이 높다. 커밋률이 떨어지면 값이 낮은 것이지 검사가 틀린 게 아니다 —
     // 벤치 스텝 응답으로 실측해 `RAIL_ACCEL_M_S2`를 갱신할 것.
     if RAIL_ACCEL_CHECK_ENABLED

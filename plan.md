@@ -19,15 +19,20 @@
 현재 활성 경로는 다음과 같다.
 
 ```text
-BallTrajectory
-    → CommitRequest (track_seq, Provisional | Refined)
-    → DirectController
-    → DirectControlCommand
-    → real Hardware / GUI sim robot::State
+vision::Trajectory
+    → CommitRequest (track_seq)
+    → 제어 워커의 인터셉트 평면 선택
+    → 첫 명령: Planner::ball_alignment → Hardware::command
+    → 같은 트랙 보정: Planner::ball_alignment_fixed_rail
+                         → Hardware::command_joints
 ```
 
-현재 실기 제어는 전체 스윙이 아니라 리니어 레일로 라켓 헤드 x를 공 x에
-맞추고 ID 3으로 상대편 끝선 중앙을 조준하는 2단계 제어다. 명령 후에는 실제
-적용값을 기준으로 레일·조준축을 다시 읽어 수렴 여부를
-판정한다. 다음 우선순위는 Windows 실물 장비 통합 검증과 보존 중인 구형
-`PositionController`·스윙 계획기의 향후 사용 여부 결정이다.
+현재 실기 제어는 전체 스윙이 아니라 예측 불확실성 기준을 통과한 궤적으로
+접촉 위치와 라켓 방향을 맞춘다. 첫 명령은 레일과 관절을 함께 움직이고, 같은
+트랙의 후속 예측은 레일을 고정한 채 관절만 보정한다. 라켓 면은 상대 코트
+절반의 중심을 향하며, 예측 도착 시각 0.5초 뒤 현재 모드의 준비 자세로
+복귀한다. 명령 완료 시 읽기와 로그는 한 번 수행하지만 주기적
+`PendingVerification` 수렴 판정은 현재 런타임에서 사용하지 않는다.
+
+다음 우선순위는 Windows 실물 장비 통합 검증과 비활성 검증 경로 및 보존 중인
+구형 `PositionController`·스윙 계획기의 향후 사용 여부 결정이다.

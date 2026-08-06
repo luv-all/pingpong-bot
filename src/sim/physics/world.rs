@@ -1972,7 +1972,7 @@ mod tests {
         );
         assert!(
             max_displacement > 0.02,
-            "0.710m 준비 위치에서 라켓 헤드 x를 중앙 공에 맞추도록 레일이 움직여야 함 (distance={max_displacement})"
+            "0.675m 준비 위치에서 라켓 헤드 x를 중앙 공에 맞추도록 레일이 움직여야 함 (distance={max_displacement})"
         );
     }
 
@@ -1992,7 +1992,7 @@ mod tests {
         }
         assert!(
             alignment_started,
-            "준비 자세 복귀 전에 공 위치·높이 정렬이 실행돼야 함"
+            "준비 자세 복귀 전에 공 위치·방향 정렬이 실행돼야 함"
         );
     }
 

@@ -520,7 +520,7 @@ fn draw_eval_status(
                 let fill = points_color(shot.points);
                 let mut button = egui::Button::new(format!("{n}")).fill(fill);
                 if selected == Some(n) {
-                    button = button.stroke(egui::Stroke::new(1.5, egui::Color32::WHITE));
+                    button = button.stroke(egui::Stroke::new(1.5_f32, egui::Color32::WHITE));
                 }
                 if ui.add_sized([22.0, 20.0], button).clicked() {
                     *start_live_shot = Some(n);
@@ -854,21 +854,21 @@ fn draw_joint_anchor_windows(
             joint_pos,
             5.0,
             egui::Stroke::new(
-                1.0,
+                1.0_f32,
                 egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180),
             ),
         );
         painter.line_segment(
             [joint_pos, label],
             egui::Stroke::new(
-                1.0,
+                1.0_f32,
                 egui::Color32::from_rgba_unmultiplied(220, 220, 230, 180),
             ),
         );
 
         let frame = egui::Frame::NONE
             .fill(egui::Color32::from_rgba_unmultiplied(12, 14, 18, 200))
-            .stroke(egui::Stroke::new(1.0, accent))
+            .stroke(egui::Stroke::new(1.0_f32, accent))
             .corner_radius(5.0)
             .inner_margin(egui::Margin::symmetric(6, 4));
 
@@ -930,7 +930,7 @@ fn draw_range_bar(ui: &mut egui::Ui, min: Option<f64>, cur: f64, max: Option<f64
     let x = rect.left() + rect.width() * t;
     painter.line_segment(
         [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-        egui::Stroke::new(1.5, egui::Color32::WHITE),
+        egui::Stroke::new(1.5_f32, egui::Color32::WHITE),
     );
 }
 
@@ -972,7 +972,7 @@ fn draw_signed_bar(ui: &mut egui::Ui, min: f64, cur: f64, max: f64, hot: bool) {
             egui::pos2(zero_x, rect.top() - 1.0),
             egui::pos2(zero_x, rect.bottom() + 1.0),
         ],
-        egui::Stroke::new(1.0, egui::Color32::from_gray(180)),
+        egui::Stroke::new(1.0_f32, egui::Color32::from_gray(180)),
     );
 }
 

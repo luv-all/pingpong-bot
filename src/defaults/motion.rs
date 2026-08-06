@@ -24,7 +24,7 @@ pub const JDOT_STEP: f64 = 1e-4;
 pub const RETURN_TO_CENTER_MIN_SECS: f64 = 0.2;
 pub const RETURN_TO_CENTER_MAX_SECS: f64 = 3.0;
 pub const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
-/// 예측된 공 도착 시각부터 중앙 복귀를 시작할 때까지 자세를 유지하는 시간.
+/// 예측된 공 도착 시각부터 준비 자세 복귀를 시작할 때까지 유지하는 시간.
 pub const POST_ALIGNMENT_HOLD_SECS: f64 = 0.5;
 
 /// 발사기 반복 시험용 고정 푸시가 한계를 지키며 임팩트를 만들 최소 시간.

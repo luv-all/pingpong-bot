@@ -1,8 +1,8 @@
-//! 실물 공 위치·높이 정렬 제어 워커.
+//! 실물 공 위치·방향 정렬·후속 팔 보정 제어 워커.
 //!
 //! `run`이 워커 시작 전에 레일과 4축 Dynamixel을 최초 중립 자세에 둔다.
-//! 이후 공 하나당 예측 위치에 라켓 중심을 정지 정렬한다. 백스윙·임팩트 속도·
-//! 팔로스루는 사용하지 않고, 잠시 유지한 뒤 같은 중립 자세로 복귀한다.
+//! 이후 공 하나당 보정된 접촉점에 라켓을 정지 정렬한다. 백스윙·임팩트 속도·
+//! 팔로스루는 사용하지 않고, 잠시 유지한 뒤 현재 모드의 준비 자세로 복귀한다.
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -411,15 +411,15 @@ pub fn spawn(
                                 joints_commanded = %format!("{:?}", measurement.joints_commanded.values),
                                 joints_measured = %format!("{:?}", measured.joints.values),
                                 joints_commanded_minus_measured = %format!("{joint_errors:?}"),
-                                "공 위치·높이 정렬 완료 후 실측"
+                                "공 위치·방향 정렬 완료 후 실측"
                             );
                         }
-                        Err(error) => warn!(%error, "공 위치·높이 정렬 완료 후 포즈 읽기 실패"),
+                        Err(error) => warn!(%error, "공 위치·방향 정렬 완료 후 포즈 읽기 실패"),
                     }
                 }
                 if let Err(error) = move_to_ready(hardware.as_mut(), &arm, home_rail_x) {
-                    let reason = format!("제어 후 중앙 복귀 실패 — 현재 자세 유지: {error}");
-                    warn!(%error, "안전한 중앙 복귀 궤적 없음 — 명령하지 않고 다음 공을 기다린다");
+                    let reason = format!("제어 후 준비 자세 복귀 실패 — 현재 자세 유지: {error}");
+                    warn!(%error, "안전한 준비 자세 복귀 궤적 없음 — 명령하지 않고 다음 공을 기다린다");
                     let fatal_hardware_error = matches!(error, MoveError::Hardware(_));
                     let _ = event_tx.send(RuntimeEvent::Failed {
                         track_seq: latch.track_seq,
@@ -448,10 +448,10 @@ pub fn spawn(
                         let returned_track_seq = state.active_track_seq();
                         info!(
                             track_seq = returned_track_seq,
-                            "제어 후 중앙 복귀 완료 — 대기 상태 진입 (n 대기)"
+                            "제어 후 준비 자세 복귀 완료 — 대기 상태 진입 (n 대기)"
                         );
                     }
-                    Err(error) => warn!(%error, "중앙 복귀 후 포즈 읽기 실패"),
+                    Err(error) => warn!(%error, "준비 자세 복귀 후 포즈 읽기 실패"),
                 }
                 // 스윙(정렬→유지→중립 복귀)이 정상적으로 끝났다 — 운영자가 결과를
                 // 확인하고 `n`을 누를 때까지 새 공을 받지 않는다.
@@ -552,7 +552,7 @@ pub fn spawn(
                 continue;
             }
             last_filtered_track_seq = None;
-            // 중앙 복귀 직후 읽어 둔 실측 자세를 재사용한다. 토크가 유지되는
+            // 준비 자세 복귀 직후 읽어 둔 실측 자세를 재사용한다. 토크가 유지되는
             // 대기 중에는 자세가 바뀌지 않으므로 느린 4-ID 직렬 읽기를 없앤다.
             let (start, start_pose_source) = if matches!(state, BallControlState::Idle) {
                 match cached_idle_pose.take() {
@@ -1361,7 +1361,7 @@ fn plan_neutral_return_segments(
         })?;
     // 직접 복귀가 테이블 관통뿐 아니라 관절 한계·토크 한계로 실패해도 상승
     // 중간 자세를 시도한다. 극단 예측 자세에서는 정지→정지 단일 quintic이
-    // 중간에 한계를 넘지만, 위로 먼저 접은 뒤에는 중앙 복귀가 가능할 수 있다.
+    // 중간에 한계를 넘지만, 위로 먼저 접은 뒤에는 준비 자세 복귀가 가능할 수 있다.
     let mut last_error = Some(direct_error);
     for lift_m in [0.03, 0.06, 0.10, 0.15] {
         let lifted_target = pingpong_bot::Point3::new(
