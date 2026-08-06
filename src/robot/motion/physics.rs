@@ -9,7 +9,7 @@ use crate::defaults;
 use crate::defaults::motion::{
     ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
     ALIGNMENT_MIN_UPWARD_TILT_DEG, ALIGNMENT_TARGET_HEIGHT_OFFSET_M, DETECTION_WINDUP_DISTANCE_M,
-    DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S,
+    DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S, FIXED_JOINT_SNAP_SPEED_RATIO,
     FIXED_JOINT_SWING_DURATION_SECS, FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
     IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M,
     READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS,
@@ -1017,7 +1017,11 @@ pub fn plan_fixed_joint_swing(
             continue;
         }
         let mut impact_velocity = vec![0.0; joint_count];
-        impact_velocity[WRIST_JOINT_INDEX] = delta / FIXED_JOINT_SWING_DURATION_SECS;
+        // 궤적은 일찍 시작해 타격 시각까지 0.40초를 쓰되, 임팩트 순간 j3만
+        // 설정상 관절 속도 상한(모터 무부하 최고속의 95%)을 요청한다.
+        // 가속·감속까지 합친 궤적 피크는 kinematic gate가 같은 상한으로 자른다.
+        impact_velocity[WRIST_JOINT_INDEX] =
+            delta.signum() * arm.max_joint_speed * FIXED_JOINT_SNAP_SPEED_RATIO;
         match build_feasible_trajectory_with_follow_time(
             arm,
             &start.joints,
@@ -1745,11 +1749,22 @@ mod tests {
         );
         for index in 0..3 {
             assert_eq!(trajectory.end.values[index], trajectory.start.values[index]);
+            assert_eq!(trajectory.end_velocity[index], 0.0);
             assert_eq!(
                 trajectory.follow_through.values[index],
                 trajectory.start.values[index]
             );
         }
+        let wrist_delta = trajectory.end.values[3] - trajectory.start.values[3];
+        assert_eq!(
+            trajectory.end_velocity[3].signum(),
+            wrist_delta.signum(),
+            "j3 스냅 방향"
+        );
+        assert!(
+            trajectory.peak_joint_speed() <= arm.max_joint_speed * (1.0 + 1e-9),
+            "가속·감속 포함 전체 피크가 모터 최고속의 95% 상한을 넘으면 안 됨"
+        );
         let impact_tilt_deg = impact
             .normal
             .z

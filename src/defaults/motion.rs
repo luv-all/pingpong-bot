@@ -63,8 +63,12 @@ pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 pub const DETECTION_WINDUP_MIN_DURATION_SECS: f64 = 0.120;
 /// 임팩트 순간 목표 라켓 선속도 [m/s].
 pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 1.80;
-/// 실기 고정 스윙이 예상 타격점에 도달하는 시간 [s].
-pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.250;
+/// j3 손목 스윙 명령 시작부터 예상 타격점에 도달하는 시간 [s].
+/// 기존 0.25초보다 0.15초 먼저 시작하되 임팩트 시각은 그대로 맞춘다.
+pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.400;
+/// 임팩트 순간 j3가 사용할 설정상 관절 속도 상한 비율.
+/// 설정상 상한 자체가 모터 무부하 최고속의 95%이므로 여기서는 전부 사용한다.
+pub const FIXED_JOINT_SNAP_SPEED_RATIO: f64 = 1.0;
 /// 임팩트 이후에도 같은 방향으로 계속 밀고 멈추는 시간 [s].
 pub const FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS: f64 = 0.120;
 impl Default for InterceptWindow {
