@@ -569,7 +569,7 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 /// 함께 푼 뒤 정지→정지 궤적 검사를 통과시킨다. 임팩트 속도와 공 도착 시각은 이
 /// 기초 정렬 모드에서 사용하지 않는다. 공 중심과 라켓 중심을 겹치지 않도록
 /// `공 반지름 + 라켓 반두께` 만큼 법선 반대쪽에 라켓 중심을 둔다.
-/// 공의 x는 발사기 기준 오른쪽으로 3 cm 보정한다. 공이 닿는 지점은
+/// 공의 x는 발사기 기준 오른쪽으로 6 cm 보정한다. 공이 닿는 지점은
 /// 블레이드 중심보다 0.5 cm 아래라서, 라켓 중심은 공 중심보다 0.5 cm 위로 올린다.
 pub fn plan_ball_alignment(
     arm: &Arm,
@@ -1740,7 +1740,7 @@ mod tests {
                 * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z);
         assert!(
             (contact - corrected_ball.coords).norm() < 2e-3,
-            "오른쪽 3cm 보정 후 라켓 중심보다 0.5cm 아래 접촉점이 목표에 닿아야 함: contact={contact:?} corrected_ball={:?}",
+            "오른쪽 6cm 보정 후 라켓 중심보다 0.5cm 아래 접촉점이 목표에 닿아야 함: contact={contact:?} corrected_ball={:?}",
             corrected_ball.coords
         );
         assert!(

@@ -47,7 +47,7 @@ pub const IMPACT_CENTER_BELOW_BALL_M: f64 = 0.020;
 pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.005;
 /// 발사기 기준 오른쪽으로 적용하는 공별 타격 예측 위치 보정 [m].
 /// 현재 실물 레일은 `reverse=true`이므로 오른쪽은 제어 x 감소 방향이다.
-pub const ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M: f64 = 0.030;
+pub const ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M: f64 = 0.060;
 /// 공을 상대편으로 넘기기 위한 라켓 면의 위쪽 기울기 [deg].
 pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 /// 검출 직후 추가 백스윙의 첫 시도 시간 [s].
