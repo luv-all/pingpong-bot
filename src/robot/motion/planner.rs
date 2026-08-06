@@ -139,7 +139,8 @@ impl Planner {
         return physics::plan_aligned_impact_sequence(arm, start, ball, time_to_impact_secs);
     }
 
-    /// 정렬 자세에서 q3만 돌려 타격 시점 라켓 면을 25°로 만든다.
+    /// 정렬 자세에서 q2·q3를 돌려 타격 시점 라켓 면을
+    /// 15° 상향각과 상대 코트 3/4 중심 방향에 맞춘다.
     pub fn fixed_joint_swing(
         arm: &Arm,
         start: &robot::Pose,
@@ -147,7 +148,7 @@ impl Planner {
         return physics::plan_fixed_joint_swing(arm, start);
     }
 
-    /// 상대 코트 중심 방향과 25° 상향각을 함께 가장 잘 맞추는 q3 스윙.
+    /// 상대 코트 3/4 중심 방향과 15° 상향각을 함께 가장 잘 맞추는 q2·q3 스윙.
     pub fn fixed_joint_swing_toward(
         arm: &Arm,
         start: &robot::Pose,

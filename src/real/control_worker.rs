@@ -2,7 +2,7 @@
 //!
 //! `run`이 워커 시작 전에 레일과 4축 Dynamixel을 최초 중립 자세에 둔다.
 //! 이후 공 하나당 보정된 접촉점에 라켓을 정지 정렬하고, 예상 타격
-//! 0.25초 전에 q3 손목만 움직여 타격 순간 라켓 면을 25°로 만든다. 손목 동작이 불가하면 그 동작만 생략하고
+//! 0.25초 전에 q2·q3를 함께 움직여 타격 순간 라켓 면을 15°·3/4 코트 중심으로 만든다. 스냅이 불가하면 그 동작만 생략하고
 //! 정렬 자세를 유지한 뒤 현재 모드의 준비 자세로 복귀한다.
 
 use std::sync::Arc;
@@ -71,8 +71,9 @@ struct CommandLatch {
 enum AlignmentAction {
     /// 정밀 기준을 처음 만족한 예측의 레일·팔 명령.
     RefinedRailAndArm,
-    /// 같은 공의 후속 갱신: 이미 계산된 레일 위치에서 팔만 미세 보정한다.
-    ArmCorrection,
+    /// 같은 공의 후속 갱신: 3/4 코트 중심 방향을 유지하도록
+    /// 레일과 전체 팔 자세를 함께 다시 푼다.
+    RailAndArmCorrection,
 }
 
 impl CommandLatch {
@@ -91,7 +92,7 @@ impl CommandLatch {
             Some(PredictionStage::Refined) if !self.primary_sent => {
                 Some(AlignmentAction::RefinedRailAndArm)
             }
-            Some(PredictionStage::Refined) => Some(AlignmentAction::ArmCorrection),
+            Some(PredictionStage::Refined) => Some(AlignmentAction::RailAndArmCorrection),
         };
     }
 
@@ -302,7 +303,7 @@ pub fn spawn(
             home_rail_x,
             filtering: false,
         });
-        info!("공 위치·방향 정렬 준비 — 예상 타격 0.25초 전 q3 손목 25° 스냅");
+        info!("공 위치·방향 정렬 준비 — 예상 타격 0.25초 전 q2·q3 15°·3/4 중심 스냅");
 
         let mut latch = CommandLatch::default();
         let mut last_command: Option<Instant> = None;
@@ -490,26 +491,26 @@ pub fn spawn(
                                         racket_normal_error_deg = f2(planned.normal_error_deg),
                                         racket_elevation_error_deg = f2(planned.elevation_error_deg),
                                         racket_azimuth_error_deg = f2(planned.azimuth_error_deg),
-                                        "q3 손목 전용 25° 우선·상대 코트 중심 최선 타격 스냅 시작"
+                                        "q2·q3 15°·상대 코트 3/4 중심 방향 타격 스냅 시작"
                                     );
                                 }
                                 Err(error) => warn!(
                                     track_seq,
                                     %error,
-                                    "q3 손목 스냅 명령 실패 — 손목 동작만 생략"
+                                    "q2·q3 타격 스냅 명령 실패 — 스냅만 생략"
                                 ),
                             }
                         }
                         Err(error) => warn!(
                             track_seq,
                             %error,
-                            "q3 손목 25° 계획 불가 — 손목 동작만 생략"
+                            "q2·q3 방향 스냅 계획 불가 — 스냅만 생략"
                         ),
                     },
                     Err(error) => warn!(
                         track_seq,
                         %error,
-                        "q3 손목 스냅 직전 포즈 읽기 실패 — 손목 동작만 생략"
+                        "q2·q3 스냅 직전 포즈 읽기 실패 — 스냅만 생략"
                     ),
                 }
             }
@@ -787,8 +788,8 @@ pub fn spawn(
                     AlignmentAction::RefinedRailAndArm => {
                         Planner::ball_alignment(&arm, &start, target.position)
                     }
-                    AlignmentAction::ArmCorrection => {
-                        Planner::ball_alignment_fixed_rail(&arm, &start, target.position)
+                    AlignmentAction::RailAndArmCorrection => {
+                        Planner::ball_alignment(&arm, &start, target.position)
                     }
                 };
                 match alignment {
@@ -846,7 +847,7 @@ pub fn spawn(
             let command_send_started = Instant::now();
             let command_result = match action {
                 AlignmentAction::RefinedRailAndArm => hardware.command(&alignment),
-                AlignmentAction::ArmCorrection => hardware.command_joints(&alignment),
+                AlignmentAction::RailAndArmCorrection => hardware.command(&alignment),
             };
             let command_send_ms = command_send_started.elapsed().as_secs_f64() * 1e3;
             if let Err(error) = command_result {
@@ -861,7 +862,7 @@ pub fn spawn(
                 command_send_started,
                 match action {
                     AlignmentAction::RefinedRailAndArm => "refined_alignment",
-                    AlignmentAction::ArmCorrection => "arm_correction",
+                    AlignmentAction::RailAndArmCorrection => "rail_arm_correction",
                 },
             ));
             latch.mark_sent(action);
@@ -2152,7 +2153,7 @@ mod tests {
         latch.mark_sent(AlignmentAction::RefinedRailAndArm);
         assert_eq!(
             latch.next_action(1, Some(PredictionStage::Refined)),
-            Some(AlignmentAction::ArmCorrection)
+            Some(AlignmentAction::RailAndArmCorrection)
         );
     }
 

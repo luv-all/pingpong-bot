@@ -4,7 +4,7 @@
 //!
 //! ```bash
 //! cargo run -p pingpong-bot
-//! # 실기 레일·팔 정렬 후 고정 레일 팔 보정. 모터를 안 움직이는 리허설은 --dry-run.
+//! # 실기 레일·팔 위치·방향 정렬. 모터를 안 움직이는 리허설은 --dry-run.
 //! cargo run -p pingpong-bot -- --mode real --dxl-port COM8
 //! cargo run -p pingpong-bot -- --mode real --dry-run
 //! # 샷별 목표 선택·직접 명령 로그 (기본 info). 더 자세히:

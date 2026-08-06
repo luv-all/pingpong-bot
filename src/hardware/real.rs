@@ -137,7 +137,7 @@ impl RealHardware {
     ) -> Result<(), HwError> {
         self.reap_executor();
         if !drive_rail && self.busy.load(Ordering::Acquire) {
-            // 타격 직전 q3 손목 명령은 진행 중인 전체 정렬의 관절
+            // 타격 직전 q2·q3 스냅 명령은 진행 중인 전체 정렬의 관절
             // 스트림만 선점한다. AXL에 이미 내려간 절대 목표는 보드가
             // 계속 수행하므로 여기서 레일은 정지시키지 않는다.
             self.cancel.store(true, Ordering::Release);
