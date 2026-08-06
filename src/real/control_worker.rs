@@ -65,34 +65,52 @@ const BENCH_RACKET_TOTAL_LENGTH_M: f64 = 0.255;
 struct CommandLatch {
     track_seq: Option<u64>,
     primary_sent: bool,
+    refined_sent: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RefinedAction {
-    /// 본 예측 첫 명령: 레일과 팔을 함께 계산·이동한다.
-    PrimaryRailAndArm,
+enum AlignmentAction {
+    /// 공이 테이블의 1/4을 지나면 거친 예측으로 레일·팔을 먼저 출발시킨다.
+    CoarseRailAndArm,
+    /// 첫 요청부터 정밀 기준을 만족한 경우의 레일·팔 명령.
+    RefinedRailAndArm,
+    /// coarse 이동 중 정밀 예측이 되면 기존 명령을 선점해 레일·팔을 둘 다 갱신한다.
+    RefinedReplacement,
     /// 같은 공의 후속 갱신: 이미 계산된 레일 위치에서 팔만 미세 보정한다.
     ArmCorrection,
 }
 
 impl CommandLatch {
-    fn next_action(&mut self, track_seq: u64, refined_ready: bool) -> Option<RefinedAction> {
+    fn next_action(
+        &mut self,
+        track_seq: u64,
+        stage: Option<PredictionStage>,
+    ) -> Option<AlignmentAction> {
         if self.track_seq != Some(track_seq) {
             *self = Self::default();
             self.track_seq = Some(track_seq);
         }
-        if !refined_ready {
-            return None;
-        }
-        return Some(if self.primary_sent {
-            RefinedAction::ArmCorrection
-        } else {
-            RefinedAction::PrimaryRailAndArm
-        });
+        return match stage {
+            None => None,
+            Some(PredictionStage::Provisional) if !self.primary_sent => {
+                Some(AlignmentAction::CoarseRailAndArm)
+            }
+            Some(PredictionStage::Provisional) => None,
+            Some(PredictionStage::Refined) if !self.primary_sent => {
+                Some(AlignmentAction::RefinedRailAndArm)
+            }
+            Some(PredictionStage::Refined) if !self.refined_sent => {
+                Some(AlignmentAction::RefinedReplacement)
+            }
+            Some(PredictionStage::Refined) => Some(AlignmentAction::ArmCorrection),
+        };
     }
 
-    fn mark_primary_sent(&mut self) {
+    fn mark_sent(&mut self, action: AlignmentAction) {
         self.primary_sent = true;
+        if !matches!(action, AlignmentAction::CoarseRailAndArm) {
+            self.refined_sent = true;
+        }
     }
 }
 
@@ -105,6 +123,25 @@ fn refined_prediction_ready(request: &CommitRequest) -> bool {
     let position_limit = nalgebra::Vector3::repeat(params.max_impact_sigma);
     let velocity_limit = nalgebra::Vector3::repeat(params.max_impact_sigma / params.max_lead);
     return last.sigma_position < position_limit && last.sigma_velocity < velocity_limit;
+}
+
+/// 본선 트리거의 fallback과 같은 기준: 공이 발사기 쪽에서 테이블 길이의
+/// 1/4을 지나 로봇 방향으로 오면 coarse 선행 이동을 허용한다.
+fn coarse_prediction_ready(request: &CommitRequest) -> bool {
+    let Some(last) = request.trajectory.measured.last() else {
+        return false;
+    };
+    return last.velocity.y < 0.0
+        && last.position.y
+            <= pingpong_bot::constants::table::LENGTH_Y
+                * pingpong_bot::defaults::vision::ALIGNMENT_TRIGGER_TABLE_Y_FRAC;
+}
+
+fn prediction_stage(request: &CommitRequest) -> Option<PredictionStage> {
+    if refined_prediction_ready(request) {
+        return Some(PredictionStage::Refined);
+    }
+    return coarse_prediction_ready(request).then_some(PredictionStage::Provisional);
 }
 
 /// 카메라 캡처(마지막 채택 관측) → 비전 적합 완료까지 걸린 시간 [ms].
@@ -188,6 +225,7 @@ enum BallControlState {
     Aligning {
         swing_due_at: Instant,
         swing_attempted: bool,
+        refined: bool,
         return_due_at: Instant,
         measurement: PendingAlignmentMeasurement,
     },
@@ -404,9 +442,10 @@ pub fn spawn(
                 BallControlState::Aligning {
                     swing_due_at,
                     swing_attempted,
+                    refined,
                     measurement,
                     ..
-                } if !swing_attempted && Instant::now() >= *swing_due_at => Some((
+                } if *refined && !swing_attempted && Instant::now() >= *swing_due_at => Some((
                     measurement.track_seq,
                     *swing_due_at,
                     measurement.target_horizontal_normal,
@@ -669,13 +708,34 @@ pub fn spawn(
             {
                 continue;
             }
-            let refined_ready = refined_prediction_ready(&request);
-            let Some(action) = latch.next_action(track_seq, refined_ready) else {
+            let stage = prediction_stage(&request);
+            let Some(action) = latch.next_action(track_seq, stage) else {
                 continue;
             };
-            if hardware.is_busy() || last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
+            let replaces_coarse = matches!(action, AlignmentAction::RefinedReplacement);
+            if hardware.is_busy() {
+                if replaces_coarse {
+                    hardware.cancel();
+                    while hardware.is_busy() && !shutdown.is_down() {
+                        thread::sleep(BUSY_POLL);
+                    }
+                    if shutdown.is_down() {
+                        break 'control;
+                    }
+                    // 중단된 coarse 명령을 완료로 기록하지 않는다.
+                    motion_watch = None;
+                } else {
+                    if matches!(stage, Some(PredictionStage::Refined)) {
+                        pending_refined = Some(request);
+                    }
+                    continue;
+                }
+            } else if !replaces_coarse
+                && last_command.is_some_and(|at| at.elapsed() < COMMAND_THROTTLE)
             {
-                pending_refined = Some(request);
+                if matches!(stage, Some(PredictionStage::Refined)) {
+                    pending_refined = Some(request);
+                }
                 continue;
             }
 
@@ -738,10 +798,12 @@ pub fn spawn(
             }
             let issued_at = Instant::now();
             let alignment = match action {
-                RefinedAction::PrimaryRailAndArm => {
+                AlignmentAction::CoarseRailAndArm
+                | AlignmentAction::RefinedRailAndArm
+                | AlignmentAction::RefinedReplacement => {
                     Planner::ball_alignment(&arm, &start, target.position)
                 }
-                RefinedAction::ArmCorrection => {
+                AlignmentAction::ArmCorrection => {
                     Planner::ball_alignment_fixed_rail(&arm, &start, target.position)
                 }
             };
@@ -787,8 +849,10 @@ pub fn spawn(
                 .unwrap_or(0.0);
             let command_send_started = Instant::now();
             let command_result = match action {
-                RefinedAction::PrimaryRailAndArm => hardware.command(&alignment),
-                RefinedAction::ArmCorrection => hardware.command_joints(&alignment),
+                AlignmentAction::CoarseRailAndArm
+                | AlignmentAction::RefinedRailAndArm
+                | AlignmentAction::RefinedReplacement => hardware.command(&alignment),
+                AlignmentAction::ArmCorrection => hardware.command_joints(&alignment),
             };
             let command_send_ms = command_send_started.elapsed().as_secs_f64() * 1e3;
             if let Err(error) = command_result {
@@ -802,13 +866,13 @@ pub fn spawn(
                 track_seq,
                 command_send_started,
                 match action {
-                    RefinedAction::PrimaryRailAndArm => "primary_alignment",
-                    RefinedAction::ArmCorrection => "arm_correction",
+                    AlignmentAction::CoarseRailAndArm => "coarse_alignment",
+                    AlignmentAction::RefinedRailAndArm => "refined_alignment",
+                    AlignmentAction::RefinedReplacement => "refined_replacement",
+                    AlignmentAction::ArmCorrection => "arm_correction",
                 },
             ));
-            if action == RefinedAction::PrimaryRailAndArm {
-                latch.mark_primary_sent();
-            }
+            latch.mark_sent(action);
             last_command = Some(issued_at);
             let _ = event_tx.send(RuntimeEvent::Commanded {
                 track_seq,
@@ -832,6 +896,7 @@ pub fn spawn(
             state = BallControlState::Aligning {
                 swing_due_at,
                 swing_attempted: false,
+                refined: matches!(stage, Some(PredictionStage::Refined)),
                 return_due_at,
                 measurement: PendingAlignmentMeasurement {
                     track_seq,
@@ -853,7 +918,7 @@ pub fn spawn(
             info!(
                 target: "latency",
                 track_seq,
-                stage = ?PredictionStage::Refined,
+                stage = ?stage.expect("action이 있으면 stage도 있음"),
                 start_pose_source,
                 request_age_secs = f4(request.age_secs()),
                 camera_to_fit_ms = f2(camera_to_fit_ms(&request)),
@@ -878,7 +943,7 @@ pub fn spawn(
                 fixed_swing_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
                 joints_commanded = %format!("{:?}", alignment.follow_through.values),
                 racket_target_horizontal_normal = %format!("{:?}", target_horizontal_normal),
-                "본 예측 레일·팔 정렬/팔 실시간 미세 보정 시작 — 고정 스윙 예약"
+                "예측 레일·팔 정렬/팔 실시간 미세 보정 시작 — 정밀 확정 후 고정 스윙 예약"
             );
         }
 
@@ -1983,17 +2048,25 @@ mod tests {
     }
 
     #[test]
-    fn each_vision_track_sends_primary_then_arm_corrections() {
+    fn each_vision_track_sends_coarse_then_refined_replacement_then_arm_corrections() {
         let mut latch = CommandLatch::default();
-        assert_eq!(latch.next_action(1, false), None);
         assert_eq!(
-            latch.next_action(1, true),
-            Some(RefinedAction::PrimaryRailAndArm)
+            latch.next_action(1, Some(PredictionStage::Provisional)),
+            Some(AlignmentAction::CoarseRailAndArm)
         );
-        latch.mark_primary_sent();
+        latch.mark_sent(AlignmentAction::CoarseRailAndArm);
         assert_eq!(
-            latch.next_action(1, true),
-            Some(RefinedAction::ArmCorrection)
+            latch.next_action(1, Some(PredictionStage::Provisional)),
+            None
+        );
+        assert_eq!(
+            latch.next_action(1, Some(PredictionStage::Refined)),
+            Some(AlignmentAction::RefinedReplacement)
+        );
+        latch.mark_sent(AlignmentAction::RefinedReplacement);
+        assert_eq!(
+            latch.next_action(1, Some(PredictionStage::Refined)),
+            Some(AlignmentAction::ArmCorrection)
         );
     }
 
@@ -2001,13 +2074,13 @@ mod tests {
     fn new_track_resets_latch() {
         let mut latch = CommandLatch::default();
         assert_eq!(
-            latch.next_action(1, true),
-            Some(RefinedAction::PrimaryRailAndArm)
+            latch.next_action(1, Some(PredictionStage::Refined)),
+            Some(AlignmentAction::RefinedRailAndArm)
         );
-        latch.mark_primary_sent();
+        latch.mark_sent(AlignmentAction::RefinedRailAndArm);
         assert_eq!(
-            latch.next_action(2, true),
-            Some(RefinedAction::PrimaryRailAndArm)
+            latch.next_action(2, Some(PredictionStage::Refined)),
+            Some(AlignmentAction::RefinedRailAndArm)
         );
     }
 
@@ -2019,6 +2092,13 @@ mod tests {
         let mut provisional = vision_request(Duration::ZERO);
         provisional.trajectory.measured.0[0].sigma_position = nalgebra::Vector3::repeat(1.0);
         assert!(!refined_prediction_ready(&provisional));
+        assert_eq!(
+            prediction_stage(&provisional),
+            Some(PredictionStage::Provisional)
+        );
+
+        provisional.trajectory.measured.0[0].position.y = pingpong_bot::constants::table::LENGTH_Y;
+        assert_eq!(prediction_stage(&provisional), None);
     }
 
     #[test]
@@ -2075,12 +2155,13 @@ mod tests {
         };
         let mut latch = CommandLatch::default();
         assert_eq!(
-            latch.next_action(9, true),
-            Some(RefinedAction::PrimaryRailAndArm)
+            latch.next_action(9, Some(PredictionStage::Refined)),
+            Some(AlignmentAction::RefinedRailAndArm)
         );
         let mut state = BallControlState::Aligning {
             swing_due_at: Instant::now(),
             swing_attempted: false,
+            refined: true,
             return_due_at: Instant::now(),
             measurement: PendingAlignmentMeasurement {
                 track_seq: 9,
@@ -2113,8 +2194,8 @@ mod tests {
         assert!((home_rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-9);
         assert!(matches!(state, BallControlState::Idle));
         assert_eq!(
-            latch.next_action(9, true),
-            Some(RefinedAction::PrimaryRailAndArm)
+            latch.next_action(9, Some(PredictionStage::Refined)),
+            Some(AlignmentAction::RefinedRailAndArm)
         );
         assert!((hardware.pose.rail_x - TestZone::Left.rail_x(rail)).abs() < 1e-6);
 
@@ -2588,6 +2669,133 @@ mod tests {
         fn read_pose(&mut self) -> Result<Pose, HwError> {
             return Ok(self.pose.lock().expect("lock").clone());
         }
+    }
+
+    #[derive(Default)]
+    struct PreemptionStats {
+        full_commands: usize,
+        joint_commands: usize,
+        cancels: usize,
+    }
+
+    struct PreemptionHardware {
+        pose: Arc<std::sync::Mutex<Pose>>,
+        stats: Arc<std::sync::Mutex<PreemptionStats>>,
+        busy: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Hardware for PreemptionHardware {
+        fn command(
+            &mut self,
+            trajectory: &pingpong_bot::robot::motion::Trajectory,
+        ) -> Result<(), HwError> {
+            *self.pose.lock().expect("pose lock") = Pose::new(
+                trajectory.follow_through_rail_x,
+                trajectory.end_joints().clone(),
+            );
+            let mut stats = self.stats.lock().expect("stats lock");
+            stats.full_commands += 1;
+            // 첫 coarse 명령만 이동 중으로 유지해 refined 선점 경로를 강제로 탄다.
+            self.busy.store(
+                stats.full_commands == 1,
+                std::sync::atomic::Ordering::Release,
+            );
+            return Ok(());
+        }
+
+        fn command_joints(
+            &mut self,
+            trajectory: &pingpong_bot::robot::motion::Trajectory,
+        ) -> Result<(), HwError> {
+            let rail_x = self.pose.lock().expect("pose lock").rail_x;
+            *self.pose.lock().expect("pose lock") =
+                Pose::new(rail_x, trajectory.end_joints().clone());
+            self.stats.lock().expect("stats lock").joint_commands += 1;
+            return Ok(());
+        }
+
+        fn read_pose(&mut self) -> Result<Pose, HwError> {
+            return Ok(self.pose.lock().expect("pose lock").clone());
+        }
+
+        fn is_busy(&mut self) -> bool {
+            return self.busy.load(std::sync::atomic::Ordering::Acquire);
+        }
+
+        fn cancel(&mut self) {
+            self.stats.lock().expect("stats lock").cancels += 1;
+            self.busy.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn refined_prediction_preempts_busy_coarse_and_reissues_rail_and_arm() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let pose = Arc::new(std::sync::Mutex::new(Pose::new(
+            rail.default_x(),
+            robot.arm.default_joints.clone(),
+        )));
+        let stats = Arc::new(std::sync::Mutex::new(PreemptionStats::default()));
+        let busy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let hardware: Box<dyn Hardware> = Box::new(PreemptionHardware {
+            pose,
+            stats: Arc::clone(&stats),
+            busy,
+        });
+
+        let (commit_tx, commit_rx) = crossbeam_channel::unbounded();
+        let (_test_control_tx, test_control_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (guard, shutdown) = crate::real::shutdown_channel();
+        let handle = spawn(
+            hardware,
+            Arc::clone(&robot.arm),
+            commit_rx,
+            test_control_rx,
+            None,
+            event_tx,
+            shutdown,
+        );
+        let generous = Duration::from_secs(3);
+
+        let mut coarse = vision_request(Duration::ZERO);
+        coarse.trajectory.measured.0[0].sigma_position = nalgebra::Vector3::repeat(1.0);
+        commit_tx.send(coarse).expect("coarse 전송");
+        assert!(
+            wait_for_event(&event_rx, generous, |event| matches!(
+                event,
+                RuntimeEvent::Commanded { .. }
+            )),
+            "coarse 레일·팔 명령이 먼저 나가야 한다"
+        );
+        assert_eq!(
+            stats.lock().expect("stats lock").joint_commands,
+            0,
+            "정밀 예측 전에는 손목 타격 명령을 시작하면 안 된다"
+        );
+
+        commit_tx
+            .send(vision_request(Duration::ZERO))
+            .expect("refined 전송");
+        assert!(
+            wait_for_event(&event_rx, generous, |event| matches!(
+                event,
+                RuntimeEvent::Commanded { .. }
+            )),
+            "refined 레일·팔 갱신 명령이 나가야 한다"
+        );
+
+        let stats = stats.lock().expect("stats lock");
+        assert_eq!(stats.cancels, 1, "진행 중 coarse를 정확히 한 번 선점");
+        assert_eq!(
+            stats.full_commands, 2,
+            "coarse와 refined 모두 레일·전 관절 명령이어야 한다"
+        );
+        drop(stats);
+
+        drop(guard);
+        handle.join().expect("워커 스레드가 정상 종료해야 한다");
     }
 
     #[test]
