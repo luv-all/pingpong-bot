@@ -95,6 +95,17 @@ impl Planner {
         return physics::plan_return_to_center_at(arm, start, rail_x);
     }
 
+    /// [`Self::return_to_center_at`]와 같지만 `speed_ratio`만큼 늦춘 궤적을 계획한다 —
+    /// 홈 포지션 복귀·시작 자세 초기화처럼 랠리보다 느려도 되는 이동에 쓴다.
+    pub fn return_to_center_at_speed_ratio(
+        arm: &Arm,
+        start: &robot::Pose,
+        rail_x: f64,
+        speed_ratio: f64,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_return_to_center_at_speed_ratio(arm, start, rail_x, speed_ratio);
+    }
+
     pub fn ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
         return physics::plan_ready_prewind(arm, start);
     }
@@ -150,6 +161,23 @@ impl Planner {
         end_rail_x: f64,
     ) -> Result<Trajectory, DomainError> {
         return physics::plan_move_to(arm, start, end_joints, end_rail_x);
+    }
+
+    /// [`Self::move_to`]와 같지만 `speed_ratio`만큼 늦춘 궤적을 계획한다.
+    pub fn move_to_at_speed_ratio(
+        arm: &Arm,
+        start: &robot::Pose,
+        end_joints: crate::robot::Joints,
+        end_rail_x: f64,
+        speed_ratio: f64,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_move_to_at_speed_ratio(
+            arm,
+            start,
+            end_joints,
+            end_rail_x,
+            speed_ratio,
+        );
     }
 
     pub fn plan_bang_bang(

@@ -1343,7 +1343,12 @@ fn plan_neutral_return_segments(
     rail_x: f64,
 ) -> Result<Vec<pingpong_bot::robot::motion::Trajectory>, DomainError> {
     let planning_start = clamp_small_joint_limit_overshoot(arm, start);
-    let direct_error = match Planner::return_to_center_at(arm, &planning_start, rail_x) {
+    let direct_error = match Planner::return_to_center_at_speed_ratio(
+        arm,
+        &planning_start,
+        rail_x,
+        pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+    ) {
         Ok(direct) => return Ok(vec![direct]),
         Err(error) => error,
     };
@@ -1385,17 +1390,27 @@ fn plan_neutral_return_segments(
                 continue;
             }
         };
-        let lift =
-            match Planner::move_to(arm, &planning_start, lifted_joints, planning_start.rail_x) {
-                Ok(trajectory) => trajectory,
-                Err(error) => {
-                    last_error = Some(error);
-                    continue;
-                }
-            };
+        let lift = match Planner::move_to_at_speed_ratio(
+            arm,
+            &planning_start,
+            lifted_joints,
+            planning_start.rail_x,
+            pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+        ) {
+            Ok(trajectory) => trajectory,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
         let lifted_pose =
             pingpong_bot::robot::Pose::new(lift.follow_through_rail_x, lift.follow_through.clone());
-        match Planner::return_to_center_at(arm, &lifted_pose, rail_x) {
+        match Planner::return_to_center_at_speed_ratio(
+            arm,
+            &lifted_pose,
+            rail_x,
+            pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+        ) {
             Ok(ready) => return Ok(vec![lift, ready]),
             Err(error) => last_error = Some(error),
         }
@@ -1599,6 +1614,28 @@ mod tests {
         assert_eq!(
             segments.last().expect("ready segment").follow_through,
             robot.arm.default_joints
+        );
+    }
+
+    #[test]
+    fn plan_neutral_return_segments_is_slower_than_full_speed_return() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let start = Pose::new(rail.x_max, robot.arm.default_joints.clone());
+
+        let home_segments = plan_neutral_return_segments(&robot.arm, &start, rail.x_min)
+            .expect("홈 포지션 복귀 계획");
+        let full_speed = Planner::return_to_center_at(&robot.arm, &start, rail.x_min)
+            .expect("전속 복귀 계획(비교 기준)");
+
+        let home_duration: f64 = home_segments
+            .iter()
+            .map(|segment| segment.duration_secs)
+            .sum();
+        assert!(
+            home_duration > full_speed.duration_secs * 2.0,
+            "home_duration={home_duration} full_speed={}",
+            full_speed.duration_secs
         );
     }
 
