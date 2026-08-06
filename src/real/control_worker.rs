@@ -387,7 +387,12 @@ pub fn spawn(
                 && waiting_auto_resume_at.is_some_and(|deadline| Instant::now() >= deadline)
             {
                 waiting_auto_resume_at = None;
-                resume_waiting_in_place(hardware.as_mut(), &mut state, &mut cached_idle_pose, &event_tx);
+                resume_waiting_in_place(
+                    hardware.as_mut(),
+                    &mut state,
+                    &mut cached_idle_pose,
+                    &event_tx,
+                );
                 info!("대기 3초 경과 — 자동으로 idle 전환 (n 불필요)");
             }
             let due_swing = match &state {
@@ -1527,8 +1532,13 @@ fn apply_immediate_control(
 }
 
 /// 스윙 후 자동 대기가 3초 만료됐거나 `n`으로 건너뛴 경우 적용한다 — 하드웨어를
-/// 다시 움직이지 않고 idle로만 전환한다. 레일·관절은 스윙 직후 복귀에서 이미
-/// 준비 자세로 들어와 있다(Task 2).
+/// 다시 움직이지 않고 idle로만 전환한다. 관절은 스윙 직후 복귀에서 이미 준비
+/// 자세로 들어왔고, 레일은 공을 친 자리에 그대로 둔다(Task 2).
+///
+/// `apply_test_control`과 달리 `CommandLatch`는 리셋하지 않는다 — 리셋하지
+/// 않아도 안전한 이유는, 이 시점에 남아있을 수 있는 같은 track_seq의 오래된
+/// 요청이 있더라도 `select_alignment_target`이 예측 궤적 만료 판정에서 이미
+/// 걸러내기 때문이다.
 fn resume_waiting_in_place(
     hardware: &mut dyn Hardware,
     state: &mut BallControlState,
@@ -2575,7 +2585,8 @@ mod tests {
             "스윙 완료 후 대기 상태로 들어가야 한다"
         );
 
-        let final_rail_x = shared_pose.lock().expect("lock").rail_x;
+        let final_pose = shared_pose.lock().expect("lock").clone();
+        let final_rail_x = final_pose.rail_x;
         assert!(
             (final_rail_x - commanded_rail_x).abs() < 1e-6,
             "복귀 후 레일은 정렬 위치({commanded_rail_x})에 그대로 있어야 하는데 {final_rail_x}"
@@ -2585,6 +2596,17 @@ mod tests {
             "정렬 위치가 홈과 달라야 검증 의미가 있다: final_rail_x={final_rail_x} default_x={}",
             rail.default_x()
         );
+        for (measured, expected) in final_pose
+            .joints
+            .values
+            .iter()
+            .zip(&robot.arm.default_joints.values)
+        {
+            assert!(
+                (measured - expected).abs() < 1e-6,
+                "복귀 후 관절은 준비 자세와 일치해야 하는데 measured={measured} expected={expected}"
+            );
+        }
 
         drop(guard);
         handle.join().expect("워커 스레드가 정상 종료해야 한다");
