@@ -3,15 +3,18 @@
 새 개발 순서를 위에서부터 차근차근 진행한다. 한 단계를 구현하고 테스트한 뒤
 다음 단계로 넘어간다.
 
-## 현재 상태 (2026-08-04)
+## 현재 상태 (2026-08-06)
 
 - **1.1~1.3 핵심 구현 완료:** `N×7` 규약, 채택 관측 버퍼, 미래 궤적 샘플링.
 - **1.4 제어 전환 완료:** real `CommitRequest`가 새 `vision::Trajectory` 계약을
   그대로 전달하고 제어가 접수 평면을 선택한다.
-- **공 위치·높이 정렬 공통 제어 완료:** real·GUI sim이
-  `HitTargetSelector`와 `Planner::ball_alignment`를 공유한다.
-- **중립 준비·복귀 완료:** 레일 0.710m와 기본 관절각에서 시작하고,
-  예측 지점에 정지 정렬한 다음 같은 자세로 복귀한다.
+- **공 위치·방향 정렬 완료:** real과 GUI sim이 `Planner::ball_alignment`를
+  공유한다. real은 자체 접수 평면 선택을 쓰고, GUI sim은 기존
+  `DirectController::select_target`을 통해 목표를 고른다.
+- **본 예측 정렬·보정 완료:** 불확실성 기준을 통과한 첫 예측에서
+  레일·팔을 함께 이동하고, 같은 공의 후속 예측은 팔만 보정한다.
+- **중립 준비·복귀 완료:** 기본은 레일 0.675m와 기본 관절각을 쓴다.
+  구간 모드에서는 해당 모드의 준비 레일 x로 복귀한다.
 - **실기 오차 계측 완료:** 명령 후 레일·전체 관절을 재측정해
   `commanded`, `measured`, `commanded - measured`를 구분해 남긴다.
 - **로그 정리:** 관전 창의 공 감지 상태는 `false ↔ true`로 바뀔 때만 한 번 기록한다.
@@ -90,7 +93,7 @@
 - [x] 기존 `Prediction`/hit-plane 계산은 궤적 생성 API에서 분리
 - [x] 기존 제어가 필요하면 임시 어댑터가 궤적에서 평면 교차를 계산하게 하고,
   궤적 반환 API에는 타격점을 다시 넣지 않음
-- [x] real 추정 워커의 `CommitRequest` 예측 목록 payload를 `BallTrajectory`로 교체
+- [x] real 추정 워커의 `CommitRequest` payload를 `vision::Trajectory`로 교체
 - [ ] 프리뷰·시뮬레이션·텔레메트리가 두 궤적을 구분해 소비할 수 있게 전달
 - [x] 실제 관측은 `t ≤ 0`, 미래 예측은 `t > 0`인지 EKF 통합 테스트
 - [x] 새 공 리셋 후 이전 공의 궤적이 섞이지 않는지 EKF 통합 테스트
@@ -120,37 +123,42 @@
   잘라내던 경계 문제를 발견했고, 로봇 작업 공간 여유 0.5 m를 반영했다.
 - `fly_08/09`는 검출 구간의 동시 검출률이 20% 안팁이므로,
   제어 전환과 별개로 검출 연속성 개선이 남아 있다.
-- 당시 검증은 `BallTrajectory → Prediction` 임시 어댑터까지였다. 현재 활성
-  제어는 이 어댑터가 아니라 `BallTrajectory → HitTargetSelector →
-  Planner::ball_alignment` 경로를 사용한다.
+- 당시 검증은 `BallTrajectory → Prediction` 임시 어댑터까지였다. 현재 실기
+  제어는 새 `vision::Trajectory → 접수 평면 선택 → Planner::ball_alignment`
+  경로를 사용한다.
 
 ---
 
-## 2. 현재 활성 제어 — 공 위치·높이 단순 정렬
+## 2. 현재 활성 제어 — 공 위치·방향 정렬
 
-현재 런타임은 중립 준비 자세에서 `BallTrajectory`의 목표 x·y·z에 라켓 중심을
-맞추고 라켓 면을 상대 네트 중앙으로 향하게 한다. 레일·팔을 동시에 움직이며
-별도 스윙 없이 목표 자세에서 정지한다.
+현재 실기 런타임은 `vision::Trajectory`에서 고른 접수점을 보정한 뒤
+라켓 블레이드에 정지 정렬한다. 라켓 면은 네트 너머 상대편 반코트의
+무게중심을 향한다. 첫 본 예측은 레일·팔을 함께 움직이고, 같은 공의
+후속 예측은 레일을 고정한 채 팔만 보정한다.
 
 ```text
-BallTrajectory
-    → HitTargetSelector
+vision::Trajectory
+    → control 접수 평면 선택
     → Planner::ball_alignment
     → Hardware::command
+    → Planner::ball_alignment_fixed_rail
+    → Hardware::command_joints
 ```
 
 ### 2.1 명령 계산
 
 - [x] 예측 궤적에서 정렬할 목표 x·y·z 선택
-- [x] 위치와 상대 네트 중앙 방향을 함께 만족하는 자세 IK 계산
+- [x] 보정된 접촉점과 상대편 반코트 무게중심 방향을 함께 만족하는 자세 IK 계산
 - [x] 레일·관절·토크·테이블 충돌 한계를 통과한 정지 정렬 궤적 생성
-- [x] 공마다 정렬 명령을 최대 한 번 전송
-- [x] real과 GUI sim이 같은 `Planner::ball_alignment` 사용
+- [x] 첫 본 예측에서 레일·팔 동시 명령
+- [x] 같은 공의 후속 예측에서 최신 팔 미세 보정
+- [x] real과 GUI sim이 같은 `Planner::ball_alignment` 정렬 계획 사용
 
 ### 2.2 적용값과 수렴 확인
 
-- [x] 시작·복귀 시 레일 0.710m와 기본 관절각의 중립 자세 사용
-- [x] 레일·팔 동시 이동 후 예측 위치에서 정지
+- [x] 기본 시작·복귀 시 레일 0.675m와 기본 관절각의 중립 자세 사용
+- [x] 구간 모드에서 선택한 준비 레일 x로 복귀
+- [x] 레일·팔 동시 이동 후 보정된 접촉 자세에서 정지
 - [x] 명령 뒤 레일·전체 관절 재측정 및 `commanded - measured` 기록
 - [x] 개별 공의 정렬 계획 실패 시 워커를 종료하지 않고 다음 공 계속 처리
 - [ ] Windows 실물 장비에서 위치·높이 정렬과 복귀 최종 검증
@@ -158,65 +166,30 @@ BallTrajectory
 ### 2.3 현재 활성 경로에서 제외
 
 - 반환 탄도와 임팩트 속도 계산
-- 백스윙과 공 도착 시각 동기화
+- 백스윙과 타격 속도 동기화
 - 물리 E-stop 입력
 
-`PositionController`와 스윙 플래너 코드는 라이브러리에 남아 있지만 현재 real·GUI
-sim의 직접 제어 경로에서는 호출하지 않는다.
+`PositionController`와 백스윙·임팩트 플래너 코드는 라이브러리에 남아 있지만
+현재 real·GUI sim의 직접 정렬 경로에서는 호출하지 않는다.
 
 ### 2.4 남은 정리·검증
 
 - [ ] 보존 중인 구형 위치·스윙 계획기의 향후 사용 여부 결정
 - [ ] 사용하지 않기로 결정한 타입·설정·테스트·문서 제거
-- [ ] 관측 → 궤적 → 단계 판정 → 명령 → 실측의 실물 통합 검증
+- [ ] 관측 → 궤적 → 불확실성 게이트 → 명령/후속 보정 → 실측의 실물 통합 검증
 - [ ] 물리 E-stop 입력과 복구 정책 정의
 - [ ] 전체 workspace 테스트 재실행
 
 ### 2.5 실기 검증 발견 사항 (2026-08-04, Windows COM8)
 
-- [x] **`track_seq`가 첫 공 이후로 고정되던 문제 — 수정함.** 지금 실기는 아직
-  공을 실제로 쳐 보내지 않아 `BallReceding`(y 증가)이 다음 공 신호를 못 잡았고,
-  `CommandLatch`가 첫 공 이후 모든 명령을 조용히 무시했다.
-  `estimator_worker.rs::is_new_ball_reacquisition`으로 "추적이 끊겼다가
-  재획득"도 새 공 신호로 추가해 해결. 실기 로그로 `track_seq`가 계속
-  올라가는 것 확인함(`5 → 6 → 7 → … → 23`).
-- [ ] **재획득 전까지 예측이 계속 stale해지는 문제 — 미해결, 원인만 파악.**
-  `BallTrajectory::reference_time`(`ekf.rs::trajectory`)은 마지막 **채택**
-  관측 시각인데, 그 정리(`stale_gap_secs=0.5s` 하드 리셋, `gate_reject_limit=5`)는
-  전부 `Ekf::update_position` 안에서만 실행된다 — 즉 **새 3D 점이 실제로
-  들어와야만** 발동한다. 카메라 동기 삼각측량이 계속 실패하면(로그에서
-  `cam{id=0}` `detection_rate`가 길게 `0.0`) 그동안 EKF는 그냥 마지막 상태에
-  얼어붙고, `reference_time`도 안 움직인다. 다음에 겨우 새 점이 들어올 때까지
-  제어 워커는 `레일·라켓 조준 명령 계산 생략 ... 목표 시각이 N초 지남`을
-  반복 — 한 트랙에서 17초 이상 관측됨. 근본 원인 후보 두 가지:
-  1. 코드: EKF에 새 점이 없어도 주기적으로 "너무 오래 안 들어옴"을 스스로
-     감지하는 선제적 타임아웃이 없다 (지금은 다음 점이 와야만 반응).
-  2. 비전: `cam0` 검출률이 구간별로 `0.0~1.0`을 오가는 것 자체가 별도 조사
-     대상 (조명·임계값·검출기 설정 등).
-  사용자 요청으로 지금은 기록만 하고 코드 수정은 보류.
-- [ ] **`PendingVerification` 경로가 실기 루프에서 도달 불가 — 2026-08-05 확인, 미해결.**
-  `pending_verification`은 선언 시 `None`, 명령 직후 재설정 `None` 외에는 실제
-  `spawn()` 루프에서 `Some(...)`으로 대입되지 않는다 — 유닛 테스트가 직접
-  구성해 `verify_due_command`를 호출할 때만 그 경로가 실행된다. 즉 `src/real/README.md`의
-  "제어 괴리 로그"·"제어 워커" 섹션이 완료로 적은 재측정 수렴 판정·3회 연속
-  실패 시 중단은 현재 실기에서 발동하지 않는다. 부활·제거 결정은 보류.
-  `docs/superpowers/specs/2026-08-05-control-worker-state-machine-design.md` 참고.
-- [x] **한 공에 정렬 명령은 최대 한 번 — 2026-08-05 latch로 명시화.**
-  명령이 하나 성공하면 그 `vision::Trajectory::seq`의 이후 요청을 전부
-  막는다. 리팩터 중 `BallControlState::Idle` 복귀 후 이 차단이 풀리는 틈이
-  잠깐 생겼었는데, `CommandLatch::mark_finished()`가 latch를
-  track_seq당 계속 막도록 한다(`src/real/control_worker.rs`).
-  새 Fit은 관측마다 계약을 갱신하지만 한 공에는 정렬 명령을 다시 보내지 않는다.
-  `src/real/README.md`도 이에 맞춰 갱신함.
-- [x] **vision control integration — `main`의 새 비전 스택을 제어 경로에 연결.**
-  `main`이 `detector`/`estimator`(재귀 EKF)를 전부 지우고 `vision::Fit`
-  (배치 Gauss-Newton 곡선 피팅) + `vision::Trajectory` 계약으로 새로 짰다
-  (2026-08-05 merge). 실기 카메라·추정 경로를 `defaults::vision::detector_for`,
-  `defaults::vision::trigger`, `vision::Fit`으로 전환했다. `CommitRequest`는
-  `vision::Trajectory` 전체를 나르고, 제어 워커가 요청 지연을 `at_time`으로
-  보정한 뒤 접수 평면을 고른다. 구 `PredictionStage`는 활성 실기 경로에서 제거했다.
-  구 `src/detector`·`src/estimator`는 시뮬레이션과 진단의 기존 호출부가 남아 있어
-  이번 통합에서는 삭제하지 않는다.
+- [x] `vision::Fit` + `vision::Trajectory` 계약을 real 제어에 연결했다.
+- [x] 첫 본 예측 레일·팔 정렬 후, 같은 `track_seq`의 후속 예측으로
+  레일을 고정하고 팔만 보정하도록 `CommandLatch` 상태를 나누었다.
+- [x] 정렬·복귀 중 다른 `track_seq`가 현재 제어 상태를 덮어쓰지 못하게 했다.
+- [ ] `PendingVerification`의 주기적 수렴 판정·3회 연속 실패 중단 경로는
+  실기 루프에서 활성화되지 않는다. 완료 후 1회 실측 로그와 구분해
+  부활할지 제거할지 결정한다.
+- [ ] Windows 실물 장비에서 정렬·후속 보정·구간 복귀를 통합 검증한다.
 
 ---
 

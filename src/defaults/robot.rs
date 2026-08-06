@@ -38,7 +38,7 @@ pub const RAIL_MAX_SPEED: f64 = 11.25;
 /// 최소*인 곳이어야 한다.
 ///
 /// **2026-07-30 재계산 (`diag_windup_rest_pose_search`,
-/// `src/planner/swing/physics.rs`).** 사용자 관찰: GUI에서 스윙마다 라켓이
+/// `src/robot/motion/physics.rs`).** 사용자 관찰: GUI에서 스윙마다 라켓이
 /// "뒤로 당겨지는" 동작이 반복된다 — 팔로스루가 임팩트 방향으로 더 나아간
 /// 뒤 `plan_return_to_center`가 중립 휴지 자세로 역방향 복귀하기 때문으로
 /// 보인다. 가설: 휴지 자세를 미리 "당겨진(backswing)" 자세로 잡으면

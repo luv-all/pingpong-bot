@@ -12,7 +12,7 @@
 
 플래너·Rapier 라켓 접촉에 넣는 **유효 반발계수**다.
 
-법선 임팩트 모델 (`planner/impact.rs`):
+법선 임팩트 모델 (`src/robot/motion/impact.rs`):
 
 \[
 v_{\mathrm{out}}\cdot n = (1+e)\,v_r\cdot n - e\,v_{\mathrm{in}}\cdot n

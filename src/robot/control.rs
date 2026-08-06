@@ -235,8 +235,9 @@ impl DirectControlMeasurement {
 }
 
 /// 전체 팔 IK 대신 라켓 헤드 x를 공 x에 맞추고, 레일 위치를
-/// 단일 각도 함수에 넣어 상대편 끝선 중앙을 바라보게 하는 공통 제어기.
-/// 실제 장치와 GUI 시뮬레이션 모두 이 계산 결과를 각 하드웨어 어댑터에 적용한다.
+/// 단일 각도 함수에 넣어 상대편 끝선 중앙을 바라보게 하는 보존 제어기.
+/// GUI sim의 목표 선택과 진단에 남아 있으며, 활성 real 워커는 전체 자세 IK를
+/// 푸는 [`crate::robot::motion::Planner::ball_alignment`]을 사용한다.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DirectController {
     selector: HitTargetSelector,
