@@ -29,6 +29,10 @@ use super::{
 
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const FIXED_SWING_LEAD: Duration = Duration::from_millis(250);
+/// q2·q3 2° 후보 탐색·궤적 검증에 쓰이는 시간을 임팩트 시각에서
+/// 미리 뺀다. 2026-08-06 실기 로그에서 예약 지연 중 계획·루프 비용은
+/// 약 30~47 ms였다. 조금 일찍 맞는 것이 감기는 중간에 늦게 맞는 것보다 안전하다.
+const FIXED_SWING_PLANNING_BUDGET: Duration = Duration::from_millis(40);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const AUTO_IDLE_AFTER_WAIT: Duration = Duration::from_secs(3);
 const BUSY_POLL: Duration = Duration::from_millis(5);
@@ -453,11 +457,17 @@ pub fn spawn(
                     // 한 공에 대해 성공·실패와 관계없이 한 번만 시도한다.
                     *swing_attempted = true;
                 }
+                let planned_arrival_at = swing_due_at + FIXED_SWING_LEAD;
+                let impact_duration_secs = planned_arrival_at
+                    .saturating_duration_since(Instant::now())
+                    .saturating_sub(FIXED_SWING_PLANNING_BUDGET)
+                    .as_secs_f64();
                 match hardware.read_pose() {
-                    Ok(swing_start) => match Planner::fixed_joint_swing_toward(
+                    Ok(swing_start) => match Planner::fixed_joint_swing_toward_in(
                         &arm,
                         &swing_start,
                         target_horizontal_normal,
+                        impact_duration_secs,
                     ) {
                         Ok(planned) => {
                             let swing = &planned.trajectory;
@@ -479,15 +489,19 @@ pub fn spawn(
                                         target: "latency",
                                         track_seq,
                                         scheduled_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
+                                        planning_budget_ms = f2(FIXED_SWING_PLANNING_BUDGET.as_secs_f64() * 1e3),
                                         start_late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
                                         command_send_ms = f2(command_send_ms),
                                         swing_duration_secs = f4(swing.duration_secs),
+                                        impact_duration_secs = f4(swing.impact_time_secs),
                                         joints_start = %format!("{:?}", swing.start.values),
                                         joints_impact = %format!("{:?}", swing.end.values),
                                         joints_follow_through = %format!("{:?}", swing.follow_through.values),
                                         skipped_joint_indices = ?planned.skipped_joint_indices,
                                         racket_target_normal = %format!("{:?}", planned.target_normal),
                                         racket_achieved_normal = %format!("{:?}", planned.achieved_normal),
+                                        impact_racket_velocity_m_s = %format!("{:?}", planned.impact_racket_velocity),
+                                        impact_forward_speed_m_s = f4(planned.impact_racket_velocity.dot(&planned.achieved_normal)),
                                         racket_normal_error_deg = f2(planned.normal_error_deg),
                                         racket_elevation_error_deg = f2(planned.elevation_error_deg),
                                         racket_azimuth_error_deg = f2(planned.azimuth_error_deg),

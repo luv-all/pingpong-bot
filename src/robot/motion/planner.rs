@@ -157,6 +157,21 @@ impl Planner {
         return physics::plan_fixed_joint_swing_toward(arm, start, target_horizontal_normal);
     }
 
+    /// 실제 공 도착까지 남은 시간에 맞춰 q2·q3 타격을 계획한다.
+    pub fn fixed_joint_swing_toward_in(
+        arm: &Arm,
+        start: &robot::Pose,
+        target_horizontal_normal: nalgebra::Vector3<f64>,
+        impact_duration_secs: f64,
+    ) -> Result<physics::FixedJointSwing, DomainError> {
+        return physics::plan_fixed_joint_swing_toward_in(
+            arm,
+            start,
+            target_horizontal_normal,
+            impact_duration_secs,
+        );
+    }
+
     pub fn opponent_center_horizontal_normal(ball: crate::Point3) -> nalgebra::Vector3<f64> {
         return physics::opponent_center_horizontal_normal(ball);
     }

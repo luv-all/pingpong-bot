@@ -921,6 +921,8 @@ pub struct FixedJointSwing {
     pub target_normal: Vector3<f64>,
     /// 선택된 q2·q3 임팩트 자세가 실제로 만드는 법선.
     pub achieved_normal: Vector3<f64>,
+    /// q2·q3가 임팩트 순간에 만드는 라켓 선속도 [m/s].
+    pub impact_racket_velocity: Vector3<f64>,
     /// 목표·달성 법선 사이의 각도 [deg].
     pub normal_error_deg: f64,
     /// 15° 상향각 오차 [deg].
@@ -962,9 +964,33 @@ pub fn plan_fixed_joint_swing_toward(
     start: &robot::Pose,
     target_horizontal_normal: Vector3<f64>,
 ) -> Result<FixedJointSwing, DomainError> {
+    return plan_fixed_joint_swing_toward_in(
+        arm,
+        start,
+        target_horizontal_normal,
+        FIXED_JOINT_SWING_DURATION_SECS,
+    );
+}
+
+/// [`plan_fixed_joint_swing_toward`]와 같지만, 실제 공 도착까지 남은
+/// `impact_duration_secs`에 맞춰 임팩트를 만든다.
+pub fn plan_fixed_joint_swing_toward_in(
+    arm: &Arm,
+    start: &robot::Pose,
+    target_horizontal_normal: Vector3<f64>,
+    impact_duration_secs: f64,
+) -> Result<FixedJointSwing, DomainError> {
     const SHOULDER_JOINT_INDEX: usize = 2;
     const WRIST_JOINT_INDEX: usize = 3;
     const SEARCH_STEP_DEG: f64 = 2.0;
+    if impact_duration_secs <= defaults::MIN_TIME_TO_GO_SECS {
+        return Err(DomainError::InfeasibleSwing(
+            SwingPlanError::InsufficientTime {
+                time_to_impact_secs: impact_duration_secs,
+                min_swing_secs: defaults::MIN_TIME_TO_GO_SECS,
+            },
+        ));
+    }
     let joint_count = start.joints.values.len();
     let (Some(shoulder_limit), Some(wrist_limit)) = (
         arm.joint_limit(SHOULDER_JOINT_INDEX),
@@ -1032,26 +1058,24 @@ pub fn plan_fixed_joint_swing_toward(
         }
     }
     candidates.sort_by(|left, right| {
-        left.0
-            .total_cmp(&right.0)
-            .then_with(|| {
-                let left_delta = (left.3.values[SHOULDER_JOINT_INDEX]
-                    - start.joints.values[SHOULDER_JOINT_INDEX])
-                    .powi(2)
-                    + (left.3.values[WRIST_JOINT_INDEX] - start.joints.values[WRIST_JOINT_INDEX])
-                        .powi(2);
-                let right_delta = (right.3.values[SHOULDER_JOINT_INDEX]
-                    - start.joints.values[SHOULDER_JOINT_INDEX])
-                    .powi(2)
-                    + (right.3.values[WRIST_JOINT_INDEX] - start.joints.values[WRIST_JOINT_INDEX])
-                        .powi(2);
-                left_delta.total_cmp(&right_delta)
-            })
-            .then_with(|| {
-                left.1
-                    .total_cmp(&right.1)
-                    .then_with(|| left.2.total_cmp(&right.2))
-            })
+        // q2+q3의 합이 비슷하면 거의 같은 라켓 법선을 만들지만,
+        // 기존에는 부동소수점 수준의 법선 오차 차이가 먼 안쪽 IK 해를
+        // 고르게 했다. 면 오차에 작은 이동 페널티를 합쳐 연속적인 해를
+        // 선호한다. 0.005 rad/rad²은 1 rad 이동에 약 0.29°만 더해
+        // 라켓 면을 희생하지 않으면서 원거리 분기를 막는다.
+        let score = |candidate: &(f64, f64, f64, Joints, Vector3<f64>)| {
+            let delta = (candidate.3.values[SHOULDER_JOINT_INDEX]
+                - start.joints.values[SHOULDER_JOINT_INDEX])
+                .powi(2)
+                + (candidate.3.values[WRIST_JOINT_INDEX] - start.joints.values[WRIST_JOINT_INDEX])
+                    .powi(2);
+            candidate.0 + 0.005 * delta
+        };
+        score(left).total_cmp(&score(right)).then_with(|| {
+            left.1
+                .total_cmp(&right.1)
+                .then_with(|| left.2.total_cmp(&right.2))
+        })
     });
     let mut last_error = None;
 
@@ -1062,20 +1086,47 @@ pub fn plan_fixed_joint_swing_toward(
         if shoulder_delta.hypot(wrist_delta) < 1e-6 {
             continue;
         }
-        let mut impact_velocity = vec![0.0; joint_count];
-        impact_velocity[SHOULDER_JOINT_INDEX] = shoulder_delta / FIXED_JOINT_SWING_DURATION_SECS;
-        impact_velocity[WRIST_JOINT_INDEX] = wrist_delta / FIXED_JOINT_SWING_DURATION_SECS;
+        let impact_pose = robot::Pose::new(start.rail_x, impact.clone());
+        let (mut impact_velocity, _) = fixed_joint_impact_velocity(
+            arm,
+            &impact_pose,
+            achieved_normal * FIXED_IMPACT_PUSH_SPEED_M_S,
+            SHOULDER_JOINT_INDEX,
+            WRIST_JOINT_INDEX,
+        )?;
+        let peak = impact_velocity
+            .iter()
+            .map(|velocity| velocity.abs())
+            .fold(0.0_f64, f64::max);
+        if peak > arm.max_joint_speed && arm.max_joint_speed > 0.0 {
+            let scale = arm.max_joint_speed / peak;
+            for velocity in &mut impact_velocity {
+                *velocity *= scale;
+            }
+        }
         match build_feasible_trajectory_with_follow_time(
             arm,
             &start.joints,
             impact,
             vec![0.0; joint_count],
             impact_velocity,
-            FIXED_JOINT_SWING_DURATION_SECS,
+            impact_duration_secs,
             Rail::fixed(start.rail_x),
             FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
         ) {
             Ok(trajectory) => {
+                let impact_racket_velocity = fixed_joint_racket_velocity(
+                    arm,
+                    &impact_pose,
+                    &trajectory.end_velocity,
+                    SHOULDER_JOINT_INDEX,
+                    WRIST_JOINT_INDEX,
+                )?;
+                // 속도 제한 적합 후에도 라켓이 공을 상대 코트 방향으로
+                // 밀어야 한다. 반대로 감기는 해는 다음 후보를 시도한다.
+                if impact_racket_velocity.dot(&achieved_normal) <= 0.0 {
+                    continue;
+                }
                 return Ok(FixedJointSwing {
                     trajectory,
                     skipped_joint_indices: (0..joint_count)
@@ -1085,6 +1136,7 @@ pub fn plan_fixed_joint_swing_toward(
                         .collect(),
                     target_normal,
                     achieved_normal,
+                    impact_racket_velocity,
                     normal_error_deg: normal_error.to_degrees(),
                     elevation_error_deg: elevation_error.to_degrees(),
                     azimuth_error_deg: azimuth_error.to_degrees(),
@@ -1100,6 +1152,96 @@ pub fn plan_fixed_joint_swing_toward(
             target_z: table::SURFACE_Z,
         },
     )));
+}
+
+/// 고정된 q0·q1·레일 상태에서 q2·q3만으로 목표 라켓 선속도를
+/// 가장 잘 만드는 최소제곱 관절속도를 구한다.
+fn fixed_joint_impact_velocity(
+    arm: &Arm,
+    pose: &robot::Pose,
+    target_velocity: Vector3<f64>,
+    shoulder_index: usize,
+    wrist_index: usize,
+) -> Result<(Vec<f64>, Vector3<f64>), DomainError> {
+    let columns = fixed_joint_velocity_columns(arm, pose, shoulder_index, wrist_index)?;
+    let a = columns[0];
+    let b = columns[1];
+    let damping = 1e-8;
+    let aa = a.dot(&a) + damping;
+    let ab = a.dot(&b);
+    let bb = b.dot(&b) + damping;
+    let at = a.dot(&target_velocity);
+    let bt = b.dot(&target_velocity);
+    let determinant = aa * bb - ab * ab;
+    if !determinant.is_finite() || determinant.abs() < 1e-12 {
+        return Err(DomainError::InfeasibleSwing(
+            SwingPlanError::InverseKinematicsNoSolution {
+                target_x: target_velocity.x,
+                target_y: target_velocity.y,
+                target_z: target_velocity.z,
+            },
+        ));
+    }
+    let shoulder_velocity = (bb * at - ab * bt) / determinant;
+    let wrist_velocity = (aa * bt - ab * at) / determinant;
+    let mut joints = vec![0.0; pose.joints.values.len()];
+    joints[shoulder_index] = shoulder_velocity;
+    joints[wrist_index] = wrist_velocity;
+    return Ok((joints, a * shoulder_velocity + b * wrist_velocity));
+}
+
+fn fixed_joint_racket_velocity(
+    arm: &Arm,
+    pose: &robot::Pose,
+    joint_velocities: &[f64],
+    shoulder_index: usize,
+    wrist_index: usize,
+) -> Result<Vector3<f64>, DomainError> {
+    let columns = fixed_joint_velocity_columns(arm, pose, shoulder_index, wrist_index)?;
+    return Ok(
+        columns[0] * joint_velocities[shoulder_index] + columns[1] * joint_velocities[wrist_index]
+    );
+}
+
+fn fixed_joint_velocity_columns(
+    arm: &Arm,
+    pose: &robot::Pose,
+    shoulder_index: usize,
+    wrist_index: usize,
+) -> Result<[Vector3<f64>; 2], DomainError> {
+    const STEP: f64 = 1e-6;
+    let base = arm
+        .forward_kinematics_with_rail(pose.rail_x, &pose.joints)
+        .ok_or_else(|| {
+            DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: pose.rail_x,
+                target_y: 0.0,
+                target_z: table::SURFACE_Z,
+            })
+        })?;
+    let mut columns = [Vector3::zeros(), Vector3::zeros()];
+    for (column, joint_index) in [shoulder_index, wrist_index].into_iter().enumerate() {
+        let limit = arm.joint_limit(joint_index);
+        let difference =
+            if limit.is_some_and(|limit| pose.joints.values[joint_index] + STEP > limit.max) {
+                -STEP
+            } else {
+                STEP
+            };
+        let mut perturbed = pose.joints.clone();
+        perturbed.values[joint_index] += difference;
+        let racket = arm
+            .forward_kinematics_with_rail(pose.rail_x, &perturbed)
+            .ok_or_else(|| {
+                DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                    target_x: pose.rail_x,
+                    target_y: 0.0,
+                    target_z: table::SURFACE_Z,
+                })
+            })?;
+        columns[column] = (racket.position.coords - base.position.coords) / difference;
+    }
+    return Ok(columns);
 }
 
 /// 정지 → 정지로 임의의 포즈까지 잇는 최단 실행가능 궤적.
@@ -1778,6 +1920,11 @@ mod tests {
         let planned = plan_fixed_joint_swing(arm, &start).expect("fixed joint swing");
         assert_eq!(planned.skipped_joint_indices, vec![0, 1]);
         let normal_error_deg = planned.normal_error_deg;
+        assert!(
+            planned.impact_racket_velocity.dot(&planned.achieved_normal) > 0.1,
+            "임팩트 순간 라켓은 면 법선을 따라 상대 코트로 전진해야 함: {:?}",
+            planned.impact_racket_velocity,
+        );
         let trajectory = planned.trajectory;
         let impact = arm
             .forward_kinematics_with_rail(trajectory.rail.end, &trajectory.end)
