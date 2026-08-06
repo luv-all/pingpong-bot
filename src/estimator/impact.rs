@@ -61,7 +61,7 @@ impl Impact {
 ///
 /// **WP3(2026-07-30) — 최소속도 네트클리어 공식을 실측 후 기각, 고정목표
 /// 유지.** "깊은 지점을 정확히 맞힐 필요 없이 네트만 넘기면 된다"는
-/// 지적(사용자, 2026-07-30) 자체는 타당해 [`rally_return_velocity_min_effort`]로
+/// 지적(사용자, 2026-07-30) 자체는 타당해 `rally_return_velocity_min_effort`로
 /// 구현했지만, **A/B 실측 결과 오히려 `peak_joint_speed_ratio`(r)가 나빠짐을
 /// 확인했다**(`diag_wp3_target_distance_sweep`: r_mean 2.076→2.721,
 /// r_max 3.555→4.822, 60개 샘플 전 지점).
@@ -88,6 +88,7 @@ pub fn rally_return_velocity(impact: Point3, _v_in: Vector3<f64>) -> Vector3<f64
 /// 그 통과 시각(`t_net`)에 x가 코트 중앙에 오도록 역산한다 — 좌우
 /// 조준 자체는 바꾸지 않는다(원래 계획의 WP3, "좌우 중앙 타겟팅 필요성"은
 /// 별개 질문으로 남는다).
+#[cfg(test)]
 pub fn rally_return_velocity_min_effort(impact: Point3, _v_in: Vector3<f64>) -> Vector3<f64> {
     let impact_cfg = defaults::ImpactParams::default();
     let y_net = table::LENGTH_Y * 0.5;
