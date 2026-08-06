@@ -383,13 +383,7 @@ pub fn spawn(
                     );
                 } else {
                     match hardware.read_pose() {
-                        Ok(swing_start) => match Planner::fixed_joint_swing_in(
-                            &arm,
-                            &swing_start,
-                            (swing_due_at + FIXED_SWING_LEAD)
-                                .saturating_duration_since(Instant::now())
-                                .as_secs_f64(),
-                        ) {
+                        Ok(swing_start) => match Planner::fixed_joint_swing(&arm, &swing_start) {
                             Ok(planned) => {
                                 let swing = &planned.trajectory;
                                 match hardware.command_joints(swing) {
@@ -405,16 +399,12 @@ pub fn spawn(
                                             track_seq,
                                             scheduled_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
                                             start_late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
-                                            impact_duration_secs = f4(swing.impact_time_secs),
                                             swing_duration_secs = f4(swing.duration_secs),
                                             joints_start = %format!("{:?}", swing.start.values),
                                             joints_impact = %format!("{:?}", swing.end.values),
                                             joints_follow_through = %format!("{:?}", swing.follow_through.values),
                                             skipped_joint_indices = ?planned.skipped_joint_indices,
-                                            racket_normal = %format!("{:?}", planned.achieved_normal),
-                                            impact_racket_velocity_m_s = %format!("{:?}", planned.impact_racket_velocity),
-                                            impact_normal_speed_m_s = f4(planned.impact_racket_velocity.dot(&planned.achieved_normal)),
-                                            "라켓 면 수직 방향 푸시 시작"
+                                            "백스윙 없는 고정 관절 스윙 시작"
                                         );
                                     }
                                     Err(error) => warn!(
