@@ -105,6 +105,19 @@ fn refined_prediction_ready(request: &CommitRequest) -> bool {
     return last.sigma_position < position_limit && last.sigma_velocity < velocity_limit;
 }
 
+/// 카메라 캡처(마지막 채택 관측) → 비전 적합 완료까지 걸린 시간 [ms].
+///
+/// `select_alignment_target`이 이미 `measured.last()`의 존재를 요구하므로 이
+/// 함수가 실제로 호출되는 시점(정렬 목표를 이미 고른 뒤)에는 항상 `Some`이다 —
+/// 방어적으로만 빈 궤적에 0.0을 반환한다.
+fn camera_to_fit_ms(request: &CommitRequest) -> f64 {
+    let Some(last) = request.trajectory.measured.last() else {
+        return 0.0;
+    };
+    let capture_at = request.trajectory.origin + last.t;
+    return request.at.saturating_duration_since(capture_at).as_secs_f64() * 1e3;
+}
+
 /// 새 비전의 전체 예측 궤적에서 제어가 사용할 접수 평면을 고른다.
 ///
 /// 요청이 큐에서 기다린 시간만큼 `at_time(last_measured + age)`로 공을 전진시킨 뒤,
@@ -1616,6 +1629,23 @@ mod tests {
             },
             at: Instant::now() - age,
         };
+    }
+
+    #[test]
+    fn camera_to_fit_ms_reflects_capture_to_fit_gap() {
+        // vision_request(age)는 origin = now-1s, measured[0].t = 0.20s(캡처 시각
+        // = now-0.8s), at = now-age로 CommitRequest를 만든다. 따라서
+        // camera_to_fit_ms ≈ 800 - age(ms)다.
+        let request = vision_request(Duration::from_millis(20));
+        let ms = camera_to_fit_ms(&request);
+        assert!((ms - 780.0).abs() < 50.0, "camera_to_fit_ms={ms}");
+    }
+
+    #[test]
+    fn camera_to_fit_ms_defensive_zero_when_measured_empty() {
+        let mut request = vision_request(Duration::from_millis(20));
+        request.trajectory.measured = Track(vec![]);
+        assert_eq!(camera_to_fit_ms(&request), 0.0);
     }
 
     struct ReadCountingHardware {
