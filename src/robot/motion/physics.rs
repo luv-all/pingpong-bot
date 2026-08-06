@@ -526,12 +526,23 @@ pub fn plan_return_to_center_at(
     start: &robot::Pose,
     rail_x: f64,
 ) -> Result<Trajectory, DomainError> {
+    return plan_return_to_center_at_speed_ratio(arm, start, rail_x, 1.0);
+}
+
+/// [`plan_return_to_center_at`]와 같지만 [`plan_move_to_at_speed_ratio`]로 계획해
+/// `speed_ratio`만큼 늦춘다 — 시작 자세 초기화·수동 홈 포지션 복귀가 쓴다.
+pub fn plan_return_to_center_at_speed_ratio(
+    arm: &Arm,
+    start: &robot::Pose,
+    rail_x: f64,
+    speed_ratio: f64,
+) -> Result<Trajectory, DomainError> {
     let center_joints = arm.default_joints.clone();
     let center_rail_x = arm
         .rail
         .as_ref()
         .map_or(start.rail_x, |rail| rail.clamp_x(rail_x));
-    return plan_move_to(arm, start, center_joints, center_rail_x);
+    return plan_move_to_at_speed_ratio(arm, start, center_joints, center_rail_x, speed_ratio);
 }
 
 /// 공이 없을 때 사용할 살짝 감긴 준비 자세로 이동한다.
@@ -1072,6 +1083,67 @@ pub fn plan_fixed_joint_swing(
 /// [`plan_return_to_center`]가 목표만 센터로 고정한 특수형이고, real의 coarse 선추종도
 /// 같은 것이 필요하다 — 임팩트 근처로 미리 옮겨두면 커밋 스윙이 이동까지 떠맡지 않는다.
 pub fn plan_move_to(
+    arm: &Arm,
+    start: &robot::Pose,
+    center_joints: Joints,
+    center_rail_x: f64,
+) -> Result<Trajectory, DomainError> {
+    return plan_move_to_full_speed(arm, start, center_joints, center_rail_x);
+}
+
+/// [`plan_move_to`]와 같지만 관절·레일 속도를 `speed_ratio`(0보다 크고 1 이하)만큼
+/// 늦춘 궤적을 계획한다 — 홈 포지션 복귀처럼 랠리보다 느려도 되는 이동에 쓴다.
+/// `speed_ratio == 1.0`이면 [`plan_move_to`]와 완전히 같은 결과를 낸다.
+///
+/// 전속 탐색의 추정 시작값을 `speed_ratio`로 나눠 다시 탐색하지 않는다 — 레일
+/// 거리가 지배적인 이동에서는 그 추정값이 실제 물리적 최단 시간과 우연히
+/// 비슷해서, 탐색이 곧바로 성공해 버리면 사실상 느려지지 않는다(실측: 3배
+/// 느리길 기대했는데 1.09배). 대신 전속 탐색이 찾아낸 **실제** 최단 시간을
+/// `1/speed_ratio`로 늘려 그대로 쓴다 — 정지→정지 quintic은 시간을 늘릴수록
+/// 필요 속도·가속도·토크가 줄어들므로, 전속에서 성공한 궤적은 그보다 긴
+/// 시간에서도 성공한다.
+///
+/// `duration_secs`는 항상 `건네준 duration + follow_time`(고정 팔로스루
+/// 유지시간)이다(`trajectory_with_follow_through`). `full_speed.duration_secs`를
+/// 그대로 `speed_ratio`로 나눠 `duration` 인자로 되돌리면 follow_time이
+/// 두 번(전속 결과에 한 번, 저속 궤적에 다시 한 번) 늘어나 총 시간이 정확히
+/// `1/speed_ratio`배가 되지 않는다 — 미리 `follow_time`을 빼서 보정한다.
+pub fn plan_move_to_at_speed_ratio(
+    arm: &Arm,
+    start: &robot::Pose,
+    center_joints: Joints,
+    center_rail_x: f64,
+    speed_ratio: f64,
+) -> Result<Trajectory, DomainError> {
+    let full_speed = plan_move_to_full_speed(arm, start, center_joints.clone(), center_rail_x)?;
+    if speed_ratio >= 1.0 {
+        return Ok(full_speed);
+    }
+    let follow_time = defaults::ControlParams::default().swing_follow_through_secs;
+    let slow_duration = full_speed.duration_secs / speed_ratio - follow_time;
+    let start_velocity = vec![0.0; start.joints.values.len()];
+    let end_velocity = vec![0.0; center_joints.values.len()];
+    let rail = Rail {
+        start: start.rail_x,
+        end: center_rail_x,
+        start_velocity: 0.0,
+        end_velocity: 0.0,
+    };
+    return build_feasible_trajectory(
+        arm,
+        &start.joints,
+        center_joints,
+        start_velocity,
+        end_velocity,
+        slow_duration,
+        rail,
+    )
+    .map_err(DomainError::InfeasibleSwing);
+}
+
+/// [`plan_move_to`]의 실제 탐색 로직 — 전속 결과가 [`plan_move_to_at_speed_ratio`]의
+/// 감속 기준(실제 최단 시간)으로도 쓰인다.
+fn plan_move_to_full_speed(
     arm: &Arm,
     start: &robot::Pose,
     center_joints: Joints,
@@ -1787,6 +1859,78 @@ mod tests {
 
         let moved =
             plan_return_to_center_at(arm, &start, rail.x_min).expect("return to center at x_min");
+
+        assert!((moved.follow_through_rail_x - rail.x_min).abs() < 1e-9);
+        assert_eq!(moved.follow_through, arm.default_joints);
+    }
+
+    #[test]
+    fn plan_move_to_at_speed_ratio_one_matches_plan_move_to() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let rail = arm.rail.expect("rail 있는 로봇");
+        let start = robot::Pose::new(rail.x_max, arm.default_joints.clone());
+
+        let via_plain = plan_move_to(arm, &start, arm.default_joints.clone(), rail.x_min)
+            .expect("plan_move_to");
+        let via_ratio =
+            plan_move_to_at_speed_ratio(arm, &start, arm.default_joints.clone(), rail.x_min, 1.0)
+                .expect("plan_move_to_at_speed_ratio ratio=1.0");
+
+        assert_eq!(via_plain.duration_secs, via_ratio.duration_secs);
+    }
+
+    #[test]
+    fn plan_move_to_at_speed_ratio_slows_down_for_ratio_below_one() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let rail = arm.rail.expect("rail 있는 로봇");
+        let start = robot::Pose::new(rail.x_max, arm.default_joints.clone());
+
+        let full_speed =
+            plan_move_to_at_speed_ratio(arm, &start, arm.default_joints.clone(), rail.x_min, 1.0)
+                .expect("전속 이동 계획");
+        let slow = plan_move_to_at_speed_ratio(
+            arm,
+            &start,
+            arm.default_joints.clone(),
+            rail.x_min,
+            1.0 / 3.0,
+        )
+        .expect("저속 이동 계획");
+
+        assert!(
+            (slow.duration_secs - full_speed.duration_secs * 3.0).abs() < 1e-9,
+            "slow={} full={}",
+            slow.duration_secs,
+            full_speed.duration_secs
+        );
+    }
+
+    #[test]
+    fn return_to_center_at_speed_ratio_one_matches_return_to_center_at() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let rail = arm.rail.expect("rail 있는 로봇");
+        let start = robot::Pose::new(rail.default_x(), arm.default_joints.clone());
+
+        let via_plain =
+            plan_return_to_center_at(arm, &start, rail.x_min).expect("plan_return_to_center_at");
+        let via_ratio = plan_return_to_center_at_speed_ratio(arm, &start, rail.x_min, 1.0)
+            .expect("plan_return_to_center_at_speed_ratio ratio=1.0");
+
+        assert_eq!(via_plain.duration_secs, via_ratio.duration_secs);
+    }
+
+    #[test]
+    fn return_to_center_at_speed_ratio_still_targets_given_rail_x() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let rail = arm.rail.expect("rail 있는 로봇");
+        let start = robot::Pose::new(rail.default_x(), arm.default_joints.clone());
+
+        let moved = plan_return_to_center_at_speed_ratio(arm, &start, rail.x_min, 1.0 / 3.0)
+            .expect("느린 복귀도 x_min에 도달");
 
         assert!((moved.follow_through_rail_x - rail.x_min).abs() < 1e-9);
         assert_eq!(moved.follow_through, arm.default_joints);

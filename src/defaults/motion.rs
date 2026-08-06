@@ -27,6 +27,11 @@ pub const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
 /// 예측된 공 도착 시각부터 준비 자세 복귀를 시작할 때까지 유지하는 시간.
 pub const POST_ALIGNMENT_HOLD_SECS: f64 = 0.5;
 
+/// 모드 1/2/3 홈 포지션 변경·시작 시 센터(ready) 복귀는 랠리처럼 빠를 필요가
+/// 없다 — `Planner::move_to_at_speed_ratio`/`return_to_center_at_speed_ratio`로
+/// 관절·레일 속도를 이 비율만큼 늦춘다.
+pub const HOME_RETURN_SPEED_RATIO: f64 = 1.0 / 3.0;
+
 /// 발사기 반복 시험용 고정 푸시가 한계를 지키며 임팩트를 만들 최소 시간.
 pub const FIXED_IMPACT_MIN_DURATION_SECS: f64 = 0.25;
 /// 공이 없을 때 기존 임팩트 자세보다 뒤에서 대기할 거리 [m].
