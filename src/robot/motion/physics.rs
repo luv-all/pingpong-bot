@@ -1017,7 +1017,7 @@ pub fn plan_fixed_joint_swing(
             continue;
         }
         let mut impact_velocity = vec![0.0; joint_count];
-        // 궤적은 일찍 시작해 타격 시각까지 0.50초를 쓰되, 임팩트 순간 j3만
+        // 궤적은 일찍 시작해 타격 시각까지 0.40초를 쓰되, 임팩트 순간 j3만
         // 설정상 관절 속도 상한(모터 무부하 최고속의 95%)을 요청한다.
         // 가속·감속까지 합친 궤적 피크는 kinematic gate가 같은 상한으로 자른다.
         impact_velocity[WRIST_JOINT_INDEX] =

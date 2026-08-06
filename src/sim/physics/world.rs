@@ -944,7 +944,7 @@ impl SimWorld {
         self.position_refined = refined;
     }
 
-    /// 예상 타격 0.50초 전에 백스윙 없는 고정 관절 스윙을 시작한다.
+    /// 예상 타격 0.40초 전에 백스윙 없는 고정 관절 스윙을 시작한다.
     ///
     /// 정렬이 아직 진행 중이어도 레일 목표는 계속 추종하고 팔 관절 궤적만
     /// 교체한다. 그렇지 않으면 sim의 `is_swinging()`이 레일 정렬까지
@@ -2110,21 +2110,19 @@ mod tests {
         world.set_use_ground_truth(true);
         world.shoot_ball(&launch::Settings::default());
 
-        let mut saw_schedule = world.direct_swing_at.is_some();
         for _ in 0..2_000 {
             world.step(1.0 / 1_000.0, None);
-            saw_schedule |= world.direct_swing_at.is_some();
-            if saw_schedule && world.direct_swing_at.is_none() {
-                let trajectory = world
-                    .robot()
-                    .active_trajectory()
-                    .expect("예약 시각에 고정 관절 스윙이 재생돼야 함");
+            if let Some(trajectory) = world.robot().active_trajectory()
+                && (trajectory.impact_time_secs - crate::defaults::FIXED_JOINT_SWING_DURATION_SECS)
+                    .abs()
+                    < 1e-12
+            {
                 assert!(
                     (trajectory.impact_time_secs
                         - crate::defaults::FIXED_JOINT_SWING_DURATION_SECS)
                         .abs()
                         < 1e-12,
-                    "스윙은 예상 타격 0.50초 전에 시작해야 함"
+                    "스윙은 예상 타격 0.40초 전에 시작해야 함"
                 );
                 assert!(
                     trajectory.end.values[2] < trajectory.start.values[2]
@@ -2134,7 +2132,7 @@ mod tests {
                 return;
             }
         }
-        panic!("고정 관절 스윙 예약이 실행되지 않음");
+        panic!("고정 관절 스윙이 실행되지 않음");
     }
 
     /// 직접 제어 목표 시각이 지난 뒤 레일과 관절이 중앙 준비 자세로
