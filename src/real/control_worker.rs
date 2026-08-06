@@ -107,19 +107,20 @@ fn arm_for_rail_position(arm: &Arm, rail_x: f64) -> Arm {
 #[derive(Debug, Clone)]
 struct RailTargetSelection {
     target_m: f64,
+    joints: Joints,
     margin_override: bool,
     planning_arm: Arm,
 }
 
 fn rail_margin_override_allowed(
-    raw_target_m: f64,
-    physical_target_m: f64,
+    target_m: f64,
     start_m: f64,
+    outside_safe_range: bool,
     can_hit: bool,
 ) -> bool {
     return can_hit
-        && (raw_target_m - physical_target_m).abs() <= f64::EPSILON
-        && (physical_target_m - start_m).abs() <= RAIL_MARGIN_OVERRIDE_MAX_TRAVEL_M;
+        && outside_safe_range
+        && (target_m - start_m).abs() <= RAIL_MARGIN_OVERRIDE_MAX_TRAVEL_M;
 }
 
 /// 평소에는 안전 범위를 사용한다. 안전 범위의 끝에서는 칠 수 없고, 마진 밖의
@@ -128,60 +129,61 @@ fn select_primary_rail_target(
     arm: &Arm,
     start: &pingpong_bot::robot::Pose,
     ball: pingpong_bot::Point3,
-) -> RailTargetSelection {
+) -> Result<RailTargetSelection, DomainError> {
     let Some(safe_rail) = arm.rail else {
-        return RailTargetSelection {
+        return Ok(RailTargetSelection {
             target_m: start.rail_x,
+            joints: start.joints.clone(),
             margin_override: false,
             planning_arm: arm.clone(),
-        };
+        });
     };
-    let raw_target = Planner::ball_alignment_rail_target_unclamped(ball);
-    let safe_target = safe_rail.clamp_x(raw_target);
-    if (raw_target - safe_target).abs() <= f64::EPSILON {
-        return RailTargetSelection {
-            target_m: safe_target,
-            margin_override: false,
-            planning_arm: arm.clone(),
-        };
-    }
 
-    // 안전 범위 끝에서도 자세가 나오면 굳이 마진을 넘지 않는다.
-    let safe_start = pingpong_bot::robot::Pose::new(safe_target, start.joints.clone());
-    if Planner::ball_alignment_fixed_rail(arm, &safe_start, ball).is_ok() {
-        return RailTargetSelection {
-            target_m: safe_target,
-            margin_override: false,
-            planning_arm: arm.clone(),
-        };
-    }
+    // 공 x만 복사하지 않고 위치+상대 코트 중앙 방향을 함께 만족하는 레일 좌표를 쓴다.
+    // 이 계산은 첫 안정 예측에 한 번만 실행된다.
+    let safe_error = match Planner::ball_alignment_pose(arm, start, ball) {
+        Ok(aligned_pose) => {
+            let fixed_start =
+                pingpong_bot::robot::Pose::new(aligned_pose.rail_x, start.joints.clone());
+            Planner::move_to(
+                arm,
+                &fixed_start,
+                aligned_pose.joints.clone(),
+                aligned_pose.rail_x,
+            )?;
+            return Ok(RailTargetSelection {
+                target_m: aligned_pose.rail_x,
+                joints: aligned_pose.joints,
+                margin_override: false,
+                planning_arm: arm.clone(),
+            });
+        }
+        Err(error) => error,
+    };
 
-    let physical_target = raw_target.clamp(
-        pingpong_bot::defaults::RAIL_PHYSICAL_X_MIN_M,
-        pingpong_bot::defaults::RAIL_PHYSICAL_X_MAX_M,
-    );
+    // 안전 범위 전체에서 중앙 방향 자세가 안 나올 때만 물리 범위로 한 번 더 푼다.
     let physical_arm = arm_with_physical_rail_range(arm);
-    let physical_start = pingpong_bot::robot::Pose::new(physical_target, start.joints.clone());
-    let can_hit_outside_margin =
-        Planner::ball_alignment_fixed_rail(&physical_arm, &physical_start, ball).is_ok();
-    let allow_override = rail_margin_override_allowed(
-        raw_target,
-        physical_target,
-        start.rail_x,
-        can_hit_outside_margin,
-    );
-    if allow_override {
-        return RailTargetSelection {
-            target_m: physical_target,
+    let Ok(aligned_pose) = Planner::ball_alignment_pose(&physical_arm, start, ball) else {
+        return Err(safe_error);
+    };
+    let outside_safe_range =
+        aligned_pose.rail_x < safe_rail.x_min || aligned_pose.rail_x > safe_rail.x_max;
+    if rail_margin_override_allowed(aligned_pose.rail_x, start.rail_x, outside_safe_range, true) {
+        let fixed_start = pingpong_bot::robot::Pose::new(aligned_pose.rail_x, start.joints.clone());
+        Planner::move_to(
+            &physical_arm,
+            &fixed_start,
+            aligned_pose.joints.clone(),
+            aligned_pose.rail_x,
+        )?;
+        return Ok(RailTargetSelection {
+            target_m: aligned_pose.rail_x,
+            joints: aligned_pose.joints,
             margin_override: true,
             planning_arm: physical_arm,
-        };
+        });
     }
-    return RailTargetSelection {
-        target_m: safe_target,
-        margin_override: false,
-        planning_arm: arm.clone(),
-    };
+    return Err(safe_error);
 }
 
 #[derive(Default)]
@@ -878,13 +880,27 @@ pub fn spawn(
             let mut rail_command_ms = 0.0;
             let mut rail_move_duration_secs = 0.0;
             let mut alignment_arm = arm_for_rail_position(&arm, start.rail_x);
+            let mut primary_alignment_joints: Option<Joints> = None;
             let planning_start = match action {
                 RefinedAction::PrimaryRailAndArm => {
                     // 본 예측이 처음 안정 기준을 넘은 순간에만 레일을 한 번
                     // 먼저 출발시킨다. 이후 같은 공의 갱신은 ArmCorrection으로
                     // 들어와 레일을 다시 명령하지 않는다.
-                    let selection = select_primary_rail_target(&arm, &start, target.position);
+                    let selection = match select_primary_rail_target(&arm, &start, target.position)
+                    {
+                        Ok(selection) => selection,
+                        Err(error) => {
+                            let _ = event_tx.send(RuntimeEvent::Failed {
+                                track_seq: Some(track_seq),
+                                reason: format!(
+                                    "상대 탁구대 중앙 방향을 만족하는 레일·팔 자세 없음: {error}"
+                                ),
+                            });
+                            continue;
+                        }
+                    };
                     let rail_target = selection.target_m;
+                    primary_alignment_joints = Some(selection.joints.clone());
                     alignment_arm = selection.planning_arm;
                     rail_move_duration_secs =
                         fast_rail_move_duration(&alignment_arm, start.rail_x, rail_target);
@@ -919,7 +935,7 @@ pub fn spawn(
                         safe_max_m = f4(arm.rail.map_or(applied_rail, |rail| rail.x_max)),
                         physical_min_m = f4(pingpong_bot::defaults::RAIL_PHYSICAL_X_MIN_M),
                         physical_max_m = f4(pingpong_bot::defaults::RAIL_PHYSICAL_X_MAX_M),
-                        "본 예측 기준 통과 — IK 전 레일 1회 선행 명령"
+                        "본 예측 기준 통과 — 중앙 방향 팔·레일 통합해로 레일 1회 명령"
                     );
                     pingpong_bot::robot::Pose::new(applied_rail, start.joints.clone())
                 }
@@ -930,11 +946,19 @@ pub fn spawn(
             let alignment_plan_started = Instant::now();
             // 레일은 이미 출발했으므로, 팔은 도착 예정 레일 좌표에 고정해
             // 계산한다. 후속 보정도 같은 고정-레일 IK만 반복한다.
-            let alignment = Planner::ball_alignment_fixed_rail(
-                &alignment_arm,
-                &planning_start,
-                target.position,
-            );
+            let alignment = match primary_alignment_joints {
+                Some(joints) => Planner::move_to(
+                    &alignment_arm,
+                    &planning_start,
+                    joints,
+                    planning_start.rail_x,
+                ),
+                None => Planner::ball_alignment_fixed_rail(
+                    &alignment_arm,
+                    &planning_start,
+                    target.position,
+                ),
+            };
             let alignment_plan_ms = alignment_plan_started.elapsed().as_secs_f64() * 1e3;
             let alignment = match alignment {
                 Ok(alignment) => alignment,
@@ -946,6 +970,16 @@ pub fn spawn(
                     continue;
                 }
             };
+            let aligned_pose = pingpong_bot::robot::Pose::new(
+                alignment.rail.end,
+                alignment.follow_through.clone(),
+            );
+            let alignment_bearing_error_deg = Planner::ball_alignment_bearing_error_deg(
+                &alignment_arm,
+                &aligned_pose,
+                target.position,
+            )
+            .unwrap_or(f64::NAN);
             let dual_base_step_rad = alignment
                 .follow_through
                 .values
@@ -1076,6 +1110,7 @@ pub fn spawn(
                 aim_commanded_rad = f4(aim_commanded_rad),
                 alignment_duration_secs = f4(alignment.duration_secs),
                 dual_base_step_deg = f2(dual_base_step_rad.to_degrees()),
+                opponent_center_bearing_error_deg = f2(alignment_bearing_error_deg),
                 post_alignment_hold_secs = pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS,
                 fixed_swing_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
                 joints_commanded = %format!("{:?}", alignment.follow_through.values),
@@ -1988,11 +2023,38 @@ mod tests {
 
     #[test]
     fn rail_margin_override_requires_reachable_target_within_thirty_centimeters() {
-        assert!(rail_margin_override_allowed(1.40, 1.40, 1.11, true));
-        assert!(!rail_margin_override_allowed(1.40, 1.40, 1.09, true));
-        assert!(!rail_margin_override_allowed(1.40, 1.40, 1.11, false));
-        // 물리 범위 밖 목표가 1.41 m로 잘린 경우도 허용하지 않는다.
-        assert!(!rail_margin_override_allowed(1.45, 1.41, 1.20, true));
+        assert!(rail_margin_override_allowed(1.40, 1.11, true, true));
+        assert!(!rail_margin_override_allowed(1.40, 1.09, true, true));
+        assert!(!rail_margin_override_allowed(1.40, 1.11, true, false));
+        assert!(!rail_margin_override_allowed(1.30, 1.11, false, true));
+    }
+
+    #[test]
+    fn primary_rail_selection_keeps_racket_aimed_at_opponent_center() {
+        let robot = pingpong_bot::defaults::robot().expect("active robot");
+        let arm = &robot.arm;
+        let rail = arm.rail.expect("rail");
+        let start = Pose::new(rail.default_x(), arm.default_joints.clone());
+        for x_fraction in [0.2, 0.5, 0.8] {
+            let ball = Point3::new(
+                pingpong_bot::constants::table::WIDTH_X * x_fraction,
+                0.215,
+                0.95,
+            );
+            let selection =
+                select_primary_rail_target(arm, &start, ball).expect("center-facing selection");
+            let aligned_pose = Pose::new(selection.target_m, selection.joints);
+            let bearing_error = Planner::ball_alignment_bearing_error_deg(
+                &selection.planning_arm,
+                &aligned_pose,
+                ball,
+            )
+            .expect("bearing");
+            assert!(
+                bearing_error <= 12.0,
+                "x_fraction={x_fraction}, bearing_error={bearing_error:.2}°"
+            );
+        }
     }
 
     #[test]

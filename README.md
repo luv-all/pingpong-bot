@@ -337,7 +337,6 @@ cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 |--------|------|-----|
 | `--dry-run` | off | 모터·레일 정지. 나머지 체인은 그대로 |
 | `--preview` | on | 좌/우 검출 오버레이 창 (ESC·`q` 종료) |
-| `--sim` | off | 관전용 3D 창 (공·선택 목표·시작 포즈 표시). 켜면 별도 렌더링 프로세스가 뜬다 |
 | `--home` | on | 시작 시 센터(ready) 자세로 이동 |
 | `--release-torque` | off | 종료 시 토크 해제. 기본은 켠 채로 둬서 팔이 안 주저앉게 한다 |
 | `--timeout-secs` | 60 | 공 대기 경고 간격. 초과해도 세션은 계속 |

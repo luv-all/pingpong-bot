@@ -362,9 +362,17 @@ impl Arm {
         hint: &Pose,
         search: IkSearch,
     ) -> Result<(Pose, f64), SwingPlanError> {
-        // 1차는 법선을 동등하게 본다 — 맞출 수 있으면 정확히 맞추는 게 낫다.
-        if let Ok(exact) = self.solve_pose_with_rail(target, target_normal, hint, search, 1.0) {
-            return Ok(exact);
+        // 1차는 법선을 동등하게 본다. 다만 이 solver의 `Ok`는 위치를 맞춘 최선의
+        // 타협해도 포함하므로, 법선까지 실제 허용오차 안인 경우에만 즉시 채택한다.
+        // 그렇지 않으면 아래의 레일+위치 IK 후보 탐색과 비교해야 공 x에 레일을 붙인
+        // 채 반대 방향으로 타협하는 자세를 피할 수 있다.
+        let pose_solver_candidate = self
+            .solve_pose_with_rail(target, target_normal, hint, search, 1.0)
+            .ok();
+        if let Some((pose, normal_error)) = &pose_solver_candidate
+            && *normal_error <= Self::POSE_IK_NORMAL_TOLERANCE
+        {
+            return Ok((pose.clone(), *normal_error));
         }
         let Some(rail) = &self.rail else {
             return Err(SwingPlanError::InverseKinematicsNoSolution {
@@ -387,7 +395,9 @@ impl Arm {
         let target_normal = target_normal.normalize();
         // 레일 x도 자유변수다 — 같은 점을 다른 레일 위치에서 잡으면 팔 자세가 달라져
         // 만들 수 있는 법선이 달라진다.
-        const RAIL_SAMPLES: usize = 5;
+        // 1 cm 간격. 10 cm 간격이던 5개 샘플은 실제로 중앙 방향이 나오는
+        // 레일 오프셋(-9 cm, -6 cm, +7 cm)을 건너뛰었다.
+        const RAIL_SAMPLES: usize = 41;
         const RAIL_SPAN_M: f64 = 0.20;
         let center_rail_x = rail.clamp_x(target.coords.x);
         let seeds = self.pose_ik_seeds(hint, search);
@@ -433,8 +443,13 @@ impl Arm {
                     right
                 }
             });
-        if let Some((normal_error, _, pose)) = best {
-            return Ok((pose, normal_error));
+        let sampled_candidate = best.map(|(normal_error, _, pose)| (pose, normal_error));
+        if let Some(candidate) = [pose_solver_candidate, sampled_candidate]
+            .into_iter()
+            .flatten()
+            .min_by(|left, right| left.1.total_cmp(&right.1))
+        {
+            return Ok(candidate);
         }
         return Err(SwingPlanError::InverseKinematicsNoSolution {
             target_x: target.coords.x,

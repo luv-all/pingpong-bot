@@ -607,28 +607,53 @@ fn ball_alignment_geometry(ball: Point3) -> (Point3, Vector3<f64>, Point3) {
     return (corrected_ball, target_normal, racket_center);
 }
 
-/// 공별 보정을 적용한 뒤 위치 정렬이 사용할 선행 레일 목표.
-///
-/// 실기에서는 이 값으로 AXL 이동을 먼저 시작하고, 같은 고정 레일 좌표에서
-/// 팔 IK를 계산한다. 따라서 IK 계산 시간이 레일 출발 지연으로 더해지지 않는다.
-pub fn ball_alignment_rail_target(arm: &Arm, ball: Point3) -> f64 {
-    let raw = ball_alignment_rail_target_unclamped(ball);
-    return arm.rail.as_ref().map_or(raw, |rail| rail.clamp_x(raw));
+/// 상대 탁구대 중앙 조준에서 허용하는 수평 방위각 오차.
+const ALIGNMENT_MAX_HORIZONTAL_BEARING_ERROR_DEG: f64 = 12.0;
+
+fn horizontal_bearing_error_deg(actual: Vector3<f64>, desired: Vector3<f64>) -> f64 {
+    let actual_xy = Vector3::new(actual.x, actual.y, 0.0);
+    let desired_xy = Vector3::new(desired.x, desired.y, 0.0);
+    if actual_xy.norm_squared() <= 1e-12 || desired_xy.norm_squared() <= 1e-12 {
+        return 180.0;
+    }
+    return actual_xy
+        .normalize()
+        .dot(&desired_xy.normalize())
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees();
 }
 
-/// 안전 마진을 적용하기 전 공별 레일 목표.
-pub fn ball_alignment_rail_target_unclamped(ball: Point3) -> f64 {
-    let (_, _, racket_center) = ball_alignment_geometry(ball);
-    return racket_center.x;
+fn validate_ball_alignment_normal(
+    corrected_ball: Point3,
+    target_normal: Vector3<f64>,
+    reached_normal: Vector3<f64>,
+) -> Result<(), DomainError> {
+    let bearing_error_deg = horizontal_bearing_error_deg(reached_normal, target_normal);
+    if bearing_error_deg > ALIGNMENT_MAX_HORIZONTAL_BEARING_ERROR_DEG
+        || reached_normal.z < -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE
+    {
+        return Err(DomainError::InfeasibleSwing(
+            SwingPlanError::RacketOrientationUnreachable {
+                target_x: corrected_ball.x,
+                target_y: corrected_ball.y,
+                target_z: corrected_ball.z,
+                normal_x: target_normal.x,
+                normal_y: target_normal.y,
+                normal_z: target_normal.z,
+            },
+        ));
+    }
+    return Ok(());
 }
 
-pub fn plan_ball_alignment(
+/// 공 접촉 위치와 상대 탁구대 중앙 방향을 함께 만족하는 팔+레일 자세를 구한다.
+pub fn ball_alignment_pose(
     arm: &Arm,
     start: &robot::Pose,
     ball: Point3,
-) -> Result<Trajectory, DomainError> {
+) -> Result<robot::Pose, DomainError> {
     let (corrected_ball, target_normal, racket_center) = ball_alignment_geometry(ball);
-    let horizontal_normal = target_normal;
     let hint_rail_x = arm
         .rail
         .as_ref()
@@ -651,20 +676,41 @@ pub fn plan_ball_alignment(
                 target_z: corrected_ball.z,
             })
         })?;
-    if reached.normal.dot(&horizontal_normal) <= 0.0
-        || reached.normal.z < -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE
-    {
-        return Err(DomainError::InfeasibleSwing(
-            SwingPlanError::RacketOrientationUnreachable {
-                target_x: corrected_ball.x,
-                target_y: corrected_ball.y,
-                target_z: corrected_ball.z,
-                normal_x: target_normal.x,
-                normal_y: target_normal.y,
-                normal_z: target_normal.z,
-            },
-        ));
-    }
+    validate_ball_alignment_normal(corrected_ball, target_normal, reached.normal)?;
+    return Ok(aligned_pose);
+}
+
+pub fn ball_alignment_bearing_error_deg(
+    arm: &Arm,
+    pose: &robot::Pose,
+    ball: Point3,
+) -> Option<f64> {
+    let (_, target_normal, _) = ball_alignment_geometry(ball);
+    let reached = arm.forward_kinematics_with_rail(pose.rail_x, &pose.joints)?;
+    return Some(horizontal_bearing_error_deg(reached.normal, target_normal));
+}
+
+/// 공별 보정을 적용한 뒤 위치 정렬이 사용할 선행 레일 목표.
+///
+/// 실기에서는 이 값으로 AXL 이동을 먼저 시작하고, 같은 고정 레일 좌표에서
+/// 팔 IK를 계산한다. 따라서 IK 계산 시간이 레일 출발 지연으로 더해지지 않는다.
+pub fn ball_alignment_rail_target(arm: &Arm, ball: Point3) -> f64 {
+    let raw = ball_alignment_rail_target_unclamped(ball);
+    return arm.rail.as_ref().map_or(raw, |rail| rail.clamp_x(raw));
+}
+
+/// 안전 마진을 적용하기 전 공별 레일 목표.
+pub fn ball_alignment_rail_target_unclamped(ball: Point3) -> f64 {
+    let (_, _, racket_center) = ball_alignment_geometry(ball);
+    return racket_center.x;
+}
+
+pub fn plan_ball_alignment(
+    arm: &Arm,
+    start: &robot::Pose,
+    ball: Point3,
+) -> Result<Trajectory, DomainError> {
+    let aligned_pose = ball_alignment_pose(arm, start, ball)?;
     return plan_move_to(arm, start, aligned_pose.joints, aligned_pose.rail_x);
 }
 
@@ -675,7 +721,6 @@ pub fn plan_ball_alignment_fixed_rail(
     ball: Point3,
 ) -> Result<Trajectory, DomainError> {
     let (corrected_ball, target_normal, racket_center) = ball_alignment_geometry(ball);
-    let horizontal_normal = target_normal;
     let hint = robot::Pose::new(start.rail_x, start.joints.clone());
     let (aligned_pose, _) = arm
         .inverse_pose_at_fixed_rail_best_normal(
@@ -695,20 +740,7 @@ pub fn plan_ball_alignment_fixed_rail(
                 target_z: corrected_ball.z,
             })
         })?;
-    if reached.normal.dot(&horizontal_normal) <= 0.0
-        || reached.normal.z < -ALIGNMENT_DOWNWARD_NORMAL_Z_TOLERANCE
-    {
-        return Err(DomainError::InfeasibleSwing(
-            SwingPlanError::RacketOrientationUnreachable {
-                target_x: corrected_ball.x,
-                target_y: corrected_ball.y,
-                target_z: corrected_ball.z,
-                normal_x: target_normal.x,
-                normal_y: target_normal.y,
-                normal_z: target_normal.z,
-            },
-        ));
-    }
+    validate_ball_alignment_normal(corrected_ball, target_normal, reached.normal)?;
     return plan_move_to(arm, start, aligned_pose.joints, start.rail_x);
 }
 

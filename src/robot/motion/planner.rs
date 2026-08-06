@@ -131,6 +131,22 @@ impl Planner {
         return physics::ball_alignment_rail_target_unclamped(ball);
     }
 
+    pub fn ball_alignment_pose(
+        arm: &Arm,
+        start: &robot::Pose,
+        ball: Point3,
+    ) -> Result<robot::Pose, DomainError> {
+        return physics::ball_alignment_pose(arm, start, ball);
+    }
+
+    pub fn ball_alignment_bearing_error_deg(
+        arm: &Arm,
+        pose: &robot::Pose,
+        ball: Point3,
+    ) -> Option<f64> {
+        return physics::ball_alignment_bearing_error_deg(arm, pose, ball);
+    }
+
     /// 레일은 현재 위치에 고정하고 Dynamixel 관절만 공 예측 위치로 정렬한다.
     pub fn ball_alignment_fixed_rail(
         arm: &Arm,

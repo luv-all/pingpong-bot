@@ -23,13 +23,12 @@ use super::estimator_worker::{self, EstimatorStats};
 use super::fmt::{f2, f2_slice};
 use super::{
     Options, PacedSource, PreviewEvent, PreviewWindow, RuntimeEvent, ShutdownGuard, TestControl,
-    control_worker, shutdown_channel, sim_host,
+    control_worker, shutdown_channel,
 };
 
 /// 카메라 → 추정 버퍼. 실시간이라 크게 잡을 이유가 없다 (밀리면 어차피 버린다).
 const VISION_CAPACITY: usize = 8;
 const PREVIEW_CAPACITY: usize = 2;
-const SIM_CAPACITY: usize = 2;
 /// 프리뷰가 없을 때 메인 루프 tick.
 const IDLE_TICK: Duration = Duration::from_millis(5);
 
@@ -76,15 +75,8 @@ pub fn run(args: &Args) -> Result<()> {
     } else {
         (None, None)
     };
-    let (sim_tx, sim_handle) = if options.sim {
-        let (tx, rx) = bounded(SIM_CAPACITY);
-        match sim_host::spawn(rx) {
-            Some(handle) => (Some(tx), Some(handle)),
-            None => (None, None),
-        }
-    } else {
-        (None, None)
-    };
+    // 실기 모드는 카메라·추정·하드웨어 제어만 실행한다. 관전용 3D sim 자식
+    // 프로세스는 CPU/GPU를 점유하고 제어 지연 측정을 흐리므로 생성하지 않는다.
 
     let mut camera_handles: Vec<JoinHandle<CameraStats>> = Vec::with_capacity(sources.len());
     for (resolved, source) in sources {
@@ -111,7 +103,7 @@ pub fn run(args: &Args) -> Result<()> {
         commit_tx,
         commit_evict_rx,
         preview_tx,
-        sim_tx.clone(),
+        None,
         event_tx.clone(),
         shutdown.clone(),
     );
@@ -120,7 +112,7 @@ pub fn run(args: &Args) -> Result<()> {
         Arc::clone(&arm),
         commit_rx,
         test_control_rx,
-        sim_tx,
+        None,
         event_tx,
         shutdown,
     );
@@ -135,10 +127,6 @@ pub fn run(args: &Args) -> Result<()> {
     if control_handle.join().is_err() {
         warn!("제어 워커 패닉");
     }
-    if let Some(handle) = sim_handle {
-        let _ = handle.join();
-    }
-
     log_summary(&outcome, &camera_stats, estimator_stats.as_ref());
     return Ok(());
 }
