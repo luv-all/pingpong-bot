@@ -1025,6 +1025,12 @@ pub fn plan_move_to(
 /// `1/speed_ratio`로 늘려 그대로 쓴다 — 정지→정지 quintic은 시간을 늘릴수록
 /// 필요 속도·가속도·토크가 줄어들므로, 전속에서 성공한 궤적은 그보다 긴
 /// 시간에서도 성공한다.
+///
+/// `duration_secs`는 항상 `건네준 duration + follow_time`(고정 팔로스루
+/// 유지시간)이다(`trajectory_with_follow_through`). `full_speed.duration_secs`를
+/// 그대로 `speed_ratio`로 나눠 `duration` 인자로 되돌리면 follow_time이
+/// 두 번(전속 결과에 한 번, 저속 궤적에 다시 한 번) 늘어나 총 시간이 정확히
+/// `1/speed_ratio`배가 되지 않는다 — 미리 `follow_time`을 빼서 보정한다.
 pub fn plan_move_to_at_speed_ratio(
     arm: &Arm,
     start: &robot::Pose,
@@ -1036,7 +1042,8 @@ pub fn plan_move_to_at_speed_ratio(
     if speed_ratio >= 1.0 {
         return Ok(full_speed);
     }
-    let slow_duration = full_speed.duration_secs / speed_ratio;
+    let follow_time = defaults::ControlParams::default().swing_follow_through_secs;
+    let slow_duration = full_speed.duration_secs / speed_ratio - follow_time;
     let start_velocity = vec![0.0; start.joints.values.len()];
     let end_velocity = vec![0.0; center_joints.values.len()];
     let rail = Rail {
@@ -1758,7 +1765,7 @@ mod tests {
         .expect("저속 이동 계획");
 
         assert!(
-            (slow.duration_secs - full_speed.duration_secs * 3.0).abs() < 1e-1,
+            (slow.duration_secs - full_speed.duration_secs * 3.0).abs() < 1e-9,
             "slow={} full={}",
             slow.duration_secs,
             full_speed.duration_secs
