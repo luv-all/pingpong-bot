@@ -515,9 +515,11 @@ pub fn spawn(
                     }
                 }
             } else if idle_ready && due_for_return {
+                let mut swing_return_rail_x = home_rail_x;
                 if let BallControlState::Aligning { measurement, .. } = &state {
                     match hardware.read_pose() {
                         Ok(measured) => {
+                            swing_return_rail_x = measured.rail_x;
                             let joint_errors: Vec<f64> = measurement
                                 .joints_commanded
                                 .values
@@ -540,7 +542,7 @@ pub fn spawn(
                         Err(error) => warn!(%error, "공 위치·방향 정렬 완료 후 포즈 읽기 실패"),
                     }
                 }
-                if let Err(error) = move_to_ready(hardware.as_mut(), &arm, home_rail_x) {
+                if let Err(error) = move_to_ready(hardware.as_mut(), &arm, swing_return_rail_x) {
                     let reason = format!("제어 후 준비 자세 복귀 실패 — 현재 자세 유지: {error}");
                     warn!(%error, "안전한 준비 자세 복귀 궤적 없음 — 명령하지 않고 다음 공을 기다린다");
                     let fatal_hardware_error = matches!(error, MoveError::Hardware(_));
@@ -2249,6 +2251,30 @@ mod tests {
         }
     }
 
+    /// `wait_for_event`처럼 이벤트를 소진하지만, `extract`가 `Some`을 반환하는
+    /// 첫 값을 돌려준다. `timeout` 안에 못 찾으면(채널 disconnect 포함) `None`.
+    fn wait_for_event_value<T>(
+        event_rx: &crossbeam_channel::Receiver<RuntimeEvent>,
+        timeout: Duration,
+        mut extract: impl FnMut(&RuntimeEvent) -> Option<T>,
+    ) -> Option<T> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            match event_rx.recv_timeout(remaining) {
+                Ok(event) => {
+                    if let Some(value) = extract(&event) {
+                        return Some(value);
+                    }
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
     #[test]
     fn spawn_ignores_balls_while_waiting_and_resumes_after_next() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
@@ -2471,6 +2497,93 @@ mod tests {
                 RuntimeEvent::TestZoneChanged { .. }
             )),
             "Next가 apply_test_control 경로(전체 경로)를 통해야 TestZoneChanged가 발생한다"
+        );
+
+        drop(guard);
+        handle.join().expect("워커 스레드가 정상 종료해야 한다");
+    }
+
+    /// 여러 스레드에서 최신 포즈를 관찰할 수 있는 `PoseApplyingHardware`의
+    /// 공유 버전 — 테스트가 워커 스레드 종료 없이도 최종 레일 위치를 읽는다.
+    struct SharedPoseHardware {
+        pose: Arc<std::sync::Mutex<Pose>>,
+    }
+
+    impl Hardware for SharedPoseHardware {
+        fn command(
+            &mut self,
+            trajectory: &pingpong_bot::robot::motion::Trajectory,
+        ) -> Result<(), HwError> {
+            *self.pose.lock().expect("lock") = Pose::new(
+                trajectory.follow_through_rail_x,
+                trajectory.end_joints().clone(),
+            );
+            return Ok(());
+        }
+
+        fn read_pose(&mut self) -> Result<Pose, HwError> {
+            return Ok(self.pose.lock().expect("lock").clone());
+        }
+    }
+
+    #[test]
+    fn spawn_keeps_rail_at_swing_position_after_return_to_ready() {
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail 있는 로봇");
+        let shared_pose = Arc::new(std::sync::Mutex::new(Pose::new(
+            rail.default_x(),
+            robot.arm.default_joints.clone(),
+        )));
+        let hardware: Box<dyn Hardware> = Box::new(SharedPoseHardware {
+            pose: Arc::clone(&shared_pose),
+        });
+
+        let (commit_tx, commit_rx) = crossbeam_channel::unbounded();
+        let (_test_control_tx, test_control_rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let (guard, shutdown) = crate::real::shutdown_channel();
+
+        let handle = spawn(
+            hardware,
+            Arc::clone(&robot.arm),
+            commit_rx,
+            test_control_rx,
+            None,
+            event_tx,
+            shutdown,
+        );
+
+        let generous = Duration::from_secs(3);
+
+        commit_tx
+            .send(vision_request(Duration::ZERO))
+            .expect("보낼 수 있음");
+
+        let commanded_rail_x = wait_for_event_value(&event_rx, generous, |event| match event {
+            RuntimeEvent::Commanded { rail_x, .. } => Some(*rail_x),
+            _ => None,
+        })
+        .expect("정렬 명령이 와야 한다");
+
+        assert!(
+            wait_for_event(&event_rx, generous, |event| matches!(
+                event,
+                RuntimeEvent::ControlState {
+                    state: ControlStateSnapshot::Waiting
+                }
+            )),
+            "스윙 완료 후 대기 상태로 들어가야 한다"
+        );
+
+        let final_rail_x = shared_pose.lock().expect("lock").rail_x;
+        assert!(
+            (final_rail_x - commanded_rail_x).abs() < 1e-6,
+            "복귀 후 레일은 정렬 위치({commanded_rail_x})에 그대로 있어야 하는데 {final_rail_x}"
+        );
+        assert!(
+            (final_rail_x - rail.default_x()).abs() > 1e-3,
+            "정렬 위치가 홈과 달라야 검증 의미가 있다: final_rail_x={final_rail_x} default_x={}",
+            rail.default_x()
         );
 
         drop(guard);
