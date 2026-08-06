@@ -979,6 +979,33 @@ fn log_verification(
     }
 }
 
+/// `motion_watch`가 있고 하드웨어가 더 이상 바쁘지 않으면 명령 발행부터 걸린
+/// 시간을 한 번 로그하고 워치를 비운다.
+///
+/// `is_busy()`는 실물에서 atomic bool 읽기(`RealHardware::is_busy`,
+/// `src/hardware/real.rs:305`)라 버스 I/O가 아니다 — 이 호출로 하드웨어 부하가
+/// 늘지 않는다. 다만 이 값은 소프트웨어 실행기가 계획한 `duration_secs`가 지났다는
+/// 뜻일 뿐 엔코더로 확인한 실제 도달은 아니다(설계 문서의 "비목표" 참고).
+fn log_motion_done_if_idle(
+    hardware: &mut dyn Hardware,
+    motion_watch: &mut Option<(u64, Instant, &'static str)>,
+) {
+    let Some((track_seq, issued_at, event)) = *motion_watch else {
+        return;
+    };
+    if hardware.is_busy() {
+        return;
+    }
+    info!(
+        target: "latency",
+        track_seq,
+        event,
+        command_to_motion_done_ms = f2(issued_at.elapsed().as_secs_f64() * 1e3),
+        "명령 실행기 유휴 전환 — 소프트웨어 추정 소요 시간(엔코더 확인 아님)"
+    );
+    *motion_watch = None;
+}
+
 /// 런타임의 다른 스레드를 띄우기 전에 레일·전체 관절을 준비 자세로 초기화한다.
 pub(super) fn initialize_pose(
     hardware: &mut dyn Hardware,
@@ -1686,6 +1713,44 @@ mod tests {
         fn read_pose(&mut self) -> Result<Pose, HwError> {
             return Ok(self.pose.clone());
         }
+    }
+
+    struct ToggleBusyHardware {
+        /// 첫 `is_busy()` 호출은 `true`, 이후 전부 `false` — 실행기가 한 번
+        /// "바쁨"을 보고한 뒤 다음 틱에 유휴로 바뀌는 상황을 흉내낸다.
+        busy_then_idle: std::cell::Cell<bool>,
+    }
+
+    impl Hardware for ToggleBusyHardware {
+        fn command(
+            &mut self,
+            _trajectory: &pingpong_bot::robot::motion::Trajectory,
+        ) -> Result<(), HwError> {
+            return Ok(());
+        }
+
+        fn read_pose(&mut self) -> Result<Pose, HwError> {
+            return Ok(Pose::new(0.0, Joints::from_slice(&[0.0; 4])));
+        }
+
+        fn is_busy(&mut self) -> bool {
+            return self.busy_then_idle.replace(false);
+        }
+    }
+
+    #[test]
+    fn log_motion_done_if_idle_keeps_watch_while_busy_then_clears_when_idle() {
+        let mut hardware = ToggleBusyHardware {
+            busy_then_idle: std::cell::Cell::new(true),
+        };
+        let mut watch: Option<(u64, Instant, &'static str)> =
+            Some((7, Instant::now(), "primary_alignment"));
+
+        log_motion_done_if_idle(&mut hardware, &mut watch);
+        assert!(watch.is_some(), "여전히 busy인 동안은 워치를 유지");
+
+        log_motion_done_if_idle(&mut hardware, &mut watch);
+        assert!(watch.is_none(), "busy가 풀리면 워치를 비움");
     }
 
     #[test]
