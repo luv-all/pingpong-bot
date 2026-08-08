@@ -30,7 +30,7 @@ use super::{
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const FIXED_SWING_LEAD: Duration = Duration::from_millis(400);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
-const AUTO_IDLE_AFTER_WAIT: Duration = Duration::from_secs(3);
+const AUTO_IDLE_AFTER_WAIT: Duration = Duration::from_millis(300);
 const BUSY_POLL: Duration = Duration::from_millis(5);
 const VERIFY_POLL_PERIOD: Duration = Duration::from_millis(20);
 const VERIFY_STABLE_SAMPLES: u8 = 2;
