@@ -1,9 +1,13 @@
 //! AXL 리니어 레일 dry-run 및 Windows 실물 어댑터.
 
 use crate::error::HwError;
+use tracing::info;
 
 use super::rail_config::RailConfig;
 use super::rail_kind::RailKind;
+
+/// 팔 궤적 종료시간에 맞춰 계산한 레일 속도에 적용하는 실기 시험 배율.
+const COMMAND_SPEED_SCALE: f64 = 1.5;
 
 pub struct AxlRail {
     config: RailConfig,
@@ -44,6 +48,25 @@ impl AxlRail {
         let mut live = super::axl_live::AxlLive::new(ffi);
         live.configure(&config)?;
         tracing::debug!(axis = config.axis, "AXL 축 설정·서보 ON 완료");
+        let (board_position_m, board_command_position_m) =
+            live.read_actual_and_command_m(config.axis)?;
+        let domain_position_m = config.board_to_domain_abs(board_position_m);
+        let board_limits = config.soft_limit_args();
+        info!(
+            axis = config.axis,
+            board_position_m,
+            board_command_position_m,
+            board_command_minus_actual_m = board_command_position_m - board_position_m,
+            domain_position_m,
+            configured_domain_min_m = config.x_min_m,
+            configured_domain_max_m = config.x_max_m,
+            board_zero_domain_m = config.board_zero_domain_m,
+            configured_board_min_m = board_limits.negative_m,
+            configured_board_max_m = board_limits.positive_m,
+            reverse = config.reverse,
+            pulses_per_meter = config.pulses_per_meter,
+            "AXL 시작 좌표 진단"
+        );
 
         return Ok(Self {
             config,
@@ -76,16 +99,39 @@ impl AxlRail {
         return Ok(normalize_m(self.config.board_to_domain_abs(board_m)));
     }
 
-    /// 궤적 시작 시 한 번만 레일을 이동한다. 속도는 `|Δx|/duration` (램프 무시).
+    /// 가속·감속 램프를 포함해 `duration_secs`에 도착할 속도를 계산한다.
     pub fn command_abs_in_secs(&mut self, x: f64, duration_secs: f64) -> Result<f64, HwError> {
+        let prepare_started = std::time::Instant::now();
+        #[cfg(all(windows, feature = "real"))]
+        if let RailKind::Live(live) = &mut self.kind {
+            // 이전 1차 이동을 먼저 정지한 후의 실제 위치로 속도를 다시 계산한다.
+            live.stop_if_moving(self.config.axis)?;
+        }
+        let usable_duration =
+            (duration_secs - prepare_started.elapsed().as_secs_f64()).max(f64::EPSILON);
         let domain_m = normalize_m(self.config.clamp_m(x));
         let current_m = self.read_x_m()?;
         let distance_m = (domain_m - current_m).abs();
-        if distance_m <= 1e-9 || duration_secs <= f64::EPSILON {
+        if distance_m <= 1e-9 || usable_duration <= f64::EPSILON {
             return self.set_domain_position(domain_m);
         }
 
-        let vel = (distance_m / duration_secs).clamp(self.config.min_vel, self.config.max_vel);
+        let accel = self.config.accel.min(self.config.decel);
+        let calculated_vel = velocity_for_distance_duration(distance_m, usable_duration, accel);
+        let vel =
+            (calculated_vel * COMMAND_SPEED_SCALE).clamp(self.config.min_vel, self.config.max_vel);
+        let board_target_m = normalize_m(self.config.domain_to_board_abs(domain_m));
+        info!(
+            current_m,
+            target_m = domain_m,
+            board_target_m,
+            calculated_velocity_m_s = calculated_vel,
+            command_speed_scale = COMMAND_SPEED_SCALE,
+            velocity_m_s = vel,
+            duration_secs,
+            usable_duration_secs = usable_duration,
+            "AXL 레일 이동 명령"
+        );
         match &mut self.kind {
             RailKind::DryRun { position_m } => {
                 let _ = vel;
@@ -93,8 +139,7 @@ impl AxlRail {
             }
             #[cfg(all(windows, feature = "real"))]
             RailKind::Live(live) => {
-                let board_m = normalize_m(self.config.domain_to_board_abs(domain_m));
-                live.start_move_abs_m(&self.config, board_m, vel)?;
+                live.start_move_abs_m(&self.config, board_target_m, vel)?;
             }
         }
         return Ok(domain_m);
@@ -138,6 +183,32 @@ impl AxlRail {
         let current_domain = self.read_x_m()?;
         return self.move_abs_m(current_domain + dx);
     }
+
+    /// 진행 중 절대 이동이 실제로 끝날 때까지 기다린다.
+    pub fn wait_idle(&mut self) -> Result<(), HwError> {
+        match &mut self.kind {
+            RailKind::DryRun { .. } => Ok(()),
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => live.wait_idle(self.config.axis),
+        }
+    }
+
+    /// 진행 중인 레일 이동을 부드럽게 정지시킨다.
+    pub fn stop(&mut self) -> Result<(), HwError> {
+        match &mut self.kind {
+            RailKind::DryRun { .. } => Ok(()),
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => live.stop(self.config.axis),
+        }
+    }
+}
+
+fn velocity_for_distance_duration(distance: f64, duration: f64, acceleration: f64) -> f64 {
+    let discriminant = duration * duration - 4.0 * distance / acceleration;
+    if discriminant <= 0.0 {
+        return f64::INFINITY;
+    }
+    return 0.5 * acceleration * (duration - discriminant.sqrt());
 }
 
 fn normalize_m(x: f64) -> f64 {
@@ -154,11 +225,11 @@ fn validate_config(config: &RailConfig) -> Result<(), HwError> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::AxlRail;
+    use super::{AxlRail, velocity_for_distance_duration};
     use crate::hardware::rail::RailConfig;
 
     #[test]
-    fn command_abs_in_secs_uses_distance_over_duration() {
+    fn command_abs_in_secs_reaches_requested_target() {
         let cfg = RailConfig {
             enabled: true,
             dll_path: PathBuf::from("unused.dll"),
@@ -173,6 +244,16 @@ mod tests {
         let commanded = rail.command_abs_in_secs(0.2, 0.4).unwrap();
         assert_eq!(commanded, 0.2);
         assert_eq!(rail.read_x_m().unwrap(), 0.2);
+    }
+
+    #[test]
+    fn duration_velocity_includes_acceleration_and_deceleration() {
+        let distance = 0.2;
+        let duration = 0.4;
+        let acceleration = 12.0;
+        let velocity = velocity_for_distance_duration(distance, duration, acceleration);
+        let resulting_duration = distance / velocity + velocity / acceleration;
+        assert!((resulting_duration - duration).abs() < 1e-12);
     }
 
     #[test]
@@ -222,6 +303,7 @@ mod tests {
             dll_path: PathBuf::from("unused.dll"),
             pulses_per_meter: 1000,
             reverse: true,
+            board_zero_domain_m: 0.2,
             x_min_m: 0.0,
             x_max_m: 0.4,
             vel: 0.2,
@@ -235,11 +317,11 @@ mod tests {
         let commanded = rail.move_abs_m(0.25).unwrap();
         assert_eq!(commanded, 0.25);
         assert_eq!(rail.read_x_m().unwrap(), 0.25);
-        // board abs = xmin + xmax - domain
-        assert_eq!(rail.read_board_x_m().unwrap(), 0.15);
+        // reverse=true이면 AXL 보드 0이 명시한 도메인 원점 0.2에 대응한다.
+        assert_eq!(rail.read_board_x_m().unwrap(), -0.05);
         let commanded = rail.move_rel_m(0.05).unwrap();
         assert_eq!(commanded, 0.3);
-        assert_eq!(rail.read_board_x_m().unwrap(), 0.1);
+        assert_eq!(rail.read_board_x_m().unwrap(), -0.1);
     }
 
     #[cfg(all(windows, feature = "real"))]

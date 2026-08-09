@@ -2,13 +2,18 @@
 //!
 //! 경연용 단일 애플리케이션 — vision → robot::motion 파이프라인.
 //!
+//! `detector`·`estimator`는 실기 제어 경로(`src/real`)가 아직 의존하는 구식
+//! 재귀 EKF 스택이다 — `vision`으로의 전환 전까지 병행 유지한다.
+//!
 //! 도메인 타입은 모듈 경로로 쓴다 (`camera::Id`, `detector::Observation`).
 //! 루트 `pub use`로 짧은 이름을 펼치지 않는다.
 
 pub mod camera;
 pub mod constants;
 pub mod defaults;
+pub mod detector;
 pub mod error;
+pub mod estimator;
 pub mod hardware;
 pub mod physics;
 pub mod robot;

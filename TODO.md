@@ -1,120 +1,196 @@
 # TODO — pingpong-bot
 
-실행 체크리스트. 상세 스펙은 [`plan.md`](plan.md)·[`docs/phase2.md`](docs/phase2.md)·[`docs/decisions.md`](docs/decisions.md).  
-앱 숫자는 [`src/defaults/`](src/defaults/) SSOT. 로봇 활성 프리셋은 `defaults::robot()` 본문만.
+새 개발 순서를 위에서부터 차근차근 진행한다. 한 단계를 구현하고 테스트한 뒤
+다음 단계로 넘어간다.
 
-공개 API는 도메인 모듈 경로 (`estimator::Impact` / `robot::motion::Planner` /
-`estimator::Kinematics` / `camera::Preview` / `sim::eval::Protocol` …).
-자유함수 root dump·호환 alias는 쓰지 않는다.
+## 현재 상태 (2026-08-06)
 
-파이프라인은 역할 기준: `detector` (검출) → `estimator` (삼각측량·EKF·예측·반발 역산)
-→ `robot::motion` (관절공간 계획) → `hardware`.
-`ball`/`shooter`/`swing`/`planner`/`eval` 도메인은 해체됨 — 공 상태·피더·채점은
-`sim::physics`/`sim::launch`/`sim::eval`, 팔–테이블 관통은 `robot::collision`.
+- **1.1~1.3 핵심 구현 완료:** `N×7` 규약, 채택 관측 버퍼, 미래 궤적 샘플링.
+- **1.4 제어 전환 완료:** real `CommitRequest`가 새 `vision::Trajectory` 계약을
+  그대로 전달하고 제어가 접수 평면을 선택한다.
+- **공 위치·방향 정렬 완료:** real과 GUI sim이 `Planner::ball_alignment`를
+  공유한다. real은 자체 접수 평면 선택을 쓰고, GUI sim은 기존
+  `DirectController::select_target`을 통해 목표를 고른다.
+- **본 예측 정렬·보정 완료:** 불확실성 기준을 통과한 첫 예측에서
+  레일·팔을 함께 이동하고, 같은 공의 후속 예측은 팔만 보정한다.
+- **중립 준비·복귀 완료:** 기본은 레일 0.675m와 기본 관절각을 쓴다.
+  구간 모드에서는 해당 모드의 준비 레일 x로 복귀한다.
+- **실기 오차 계측 완료:** 명령 후 레일·전체 관절을 재측정해
+  `commanded`, `measured`, `commanded - measured`를 구분해 남긴다.
+- **로그 정리:** 관전 창의 공 감지 상태는 `false ↔ true`로 바뀔 때만 한 번 기록한다.
+- `fly_07/08/09` 검출·삼각측량·EKF 예측 진단 통과. 단, 이것은 아직
+  `Target → 위치 이동`까지의 통합 테스트가 아니다.
+- 현재 변경은 정적 검사와 관련 단위·물리 sim 테스트를 통과했다. GUI 시뮬레이션과
+  Windows 실물 장비에서의 최종 수렴 동작은 별도 검증이 필요하다.
 
-**우선순위:** **리턴 파워(eval)** → 실기 단발 1발 계측 / Windows 벤치 → 시뮬 품질·포기 정책 → ω 추정 → 풀 동역학 후속.
+## 1. 공 궤적 반환 API
 
-> **🔴 지금 최우선 — 리턴 파워:** eval 30/90 (통과선 45). 30발 전부 1점.
-> 진단·반증: [`docs/superpowers/plans/2026-07-27-return-power.md`](docs/superpowers/plans/2026-07-27-return-power.md).
-> **새 세션은 이 문서부터** — 배제·반증한 레버를 다시 밟지 말 것.
+공 위치 검출·삼각측량·EKF·탄도 예측을 하나의 궤적 출력으로 묶는다.
+실제 관측 궤적과 미래 예측 궤적을 같은 형식으로 반환한다.
 
----
+**이 API는 타격 예측 지점을 반환하지 않는다.** 시간 순서대로 샘플링된
+전체 궤적만 반환한다. 최고 타격 지점·타격 시각·타격 가능성은 나중에
+이 궤적을 입력으로 받는 별도 계산기에서 구한다.
 
-## 0. 지금 당장
+### 1.1 반환 형식 확정
 
-### 0.1 시뮬·제어 (대체로 완료)
+각 궤적은 `N×7` 행렬이다. 행 하나는 한 시점의 공 상태를 뜻한다.
 
-- [x] URDF → domain 직렬 체인 / FK·IK / 레일
-- [x] 동적 인터셉트·quintic·Rapier 다물체 EE 폐루프
-- [x] EKF control 튜닝 (drag=0 sim, C4 미드코트 게이트) — decisions C2 문서화
-- [ ] C2 승격 — EKF 타격 성공률 스모크 후 기본값 GT→EKF 전환
-
-### 0.2 측정으로 잠글 상수
-
-- [x] e / μ / drag 측정 툴 + [`docs/measure-physics.md`](docs/measure-physics.md)
-- [x] 테이블 바운스 커널 `estimator::Kinematics::bounce_on_table`
-- [ ] Rapier 테이블–공 μ ↔ 커널 정렬 (랜덤샷·랠리 재튜닝 동반)
-- [ ] A4 e·마찰·drag **실측값**으로 `PhysicsParams` / `impact()` 갱신 (보드 준비 후)
-
----
-
-## 1. 제어 API (현황)
-
-| 역할 | facade |
-|------|--------|
-| 리턴·라켓 속도 | `estimator::Impact::rally_return` / `required_racket_velocity` |
-| 스윙 | `robot::motion::Planner::plan` / `plan_best` / `plan_bang_bang` |
-| IK·속도 | `Arm::inverse_pose_with_rail` / `velocities_for_racket_velocity` |
-| 토크 | `Arm::required_torque` / `Arm::torque_feasible` |
-
-- [x] RNEA·토크 게이트·FF (`torque_feedforward` default true)
-- [x] Dynamixel Goal Current + sim RNEA→다물체 effort + τ HUD
-
----
-
-## 2. 공 추적·스핀 / Magnus
-
-순방향 Model C는 sim·탄도·플래너에 들어감. **역방향 ω 추정**만 남음.
-
-- [x] Model C 순방향 (`estimator::Kinematics` / Rapier 외력 / `sim::launch` spin)
-- [ ] 스펙 — `docs/`에 카메라·Model A/B/C·bounce 구간
-- [ ] 궤적 fitting → ω 추정 · EKF 확장 또는 별도 추정기
-- [ ] prediction_error · spin_confidence · A/B fallback · 바운드 전후 분리
-- [ ] sim 슈터 spin ↔ 추정 ω 교차검증
-
----
-
-## 3. 관측 파이프라인
-
-설계: [`docs/superpowers/specs/2026-07-18-vision-pipeline-design.md`](docs/superpowers/specs/2026-07-18-vision-pipeline-design.md)  
-조립 SSOT: `defaults::detector_for` · `data/colormask.json`.  
-진입: `camera::Preview` / `camera::Charuco` / `camera::TablePnp` / `estimator::Triangulate` / `detector::Detector`.
-
-- [x] 삼각·검출·ROI·colormask·ChArUco·탁구대 PnP·UVC/파일·undistort 파이프
-- [ ] 멀티캠 동기·타임스탬프 — **비범위**
-
----
-
-## 4. 하드웨어
-
-- [x] `RealHardware` · SwingExecutor · jog · AXL 레일 · URDF↔motor_ids
-- [x] `run_real` **단발 타격** — `src/real/` (채널 단일소유 파이프라인).
-      설계 [`src/real/README.md`](src/real/README.md) ·
-      계획 [`docs/superpowers/plans/2026-07-31-run-real-single-shot.md`](docs/superpowers/plans/2026-07-31-run-real-single-shot.md)
-- [ ] Windows 벤치: `jog --dry-run` → 작은 `j`/`rd` → `swing` → `--mode real --dry-run` → 실기 1발
-- [ ] 실기 1발 계측 후 랠리 확장 (커밋 래치 해제·샷 간 EKF 리셋·연속 포기 정책)
-- [ ] 실물 E-stop 경로 (tick clamp·profile은 적용됨)
-
----
-
-## 5. 시뮬레이터 품질
-
-- [x] GUI 렉 (dev opt-level) · 라켓–공 physical SSOT · GUI 기본 디버그
-- [ ] 테이블 위 구름 공 포기 조건 — decisions I (인터셉트 평면 교차 없음 → 스윙 안 나감)
-- [ ] GT/EKF 타격 성공률 스모크 → C2
-- [ ] 네트 넘김 / 바운스 후 / 사이드 샷 시나리오 세트
-- [ ] GUI: 활성 로봇 프리셋 표시, hit-plane·예측 마커 유지보수
-
----
-
-## 6. 문서·후속
-
-- [ ] `docs/phase2.md` ↔ 이 TODO·defaults 동기
-- [ ] 공 추적 MD → `docs/spin-tracking.md`
-- [ ] ML (plan §10) — vision API 뒤 교체 전제, 고전 파이프라인 우선
-
----
-
-## 빠른 검증
-
-```bash
-cargo test --workspace
-cargo run -p pingpong-bot -- --mode sim
-# 실캠 단발 리허설 (모터 정지, macOS에서도 됨)
-cargo run -p pingpong-bot -- --mode real --dry-run
-# Windows real:
-# cargo run -p pingpong-bot -- --mode real --dxl-port COM8
+```text
+[x, y, z, vx, vy, vz, t]
 ```
 
-갱신: 2026-07-30 — 도메인 재편: ball/shooter/swing/planner/eval 해체, 계획은 `robot::motion`,
-공 반발 역산은 `estimator::Impact`, robot↔hardware 레이어 분리, 호환 alias 제거.
+| 열 | 뜻 | 단위 |
+|---|---|---|
+| `x, y, z` | 월드 좌표계의 공 중심 | m |
+| `vx, vy, vz` | 해당 시점의 속도 벡터 | m/s |
+| `t` | 기준 시각으로부터의 상대 시간 | s |
+
+시간 기준은 **가장 최근의 EKF 채택 관측 시각**으로 통일한다.
+
+- 실제 관측 궤적: 과거 행은 `t ≤ 0`, 가장 최근 행은 `t = 0`
+- 미래 예측 궤적: 첫 미래 행부터 `t > 0`
+- 행은 항상 `t` 오름차순으로 정렬
+
+내부 코드는 열 인덱스 실수를 막기 위해 명시적인 샘플 타입을 사용하고,
+외부 반환 경계에서만 `N×7` 행렬로 변환한다.
+
+- [x] `TrajectorySample { position, velocity, time_secs }` 타입 추가
+- [x] `BallTrajectory { observed, predicted, reference_time }` 타입 추가
+- [x] `TrajectorySample` 목록 ↔ `N×7` 행렬 변환 API 추가
+- [x] 행렬의 열 순서·단위·시간 기준 단위 테스트
+
+### 1.2 실제 관측 궤적
+
+스테레오 삼각측량을 통과한 3D 관측과 EKF가 추정한 속도를 기록한다.
+재투영 오차나 EKF 게이트에서 거부된 점은 반환 궤적에 포함하지 않는다.
+
+- [x] EKF가 채택한 3D 관측을 샷별 링 버퍼에 보관
+- [x] 각 관측 시각의 EKF 속도를 함께 보관
+- [x] 새 공으로 EKF를 리셋할 때 관측 궤적도 분리
+- [x] 버퍼 최대 길이와 최대 보관 시간을 `defaults` 값으로 제한
+- [x] 두 번째 관측 이전에는 속도가 없으므로 해당 행을 반환하지 않도록 처리
+
+### 1.3 미래 예측 궤적
+
+현재의 `predict_to(HitPlane) -> Prediction` 중심 출력을 전체 궤적 출력으로
+바꾼다. 탄도 적분기가 일정한 간격으로 미래 상태 여러 개를 샘플링한다.
+
+- [x] `Kinematics` 또는 `ballistics`에 궤적 샘플링 API 추가
+- [x] EKF의 최신 위치·속도에서 예측 시작
+- [x] 현재 물리 모델의 중력·drag·Magnus·테이블 바운스를 그대로 사용
+- [x] `integrate_dt`를 샘플 간격으로 사용하고 `max_lead`까지 반환
+- [x] 유효 작업 영역 밖, 예측 시간 초과 종료 조건 적용
+- [ ] 테이블 아래 상태의 명시적 종료 조건 추가
+  - 현재 적분기는 테이블 바운스 시 z를 표면으로 보정하므로 정상 탄도는 아래로 내려가지 않는다.
+- [x] 출력에 `impact_position`, `HitPlane`, 대표 타격 점을 포함하지 않음
+- [x] 첫 행부터 마지막 행까지 위치·속도·시간이 연속적인지 회귀 테스트
+
+### 1.4 통합 반환
+
+- [x] `Estimator::trajectory()`가 `observed` 궤적과 `predicted` 궤적을 함께 생성
+- [x] `BallTrajectory` 반환값에는 두 궤적과 `reference_time`만 포함
+- [x] 기존 `Prediction`/hit-plane 계산은 궤적 생성 API에서 분리
+- [x] 기존 제어가 필요하면 임시 어댑터가 궤적에서 평면 교차를 계산하게 하고,
+  궤적 반환 API에는 타격점을 다시 넣지 않음
+- [x] real 추정 워커의 `CommitRequest` payload를 `vision::Trajectory`로 교체
+- [ ] 프리뷰·시뮬레이션·텔레메트리가 두 궤적을 구분해 소비할 수 있게 전달
+- [x] 실제 관측은 `t ≤ 0`, 미래 예측은 `t > 0`인지 EKF 통합 테스트
+- [x] 새 공 리셋 후 이전 공의 궤적이 섞이지 않는지 EKF 통합 테스트
+- [ ] `cargo test --workspace`
+  - 2026-08-01: 260 통과, 46 ignored, 기존 Dynamixel 매핑 테스트 1개 실패.
+
+### 1.5 진행 순서
+
+1. 반환 타입과 `N×7` 행렬 규약을 먼저 구현한다.
+2. 실제 관측 궤적 버퍼를 붙인다.
+3. 미래 탄도 샘플링을 붙인다.
+4. 두 궤적을 하나의 결과로 묶는다.
+5. 타격점 계산이 궤적 반환 기능과 분리됐는지 검증한다.
+
+### 1.6 2026-08-01 영상 검증 기록
+
+2026-08-01, `data/clips/fly_07~09` 진단. 예측 오차는 현재
+`max_impact_sigma = 0.15 m`, `drag = 0` 게이트를 통과한 값이다.
+
+| 클립 | 겹치는 비행 구간 동시 검출 | 3D 궤적 | 예측 횟수 | 평균 / 최대 오차 |
+|---|---:|---:|---:|---:|
+| `fly_07` | 43/54 (80%) | 41점 | 13회 | 12.2 / 17.0 cm |
+| `fly_08` | 44/221 (20%) | 41점 | 7회 | 6.4 / 12.1 cm |
+| `fly_09` | 46/280 (16%) | 44점 | 11회 | 4.9 / 15.9 cm |
+
+- `fly_07` 실제 교차 x=1.598 m를 테이블 폭 밖이라는 이유로 예측에서
+  잘라내던 경계 문제를 발견했고, 로봇 작업 공간 여유 0.5 m를 반영했다.
+- `fly_08/09`는 검출 구간의 동시 검출률이 20% 안팁이므로,
+  제어 전환과 별개로 검출 연속성 개선이 남아 있다.
+- 당시 검증은 `BallTrajectory → Prediction` 임시 어댑터까지였다. 현재 실기
+  제어는 새 `vision::Trajectory → 접수 평면 선택 → Planner::ball_alignment`
+  경로를 사용한다.
+
+---
+
+## 2. 현재 활성 제어 — 공 위치·방향 정렬
+
+현재 실기 런타임은 `vision::Trajectory`에서 고른 접수점을 보정한 뒤
+라켓 블레이드에 정지 정렬한다. 라켓 면은 네트 너머 상대편 반코트의
+무게중심을 향한다. 첫 본 예측은 레일·팔을 함께 움직이고, 같은 공의
+후속 예측은 레일을 고정한 채 팔만 보정한다.
+
+```text
+vision::Trajectory
+    → control 접수 평면 선택
+    → Planner::ball_alignment
+    → Hardware::command
+    → Planner::ball_alignment_fixed_rail
+    → Hardware::command_joints
+```
+
+### 2.1 명령 계산
+
+- [x] 예측 궤적에서 정렬할 목표 x·y·z 선택
+- [x] 보정된 접촉점과 상대편 반코트 무게중심 방향을 함께 만족하는 자세 IK 계산
+- [x] 레일·관절·토크·테이블 충돌 한계를 통과한 정지 정렬 궤적 생성
+- [x] 첫 본 예측에서 레일·팔 동시 명령
+- [x] 같은 공의 후속 예측에서 최신 팔 미세 보정
+- [x] real과 GUI sim이 같은 `Planner::ball_alignment` 정렬 계획 사용
+
+### 2.2 적용값과 수렴 확인
+
+- [x] 기본 시작·복귀 시 레일 0.675m와 기본 관절각의 중립 자세 사용
+- [x] 구간 모드에서 선택한 준비 레일 x로 복귀
+- [x] 레일·팔 동시 이동 후 보정된 접촉 자세에서 정지
+- [x] 명령 뒤 레일·전체 관절 재측정 및 `commanded - measured` 기록
+- [x] 개별 공의 정렬 계획 실패 시 워커를 종료하지 않고 다음 공 계속 처리
+- [ ] Windows 실물 장비에서 위치·높이 정렬과 복귀 최종 검증
+
+### 2.3 현재 활성 경로에서 제외
+
+- 반환 탄도와 임팩트 속도 계산
+- 백스윙과 타격 속도 동기화
+- 물리 E-stop 입력
+
+`PositionController`와 백스윙·임팩트 플래너 코드는 라이브러리에 남아 있지만
+현재 real·GUI sim의 직접 정렬 경로에서는 호출하지 않는다.
+
+### 2.4 남은 정리·검증
+
+- [ ] 보존 중인 구형 위치·스윙 계획기의 향후 사용 여부 결정
+- [ ] 사용하지 않기로 결정한 타입·설정·테스트·문서 제거
+- [ ] 관측 → 궤적 → 불확실성 게이트 → 명령/후속 보정 → 실측의 실물 통합 검증
+- [ ] 물리 E-stop 입력과 복구 정책 정의
+- [ ] 전체 workspace 테스트 재실행
+
+### 2.5 실기 검증 발견 사항 (2026-08-04, Windows COM8)
+
+- [x] `vision::Fit` + `vision::Trajectory` 계약을 real 제어에 연결했다.
+- [x] 첫 본 예측 레일·팔 정렬 후, 같은 `track_seq`의 후속 예측으로
+  레일을 고정하고 팔만 보정하도록 `CommandLatch` 상태를 나누었다.
+- [x] 정렬·복귀 중 다른 `track_seq`가 현재 제어 상태를 덮어쓰지 못하게 했다.
+- [ ] `PendingVerification`의 주기적 수렴 판정·3회 연속 실패 중단 경로는
+  실기 루프에서 활성화되지 않는다. 완료 후 1회 실측 로그와 구분해
+  부활할지 제거할지 결정한다.
+- [ ] Windows 실물 장비에서 정렬·후속 보정·구간 복귀를 통합 검증한다.
+
+---
+
+다음 기능은 요구사항을 받으면 `3.` 섹션으로 추가한다.

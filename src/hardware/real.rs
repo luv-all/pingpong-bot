@@ -13,18 +13,13 @@ use tracing::{debug, error};
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::AxlRail;
 use super::rail::RailConfig;
-use crate::defaults;
 use crate::error::HwError;
-use crate::hardware::Hardware;
-use crate::robot::Arm;
+use crate::hardware::{AppliedRailRacketCommand, Hardware};
 use crate::robot::motion;
 
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
     bus: Arc<Mutex<DynamixelBus>>,
-    /// 레일 dry-run·RNEA 디버그용 Arm 핸들 (스윙 실행 자체는 Goal Position만 씀).
-    #[allow(dead_code)]
-    arm: Arc<Arm>,
     /// `None`이면 `rail_x = 0` (레일 비활성). executor와 pose 읽기가 공유.
     rail: Arc<Mutex<Option<AxlRail>>>,
     busy: Arc<AtomicBool>,
@@ -35,48 +30,29 @@ pub struct RealHardware {
 
 impl RealHardware {
     /// 실제 시리얼 포트를 열고 motion profile과 torque를 설정한다.
-    pub fn new(
-        config: DynamixelConfig,
-        rail: Option<RailConfig>,
-        arm: Arc<Arm>,
-    ) -> Result<Self, HwError> {
+    pub fn new(config: DynamixelConfig, rail: Option<RailConfig>) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::open(config)?;
+        // Goal Position, Torque Enable, EEPROM 설정 중 어떤 것도 건드리기
+        // 전에 듀얼 모터 기계 정렬을 검사한다. 예전에는 enable_torque가
+        // ID2에 계산된 미러 목표를 먼저 쓴 뒤 여기서 실패해, 검사가
+        // 급동작을 막지 못했다.
+        bus.verify_mirror_alignment()?;
         bus.configure_position_mode_max_effort()?;
         bus.enable_torque(true)?;
         // 실포트: is_dry_run = false → AXL 실개방
-        return Self::from_bus(bus, stream_hz, rail, false, arm);
+        return Self::from_bus(bus, stream_hz, rail, false);
     }
 
     /// 포트를 열지 않지만 실제 좌표 변환·리밋·executor 경로를 그대로 사용한다.
     pub fn dry_run(config: DynamixelConfig, rail: Option<RailConfig>) -> Result<Self, HwError> {
-        return Self::dry_run_with_arm(
-            config,
-            rail,
-            Arc::new(
-                (*defaults::urdf_4dof()
-                    .map_err(|e| HwError::InvalidConfig {
-                        reason: e.to_string(),
-                    })?
-                    .arm)
-                    .clone(),
-            ),
-        );
-    }
-
-    /// dry-run + 명시적 Arm (RNEA FF 테스트용).
-    pub fn dry_run_with_arm(
-        config: DynamixelConfig,
-        rail: Option<RailConfig>,
-        arm: Arc<Arm>,
-    ) -> Result<Self, HwError> {
         let stream_hz = config.stream_hz;
         let mut bus = DynamixelBus::dry_run(config).map_err(|e| HwError::InvalidConfig {
             reason: e.to_string(),
         })?;
         bus.configure_position_mode_max_effort()?;
         bus.enable_torque(true)?;
-        return Self::from_bus(bus, stream_hz, rail, true, arm);
+        return Self::from_bus(bus, stream_hz, rail, true);
     }
 
     fn from_bus(
@@ -84,7 +60,6 @@ impl RealHardware {
         stream_hz: f64,
         rail: Option<RailConfig>,
         is_dry_run: bool,
-        arm: Arc<Arm>,
     ) -> Result<Self, HwError> {
         let rail = match rail.filter(|config| config.enabled) {
             None => {
@@ -126,7 +101,6 @@ impl RealHardware {
         };
         return Ok(Self {
             bus: Arc::new(Mutex::new(bus)),
-            arm,
             rail: Arc::new(Mutex::new(rail)),
             busy: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
@@ -152,16 +126,18 @@ impl RealHardware {
         if let Some(handle) = self.executor.take()
             && handle.join().is_err()
         {
-            error!("Dynamixel swing executor 패닉");
+            error!("Dynamixel 궤적 executor 패닉");
         }
     }
-}
 
-impl Hardware for RealHardware {
-    fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
+    fn start_trajectory(
+        &mut self,
+        trajectory: &motion::Trajectory,
+        drive_rail: bool,
+    ) -> Result<(), HwError> {
         self.reap_executor();
         if self.busy.swap(true, Ordering::AcqRel) {
-            debug!("Dynamixel 스윙 실행 중 — 중복 명령 무시");
+            debug!("Dynamixel 궤적 실행 중 — 중복 명령 무시");
             return Ok(());
         }
 
@@ -175,7 +151,8 @@ impl Hardware for RealHardware {
         let rail_target = trajectory.follow_through_rail_x;
         let rail_duration = trajectory.duration_secs;
         self.executor = Some(thread::spawn(move || {
-            if let Ok(mut guard) = rail.lock()
+            if drive_rail
+                && let Ok(mut guard) = rail.lock()
                 && let Some(rail_hw) = guard.as_mut()
                 && let Err(error) = rail_hw.command_abs_in_secs(rail_target, rail_duration)
             {
@@ -183,7 +160,7 @@ impl Hardware for RealHardware {
                     rail_target,
                     rail_duration,
                     error = %error,
-                    "AXL 레일 이동 시작 실패 — 스윙 중단"
+                    "AXL 레일 이동 시작 실패 — 궤적 중단"
                 );
                 busy.store(false, Ordering::Release);
                 return;
@@ -205,13 +182,13 @@ impl Hardware for RealHardware {
                             error!(
                                 sample_time,
                                 error = %error,
-                                "Dynamixel goal position 전송 실패 — 스윙 중단"
+                                "Dynamixel goal position 전송 실패 — 궤적 중단"
                             );
                             false
                         }
                     },
                     Err(_) => {
-                        error!(sample_time, "Dynamixel bus mutex poisoned — 스윙 중단");
+                        error!(sample_time, "Dynamixel bus mutex poisoned — 궤적 중단");
                         false
                     }
                 };
@@ -224,9 +201,27 @@ impl Hardware for RealHardware {
                 }
                 thread::sleep(tick);
             }
+            if drive_rail
+                && !cancel.load(Ordering::Acquire)
+                && let Ok(mut guard) = rail.lock()
+                && let Some(rail_hw) = guard.as_mut()
+                && let Err(error) = rail_hw.wait_idle()
+            {
+                error!(error = %error, "AXL 레일 완료 대기 실패");
+            }
             busy.store(false, Ordering::Release);
         }));
         return Ok(());
+    }
+}
+
+impl Hardware for RealHardware {
+    fn command(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
+        return self.start_trajectory(trajectory, true);
+    }
+
+    fn command_joints(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
+        return self.start_trajectory(trajectory, false);
     }
 
     fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
@@ -241,15 +236,112 @@ impl Hardware for RealHardware {
         return Ok(robot::Pose::new(self.read_rail_x_m()?, joints));
     }
 
+    fn arm_joint_limit_escape(&mut self, joints: &robot::Joints) -> Result<(), HwError> {
+        self.reap_executor();
+        self.bus
+            .lock()
+            .map_err(|_| HwError::CommandFailed {
+                duration_secs: 0.0,
+                joint_count: joints.values.len(),
+                reason: "Dynamixel bus mutex poisoned".into(),
+            })?
+            .arm_limit_escape_from(joints)
+    }
+
+    fn verify_coupled_joints(&mut self) -> Result<(), HwError> {
+        self.reap_executor();
+        self.bus
+            .lock()
+            .map_err(|_| HwError::ReadFailed {
+                reason: "Dynamixel bus mutex poisoned".into(),
+            })?
+            .verify_mirror_alignment()
+    }
+
+    fn command_rail_and_racket(
+        &mut self,
+        rail_x: f64,
+        aim_joint_rad: f64,
+        duration_secs: f64,
+    ) -> Result<AppliedRailRacketCommand, HwError> {
+        self.reap_executor();
+        if self.busy.load(Ordering::Acquire) {
+            return Err(HwError::CommandFailed {
+                duration_secs,
+                joint_count: 1,
+                reason: "중앙 이동 궤적이 아직 실행 중입니다".into(),
+            });
+        }
+
+        let (applied_rail_m, rail_sent) = {
+            let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
+                duration_secs,
+                joint_count: 1,
+                reason: "레일 mutex poisoned".into(),
+            })?;
+            match rail.as_mut() {
+                Some(rail) => (rail.command_abs_in_secs(rail_x, duration_secs)?, true),
+                None => (0.0, false),
+            }
+        };
+        // 4-DOF 논리 관절 1번은 라켓 수평 조준축(ID 3)이다.
+        // 다른 관절에는 Goal Position을 보내지 않는다.
+        let applied_aim_rad = self
+            .bus
+            .lock()
+            .map_err(|_| HwError::CommandFailed {
+                duration_secs,
+                joint_count: 1,
+                reason: "Dynamixel bus mutex poisoned".into(),
+            })?
+            .write_joint(crate::robot::control::DIRECT_AIM_JOINT_INDEX, aim_joint_rad)?;
+        return Ok(AppliedRailRacketCommand {
+            rail_m: applied_rail_m,
+            aim_rad: applied_aim_rad,
+            rail_sent,
+        });
+    }
+
     fn is_busy(&mut self) -> bool {
         self.reap_executor();
         return self.busy.load(Ordering::Acquire);
+    }
+
+    fn log_joint_diagnostics(&mut self) {
+        match self.bus.lock() {
+            Ok(mut bus) => bus.log_joint_diagnostics(),
+            Err(_) => error!("Dynamixel 진단 실패 — bus mutex poisoned"),
+        }
+    }
+
+    fn recover_joint_control(&mut self) -> Result<bool, HwError> {
+        return self
+            .bus
+            .lock()
+            .map_err(|_| HwError::ReadFailed {
+                reason: "Dynamixel 복구 실패 — bus mutex poisoned".into(),
+            })?
+            .recover_joint_control();
     }
 
     fn cancel(&mut self) {
         // executor 루프가 매 틱 이 플래그를 보고 빠져나오며 `busy`를 내린다.
         // `Drop`이 쓰는 것과 같은 경로다.
         self.cancel.store(true, Ordering::Release);
+        if let Ok(mut rail) = self.rail.lock()
+            && let Some(rail) = rail.as_mut()
+            && let Err(error) = rail.stop()
+        {
+            error!(%error, "AXL 레일 안전 정지 실패");
+        }
+        if let Ok(mut bus) = self.bus.lock()
+            && let Ok(joints) = bus.read_joints()
+            && let Some(aim) = joints
+                .values
+                .get(crate::robot::control::DIRECT_AIM_JOINT_INDEX)
+        {
+            let _ = bus.write_joint(crate::robot::control::DIRECT_AIM_JOINT_INDEX, *aim);
+        }
     }
 }
 
@@ -300,9 +392,8 @@ mod tests {
         bus.configure_position_mode_max_effort()
             .expect("position mode");
         bus.enable_torque(true).expect("torque");
-        let arm = Arc::new((*crate::defaults::urdf_4dof().expect("urdf").arm).clone());
-        let mut hardware = RealHardware::from_bus(bus, stream_hz, Some(test_rail()), false, arm)
-            .expect("hardware");
+        let mut hardware =
+            RealHardware::from_bus(bus, stream_hz, Some(test_rail()), false).expect("hardware");
         assert_eq!(hardware.read_pose().expect("pose").rail_x, 0.0);
     }
 
@@ -344,7 +435,7 @@ mod tests {
             RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
         let trajectory = motion::Trajectory::new(
             Joints::from_slice(&[0.0; 4]),
-            Joints::from_slice(&[0.05; 4]),
+            Joints::from_slice(&[0.10, 0.05, 0.05, 0.05]),
             vec![0.0; 4],
             vec![0.0; 4],
             0.04,
@@ -362,9 +453,62 @@ mod tests {
 
         let pose = hardware.read_pose().expect("pose");
         assert!((pose.rail_x - 0.25).abs() < 1e-9);
-        for angle in pose.joints.values {
-            assert!((angle - 0.05).abs() < 0.002);
+        assert!((pose.joints.values[0] - 0.10).abs() < 0.002);
+        for angle in &pose.joints.values[1..] {
+            assert!((*angle - 0.05).abs() < 0.002);
         }
+    }
+
+    #[test]
+    fn joint_only_trajectory_does_not_overwrite_direct_rail_target() {
+        let config = DynamixelConfig {
+            stream_hz: 500.0,
+            ..DynamixelConfig::default()
+        };
+        let mut hardware =
+            RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
+        hardware
+            .command_rail_and_racket(0.35, 0.0, 0.10)
+            .expect("direct rail command");
+        let trajectory = motion::Trajectory::new(
+            Joints::from_slice(&[0.0; 4]),
+            Joints::from_slice(&[0.05; 4]),
+            vec![0.0; 4],
+            vec![0.0; 4],
+            0.04,
+            motion::Rail::fixed(0.0),
+        );
+
+        hardware.command_joints(&trajectory).expect("joint command");
+        thread::sleep(Duration::from_millis(100));
+
+        let pose = hardware.read_pose().expect("pose");
+        assert!((pose.rail_x - 0.35).abs() < 1e-9);
+    }
+
+    #[test]
+    fn direct_tracking_changes_only_rail_and_aim_joint() {
+        let config = DynamixelConfig {
+            stream_hz: 500.0,
+            ..DynamixelConfig::default()
+        };
+        let mut hardware =
+            RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
+        let before = hardware.read_pose().expect("before");
+
+        let applied = hardware
+            .command_rail_and_racket(0.35, -0.25, 0.1)
+            .expect("tracking command");
+        assert!((applied.rail_m - 0.35).abs() < 1e-9);
+        assert!((applied.aim_rad - -0.25).abs() < 0.002);
+        assert!(applied.rail_sent);
+
+        let after = hardware.read_pose().expect("after");
+        assert!((after.rail_x - 0.35).abs() < 1e-9);
+        for index in [0, 2, 3] {
+            assert!((after.joints.values[index] - before.joints.values[index]).abs() < 0.002);
+        }
+        assert!((after.joints.values[1] - -0.25).abs() < 0.002);
     }
 
     #[test]

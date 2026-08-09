@@ -13,6 +13,8 @@ pub struct State {
     rail_x: f64,
     /// 리니어 목표 x [m]
     rail_target: f64,
+    /// 직접 명령이 지정한 순항 속도. `None`이면 모델 최대 속도.
+    rail_speed_limit: Option<f64>,
     /// 리니어 레일 현재 속도 [m/s] — `RAIL_ACCEL_M_S2` 가속 제한 적분 상태.
     ///
     /// 속도만 제한하면(예전 동작) 레일이 한 틱 만에 정지→최고속으로 뛰는데,
@@ -24,6 +26,8 @@ pub struct State {
     targets: Joints,
     /// 스윙 재생(quintic 또는 순수 토크 bang-bang)
     active_swing: Option<SwingPlayback>,
+    /// 위치 이동 후 이어서 돌아갈 출발 포즈.
+    return_pose_after_motion: Option<crate::robot::Pose>,
     /// 스윙 종료 후 `plan_return_to_center` 자동 복귀 (메인 sim 기본 on, jog off).
     auto_return_to_center: bool,
 }
@@ -34,15 +38,17 @@ impl State {
         return Self {
             rail_x,
             rail_target: rail_x,
+            rail_speed_limit: None,
             rail_vel: 0.0,
             targets: initial.clone(),
             angles: initial,
             active_swing: None,
+            return_pose_after_motion: None,
             auto_return_to_center: true,
         };
     }
 
-    /// 스윙이 끝나면 테이블 중앙으로 자동 복귀할지 (메인 랠리 sim용).
+    /// 스윙이 끝나면 실기 보정 준비 위치로 자동 복귀할지 (메인 랠리 sim용).
     pub fn set_auto_return_to_center(&mut self, enabled: bool) {
         self.auto_return_to_center = enabled;
     }
@@ -54,8 +60,10 @@ impl State {
     /// 스윙 취소 후 관절·레일을 즉시 스냅 (플래그 유지).
     pub fn snap_to_pose(&mut self, pose: crate::robot::Pose) {
         self.active_swing = None;
+        self.return_pose_after_motion = None;
         self.rail_x = pose.rail_x;
         self.rail_target = pose.rail_x;
+        self.rail_speed_limit = None;
         self.rail_vel = 0.0;
         self.angles = pose.joints.clone();
         self.targets = pose.joints;
@@ -108,6 +116,21 @@ impl State {
     /// 설정된 목표를 향해 `rail.max_speed`·`RAIL_ACCEL_M_S2`로 접근한다.
     pub fn set_rail_target(&mut self, rail_x: f64) {
         self.rail_target = rail_x;
+        self.rail_speed_limit = None;
+    }
+
+    /// 실기 AXL과 같이 가속·감속을 포함해 지정 시간에 도착하도록 직접 목표를 건다.
+    pub fn set_rail_target_in_secs(&mut self, arm: &Arm, rail_x: f64, duration_secs: f64) {
+        self.rail_target = rail_x;
+        let distance = (rail_x - self.rail_x).abs();
+        let acceleration = crate::defaults::motion::RAIL_ACCEL_M_S2;
+        let discriminant = duration_secs * duration_secs - 4.0 * distance / acceleration;
+        let velocity = if discriminant <= 0.0 {
+            f64::INFINITY
+        } else {
+            0.5 * acceleration * (duration_secs - discriminant.sqrt())
+        };
+        self.rail_speed_limit = arm.rail.map(|rail| velocity.min(rail.max_speed));
     }
 
     /// quintic 스윙 궤적을 시작한다 (이미 스윙 중이면 무시).
@@ -120,14 +143,33 @@ impl State {
 
     /// 스윙을 현재 포즈 기준 새 quintic 궤적으로 교체한다 (elapsed=0).
     pub fn replace_swing(&mut self, trajectory: motion::Trajectory) {
-        self.replace_playback(PlaybackTrajectory::Quintic(trajectory), 0.0);
+        self.replace_playback(PlaybackTrajectory::Quintic(trajectory), 0.0, true);
+    }
+
+    /// 기존 레일 직접 이동을 유지하면서 관절 quintic만 재생한다.
+    pub fn replace_joint_swing(&mut self, trajectory: motion::Trajectory) {
+        self.replace_playback(PlaybackTrajectory::Quintic(trajectory), 0.0, false);
+    }
+
+    /// 목표 위치 이동을 시작하고, 완료 후 출발 포즈로 복귀한다.
+    pub fn replace_motion_and_return(
+        &mut self,
+        trajectory: motion::Trajectory,
+        return_pose: crate::robot::Pose,
+    ) {
+        // 정밀 예측으로 진행 중 궤적을 교체해도 복귀점은 재계획 순간의
+        // 자세가 아니라 공을 받기 전 출발 자세여야 한다.
+        if self.return_pose_after_motion.is_none() {
+            self.return_pose_after_motion = Some(return_pose);
+        }
+        self.replace_swing(trajectory);
     }
 
     /// 스윙을 현재 포즈 기준 새 순수 토크 bang-bang 궤적으로 교체한다
     /// (elapsed=0) - GUI "bang-bang swing" 토글이 켜졌을 때 `replace_swing`
     /// 대신 쓴다.
     pub fn replace_bang_bang_swing(&mut self, trajectory: motion::bang_bang::Trajectory) {
-        self.replace_playback(PlaybackTrajectory::BangBang(trajectory), 0.0);
+        self.replace_playback(PlaybackTrajectory::BangBang(trajectory), 0.0, true);
     }
 
     /// `replace_bang_bang_swing`과 같지만 재생을 `elapsed`[s] 지점부터
@@ -141,21 +183,24 @@ impl State {
         trajectory: motion::bang_bang::Trajectory,
         elapsed: f64,
     ) {
-        self.replace_playback(PlaybackTrajectory::BangBang(trajectory), elapsed);
+        self.replace_playback(PlaybackTrajectory::BangBang(trajectory), elapsed, true);
     }
 
-    fn replace_playback(&mut self, trajectory: PlaybackTrajectory, elapsed: f64) {
+    fn replace_playback(&mut self, trajectory: PlaybackTrajectory, elapsed: f64, drive_rail: bool) {
         let elapsed = elapsed.clamp(0.0, trajectory.duration_secs());
         self.targets = trajectory.sample_at(elapsed);
         self.angles = self.targets.clone();
-        self.rail_target = trajectory.follow_through_rail_x();
-        self.rail_x = trajectory.sample_rail_at(elapsed);
-        // 궤적 재생 중에는 레일 위치를 궤적이 직접 준다 — 슬루 적분 상태를
-        // 남겨두면 재생이 끝난 뒤 낡은 속도로 튄다.
-        self.rail_vel = 0.0;
+        if drive_rail {
+            self.rail_target = trajectory.follow_through_rail_x();
+            self.rail_x = trajectory.sample_rail_at(elapsed);
+            // 궤적 재생 중에는 레일 위치를 궤적이 직접 준다 — 슬루 적분 상태를
+            // 남겨두면 재생이 끝난 뒤 낡은 속도로 튄다.
+            self.rail_vel = 0.0;
+        }
         self.active_swing = Some(SwingPlayback {
             trajectory,
             elapsed,
+            drive_rail,
             joint_vel: Vec::new(),
         });
     }
@@ -171,13 +216,23 @@ impl State {
     /// 진행 중 스윙을 취소한다 (다음 공 발사 전).
     pub fn cancel_swing(&mut self) {
         self.active_swing = None;
+        self.return_pose_after_motion = None;
     }
 
     /// 시뮬 폐루프: 궤적·레일 명령만 갱신한다. 측정 관절각은 건드리지 않는다.
     pub fn step_commands(&mut self, arm: &Arm, dt: f64) {
         if self.active_swing.is_some() {
+            let drive_rail = self
+                .active_swing
+                .as_ref()
+                .is_some_and(|playback| playback.drive_rail);
             let finished = self.advance_swing_commands(dt);
-            if finished && self.auto_return_to_center && !self.is_at_center(arm) {
+            if !drive_rail {
+                self.advance_rail(arm, dt);
+            }
+            if finished && let Some(return_pose) = self.return_pose_after_motion.take() {
+                self.start_return_to_pose(arm, return_pose);
+            } else if finished && self.auto_return_to_center && !self.is_at_center(arm) {
                 let start = crate::robot::Pose::new(self.rail_x, self.angles.clone());
                 if let Ok(trajectory) = motion::Planner::return_to_center(arm, &start) {
                     self.replace_swing(trajectory);
@@ -209,12 +264,14 @@ impl State {
         }
         let accel = crate::defaults::motion::RAIL_ACCEL_M_S2;
         let brake_speed = (2.0 * accel * diff.abs()).sqrt();
-        let desired_vel = diff.signum() * rail.max_speed.min(brake_speed);
+        let speed_limit = self.rail_speed_limit.unwrap_or(rail.max_speed);
+        let desired_vel = diff.signum() * speed_limit.min(rail.max_speed).min(brake_speed);
         self.rail_vel += (desired_vel - self.rail_vel).clamp(-accel * dt, accel * dt);
         let step = self.rail_vel * dt;
         if step.abs() >= diff.abs() {
             self.rail_x = self.rail_target;
             self.rail_vel = 0.0;
+            self.rail_speed_limit = None;
         } else {
             self.rail_x += step;
         }
@@ -254,7 +311,9 @@ impl State {
         let duration = playback.trajectory.duration_secs();
         let t = playback.elapsed.min(duration);
         self.targets = playback.trajectory.sample_at(t);
-        self.rail_x = playback.trajectory.sample_rail_at(t);
+        if playback.drive_rail {
+            self.rail_x = playback.trajectory.sample_rail_at(t);
+        }
         if playback.elapsed >= duration {
             self.active_swing = None;
             return true;
@@ -280,7 +339,9 @@ impl State {
         let duration = playback.trajectory.duration_secs();
         let t = playback.elapsed.min(duration);
         let sampled = playback.trajectory.sample_at(t);
-        self.rail_x = playback.trajectory.sample_rail_at(t);
+        if playback.drive_rail {
+            self.rail_x = playback.trajectory.sample_rail_at(t);
+        }
         self.angles = sampled;
         if playback.elapsed >= duration {
             self.active_swing = None;
@@ -316,7 +377,9 @@ impl State {
         let t = playback.elapsed.min(duration);
         let desired = playback.trajectory.sample_at(t);
         let desired_vel = playback.trajectory.sample_velocity_at(t);
-        self.rail_x = playback.trajectory.sample_rail_at(t);
+        if playback.drive_rail {
+            self.rail_x = playback.trajectory.sample_rail_at(t);
+        }
 
         let inertia = control.joint_inertia.max(1e-9);
         let n = self.angles.values.len().min(desired.values.len());
@@ -344,13 +407,15 @@ impl State {
     /// 목표 관절각을 `max_speed` [rad/s]로 추종한다 (궤적 없을 때 폴백).
     ///
     /// 스윙(타격이든 복귀든)이 끝나는 순간 중앙 포즈(관절 `default_joints`,
-    /// 레일 `default_x` = 테이블 폭 중앙)가 아니면 곧바로 복귀 궤적을 이어서
+    /// 레일 `default_x` = 실기 보정 준비 위치)가 아니면 곧바로 복귀 궤적을 이어서
     /// 시작한다 — 실물 로봇은 모터 토크 한계 때문에 끝에서 끝으로 급하게 못
     /// 움직이므로, 매번 중앙으로 되돌아온 상태에서 다음 스윙을 시작해야 한다.
     pub fn step_toward_targets(&mut self, arm: &Arm, dt: f64) {
         if self.active_swing.is_some() {
             let finished = self.advance_swing(arm, dt);
-            if finished && self.auto_return_to_center && !self.is_at_center(arm) {
+            if finished && let Some(return_pose) = self.return_pose_after_motion.take() {
+                self.start_return_to_pose(arm, return_pose);
+            } else if finished && self.auto_return_to_center && !self.is_at_center(arm) {
                 let start = crate::robot::Pose::new(self.rail_x, self.angles.clone());
                 if let Ok(trajectory) = motion::Planner::return_to_center(arm, &start) {
                     self.replace_swing(trajectory);
@@ -374,8 +439,18 @@ impl State {
         self.angles = crate::robot::collision::clamp_above_table(arm, self.rail_x, &self.angles);
     }
 
+    fn start_return_to_pose(&mut self, arm: &Arm, return_pose: crate::robot::Pose) {
+        let start = crate::robot::Pose::new(self.rail_x, self.angles.clone());
+        if let Ok(trajectory) =
+            motion::Planner::move_to(arm, &start, return_pose.joints, return_pose.rail_x)
+        {
+            // 복귀 궤적 완료 후에는 다시 자동 복귀를 시작하지 않는다.
+            self.replace_swing(trajectory);
+        }
+    }
+
     /// 레일·관절이 이미 중앙 포즈(`Arm::default_joints`, `LinearRail::default_x`
-    /// = 테이블 폭 중앙) 근처인지. `LinearRail::home_x`(레일 원점, x=0)는
+    /// = 실기 보정 준비 위치) 근처인지. `LinearRail::home_x`(레일 원점, x=0)는
     /// 부팅 시 "대기 위치"일 뿐 여기서 말하는 중앙이 아니다.
     fn is_at_center(&self, arm: &Arm) -> bool {
         const RAIL_EPSILON_M: f64 = 1e-3;
@@ -442,6 +517,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn joint_only_swing_keeps_direct_rail_move_running() {
+        const DT: f64 = 1.0 / 1000.0;
+        let arm = crate::defaults::primitive_4dof().expect("arm").arm;
+        let mut state = arm.initial_state();
+        let rail_start = state.rail_x();
+        let rail_goal = rail_start + 0.20;
+        state.set_rail_target_in_secs(&arm, rail_goal, 0.40);
+
+        let mut impact = state.joints().clone();
+        impact.values[0] += 0.04;
+        let trajectory = motion::Trajectory::new(
+            state.joints().clone(),
+            impact,
+            vec![0.0; 4],
+            vec![0.0; 4],
+            0.30,
+            motion::Rail::fixed(rail_start),
+        );
+        state.replace_joint_swing(trajectory);
+        for _ in 0..300 {
+            state.step_commands(&arm, DT);
+        }
+
+        assert!(state.rail_x() > rail_start + 0.05);
+        assert!(state.rail_x() <= rail_goal + 1e-9);
+    }
+
     /// 레일은 정지 상태에서 한 틱 만에 `max_speed`로 뛰지 못한다 —
     /// `RAIL_ACCEL_M_S2`가 실제로 걸리는지 잠근다(WP5 회귀 가드).
     ///
@@ -498,6 +601,27 @@ mod tests {
             state.rail_x() <= goal + 1e-9,
             "오버슛: {} > {goal}",
             state.rail_x()
+        );
+    }
+
+    #[test]
+    fn direct_rail_command_arrives_near_requested_duration() {
+        const DT: f64 = 1.0 / 1000.0;
+        let arm = crate::defaults::primitive_4dof().expect("arm").arm;
+        let mut state = arm.initial_state();
+        let goal = state.rail_x() + 0.20;
+        let requested_secs = 0.40;
+        state.set_rail_target_in_secs(&arm, goal, requested_secs);
+
+        let mut elapsed = 0.0;
+        while (state.rail_x() - goal).abs() > 1e-9 && elapsed < 1.0 {
+            state.step_commands(&arm, DT);
+            elapsed += DT;
+        }
+
+        assert!(
+            (elapsed - requested_secs).abs() <= 0.01,
+            "elapsed={elapsed}"
         );
     }
 

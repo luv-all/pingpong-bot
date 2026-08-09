@@ -12,10 +12,10 @@ use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector3};
 
 use crate::Point3;
 use crate::constants::geometry;
-use crate::constants::table;
 use crate::defaults::dxl_limits::{
     DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, joint_reflected_inertias_4dof, joint_torque_limits_4dof,
 };
+use crate::defaults::hardware::{RAIL_READY_X_M, RAIL_X_MAX_M, RAIL_X_MIN_M};
 use crate::robot::{
     Arm, JointLimit, Joints, LinkInertial, MountPreset, RailFrame, Robot, RobotBuildError,
     RobotBuilder, SerialChain, SerialJoint,
@@ -23,12 +23,8 @@ use crate::robot::{
 
 /// 리니어 레일 최대 속도 [m/s].
 ///
-/// 이전 `12.0`은 근거 없는 리터럴이었다 — 테이블 전폭(1.525 m)을 0.127초에
-/// 주파해, rough-to-fine 추종이 예측 방향으로 레일을 미리 옮길 때 렌더 프레임
-/// 상 순간이동처럼 보였다(육안 확인, 2026-07-23). 실기
-/// `config/real-hardware.toml`의 `[hardware.rail]` `vel`/`max_vel` = 5.0 m/s에
-/// 맞춰 재보정 — 전폭 주파 0.305초로, 연속적인 움직임으로 보인다.
-pub const RAIL_MAX_SPEED: f64 = 5.0;
+/// 발사기 실기 시험 기준값 7.5 m/s의 1.5배. 계획기와 AXL 설정이 공유한다.
+pub const RAIL_MAX_SPEED: f64 = 11.25;
 
 /// 4-DOF 휴지(ready) 자세 [rad] — yaw, 어깨, 팔꿈치, 손목 순.
 ///
@@ -36,13 +32,13 @@ pub const RAIL_MAX_SPEED: f64 = 5.0;
 /// 자세의 도달성이 아니라 *휴지 자세 → 임팩트 자세* 관절공간 이동에
 /// 걸리는 시간이다(2026-07-23 2차 조사, `.omc/research/
 /// known-regressions-realistic-joint-speed.md` §1). 재보정된 관절속도
-/// (~2.88 rad/s, [`DYNAMIXEL_MAX_JOINT_SPEED_RAD_S`]) 아래서 quintic 소요시간은
+/// (~5.18 rad/s, [`DYNAMIXEL_MAX_JOINT_SPEED_RAD_S`]) 아래서 quintic 소요시간은
 /// **가장 많이 움직이는 한 관절**이 결정하므로, 휴지 자세는 "중립적으로
 /// 보이는" 곳이 아니라 *실제로 마주칠 임팩트 자세들까지의 최악 이동거리가
 /// 최소*인 곳이어야 한다.
 ///
 /// **2026-07-30 재계산 (`diag_windup_rest_pose_search`,
-/// `src/planner/swing/physics.rs`).** 사용자 관찰: GUI에서 스윙마다 라켓이
+/// `src/robot/motion/physics.rs`).** 사용자 관찰: GUI에서 스윙마다 라켓이
 /// "뒤로 당겨지는" 동작이 반복된다 — 팔로스루가 임팩트 방향으로 더 나아간
 /// 뒤 `plan_return_to_center`가 중립 휴지 자세로 역방향 복귀하기 때문으로
 /// 보인다. 가설: 휴지 자세를 미리 "당겨진(backswing)" 자세로 잡으면
@@ -88,7 +84,11 @@ pub const RAIL_MAX_SPEED: f64 = 5.0;
 /// 대각을 바꾼다), `robot::tests::default_arm_produces_racket_pose`(재산출 값에서는
 /// 라켓이 베이스보다 아래로 내려온다 — 임팩트 대역에 가까워지므로 정상이지만
 /// 그 단정문이 실패한다), 그리고 `mount_search`로 `mount_y` 재스윕.
-pub const READY_JOINTS_4DOF: [f64; 4] = [0.5067, 0.0, -0.2054, -0.6925];
+/// **2026-08-05 실기 동기화.** 라켓 최하단 15.5 cm·장축 8°가
+/// 실측과 일치한 두 번의 안정 도달값을 평균했다. 예전 계획기 최적화값을
+/// 계속 명령하면 실물은 항상 약 1–2.5° 다른 자세에 멈춰 sim·real
+/// 시작 자세가 어긋났다. 이 값은 기본 자세에서 그 괴리를 없앤다.
+pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
 
 /// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·바닥 기준).
 ///
@@ -98,10 +98,10 @@ pub const READY_JOINTS_4DOF: [f64; 4] = [0.5067, 0.0, -0.2054, -0.6925];
 /// (~면 위 3~5cm)과 맞춤"이라는 추정에 기대고 있었는데 실측이 그 가정을
 /// 뒤집었다 — 시뮬 베이스가 실물보다 12.5 cm 낮았다.
 ///
-/// `mount_y`는 `mount_search`(2026-07-26) 값을 유지한다: `behind=0.02`(y=−0.02)는
-/// ratio≤1이 **0/150**, mean≈3.79였고 `behind=0.10`(당시 height=0.05)은
-/// **10/150**, mean≈2.48로 임팩트 끝속도 스케일(`NEAR_SINGULARITY` 2.5) 직전에
-/// 들어왔다. 다만 그 스윕은 **낮은 베이스 기준**이라 0.935에서의 최적값은 아니다.
+/// `mount_y`는 실측값 **-0.128**을 쓴다 — `mount_search`(2026-07-26)가 낮은
+/// 베이스 기준으로 추천한 `behind=0.10`(y=−0.10, `behind=0.02` 대비 ratio≤1이
+/// **10/150**, mean≈2.48)은 그 스윕이 **낮은 베이스 기준**이라 0.935에서는
+/// 최적값이 아니었고, 이후 실측이 이 값으로 대체했다.
 ///
 /// 두 값 모두 sim GUI "Rig" 패널에서 공이 주차된 동안 런타임 조정 가능하다
 /// (`SimRuntimeControls::rail_frame`). 좋은 위치를 눈으로 찾은 뒤
@@ -109,7 +109,7 @@ pub const READY_JOINTS_4DOF: [f64; 4] = [0.5067, 0.0, -0.2054, -0.6925];
 /// [`READY_JOINTS_4DOF`]를 확정하는 것이 순서다.
 pub fn rail_frame() -> RailFrame {
     return RailFrame {
-        mount_y: -0.10,
+        mount_y: -0.128,
         rail_bottom_z: 0.88,
     };
 }
@@ -151,23 +151,42 @@ pub fn primitive_4dof_with_mount(mount_y: f64, mount_z: f64) -> Result<Robot, Ro
         .expect("4-dof q3 axis"),
     ];
 
-    let chain = SerialChain::new(
-        UnitQuaternion::identity(),
-        joints,
-        // CAD tip: +Y=면 법선, −Z=손잡이(면 내, 홈 포즈 기준). 타격점은 면 평행 이동.
-        Isometry3::translation(
+    // primitive도 실측 피치를 적용해 URDF 활성 로봇과 같은 라켓 축을 쓴다.
+    // 다만 primitive EE는 이미 손목→블레이드 중심 0.10 m를 포함하므로,
+    // URDF 원점용 0.1111 m 추가 이동은 중복 적용하지 않는다.
+    let link_from_racket = UnitQuaternion::from_axis_angle(
+        &nalgebra::Unit::new_normalize(Vector3::new(0.0, 1.0, 1.0)),
+        std::f64::consts::PI,
+    );
+    let mount_pitch = UnitQuaternion::from_axis_angle(
+        &nalgebra::Unit::new_normalize(Vector3::x()),
+        geometry::RACKET_MOUNT_PITCH_CORRECTION_RAD,
+    );
+    let link_from_racket_iso =
+        Isometry3::from_parts(nalgebra::Translation3::identity(), link_from_racket);
+    let ee_transform = link_from_racket_iso
+        * Isometry3::from_parts(nalgebra::Translation3::identity(), mount_pitch)
+        * Isometry3::translation(
             0.0,
-            -geometry::RACKET_HALF_Z,
             -geometry::RACKET_HANDLE_LENGTH,
-        ),
-    )
-    .expect("4-dof serial chain");
+            -geometry::RACKET_HALF_Z,
+        )
+        * link_from_racket_iso.inverse();
+    let chain = SerialChain::new(UnitQuaternion::identity(), joints, ee_transform)
+        .expect("4-dof serial chain");
 
     let (link_inertials, aggregated_inertials) = primitive_4dof_inertials();
 
     let built = Arm::builder()
         .base_xyz(0.0, mount_y, mount_z)
-        .linear_rail(mount_y, mount_z, 0.0, table::WIDTH_X, RAIL_MAX_SPEED)
+        .linear_rail(
+            mount_y,
+            mount_z,
+            RAIL_X_MIN_M,
+            RAIL_X_MAX_M,
+            RAIL_READY_X_M,
+            RAIL_MAX_SPEED,
+        )
         .serial_chain(
             chain,
             vec![
@@ -480,20 +499,6 @@ pub fn robot() -> Result<Robot, RobotBuildError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::table;
-
-    /// 실측 회귀: 베이스는 바닥 기준 0.935 m (= 하단 0.88 + 두께 0.055).
-    ///
-    /// 탁구대 면(0.76)보다 17.5 cm 위다 — 예전 `SURFACE_Z + 0.05` 가정보다
-    /// 12.5 cm 높다. 이 숫자가 실물이므로 값이 흔들리면 회귀다.
-    #[test]
-    fn rail_frame_mounts_behind_table_at_measured_height() {
-        let frame = rail_frame();
-        assert!((frame.mount_y() - (-0.10)).abs() < 1e-12);
-        assert!((frame.mount_z() - 0.935).abs() < 1e-12);
-        assert_eq!(frame.mount_xyz0(), [0.0, -0.10, frame.mount_z()]);
-        assert!((frame.mount_z() - table::SURFACE_Z - 0.175).abs() < 1e-12);
-    }
 
     #[test]
     fn primitive_follows_rail_frame() {
@@ -505,5 +510,48 @@ mod tests {
         let rail = arm.rail.expect("rail");
         assert!((rail.mount_y - frame.mount_y()).abs() < 1e-12);
         assert!((rail.mount_z - frame.mount_z()).abs() < 1e-12);
+    }
+
+    /// 2026-08-05 버니어 실측(손잡이 끝이 로봇 쪽으로 8°)을 라켓
+    /// 장착 변환의 회귀 기준으로 고정한다.
+    #[test]
+    fn ready_racket_mount_matches_bench_geometry() {
+        let robot = urdf_4dof().expect("4-dof");
+        let arm = robot.arm.as_ref();
+        let rail_x = arm
+            .rail
+            .as_ref()
+            .map_or(RAIL_READY_X_M, |rail| rail.default_x());
+        let pose = arm
+            .forward_kinematics_with_rail(rail_x, &arm.default_joints)
+            .expect("ready FK");
+        let [w, x, y, z] = pose.orientation;
+        let rotation = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(w, x, y, z));
+        let axis_x = rotation * Vector3::x();
+        let blade_axis = rotation * Vector3::y();
+        let axis_normal = rotation * Vector3::z();
+        let angle_deg = blade_axis.z.abs().acos().to_degrees();
+        let half_height = axis_x.z.abs() * geometry::RACKET_HALF_X
+            + blade_axis.z.abs() * geometry::RACKET_HALF_Y
+            + axis_normal.z.abs() * geometry::RACKET_HALF_Z;
+        let lowest = pose.position.z - crate::constants::table::SURFACE_Z - half_height;
+
+        assert!(
+            (angle_deg - 8.0).abs() < 0.15,
+            "bench angle=8deg, model={angle_deg:.3}deg"
+        );
+        assert!(
+            blade_axis.y < 0.0 && blade_axis.z > 0.0,
+            "손잡이 쪽(+blade Y)은 로봇(-world Y)·위(+Z)로 기울어야 함: {blade_axis:?}"
+        );
+        assert!(
+            pose.normal.y > 0.0 && pose.normal.z >= 0.0,
+            "라켓 면은 상대 탁구대(+Y)를 보고 아래로 기울지 않아야 함: {:?}",
+            pose.normal
+        );
+        assert!(
+            (lowest - 0.155).abs() < 0.003,
+            "bench lowest=0.155m, model={lowest:.4}m"
+        );
     }
 }

@@ -76,10 +76,10 @@ pub fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
 }
 
 /// 벤치 스테레오 리그 — USB 순서가 바뀌면 **여기만** 고친다.
-pub const LEFT_DEVICE: i32 = 1;
-pub const RIGHT_DEVICE: i32 = 0;
-pub const LEFT_CAMERA_ID: u8 = 0;
-pub const RIGHT_CAMERA_ID: u8 = 1;
+pub const LEFT_DEVICE: i32 = 0;
+pub const RIGHT_DEVICE: i32 = 1;
+pub const LEFT_CAMERA_ID: u8 = 1;
+pub const RIGHT_CAMERA_ID: u8 = 0;
 
 pub const MAX_REPROJ_RMSE_PX: f64 = 7.0;
 pub const MIN_CHARUCO_CORNERS: usize = 4;

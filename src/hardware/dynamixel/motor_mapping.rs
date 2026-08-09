@@ -34,13 +34,25 @@ impl MotorMapping {
     }
 
     pub fn radians_to_ticks(&self, joint_index: usize, angle_rad: f64) -> i32 {
-        let sign = f64::from(self.config.joint_signs[joint_index]);
-        let adjusted = sign * angle_rad + self.config.joint_offsets_rad[joint_index];
-        let ticks = (f64::from(self.config.zero_tick)
-            + adjusted * f64::from(self.config.ticks_per_revolution) / TAU)
-            .round() as i32;
+        let ticks = self.radians_to_raw_ticks(joint_index, angle_rad);
         let (lo, hi) = self.tick_limits[joint_index];
         return ticks.clamp(lo, hi);
+    }
+
+    /// 모터 소프트 한계를 적용하기 전 절대 tick.
+    ///
+    /// 시작 자세가 이미 한계 밖인 경우 그 자리에서 정상 범위 쪽으로만 빠져나오는
+    /// 제한 복귀에 사용한다. 일반 명령은 계속 [`Self::radians_to_ticks`]를 쓴다.
+    pub(super) fn radians_to_raw_ticks(&self, joint_index: usize, angle_rad: f64) -> i32 {
+        let sign = f64::from(self.config.joint_signs[joint_index]);
+        let adjusted = sign * angle_rad + self.config.joint_offsets_rad[joint_index];
+        return (f64::from(self.config.zero_tick)
+            + adjusted * f64::from(self.config.ticks_per_revolution) / TAU)
+            .round() as i32;
+    }
+
+    pub(super) fn tick_limit(&self, joint_index: usize) -> (i32, i32) {
+        return self.tick_limits[joint_index];
     }
 
     /// [`Self::radians_to_ticks`]가 모터 각도 한계로 **잘랐는가**.
@@ -50,11 +62,7 @@ impl MotorMapping {
     /// 0.50 rad(28.8°) 어긋난 게 이것이었다: 모터가 못 따라간 게 아니라 **갈 수 없는 각도를
     /// 명령**했다. 호출측이 이걸 보고 경고할 수 있게 노출한다.
     pub fn clamped_by_motor_limit(&self, joint_index: usize, angle_rad: f64) -> bool {
-        let sign = f64::from(self.config.joint_signs[joint_index]);
-        let adjusted = sign * angle_rad + self.config.joint_offsets_rad[joint_index];
-        let raw = (f64::from(self.config.zero_tick)
-            + adjusted * f64::from(self.config.ticks_per_revolution) / TAU)
-            .round() as i32;
+        let raw = self.radians_to_raw_ticks(joint_index, angle_rad);
         let (lo, hi) = self.tick_limits[joint_index];
         return raw < lo || raw > hi;
     }

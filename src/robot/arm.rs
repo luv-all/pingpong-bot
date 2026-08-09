@@ -425,6 +425,60 @@ impl Arm {
         });
     }
 
+    /// 레일 위치를 고정한 채 라켓 중심을 목표에 두고, 면 법선은 가장 가까운 해를 고른다.
+    ///
+    /// 실시간 팔 보정에서 레일이 IK의 자유변수로 다시 움직이지 않도록 사용한다.
+    /// 위치는 하드 제약으로 맞추고, 고정 레일에서 방향을 정확히 만들 수 없으면
+    /// 관절 시드 중 법선 오차가 가장 작은 해를 반환한다.
+    pub fn inverse_pose_at_fixed_rail_best_normal(
+        &self,
+        rail_x: f64,
+        target: Point3,
+        target_normal: Vector3<f64>,
+        hint: &Pose,
+        search: IkSearch,
+    ) -> Result<(Pose, f64), SwingPlanError> {
+        let Some(rail) = &self.rail else {
+            return self.inverse_pose_with_rail_best_normal(target, target_normal, hint, search);
+        };
+        if target_normal.norm_squared() <= f64::EPSILON {
+            return Err(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: target.x,
+                target_y: target.y,
+                target_z: target.z,
+            });
+        }
+        let rail_x = rail.clamp_x(rail_x);
+        let target_normal = target_normal.normalize();
+        let mut best: Option<(f64, Pose)> = None;
+        for seed in self.pose_ik_seeds(hint, search) {
+            let Ok(joints) = self.inverse_kinematics_with_rail(rail, rail_x, target, Some(&seed))
+            else {
+                continue;
+            };
+            let Some(racket) = self.forward_kinematics_with_rail(rail_x, &joints) else {
+                continue;
+            };
+            if (racket.position.coords - target.coords).norm() > Self::POSE_IK_POSITION_TOLERANCE {
+                continue;
+            }
+            let normal_error = (target_normal - racket.normal).norm();
+            if best
+                .as_ref()
+                .is_none_or(|(best_error, _)| normal_error < *best_error)
+            {
+                best = Some((normal_error, Pose::new(rail_x, joints)));
+            }
+        }
+        return best.map(|(normal_error, pose)| (pose, normal_error)).ok_or(
+            SwingPlanError::InverseKinematicsNoSolution {
+                target_x: target.x,
+                target_y: target.y,
+                target_z: target.z,
+            },
+        );
+    }
+
     /// 자세 IK 시드 — 위치전용 폴백도 같은 분기 커버리지를 써야 한다.
     fn pose_ik_seeds(&self, hint: &Pose, search: IkSearch) -> Vec<Joints> {
         let mut seeds = vec![hint.joints.clone(), self.default_joints.clone()];
@@ -740,9 +794,19 @@ impl Arm {
         hint: Option<&Joints>,
     ) -> Result<Joints, SwingPlanError> {
         const MAX_ITERS: usize = 300;
-        const TOLERANCE: f64 = 1e-5;
+        const TOLERANCE: f64 = Arm::POSE_IK_POSITION_TOLERANCE;
         const DAMPING: f64 = 1e-3;
         const MAX_STEP: f64 = 0.25;
+
+        // 링크 길이 합은 FK가 만들 수 있는 거리의 절대 상한이다.
+        // 이 경계 밖은 시드 5개×300회 DLS를 돌려도 해가 없으므로 즉시 끝낸다.
+        if (target.coords - mount.coords).norm() > self.arm_length() + TOLERANCE {
+            return Err(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: target.coords.x,
+                target_y: target.coords.y,
+                target_z: target.coords.z,
+            });
+        }
 
         let mut seeds = Vec::new();
         if let Some(hint) = hint.filter(|joints| joints.values.len() == self.joint_count()) {

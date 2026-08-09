@@ -74,7 +74,22 @@ impl AxlLive {
                 config.neg_end_limit_level,
             )
         })?;
-        let soft_limit = config.soft_limit_args();
+        check_axl("AxmSignalServoOn", unsafe {
+            (self.ffi.axm_signal_servo_on)(axis, super::axl_ffi::ENABLE)
+        })?;
+        let (actual_position_m, command_position_m) = self.read_actual_and_command_m(axis)?;
+        let command_minus_actual_m = command_position_m - actual_position_m;
+        let soft_limit = config.soft_limit_args_for_command_offset(command_minus_actual_m);
+        tracing::info!(
+            axis,
+            actual_position_m,
+            command_position_m,
+            command_minus_actual_m,
+            soft_limit_selection = soft_limit.selection,
+            soft_limit_positive_m = soft_limit.positive_m,
+            soft_limit_negative_m = soft_limit.negative_m,
+            "AXL ActPos/CmdPos 원점 및 소프트 리밋 진단"
+        );
         check_axl("AxmSignalSetSoftLimit", unsafe {
             (self.ffi.axm_signal_set_soft_limit)(
                 axis,
@@ -85,9 +100,22 @@ impl AxlLive {
                 soft_limit.negative_m,
             )
         })?;
-        return check_axl("AxmSignalServoOn", unsafe {
-            (self.ffi.axm_signal_servo_on)(axis, super::axl_ffi::ENABLE)
-        });
+        return Ok(());
+    }
+
+    pub(super) fn read_actual_and_command_m(&mut self, axis: i32) -> Result<(f64, f64), HwError> {
+        let mut actual_position_m = 0.0;
+        let mut command_position_m = 0.0;
+        let actual_status =
+            unsafe { (self.ffi.axm_status_get_act_pos)(axis, &mut actual_position_m) };
+        let command_status =
+            unsafe { (self.ffi.axm_status_get_cmd_pos)(axis, &mut command_position_m) };
+        if actual_status != super::axl_ffi::AXT_RT_SUCCESS
+            || command_status != super::axl_ffi::AXT_RT_SUCCESS
+        {
+            return Err(read_position_error(actual_status, command_status));
+        }
+        return Ok((actual_position_m, command_position_m));
     }
 
     pub(super) fn read_x_m(&mut self, axis: i32) -> Result<f64, HwError> {
@@ -107,45 +135,84 @@ impl AxlLive {
     pub(super) fn start_move_abs_m(
         &mut self,
         config: &RailConfig,
-        commanded_m: f64,
+        actual_target_m: f64,
         vel: f64,
     ) -> Result<(), HwError> {
-        // InMotion이면 AxmMoveStartPos 불가 — 스윙용 레일 명령만 무시하고 Dynamixel은 계속.
-        let mut in_motion = 0;
-        check_axl("AxmStatusReadInMotion", unsafe {
-            (self.ffi.axm_status_read_in_motion)(config.axis, &mut in_motion)
-        })?;
-        if in_motion != 0 {
-            tracing::warn!(
-                axis = config.axis,
-                commanded_m,
-                vel,
-                "AXL 레일 InMotion — AxmMoveStartPos 무시"
-            );
-            return Ok(());
-        }
+        // 1차 목표로 이동 중 정밀 목표가 오면 기존 명령을 부드럽게 감속
+        // 정지한 뒤 새 목표를 건다. 예전처럼 InMotion을 무시하면 관절만
+        // 정밀 위치로 가고 레일은 1차 위치로 가는 실기 불일치가 생긴다.
+        self.stop_if_moving(config.axis)?;
+
+        let (actual_now_m, command_now_m) = self.read_actual_and_command_m(config.axis)?;
+        let command_target_m = RailConfig::command_position_for_actual_target(
+            actual_target_m,
+            actual_now_m,
+            command_now_m,
+        );
+        tracing::info!(
+            axis = config.axis,
+            actual_now_m,
+            command_now_m,
+            command_minus_actual_m = command_now_m - actual_now_m,
+            actual_target_m,
+            command_target_m,
+            "AXL ActPos 기준 절대 목표 보정"
+        );
 
         check_axl("AxmMotSetAbsRelMode", unsafe {
             (self.ffi.axm_mot_set_abs_rel_mode)(config.axis, 0)
         })?;
         check_axl("AxmMoveStartPos", unsafe {
-            (self.ffi.axm_move_start_pos)(config.axis, commanded_m, vel, config.accel, config.decel)
+            (self.ffi.axm_move_start_pos)(
+                config.axis,
+                command_target_m,
+                vel,
+                config.accel,
+                config.decel,
+            )
         })?;
+        return Ok(());
+    }
+
+    pub(super) fn stop_if_moving(&mut self, axis: i32) -> Result<(), HwError> {
+        let mut in_motion = 0;
+        check_axl("AxmStatusReadInMotion", unsafe {
+            (self.ffi.axm_status_read_in_motion)(axis, &mut in_motion)
+        })?;
+        if in_motion != 0 {
+            self.stop(axis)?;
+            self.wait_idle(axis)?;
+        }
         return Ok(());
     }
 
     pub(super) fn move_abs_m_blocking(
         &mut self,
         config: &RailConfig,
-        commanded_m: f64,
+        actual_target_m: f64,
     ) -> Result<(), HwError> {
+        let (actual_now_m, command_now_m) = self.read_actual_and_command_m(config.axis)?;
+        let command_target_m = RailConfig::command_position_for_actual_target(
+            actual_target_m,
+            actual_now_m,
+            command_now_m,
+        );
+        tracing::info!(
+            axis = config.axis,
+            actual_now_m,
+            command_now_m,
+            command_minus_actual_m = command_now_m - actual_now_m,
+            actual_target_m,
+            command_target_m,
+            "AXL ActPos 기준 블로킹 목표 보정"
+        );
         check_axl("AxmMotSetAbsRelMode", unsafe {
             (self.ffi.axm_mot_set_abs_rel_mode)(config.axis, 0)
         })?;
         check_axl("AxmMovePos", unsafe {
             (self.ffi.axm_move_pos)(
                 config.axis,
-                commanded_m,
+                command_target_m,
                 config.vel,
                 config.accel,
                 config.decel,
@@ -169,6 +236,10 @@ impl AxlLive {
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+    }
+
+    pub(super) fn stop(&mut self, axis: i32) -> Result<(), HwError> {
+        return check_axl("AxmMoveSStop", unsafe { (self.ffi.axm_move_s_stop)(axis) });
     }
 }
 

@@ -85,6 +85,68 @@ impl Planner {
         return physics::plan_return_to_center(arm, start);
     }
 
+    /// [`Self::return_to_center`]과 같지만 목표 레일 x를 호출측이 고른다 —
+    /// 좌/센터/우 존 테스트 컨트롤이 쓴다.
+    pub fn return_to_center_at(
+        arm: &Arm,
+        start: &robot::Pose,
+        rail_x: f64,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_return_to_center_at(arm, start, rail_x);
+    }
+
+    /// [`Self::return_to_center_at`]와 같지만 `speed_ratio`만큼 늦춘 궤적을 계획한다 —
+    /// 홈 포지션 복귀·시작 자세 초기화처럼 랠리보다 느려도 되는 이동에 쓴다.
+    pub fn return_to_center_at_speed_ratio(
+        arm: &Arm,
+        start: &robot::Pose,
+        rail_x: f64,
+        speed_ratio: f64,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_return_to_center_at_speed_ratio(arm, start, rail_x, speed_ratio);
+    }
+
+    pub fn ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, DomainError> {
+        return physics::plan_ready_prewind(arm, start);
+    }
+
+    /// 발사기 기준 오른쪽 6cm로 보정한 예측 위치에, 라켓 중심보다
+    /// 0.5cm 아래 지점이 닿도록 정지 정렬한다.
+    /// 라켓 면은 공 반지름+라켓 반두께만큼 뒤에 둔다.
+    pub fn ball_alignment(
+        arm: &Arm,
+        start: &robot::Pose,
+        ball: crate::Point3,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_ball_alignment(arm, start, ball);
+    }
+
+    /// 레일은 현재 위치에 고정하고 Dynamixel 관절만 공 예측 위치로 정렬한다.
+    pub fn ball_alignment_fixed_rail(
+        arm: &Arm,
+        start: &robot::Pose,
+        ball: crate::Point3,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_ball_alignment_fixed_rail(arm, start, ball);
+    }
+
+    pub fn aligned_impact_sequence(
+        arm: &Arm,
+        start: &robot::Pose,
+        ball: crate::Point3,
+        time_to_impact_secs: f64,
+    ) -> Result<physics::AlignedImpactSequence, DomainError> {
+        return physics::plan_aligned_impact_sequence(arm, start, ball, time_to_impact_secs);
+    }
+
+    /// 정렬 자세에서 0.1초 고정 관절 스윙을 만든다.
+    pub fn fixed_joint_swing(
+        arm: &Arm,
+        start: &robot::Pose,
+    ) -> Result<physics::FixedJointSwing, DomainError> {
+        return physics::plan_fixed_joint_swing(arm, start);
+    }
+
     /// 정지 → 정지로 임의 포즈까지 잇는 최단 실행가능 궤적 (coarse 선추종용).
     pub fn move_to(
         arm: &Arm,
@@ -93,6 +155,23 @@ impl Planner {
         end_rail_x: f64,
     ) -> Result<Trajectory, DomainError> {
         return physics::plan_move_to(arm, start, end_joints, end_rail_x);
+    }
+
+    /// [`Self::move_to`]와 같지만 `speed_ratio`만큼 늦춘 궤적을 계획한다.
+    pub fn move_to_at_speed_ratio(
+        arm: &Arm,
+        start: &robot::Pose,
+        end_joints: crate::robot::Joints,
+        end_rail_x: f64,
+        speed_ratio: f64,
+    ) -> Result<Trajectory, DomainError> {
+        return physics::plan_move_to_at_speed_ratio(
+            arm,
+            start,
+            end_joints,
+            end_rail_x,
+            speed_ratio,
+        );
     }
 
     pub fn plan_bang_bang(

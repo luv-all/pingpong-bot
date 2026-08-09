@@ -16,6 +16,8 @@ pub struct LinearRail {
     pub x_min: f64,
     /// 이동 가능한 최대 x [m]
     pub x_max: f64,
+    /// 시작 및 제어 후 복귀할 준비 위치 x [m]
+    pub default_x: f64,
     /// 최대 이동 속도 [m/s]
     pub max_speed: f64,
 }
@@ -36,8 +38,8 @@ impl LinearRail {
         return self.x_min;
     }
 
-    /// 레일 중앙 x.
+    /// 시작 및 제어 후 복귀할 준비 위치 x.
     pub fn default_x(self) -> f64 {
-        return (self.x_min + self.x_max) * 0.5;
+        return self.clamp_x(self.default_x);
     }
 }

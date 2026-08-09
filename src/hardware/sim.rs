@@ -7,7 +7,8 @@ use crate::robot;
 use std::sync::{Arc, Mutex};
 
 use crate::error::HwError;
-use crate::hardware::Hardware;
+use crate::hardware::{AppliedRailRacketCommand, Hardware};
+use crate::robot::control::DIRECT_AIM_JOINT_INDEX;
 use crate::robot::motion;
 use tracing::debug;
 
@@ -53,14 +54,13 @@ impl Hardware for SimHardware {
                 debug!("이번 공에 이미 스윙 commit — 재계획 무시");
                 return Ok(());
             }
-            // decisions C4: 네트 통과 전 commit 금지 (ground truth 경로와 동일)
-            let ball_y = f64::from(world.ball_position().y);
-            if !motion::Planner::past_midcourt(ball_y) {
-                debug!(ball_y, "상대 코트 — EKF control commit 대기");
-                return Ok(());
-            }
             let arm = Arc::clone(&world.arm);
-            world.robot_mut().begin_swing(trajectory.clone());
+            let return_pose =
+                robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
+            world.robot_mut().set_auto_return_to_center(false);
+            world
+                .robot_mut()
+                .replace_motion_and_return(trajectory.clone(), return_pose);
             world.mark_swing_committed();
             world.debug_snap_mut().set_committed_path(&arm, &trajectory);
         }
@@ -80,15 +80,81 @@ impl Hardware for SimHardware {
         return Ok(());
     }
 
+    fn command_joints(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
+        let mut world = self.world.lock().expect("sim 월드");
+        world.robot_mut().replace_joint_swing(trajectory.clone());
+        self.command_count += 1;
+        return Ok(());
+    }
+
     fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
         let world = self.world.lock().expect("sim 월드");
         let robot = world.robot();
         return Ok(robot::Pose::new(robot.rail_x(), robot.joints().clone()));
     }
 
+    fn command_rail_and_racket(
+        &mut self,
+        rail_x: f64,
+        aim_joint_rad: f64,
+        duration_secs: f64,
+    ) -> Result<AppliedRailRacketCommand, HwError> {
+        if !rail_x.is_finite() || !aim_joint_rad.is_finite() || !duration_secs.is_finite() {
+            return Err(HwError::InvalidConfig {
+                reason: "sim 레일·라켓 조준 명령에 유효하지 않은 값이 있음".into(),
+            });
+        }
+        {
+            let mut world = self.world.lock().expect("sim 월드");
+            let applied_rail_m = world.arm.rail.map_or(rail_x, |rail| rail.clamp_x(rail_x));
+            let applied_aim_rad = world
+                .arm
+                .joint_limit(DIRECT_AIM_JOINT_INDEX)
+                .map_or(aim_joint_rad, |limit| {
+                    aim_joint_rad.clamp(limit.min, limit.max)
+                });
+            let mut targets = world.robot().targets().clone();
+            let Some(aim) = targets.values.get_mut(DIRECT_AIM_JOINT_INDEX) else {
+                return Err(HwError::InvalidConfig {
+                    reason: format!(
+                        "sim 로봇 관절 {}개에는 라켓 조준축 인덱스 {}가 없음",
+                        targets.values.len(),
+                        DIRECT_AIM_JOINT_INDEX
+                    ),
+                });
+            };
+            *aim = applied_aim_rad;
+            let arm = Arc::clone(&world.arm);
+            world
+                .robot_mut()
+                .set_rail_target_in_secs(&arm, applied_rail_m, duration_secs);
+            world.robot_mut().set_targets(targets);
+            world.mark_swing_committed();
+            self.command_count += 1;
+            debug!(
+                commands = self.command_count,
+                rail_commanded_m = applied_rail_m,
+                aim_commanded_rad = applied_aim_rad,
+                duration_secs,
+                "sim 레일·라켓 조준 직접 명령 적용"
+            );
+            return Ok(AppliedRailRacketCommand {
+                rail_m: applied_rail_m,
+                aim_rad: applied_aim_rad,
+                rail_sent: world.arm.rail.is_some(),
+            });
+        }
+    }
+
     fn is_busy(&mut self) -> bool {
         let world = self.world.lock().expect("sim 월드");
         // ground truth 타격 중이면 control이 plan_swing을 돌리지 않게 한다
         return world.use_ground_truth() || world.swing_committed() || world.robot().is_swinging();
+    }
+
+    fn cancel(&mut self) {
+        let mut world = self.world.lock().expect("sim 월드");
+        let pose = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
+        world.robot_mut().snap_to_pose(pose);
     }
 }

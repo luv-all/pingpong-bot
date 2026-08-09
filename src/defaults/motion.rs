@@ -8,8 +8,9 @@ pub const MAX_INTERCEPT_SAMPLES: usize = 1_024;
 /// Magnus |ω| 클립 [rad/s].
 pub const MAGNUS_OMEGA_MAX: f64 = 80.0;
 
-/// 실기 AXL 레일 가속/감속 [m/s²] — `RailConfig::default().accel`과 맞춤.
-pub const RAIL_ACCEL_M_S2: f64 = 12.0;
+/// 실기 AXL 레일 가속/감속 [m/s²] — `RailConfig::default()`도 이 값을 쓴다.
+/// 발사기 실기 시험 기준값 16 m/s²의 1.5배.
+pub const RAIL_ACCEL_M_S2: f64 = 24.0;
 pub const POSITION_TOLERANCE_RAD_OR_M: f64 = 1e-3;
 pub const RACKET_SPEED_RATIO_TOLERANCE: f64 = 0.15;
 pub const RACKET_DIRECTION_TOLERANCE_DEG: f64 = 15.0;
@@ -20,9 +21,52 @@ pub const TIME_TO_GO_BIAS: f64 = 0.5;
 pub const MIN_TIME_TO_GO_SECS: f64 = 1e-3;
 pub const JDOT_STEP: f64 = 1e-4;
 
-pub const RETURN_TO_CENTER_MIN_SECS: f64 = 0.3;
+pub const RETURN_TO_CENTER_MIN_SECS: f64 = 0.2;
 pub const RETURN_TO_CENTER_MAX_SECS: f64 = 3.0;
 pub const RETURN_TO_CENTER_GROWTH: f64 = 1.4;
+/// 예측된 공 도착 시각부터 준비 자세 복귀를 시작할 때까지 유지하는 시간.
+pub const POST_ALIGNMENT_HOLD_SECS: f64 = 0.5;
+
+/// 모드 1/2/3 홈 포지션 변경·시작 시 센터(ready) 복귀는 랠리처럼 빠를 필요가
+/// 없다 — `Planner::move_to_at_speed_ratio`/`return_to_center_at_speed_ratio`로
+/// 관절·레일 속도를 이 비율만큼 늦춘다.
+pub const HOME_RETURN_SPEED_RATIO: f64 = 1.0 / 3.0;
+
+/// 발사기 반복 시험용 고정 푸시가 한계를 지키며 임팩트를 만들 최소 시간.
+pub const FIXED_IMPACT_MIN_DURATION_SECS: f64 = 0.25;
+/// 공이 없을 때 기존 임팩트 자세보다 뒤에서 대기할 거리 [m].
+///
+/// 큰 동작을 줄인 반복 발사기 시험값 2cm.
+pub const READY_PREWIND_DISTANCE_M: f64 = 0.020;
+/// 공이 없을 때 미리 맞춰 둘 대표 라켓 중심 높이 [m].
+pub const READY_RACKET_HEIGHT_M: f64 = 1.050;
+/// 기본 인터셉트 구간 중앙의 준비 타격 y [m].
+pub const READY_RACKET_Y_M: f64 = 0.215;
+/// 공 검출 후 공 높이에서 유지할 임팩트 자세 기준 백스윙 거리 [m].
+/// 준비 자세와 같은 2cm로 두어 검출 뒤 불필요한 추가 감김을 없앤다.
+pub const DETECTION_WINDUP_DISTANCE_M: f64 = 0.020;
+/// 기본 타격에서 라켓 중심을 공 중심보다 아래에 둘 거리 [m].
+pub const IMPACT_CENTER_BELOW_BALL_M: f64 = 0.020;
+/// 기초 정렬 모드에서 공이 닿을 지점을 블레이드 중심보다 낮추는 거리 [m].
+/// 현재는 블레이드 중심보다 0.5cm 아래를 맞춘다.
+pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.005;
+/// 발사기 기준 오른쪽으로 적용하는 공별 타격 예측 위치 보정 [m].
+/// 현재 실물 레일은 `reverse=true`이므로 오른쪽은 제어 x 감소 방향이다.
+pub const ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M: f64 = 0.060;
+/// 공을 상대편으로 넘기기 위한 라켓 면의 위쪽 기울기 [deg].
+pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
+/// 검출 직후 추가 백스윙의 첫 시도 시간 [s].
+pub const DETECTION_WINDUP_MIN_DURATION_SECS: f64 = 0.120;
+/// 임팩트 순간 목표 라켓 선속도 [m/s].
+pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 1.80;
+/// 실기 고정 스윙이 예상 타격점에 도달하는 시간 [s].
+pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.250;
+/// 임팩트 이후에도 같은 방향으로 계속 밀고 멈추는 시간 [s].
+pub const FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS: f64 = 0.120;
+/// 정렬 자세 기준 고정 관절 변화량 [rad].
+/// q0·q1은 좌우 정렬을 유지하고 q2·q3만 짧게 편다.
+pub const FIXED_JOINT_SWING_DELTA_RAD: [f64; 4] =
+    [0.0, 0.0, -6.0_f64.to_radians(), -12.0_f64.to_radians()];
 
 impl Default for InterceptWindow {
     fn default() -> Self {

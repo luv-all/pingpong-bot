@@ -143,7 +143,7 @@ pub(crate) fn run_eval_shot(
 
     let mut world = SimWorld::with_physics(robot.clone(), physics);
     world.set_use_ground_truth(true);
-    // 실제 로봇은 랠리 사이 항상 `plan_return_to_center`로 테이블 중앙(`default_x()`)에
+    // 실제 로봇은 랠리 사이 항상 `plan_return_to_center`로 보정 준비 위치(`default_x()`)에
     // 복귀해 대기한다 — `Arm::initial_state()`의 `home_x()`(레일 끝단)는 부팅/대기
     // 위치일 뿐 랠리 시작 자세가 아니다. 이걸 안 바꾸면 매 eval 샷이 레일 끝단에서
     // 시작해 좌우 목표까지 이동 거리가 비대칭이 되어 Right 존만 커밋 시간창 안에

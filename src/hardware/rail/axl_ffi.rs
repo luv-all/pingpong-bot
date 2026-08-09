@@ -34,6 +34,7 @@ type AxmStatusGetCmdPos = unsafe extern "system" fn(i32, *mut f64) -> u32;
 type AxmStatusReadInMotion = unsafe extern "system" fn(i32, *mut u32) -> u32;
 type AxmMovePos = unsafe extern "system" fn(i32, f64, f64, f64, f64) -> u32;
 type AxmMoveStartPos = unsafe extern "system" fn(i32, f64, f64, f64, f64) -> u32;
+type AxmMoveSStop = unsafe extern "system" fn(i32) -> u32;
 
 /// AXL 헤더와 동일한 stdcall 심볼 테이블.
 ///
@@ -61,6 +62,7 @@ pub struct AxlFfi {
     pub axm_status_read_in_motion: AxmStatusReadInMotion,
     pub axm_move_pos: AxmMovePos,
     pub axm_move_start_pos: AxmMoveStartPos,
+    pub axm_move_s_stop: AxmMoveSStop,
 }
 
 impl AxlFfi {
@@ -116,6 +118,7 @@ impl AxlFfi {
                     .map_err(symbol_error)?,
                 axm_move_pos: *library.get(b"AxmMovePos\0").map_err(symbol_error)?,
                 axm_move_start_pos: *library.get(b"AxmMoveStartPos\0").map_err(symbol_error)?,
+                axm_move_s_stop: *library.get(b"AxmMoveSStop\0").map_err(symbol_error)?,
                 _library: ManuallyDrop::new(library),
             });
         }

@@ -12,7 +12,7 @@
 
 플래너·Rapier 라켓 접촉에 넣는 **유효 반발계수**다.
 
-법선 임팩트 모델 (`planner/impact.rs`):
+법선 임팩트 모델 (`src/robot/motion/impact.rs`):
 
 \[
 v_{\mathrm{out}}\cdot n = (1+e)\,v_r\cdot n - e\,v_{\mathrm{in}}\cdot n
@@ -60,7 +60,7 @@ v_{\mathrm{out}}\cdot n = (1+e)\,v_r\cdot n - e\,v_{\mathrm{in}}\cdot n
 > 0.69~0.85로 요동 — `tests/diag_table_restitution.rs`의
 > `diag_effective_restitution_subtick_phase`). 같은 원인이 라켓 접촉도
 > 계획된 임팩트 시각보다 평균 −3.9 ms 일찍 발동시켜 접촉 타이밍 불일치(RC-3,
-> `docs/swing-diagnostic-report.md`)를 만들었다. `num_solver_iterations`를
+> 스윙 진단에서 `num_solver_iterations`를
 > **32**로 올리면 두 증상이 함께 해소된다 — 유효 \(e\) 평균 0.878(산포
 > 0.002), 접촉 타이밍 오차 평균 +0.02 ms(`tests/diag_contact_timing.rs`의
 > `diag_contact_timing_solver_knob_sweep`). 물리 틱 비용도 오히려 개선됐다
@@ -281,8 +281,7 @@ urdf_4dof, 휴지 자세 FK 임팩트:
   peak**가 조금만 움직였다.
 - 실질 비용: 짧은 커밋(0.22~0.25 s)에서 게이트가 끝속도를 깎아 달성 peak q̇가
   최대 **−9%**. 더 긴 커밋에서는 변화 없음.
-- joint 1(shoulder)은 두 모델 모두 util 0.000 — `docs/swing-diagnostic-report.md`
-  §3.6의 "shoulder 미사용" 관측과 일치(WP4c 대상, WP8과 무관).
+- joint 1(shoulder)은 두 모델 모두 util 0.000으로 계측됨.
 
 ### derate를 바꾸지 않는 이유
 

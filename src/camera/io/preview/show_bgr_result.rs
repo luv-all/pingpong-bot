@@ -74,18 +74,27 @@ pub fn show_bgr(window: &str, image: &Mat, wait_ms: i32) -> CvResult<ShowBgrResu
         },
     };
     highgui::imshow(window, &fitted.image)?;
+    let action = poll_key(wait_ms)?;
+    return Ok(ShowBgrResult {
+        action,
+        scale: fitted.scale,
+    });
+}
+
+/// 새 프레임 없이 키 입력만 뽑는다 — 이미 떠 있는 창을 다시 그리지 않는다.
+///
+/// 화면에 변화가 없을 때(같은 프레임 반복 표시)도 highgui 이벤트 루프는 계속
+/// 돌아야 창이 "응답 없음"으로 안 보인다. `imshow`(픽셀 재업로드)는 건너뛰고
+/// 이 폴링만으로 그 역할을 한다.
+pub fn poll_key(wait_ms: i32) -> CvResult<PreviewAction> {
     // waitKeyEx: 화살표가 macOS/X11에서 풀 키코드로 온다 (waitKey+&0xff는 Left≡'Q' 충돌).
     let key = highgui::wait_key_ex(wait_ms.max(1))?;
-    let action = if key < 0 {
+    return Ok(if key < 0 {
         PreviewAction::Continue
     } else if key == 27 || key == i32::from(b'q') || key == i32::from(b'Q') {
         PreviewAction::Quit
     } else {
         PreviewAction::Key(key)
-    };
-    return Ok(ShowBgrResult {
-        action,
-        scale: fitted.scale,
     });
 }
 
