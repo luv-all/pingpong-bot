@@ -35,9 +35,7 @@ pub const RAIL_READY_X_M: f64 = 0.6750;
 /// 2026-08-06 시작 자세에서 Goal-Present는 5 tick으로 정상이었지만,
 /// 모델은 라켓 면 +6.76°를 예측하는 반면 실물은 거의 0°(수직)이었다.
 /// 원래 벤치 기준 +8°를 복원하도록 모터 목표를 -8° 더 돌린다.
-pub const WRIST_JOINT_ZERO_OFFSET_RAD: f64 = -8.0_f64.to_radians();
-
-/// 손목 q3(ID 5) 실물 혼·라켓 장착 영점 보정 [rad].
+/// /// 손목 q3(ID 5) 실물 혼·라켓 장착 영점 보정 [rad].
 pub const WRIST_JOINT_ZERO_OFFSET_RAD: f64 = -8.0_f64.to_radians();
 
 /// 하단 듀얼 MX-64 q0(ID 1·2) 재조립 혼 영점 보정 [rad].
