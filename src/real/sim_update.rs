@@ -69,6 +69,7 @@ pub struct SimUpdate {
 }
 
 impl SimUpdate {
+    #[cfg(test)]
     pub fn to_line(&self) -> String {
         return serde_json::to_string(self).unwrap_or_else(|_| "{}".to_owned());
     }

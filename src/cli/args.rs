@@ -30,10 +30,6 @@ pub struct Args {
     /// `data/clips/{scene}_{nn}/`. 녹화 당시 fps로 페이싱해 라이브와 같은 타이밍으로 돈다.
     #[arg(long, value_name = "NAME|DIR")]
     pub clip: Option<std::path::PathBuf>,
-    /// real: 관전용 sim 창 (테이블·로봇·예측 도달점). 불필요한 렌더링 자원 소비를 피하려
-    /// 기본은 꺼짐 — 켜려면 `--sim`
-    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
-    pub sim: bool,
     /// real: 종료 시 토크를 뺀다. 기본은 켠 채로 둬서 팔이 주저앉지 않게 한다.
     #[arg(long)]
     pub release_torque: bool,

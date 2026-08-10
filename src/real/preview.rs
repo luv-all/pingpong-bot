@@ -330,9 +330,9 @@ fn draw_control_state_panel(
 
     if let Some((zone, home_rail_x, filtering)) = zone {
         let zone_line = if filtering {
-            format!("MODE {}  x={home_rail_x:.3}", zone.label())
+            format!("MODE {}  HOME x={home_rail_x:.3}", zone.label())
         } else {
-            format!("MODE ALL  x={home_rail_x:.3}")
+            format!("MODE ALL  HOME x={home_rail_x:.3}")
         };
         camera::Preview::draw_text_at_px(
             image,

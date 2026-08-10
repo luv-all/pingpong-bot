@@ -836,6 +836,13 @@ impl SimWorld {
         }
         self.debug_snap.commit_phase = CommitPhase::InWindow;
 
+        // 실기와 동일하게 첫 공 관측 뒤 0.15초 동안은 레일·팔 명령을 내리지
+        // 않는다. 시뮬 ground-truth 검출은 발사와 동시에 시작한다.
+        let observed_span_secs = self.sim_time - self.flight_started_at;
+        if observed_span_secs < crate::defaults::FIRST_CONTROL_AFTER_DETECTION_SECS {
+            return;
+        }
+
         if self.sim_time - self.last_swing_attempt_at < SWING_RETRY_THROTTLE_SECS {
             if let Some(prediction) = predictions.first() {
                 self.set_debug_prediction(Some(prediction.clone()));
@@ -861,7 +868,6 @@ impl SimWorld {
         else {
             return;
         };
-        let observed_span_secs = self.sim_time - self.flight_started_at;
         let target = match controller.select_target(&ball_trajectory) {
             Ok(target) => target,
             Err(error) => {
@@ -877,7 +883,28 @@ impl SimWorld {
             return;
         }
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        let alignment = match motion::Planner::ball_alignment(&self.arm, &start, target.position) {
+        let alignment_result = if refined {
+            // 실기 본 예측과 동일하게 레일·팔 중앙 방향 통합해로 보정한다.
+            motion::Planner::ball_alignment(&self.arm, &start, target.position)
+        } else {
+            // 실기 첫 유효 예측과 동일한 빠른 단계: 공 x 기준 레일 목표를 먼저
+            // 만들고, 그 레일에서 방향 IK가 되면 팔도 함께 움직인다. 방향 IK가
+            // 아직 불안정하면 레일만 출발시킨다.
+            let rough_rail =
+                motion::Planner::ball_alignment_rail_target(&self.arm, target.position);
+            let rough_start = robot::Pose::new(rough_rail, start.joints.clone());
+            let rough_joints = motion::Planner::ball_alignment_fixed_rail(
+                &self.arm,
+                &rough_start,
+                target.position,
+            )
+            .map_or_else(
+                |_| start.joints.clone(),
+                |trajectory| trajectory.follow_through,
+            );
+            motion::Planner::move_to(&self.arm, &start, rough_joints, rough_rail)
+        };
+        let alignment = match alignment_result {
             Ok(alignment) => alignment,
             Err(error) => {
                 self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
@@ -910,14 +937,14 @@ impl SimWorld {
             fixed_swing_lead_secs = crate::defaults::FIXED_JOINT_SWING_DURATION_SECS,
             rail_commanded_m,
             target = ?target.position.coords,
-            "shot: 레일·팔 동시 위치·방향 정렬 commit — 고정 스윙 예약"
+            "shot: 예비 레일 즉시 이동/본 예측 중앙 방향 보정 commit — 고정 스윙 예약"
         );
         self.swing_committed = true;
         self.debug_snap.commit_phase = CommitPhase::Committed;
         self.position_refined = refined;
     }
 
-    /// 예상 타격 0.25초 전에 백스윙 없는 고정 관절 스윙을 시작한다.
+    /// 예상 타격 0.40초 전에 백스윙 없는 고정 관절 스윙을 시작한다.
     ///
     /// 정렬이 아직 진행 중이어도 레일 목표는 계속 추종하고 팔 관절 궤적만
     /// 교체한다. 그렇지 않으면 sim의 `is_swinging()`이 레일 정렬까지
@@ -2021,18 +2048,40 @@ mod tests {
         let origin = robot::Pose::new(world.robot().rail_x(), world.robot().joints().clone());
         world.shoot_ball(&settings);
         let mut max_displacement = 0.0_f64;
+        let mut control_committed = false;
         for _ in 0..1_500 {
             world.step(1.0 / 1000.0, None);
+            control_committed |= world.swing_committed();
             max_displacement = max_displacement.max((world.robot().rail_x() - origin.rail_x).abs());
         }
-        assert!(
-            world.swing_committed(),
-            "발사 후 직접 제어 명령이 적용돼야 함"
-        );
+        assert!(control_committed, "발사 후 직접 제어 명령이 적용돼야 함");
         assert!(
             max_displacement > 0.01,
             "0.675m 준비 위치에서 라켓 헤드 x를 중앙 공에 맞추도록 레일이 움직여야 함 (distance={max_displacement})"
         );
+    }
+
+    #[test]
+    fn direct_control_waits_150ms_after_detection() {
+        let mut world = SimWorld::new(test_robot());
+        world.set_use_ground_truth(true);
+        world.shoot_ball(&launch::Settings::default());
+
+        for _ in 0..149 {
+            world.step(1.0 / 1_000.0, None);
+        }
+        assert!(
+            !world.swing_committed(),
+            "첫 검출 후 0.15초 전에는 레일·팔 명령이 없어야 함"
+        );
+
+        for _ in 0..500 {
+            world.step(1.0 / 1_000.0, None);
+            if world.swing_committed() {
+                return;
+            }
+        }
+        panic!("검출 0.15초 뒤 첫 유효 예측은 제어에 사용돼야 함");
     }
 
     #[test]
@@ -2061,21 +2110,19 @@ mod tests {
         world.set_use_ground_truth(true);
         world.shoot_ball(&launch::Settings::default());
 
-        let mut saw_schedule = world.direct_swing_at.is_some();
         for _ in 0..2_000 {
             world.step(1.0 / 1_000.0, None);
-            saw_schedule |= world.direct_swing_at.is_some();
-            if saw_schedule && world.direct_swing_at.is_none() {
-                let trajectory = world
-                    .robot()
-                    .active_trajectory()
-                    .expect("예약 시각에 고정 관절 스윙이 재생돼야 함");
+            if let Some(trajectory) = world.robot().active_trajectory()
+                && (trajectory.impact_time_secs - crate::defaults::FIXED_JOINT_SWING_DURATION_SECS)
+                    .abs()
+                    < 1e-12
+            {
                 assert!(
                     (trajectory.impact_time_secs
                         - crate::defaults::FIXED_JOINT_SWING_DURATION_SECS)
                         .abs()
                         < 1e-12,
-                    "스윙은 예상 타격 0.25초 전에 시작해야 함"
+                    "스윙은 예상 타격 0.40초 전에 시작해야 함"
                 );
                 assert!(
                     trajectory.end.values[2] < trajectory.start.values[2]
@@ -2085,7 +2132,7 @@ mod tests {
                 return;
             }
         }
-        panic!("고정 관절 스윙 예약이 실행되지 않음");
+        panic!("고정 관절 스윙이 실행되지 않음");
     }
 
     /// 직접 제어 목표 시각이 지난 뒤 레일과 관절이 중앙 준비 자세로

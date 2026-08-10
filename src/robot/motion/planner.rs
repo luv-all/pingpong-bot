@@ -2,6 +2,7 @@
 
 use nalgebra::Vector3;
 
+use crate::Point3;
 use crate::error::DomainError;
 use crate::robot::motion::Prediction;
 use crate::robot::{self, Arm};
@@ -121,6 +122,31 @@ impl Planner {
         return physics::plan_ball_alignment(arm, start, ball);
     }
 
+    /// IK보다 먼저 출발시킬 공별 안전 레일 목표를 계산한다.
+    pub fn ball_alignment_rail_target(arm: &Arm, ball: Point3) -> f64 {
+        return physics::ball_alignment_rail_target(arm, ball);
+    }
+
+    pub fn ball_alignment_rail_target_unclamped(ball: Point3) -> f64 {
+        return physics::ball_alignment_rail_target_unclamped(ball);
+    }
+
+    pub fn ball_alignment_pose(
+        arm: &Arm,
+        start: &robot::Pose,
+        ball: Point3,
+    ) -> Result<robot::Pose, DomainError> {
+        return physics::ball_alignment_pose(arm, start, ball);
+    }
+
+    pub fn ball_alignment_bearing_error_deg(
+        arm: &Arm,
+        pose: &robot::Pose,
+        ball: Point3,
+    ) -> Option<f64> {
+        return physics::ball_alignment_bearing_error_deg(arm, pose, ball);
+    }
+
     /// 레일은 현재 위치에 고정하고 Dynamixel 관절만 공 예측 위치로 정렬한다.
     pub fn ball_alignment_fixed_rail(
         arm: &Arm,
@@ -139,7 +165,7 @@ impl Planner {
         return physics::plan_aligned_impact_sequence(arm, start, ball, time_to_impact_secs);
     }
 
-    /// 정렬 자세에서 0.1초 고정 관절 스윙을 만든다.
+    /// 정렬 자세에서 q3만 돌려 타격 시점 라켓 면을 25°로 만든다.
     pub fn fixed_joint_swing(
         arm: &Arm,
         start: &robot::Pose,

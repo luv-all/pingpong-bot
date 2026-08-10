@@ -23,6 +23,11 @@ pub struct RailConfig {
     pub board_zero_domain_m: f64,
     pub x_min_m: f64,
     pub x_max_m: f64,
+    /// 안전 마진을 포함하지 않은 기계적 최소/최대 좌표 [m].
+    /// AXL 보드 소프트 리밋과 시작 좌표 진단에만 사용한다. 이동 명령은 항상
+    /// `x_min_m..=x_max_m` 안전 범위로 제한한다.
+    pub physical_x_min_m: f64,
+    pub physical_x_max_m: f64,
     pub vel: f64,
     pub accel: f64,
     pub decel: f64,
@@ -57,6 +62,14 @@ impl RailConfig {
             return Err(RailConfigError::InvalidRange);
         }
         if !self.x_min_m.is_finite() || !self.x_max_m.is_finite() || self.x_min_m >= self.x_max_m {
+            return Err(RailConfigError::InvalidRange);
+        }
+        if !self.physical_x_min_m.is_finite()
+            || !self.physical_x_max_m.is_finite()
+            || self.physical_x_min_m >= self.physical_x_max_m
+            || self.x_min_m < self.physical_x_min_m
+            || self.x_max_m > self.physical_x_max_m
+        {
             return Err(RailConfigError::InvalidRange);
         }
         for value in [self.vel, self.accel, self.decel, self.max_vel] {
@@ -103,11 +116,11 @@ impl RailConfig {
     pub fn soft_limit_args(&self) -> SoftLimitArgs {
         let (positive_m, negative_m) = if self.reverse {
             (
-                self.board_zero_domain_m - self.x_min_m,
-                self.board_zero_domain_m - self.x_max_m,
+                self.board_zero_domain_m - self.physical_x_min_m,
+                self.board_zero_domain_m - self.physical_x_max_m,
             )
         } else {
-            (self.x_max_m, self.x_min_m)
+            (self.physical_x_max_m, self.physical_x_min_m)
         };
         return SoftLimitArgs {
             use_: 1,
@@ -176,6 +189,8 @@ mod tests {
             reverse: false,
             x_min_m: -0.15,
             x_max_m: 0.40,
+            physical_x_min_m: -0.15,
+            physical_x_max_m: 0.40,
             soft_limit_stop_mode: 0,
             soft_limit_selection: 0,
             ..RailConfig::default()
@@ -193,6 +208,8 @@ mod tests {
             board_zero_domain_m: 0.715,
             x_min_m: 0.0,
             x_max_m: 1.43,
+            physical_x_min_m: 0.0,
+            physical_x_max_m: 1.43,
             ..RailConfig::default()
         };
         assert_eq!(cfg.domain_to_board_abs(0.0), 0.715);

@@ -34,7 +34,6 @@ mod run;
 mod runtime_event;
 mod shutdown;
 mod sim_child;
-mod sim_host;
 mod sim_update;
 mod test_control;
 mod throttle;

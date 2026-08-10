@@ -247,6 +247,23 @@ mod tests {
     }
 
     #[test]
+    fn command_abs_in_secs_always_keeps_safety_margin() {
+        let cfg = RailConfig {
+            enabled: true,
+            dll_path: PathBuf::from("unused.dll"),
+            pulses_per_meter: 1000,
+            x_min_m: 0.01,
+            x_max_m: 1.3395,
+            physical_x_min_m: 0.0,
+            physical_x_max_m: 1.41,
+            ..RailConfig::default()
+        };
+        let mut rail = AxlRail::dry_run(cfg).unwrap();
+        assert_eq!(rail.command_abs_in_secs(1.40, 0.4).unwrap(), 1.3395);
+        assert_eq!(rail.read_x_m().unwrap(), 1.3395);
+    }
+
+    #[test]
     fn duration_velocity_includes_acceleration_and_deceleration() {
         let distance = 0.2;
         let duration = 0.4;

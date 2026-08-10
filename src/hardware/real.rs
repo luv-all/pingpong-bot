@@ -136,6 +136,18 @@ impl RealHardware {
         drive_rail: bool,
     ) -> Result<(), HwError> {
         self.reap_executor();
+        if !drive_rail && self.busy.load(Ordering::Acquire) {
+            // 타격 직전 q3 손목 명령은 진행 중인 전체 정렬의 관절
+            // 스트림만 선점한다. AXL에 이미 내려간 절대 목표는 보드가
+            // 계속 수행하므로 여기서 레일은 정지시키지 않는다.
+            self.cancel.store(true, Ordering::Release);
+            if let Some(handle) = self.executor.take()
+                && handle.join().is_err()
+            {
+                error!("Dynamixel 궤적 executor 선점 중 패닉");
+            }
+            self.busy.store(false, Ordering::Release);
+        }
         if self.busy.swap(true, Ordering::AcqRel) {
             debug!("Dynamixel 궤적 실행 중 — 중복 명령 무시");
             return Ok(());
@@ -222,6 +234,19 @@ impl Hardware for RealHardware {
 
     fn command_joints(&mut self, trajectory: &motion::Trajectory) -> Result<(), HwError> {
         return self.start_trajectory(trajectory, false);
+    }
+
+    fn command_rail(&mut self, rail_x: f64, duration_secs: f64) -> Result<f64, HwError> {
+        self.reap_executor();
+        let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
+            duration_secs,
+            joint_count: 0,
+            reason: "레일 mutex poisoned".into(),
+        })?;
+        return match rail.as_mut() {
+            Some(rail) => rail.command_abs_in_secs(rail_x, duration_secs),
+            None => Ok(0.0),
+        };
     }
 
     fn read_pose(&mut self) -> Result<robot::Pose, HwError> {
@@ -484,6 +509,53 @@ mod tests {
 
         let pose = hardware.read_pose().expect("pose");
         assert!((pose.rail_x - 0.35).abs() < 1e-9);
+    }
+
+    #[test]
+    fn joint_only_trajectory_preempts_joint_stream_without_stopping_rail() {
+        let config = DynamixelConfig {
+            stream_hz: 500.0,
+            ..DynamixelConfig::default()
+        };
+        let mut hardware =
+            RealHardware::dry_run(config, Some(test_rail())).expect("dry-run hardware");
+        let alignment = motion::Trajectory::new(
+            Joints::from_slice(&[0.0; 4]),
+            Joints::from_slice(&[0.20, 0.20, 0.20, 0.20]),
+            vec![0.0; 4],
+            vec![0.0; 4],
+            0.30,
+            motion::Rail {
+                start: 0.0,
+                end: 0.35,
+                start_velocity: 0.0,
+                end_velocity: 0.0,
+            },
+        );
+        hardware.command(&alignment).expect("alignment command");
+        thread::sleep(Duration::from_millis(20));
+
+        let snap_start = hardware.read_pose().expect("snap start");
+        let mut snap_end = snap_start.joints.clone();
+        snap_end.values[3] += 0.10;
+        let snap = motion::Trajectory::new(
+            snap_start.joints.clone(),
+            snap_end.clone(),
+            vec![0.0; 4],
+            vec![0.0; 4],
+            0.04,
+            motion::Rail::fixed(snap_start.rail_x),
+        );
+
+        hardware.command_joints(&snap).expect("wrist snap command");
+        thread::sleep(Duration::from_millis(100));
+
+        let pose = hardware.read_pose().expect("pose");
+        assert!((pose.rail_x - 0.35).abs() < 1e-9);
+        for index in 0..3 {
+            assert!((pose.joints.values[index] - snap_start.joints.values[index]).abs() < 0.002);
+        }
+        assert!((pose.joints.values[3] - snap_end.values[3]).abs() < 0.002);
     }
 
     #[test]

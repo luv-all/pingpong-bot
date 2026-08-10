@@ -30,6 +30,12 @@ pub const RAIL_X_MIN_M: f64 = RAIL_PHYSICAL_X_MIN_M + RAIL_LEFT_END_MARGIN_M;
 pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_RIGHT_END_MARGIN_M;
 /// 탁구대 실측 중앙 보정 위치 [m].
 pub const RAIL_READY_X_M: f64 = 0.6750;
+/// 손목 q3(ID 5) 실물 혼·라켓 장착 영점 보정 [rad].
+///
+/// 2026-08-06 시작 자세에서 Goal-Present는 5 tick으로 정상이었지만,
+/// 모델은 라켓 면 +6.76°를 예측하는 반면 실물은 거의 0°(수직)이었다.
+/// 원래 벤치 기준 +8°를 복원하도록 모터 목표를 -8° 더 돌린다.
+pub const WRIST_JOINT_ZERO_OFFSET_RAD: f64 = -8.0_f64.to_radians();
 
 /// 손목 q3(ID 5) 실물 혼·라켓 장착 영점 보정 [rad].
 pub const WRIST_JOINT_ZERO_OFFSET_RAD: f64 = -8.0_f64.to_radians();
@@ -127,6 +133,8 @@ impl Default for RailConfig {
             board_zero_domain_m: RAIL_BOARD_ZERO_DOMAIN_M,
             x_min_m: RAIL_X_MIN_M,
             x_max_m: RAIL_X_MAX_M,
+            physical_x_min_m: RAIL_PHYSICAL_X_MIN_M,
+            physical_x_max_m: RAIL_PHYSICAL_X_MAX_M,
             vel: 11.25,
             accel: RAIL_ACCEL_M_S2,
             decel: RAIL_ACCEL_M_S2,
