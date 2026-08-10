@@ -1,0 +1,14 @@
+{
+  "scene": "fly",
+  "preroll_secs": 6.0,
+  "postroll_secs": 2.0,
+  "width": 1280,
+  "height": 800,
+  "request_fps": 120.0,
+  "meas_fps": 80.6755772841777,
+  "writer_fps": 80.6755772841777,
+  "fourcc": "MJPG (stream was MJPG)",
+  "backend": "msmf",
+  "frames": 645,
+  "created_unix_secs": 1786190441
+}

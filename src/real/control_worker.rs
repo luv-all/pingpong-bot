@@ -30,13 +30,8 @@ use super::{
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const FIXED_SWING_LEAD: Duration = Duration::from_millis(400);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
-<<<<<<< HEAD
-const AUTO_NEXT_AFTER_HIT_WAIT: Duration = Duration::from_secs(3);
-||||||| fe22559
-=======
-const AUTO_IDLE_AFTER_WAIT: Duration = Duration::from_secs(3);
->>>>>>> codex/wrist-linear-control-base
-const BUSY_POLL: Duration = Duration::from_millis(5);
+const AUTO_NEXT_AFTER_HIT_WAIT: Duration = Duration::from_millis(300);
+const AUTO_IDLE_AFTER_WAIT: Duration = Duration::from_millis(300);
 const VERIFY_POLL_PERIOD: Duration = Duration::from_millis(20);
 const VERIFY_STABLE_SAMPLES: u8 = 2;
 const MAX_CONSECUTIVE_MISSES: u8 = 3;
