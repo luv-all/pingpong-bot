@@ -2528,7 +2528,8 @@ mod tests {
 
     #[test]
     fn committed_motion_is_not_replanned_too_late() {
-        // 추적 직후 첫 목표로 타격을 시작했다면 0.25초 뒤 정밀 단계가 되어도
+        // 첫 검출 후 0.15초 관측을 마치고 첫 목표로 타격을 시작했다면,
+        // 그 뒤 정밀 단계가 되어도
         // 진행 중 궤적을 덮어쓰거나 시간 부족 실패를 새로 만들지 않는다.
         let robot = test_robot();
         let mut world = SimWorld::new(robot.clone());
@@ -2536,7 +2537,19 @@ mod tests {
 
         let settings = launch::Settings::default();
         world.shoot_ball(&settings);
-        assert!(world.swing_committed(), "1차 위치 제어는 즉시 시작해야 함");
+        assert!(
+            !world.swing_committed(),
+            "0.15초 관측 전에는 위치 제어를 시작하면 안 됨"
+        );
+        let observation_steps =
+            (crate::defaults::FIRST_CONTROL_AFTER_DETECTION_SECS * 1_000.0).ceil() as usize + 10;
+        for _ in 0..observation_steps {
+            world.step(1.0 / 1000.0, None);
+        }
+        assert!(
+            world.swing_committed(),
+            "0.15초 관측 후에는 1차 위치 제어를 시작해야 함"
+        );
         assert!(
             !world.position_refined,
             "발사 직후에는 아직 1차 단계여야 함"
