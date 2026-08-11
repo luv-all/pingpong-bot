@@ -76,8 +76,8 @@ pub fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
 }
 
 /// 벤치 스테레오 리그 — USB 순서가 바뀌면 **여기만** 고친다.
-pub const LEFT_DEVICE: i32 = 0;
-pub const RIGHT_DEVICE: i32 = 1;
+pub const LEFT_DEVICE: i32 = 1;
+pub const RIGHT_DEVICE: i32 = 0;
 /// `data/calibration.json`·`data/colormask.json`의 `camera_id`와 맞춘 값.
 ///
 /// 예전엔 1/0(뒤집힘)이었다 — `clip_review`는 `left.avi`를 `camera::Id(0)`로 고정해 읽는데
