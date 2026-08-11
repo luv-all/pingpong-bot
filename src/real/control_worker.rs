@@ -60,9 +60,13 @@ const BENCH_RACKET_LOWEST_ABOVE_TABLE_M: f64 = 0.155;
 const BENCH_HANDLE_END_ABOVE_TABLE_M: f64 = 0.410;
 const BENCH_RACKET_AXIS_FROM_VERTICAL_DEG: f64 = 8.0;
 const BENCH_RACKET_TOTAL_LENGTH_M: f64 = 0.255;
+/// 물리 한계 최단시간 대비 여유. 도착을 약 25% 늦춰 출발·정지를
+/// 부드럽게 하면서도 첫 관측 후 레일을 즉시 출발시키는 구조는 유지한다.
+const RAIL_MOVE_DURATION_SCALE: f64 = 1.25;
 
 /// 레일의 속도·가속 한계로 가능한 가장 짧은 정지→정지 이동시간.
-/// 수치 경계에서 AXL 속도 계산 판별식이 음수가 되지 않도록 2% 여유를 둔다.
+/// 수치 경계에서 AXL 속도 계산 판별식이 음수가 되지 않고,
+/// 최단시간으로 급가속하지 않도록 운전 여유를 둔다.
 fn fast_rail_move_duration(arm: &Arm, start_x: f64, target_x: f64) -> f64 {
     let Some(rail) = arm.rail else {
         return pingpong_bot::defaults::RETURN_TO_CENTER_MIN_SECS;
@@ -79,7 +83,7 @@ fn fast_rail_move_duration(arm: &Arm, start_x: f64, target_x: f64) -> f64 {
     } else {
         distance / max_speed + max_speed / acceleration
     };
-    return (minimum * 1.02).max(0.02);
+    return (minimum * RAIL_MOVE_DURATION_SCALE).max(0.02);
 }
 
 fn arm_with_physical_rail_range(arm: &Arm) -> Arm {

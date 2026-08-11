@@ -9,8 +9,11 @@ pub const MAX_INTERCEPT_SAMPLES: usize = 1_024;
 pub const MAGNUS_OMEGA_MAX: f64 = 80.0;
 
 /// 실기 AXL 레일 가속/감속 [m/s²] — `RailConfig::default()`도 이 값을 쓴다.
-/// 발사기 실기 시험 기준값 16 m/s²의 1.5배.
-pub const RAIL_ACCEL_M_S2: f64 = 24.0;
+///
+/// 기존 24 m/s²는 최단시간 이동과 겹치면 출발·정지 충격이 크다.
+/// 실물 안전 운전은 12 m/s²로 낮춰 예측 보정 중에도 부드럽게
+/// 가감속하고, 시뮬레이션과 계획기도 같은 한계를 사용한다.
+pub const RAIL_ACCEL_M_S2: f64 = 12.0;
 pub const POSITION_TOLERANCE_RAD_OR_M: f64 = 1e-3;
 pub const RACKET_SPEED_RATIO_TOLERANCE: f64 = 0.15;
 pub const RACKET_DIRECTION_TOLERANCE_DEG: f64 = 15.0;
