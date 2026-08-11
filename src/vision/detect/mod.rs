@@ -7,7 +7,7 @@ mod pick;
 
 pub use colormask::{ColorSpace, ColormaskParams};
 pub use layer::Layer;
-pub use layers::{Background, ColorBox, ColorPlane};
+pub use layers::{Background, ColorBox, ColorPlane, Spatial};
 pub use pick::Picker;
 
 use anyhow::Result;

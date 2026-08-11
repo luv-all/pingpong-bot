@@ -19,7 +19,7 @@ use crate::constants::table;
 use crate::defaults::EstimatorParams;
 use crate::defaults::calib::{calibration_path, colormask_path};
 use crate::vision::detect::colormask::{ColormaskParams, load_colormask_set};
-use crate::vision::detect::{Background, ColorBox, Layer, Picker};
+use crate::vision::detect::{Background, ColorBox, Layer, Picker, Spatial};
 use crate::vision::triggers::{Any, PlaneCrossing, SigmaThreshold};
 use crate::vision::{Detector, Trigger};
 
@@ -74,11 +74,14 @@ pub fn detector_for(camera_id: camera::Id) -> Result<Detector> {
 /// 레이어를 갈아끼울 땐 여기만 고치면 되고, 개수가 변해도 `detect-full` 은 그대로 돈다 —
 /// 그 툴은 [`Detector::trace`] 가 주는 이름과 마스크만 그린다.
 ///
-/// 공간 레이어(비행 부피 밖 끄기)는 뺐다. 두 카메라가 테이블 끝에서 부피를 정면으로
-/// 보고 있어서 화면이 곧 부피다 — 실측 keep 이 cam0 86 %, cam1 100 % 였다. 매 프레임
-/// 풀프레임 AND 를 내고 아무것도 안 얻는다. 카메라를 옆으로 옮기면 다시 볼 값이 있다.
+/// 공간 레이어(비행 부피 밖 끄기)를 맨 앞에 둔다 — 한 번은 뺐었다 (두 카메라가 테이블
+/// 끝에서 부피를 정면으로 봐서 화면이 곧 부피였고, keep 이 cam0 86 %·cam1 100 %라 매
+/// 프레임 풀프레임 AND 가 아무것도 안 얻었다). 로봇 뒤로 카메라를 옮기면서 프레임에
+/// 부피 밖(선 사람 자리)이 크게 들어와, 배경 차분도 못 거르는 피부색이 새기 시작했다 —
+/// 그래서 배경 차분보다도 앞, 첫 스텝으로 다시 넣는다.
 pub fn cascade(params: &camera::Params) -> Result<Detector> {
     let layers: Vec<Box<dyn Layer>> = vec![
+        Box::new(Spatial::from_params(params)?),
         Box::new(Background::new(
             detect::BACKGROUND_HISTORY,
             detect::BACKGROUND_VAR_THRESHOLD,

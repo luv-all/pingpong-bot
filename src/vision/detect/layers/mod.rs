@@ -3,7 +3,9 @@
 pub mod background;
 mod color;
 mod color_box;
+mod spatial;
 
 pub use background::Background;
 pub use color::ColorPlane;
 pub use color_box::ColorBox;
+pub use spatial::Spatial;

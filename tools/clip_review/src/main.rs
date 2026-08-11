@@ -82,6 +82,58 @@ struct Args {
     /// `--all` 결과를 넣을 폴더.
     #[arg(long, default_value = "data/review")]
     out: std::path::PathBuf,
+
+    /// 창 없이 `--clip`의 한 프레임에 월드 격자를 얹어 `{name}_grid.png`로 남긴다 —
+    /// 캘리브가 지금 카메라 자세와 맞는지 눈으로 확인하는 용도.
+    #[arg(long)]
+    grid: bool,
+}
+
+/// `--grid` — 격자가 탁구대·네트에 붙는지로 캘리브 자세를 확인한다. 공은 필요 없어서
+/// 프리롤 프레임(0)을 그냥 쓴다 — 카메라가 고정이라 어차피 매 프레임 같은 배경이다.
+fn run_grid(args: &Args) -> Result<()> {
+    let Some(clip) = args.offline.resolve().map_err(anyhow::Error::msg)? else {
+        bail!("--clip 이 필요하다 (예: --clip fly_21 --grid)");
+    };
+    let name = clip
+        .dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .context("클립 이름")?
+        .to_owned();
+    let calibration = Calibration::load_json(&defaults::calibration_path())
+        .map_err(anyhow::Error::msg)
+        .context("calibration")?;
+    std::fs::create_dir_all(&args.out).with_context(|| format!("mkdir {}", args.out.display()))?;
+
+    let mut panels = Vec::with_capacity(2);
+    for (slot, path) in [(0usize, &clip.left), (1usize, &clip.right)] {
+        let mut source = camera::OpenCvCapture::from_path(camera::Id(slot as u8), path)
+            .map_err(anyhow::Error::msg)?;
+        use pingpong_bot::camera::FrameSource;
+        let frame = source.next_frame().context("첫 프레임 못 읽음")?;
+        let mut panel = frame.image.try_clone().context("프레임 clone")?;
+        let params = calibration
+            .params(camera::Id(slot as u8))
+            .with_context(|| format!("cam{slot} params 없음"))?;
+        camera::Preview::draw_world_grid(&mut panel, params, &camera::WorldGridParams::default())?;
+        camera::Preview::draw_cam_label(
+            &mut panel,
+            &format!("cam{slot}  grid"),
+            opencv::core::Scalar::new(230.0, 230.0, 230.0, 0.0),
+        )?;
+        panels.push(panel);
+    }
+    let mosaic = camera::Preview::hstack_bgr(&panels)?;
+    let path = args.out.join(format!("{name}_grid.png"));
+    opencv::imgcodecs::imwrite(
+        path.to_str().context("경로에 UTF-8 아닌 글자")?,
+        &mosaic,
+        &opencv::core::Vector::new(),
+    )
+    .with_context(|| format!("imwrite {}", path.display()))?;
+    println!("{}", path.display());
+    return Ok(());
 }
 
 /// 클립 하나 — 성적표 한 줄.
@@ -170,6 +222,9 @@ fn main() -> Result<()> {
     }
     if args.sim_child {
         return sim_child::run();
+    }
+    if args.grid {
+        return run_grid(&args);
     }
     return run(&args);
 }

@@ -78,8 +78,15 @@ pub fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
 /// 벤치 스테레오 리그 — USB 순서가 바뀌면 **여기만** 고친다.
 pub const LEFT_DEVICE: i32 = 0;
 pub const RIGHT_DEVICE: i32 = 1;
-pub const LEFT_CAMERA_ID: u8 = 1;
-pub const RIGHT_CAMERA_ID: u8 = 0;
+/// `data/calibration.json`·`data/colormask.json`의 `camera_id`와 맞춘 값.
+///
+/// 예전엔 1/0(뒤집힘)이었다 — `clip_review`는 `left.avi`를 `camera::Id(0)`로 고정해 읽는데
+/// (`tools/clip_review/src/main.rs`), 여기(`CamRigConfig`를 타는 `--cam left|right` 툴들)는
+/// `Id(1)`을 썼다. 월드 격자 투영이 `Id(0)`일 때만 `left.avi`의 테이블 모서리·네트에
+/// 픽셀 단위로 붙어서(2026-08-11, `clip-review --grid`) 뒤집혔던 쪽이 여기였다고 확인,
+/// 바로잡음 — `detect-full --cam left`가 엉뚱한 캘리브·colormask를 물던 원인.
+pub const LEFT_CAMERA_ID: u8 = 0;
+pub const RIGHT_CAMERA_ID: u8 = 1;
 
 pub const MAX_REPROJ_RMSE_PX: f64 = 7.0;
 pub const MIN_CHARUCO_CORNERS: usize = 4;
