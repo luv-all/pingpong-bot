@@ -6,8 +6,9 @@ use tracing::info;
 use super::rail_config::RailConfig;
 use super::rail_kind::RailKind;
 
-/// 팔 궤적 종료시간에 맞춰 계산한 레일 속도에 적용하는 실기 시험 배율.
-const COMMAND_SPEED_SCALE: f64 = 1.5;
+/// 팔 궤적 종료시간에 맞춰 계산한 레일 속도에 적용하는 배율.
+/// 도착 시간에서 역산한 속도를 그대로 쓰고 추가 오버드라이브하지 않는다.
+const COMMAND_SPEED_SCALE: f64 = 1.0;
 
 pub struct AxlRail {
     config: RailConfig,
