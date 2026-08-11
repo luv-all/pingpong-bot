@@ -30,8 +30,8 @@ use super::{
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 const FIXED_SWING_LEAD: Duration = Duration::from_millis(400);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
+const BUSY_POLL: Duration = Duration::from_millis(5);
 const AUTO_NEXT_AFTER_HIT_WAIT: Duration = Duration::from_millis(300);
-const AUTO_IDLE_AFTER_WAIT: Duration = Duration::from_millis(300);
 const VERIFY_POLL_PERIOD: Duration = Duration::from_millis(20);
 const VERIFY_STABLE_SAMPLES: u8 = 2;
 const MAX_CONSECUTIVE_MISSES: u8 = 3;
@@ -290,7 +290,7 @@ struct PendingAlignmentMeasurement {
 /// `Option` 세 개(`track_seq`, `return_due_at`,
 /// `pending_impact_measurement`)로 표현해 그 불변식이 관례로만 유지됐다.
 ///
-/// 타격 후 `Waiting`은 3초 후 자동으로 `Idle`(N)로 전환한다.
+/// 타격 후 `Waiting`은 0.3초 후 자동으로 `Idle`(N)로 전환한다.
 /// `w` 키로 수동 진입한 `Waiting`은 기존처럼 `n`을 누를 때까지 유지한다.
 enum BallControlState {
     Idle,
@@ -403,6 +403,7 @@ pub fn spawn(
         let mut pending_test_control: Option<TestControl> = None;
         let mut last_filtered_track_seq: Option<u64> = None;
         let mut last_waiting_ignored_track_seq: Option<u64> = None;
+        let mut last_detection_delay_track_seq: Option<u64> = None;
         // 타격 후 자동으로 진입한 Waiting에만 설정한다.
         // 수동 W는 `None`이므로 자동 만료되지 않는다.
         let mut waiting_auto_next_at: Option<Instant> = None;
@@ -501,6 +502,7 @@ pub fn spawn(
                 }
                 VerificationResult::Pending => {}
             }
+            log_motion_done_if_idle(hardware.as_mut(), &mut motion_watch);
             if matches!(state, BallControlState::Waiting)
                 && waiting_auto_next_at.is_some_and(|deadline| Instant::now() >= deadline)
             {
@@ -512,7 +514,7 @@ pub fn spawn(
                     &mut cached_idle_pose,
                     &event_tx,
                 );
-                info!("W 대기 3초 경과 — 자동 N 전환, 레일·관절 유지");
+                info!("W 대기 0.3초 경과 — 자동 N 전환, 레일·관절 유지");
             }
             let due_swing = match &state {
                 BallControlState::Aligning {
@@ -633,11 +635,9 @@ pub fn spawn(
                     }
                 }
             } else if idle_ready && due_for_return {
-                let mut swing_return_rail_x = home_rail_x;
                 if let BallControlState::Aligning { measurement, .. } = &state {
                     match hardware.read_pose() {
                         Ok(measured) => {
-                            swing_return_rail_x = measured.rail_x;
                             let joint_errors: Vec<f64> = measurement
                                 .joints_commanded
                                 .values
@@ -692,12 +692,12 @@ pub fn spawn(
                         info!(
                             track_seq = returned_track_seq,
                             rail_held_m = f4(pose.rail_x),
-                            "타격 후 Dynamixel만 준비 자세 복귀 — 레일 타격 위치 유지, W 3초"
+                            "타격 후 Dynamixel만 준비 자세 복귀 — 레일 타격 위치 유지, W 0.3초"
                         );
                     }
                     Err(error) => warn!(%error, "준비 자세 복귀 후 포즈 읽기 실패"),
                 }
-                // 타격 후 W 상태를 3초만 유지하고 자동으로 N(Idle)으로 전환한다.
+                // 타격 후 W 상태를 0.3초만 유지하고 자동으로 N(Idle)으로 전환한다.
                 state = BallControlState::Waiting;
                 waiting_auto_next_at = Some(Instant::now() + AUTO_NEXT_AFTER_HIT_WAIT);
                 pending_refined = None;
@@ -1936,7 +1936,7 @@ fn apply_immediate_control(
     };
 }
 
-/// 타격 후 자동 W가 3초 만료됐거나 그 전에 수동 N을 누른 경우,
+/// 타격 후 자동 W가 0.3초 만료됐거나 그 전에 수동 N을 누른 경우,
 /// 하드웨어를 다시 움직이지 않고 다음 공을 받는 상태로만 전환한다.
 fn resume_waiting_in_place(
     hardware: &mut dyn Hardware,
@@ -2239,6 +2239,41 @@ mod tests {
         fn read_pose(&mut self) -> Result<Pose, HwError> {
             return Ok(self.pose.clone());
         }
+    }
+
+    struct ToggleBusyHardware {
+        busy_then_idle: std::cell::Cell<bool>,
+    }
+
+    impl Hardware for ToggleBusyHardware {
+        fn command(
+            &mut self,
+            _trajectory: &pingpong_bot::robot::motion::Trajectory,
+        ) -> Result<(), HwError> {
+            return Ok(());
+        }
+
+        fn read_pose(&mut self) -> Result<Pose, HwError> {
+            return Ok(Pose::new(0.0, Joints::from_slice(&[0.0; 4])));
+        }
+
+        fn is_busy(&mut self) -> bool {
+            return self.busy_then_idle.replace(false);
+        }
+    }
+
+    #[test]
+    fn log_motion_done_keeps_watch_while_busy_then_clears_when_idle() {
+        let mut hardware = ToggleBusyHardware {
+            busy_then_idle: std::cell::Cell::new(true),
+        };
+        let mut watch = Some((7, Instant::now(), "primary_alignment"));
+
+        log_motion_done_if_idle(&mut hardware, &mut watch);
+        assert!(watch.is_some(), "실행 중에는 완료 기록을 유지해야 함");
+
+        log_motion_done_if_idle(&mut hardware, &mut watch);
+        assert!(watch.is_none(), "실행이 끝나면 완료 기록을 비워야 함");
     }
 
     struct JointOnlyRecordingHardware {
@@ -2767,32 +2802,8 @@ mod tests {
         }
     }
 
-    /// `wait_for_event`처럼 이벤트를 소진하지만, `extract`가 `Some`을 반환하는
-    /// 첫 값을 돌려준다. `timeout` 안에 못 찾으면(채널 disconnect 포함) `None`.
-    fn wait_for_event_value<T>(
-        event_rx: &crossbeam_channel::Receiver<RuntimeEvent>,
-        timeout: Duration,
-        mut extract: impl FnMut(&RuntimeEvent) -> Option<T>,
-    ) -> Option<T> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return None;
-            }
-            match event_rx.recv_timeout(remaining) {
-                Ok(event) => {
-                    if let Some(value) = extract(&event) {
-                        return Some(value);
-                    }
-                }
-                Err(_) => return None,
-            }
-        }
-    }
-
     #[test]
-    fn spawn_ignores_balls_while_waiting_and_resumes_after_next() {
+    fn spawn_ignores_balls_while_waiting_and_resumes_after_next_before_auto_resume() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
         let rail = robot.arm.rail.expect("rail 있는 로봇");
         let hardware: Box<dyn Hardware> = Box::new(ReadCountingHardware {
@@ -2841,11 +2852,11 @@ mod tests {
             .send(vision_request(Duration::ZERO))
             .expect("보낼 수 있음");
         assert!(
-            !wait_for_event(&event_rx, Duration::from_millis(400), |event| matches!(
+            !wait_for_event(&event_rx, Duration::from_millis(100), |event| matches!(
                 event,
                 RuntimeEvent::Commanded { .. }
             )),
-            "대기 중에는 두 번째 공을 명령하면 안 된다"
+            "0.3초 대기 중에는 두 번째 공을 명령하면 안 된다"
         );
 
         test_control_tx
@@ -2877,7 +2888,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_auto_switches_from_post_hit_w_to_n_after_three_seconds() {
+    fn spawn_auto_switches_from_post_hit_w_to_n_after_300ms() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
         let rail = robot.arm.rail.expect("레일 있는 로봇");
         let hardware: Box<dyn Hardware> = Box::new(ReadCountingHardware {
