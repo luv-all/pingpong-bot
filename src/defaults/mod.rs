@@ -20,6 +20,7 @@
 //! | [`hardware`] | DynamixelConfig / RailConfig |
 //! | [`dxl_limits`] | derate·속도·토크 배열 |
 //! | [`motion`] | InterceptWindow + 정렬·스윙·bang-bang consts |
+//! | [`rail`] | 레일 좌표계·프레임 SSOT (영점·범위·마운트·모션) |
 //! | [`sim`] | Settings + 랜덤/eval consts |
 //! | [`sim_motor`] | `SimMotorParams` |
 //!
@@ -33,6 +34,7 @@ mod estimator;
 mod hardware;
 mod impact;
 pub mod motion;
+pub mod rail;
 mod physics;
 mod robot;
 pub mod sim;
@@ -56,12 +58,7 @@ pub use dxl_limits::{
     reflected_inertia,
 };
 pub use estimator::EstimatorParams;
-pub use hardware::{
-    BASE_JOINT_ZERO_OFFSET_RAD, RAIL_BOARD_ZERO_DOMAIN_M, RAIL_COORDINATE_POSITIVE_X_OFFSET_M,
-    RAIL_LEFT_END_MARGIN_M, RAIL_NEGATIVE_X_ZERO_SHIFT_M, RAIL_PHYSICAL_X_MAX_M,
-    RAIL_PHYSICAL_X_MIN_M, RAIL_POSITIVE_X_TRIM_M, RAIL_READY_X_M, RAIL_RIGHT_END_MARGIN_M,
-    RAIL_X_MAX_M, RAIL_X_MIN_M, WRIST_JOINT_ZERO_OFFSET_RAD,
-};
+pub use hardware::{BASE_JOINT_ZERO_OFFSET_RAD, WRIST_JOINT_ZERO_OFFSET_RAD};
 pub use impact::ImpactParams;
 pub use motion::{
     ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
@@ -70,13 +67,20 @@ pub use motion::{
     FIXED_JOINT_SWING_DURATION_SECS, HOME_RETURN_SPEED_RATIO, JACOBIAN_DAMPING, JDOT_STEP,
     MAGNUS_OMEGA_MAX, MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
     POSITION_TOLERANCE_RAD_OR_M, POST_ALIGNMENT_HOLD_SECS, RACKET_DIRECTION_TOLERANCE_DEG,
-    RACKET_SPEED_RATIO_TOLERANCE, RAIL_ACCEL_M_S2, RETURN_TO_CENTER_GROWTH,
-    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS, TIME_TO_GO_BIAS,
+    RACKET_SPEED_RATIO_TOLERANCE, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS,
+    RETURN_TO_CENTER_MIN_SECS, TIME_TO_GO_BIAS,
 };
 pub use physics::PhysicsParams;
+pub use rail::{
+    DEFAULT_RAIL_CALIBRATION_PATH, RAIL_ACCEL_M_S2, RAIL_BOARD_ZERO_DOMAIN_M,
+    RAIL_COORDINATE_POSITIVE_X_OFFSET_M, RAIL_HOMING_VELOCITY_M_S, RAIL_LEFT_END_MARGIN_M,
+    RAIL_MAX_SPEED, RAIL_NEGATIVE_X_ZERO_SHIFT_M, RAIL_PHYSICAL_X_MAX_M, RAIL_PHYSICAL_X_MIN_M,
+    RAIL_POSITIVE_X_TRIM_M, RAIL_READY_X_M, RAIL_RIGHT_END_MARGIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M,
+    rail_calibration_path, rail_frame,
+};
 pub use robot::{
-    RAIL_MAX_SPEED, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount, rail_frame,
-    robot, shared_robot, urdf_4dof, urdf_test,
+    READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount, robot, shared_robot, urdf_4dof,
+    urdf_test,
 };
 pub use sim::{
     EVAL_MAX_SCORE, EVAL_NET_PASSTHROUGH_RETRIES, EVAL_PASS_SCORE_EXCLUSIVE, EVAL_PITCH_JITTER_DEG,

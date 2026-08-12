@@ -3,33 +3,11 @@
 use crate::hardware::dynamixel::{DynamixelConfig, MirrorSlave};
 use crate::hardware::rail::RailConfig;
 
-use super::motion::RAIL_ACCEL_M_S2;
+use super::rail::{
+    RAIL_ACCEL_M_S2, RAIL_BOARD_ZERO_DOMAIN_M, RAIL_MAX_SPEED, RAIL_PHYSICAL_X_MAX_M,
+    RAIL_PHYSICAL_X_MIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M,
+};
 
-/// 실기 좌측 안전 마진 [m].
-pub const RAIL_LEFT_END_MARGIN_M: f64 = 0.0100;
-/// 실기 우측 안전 마진 [m].
-pub const RAIL_RIGHT_END_MARGIN_M: f64 = 0.0705;
-/// 실기에서 확인한 레일 좌표 범위 [m].
-pub const RAIL_PHYSICAL_X_MIN_M: f64 = 0.0;
-pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
-/// AXL 보드 실측 원점(보드 0.0m)에 대응하는 제어 좌표 [m].
-///
-/// 레일 기하학적 원점에 더하는 논리 +X 좌표계 보정 [m].
-/// 타격 목표나 IK 결과가 아니라 AXL board↔domain 좌표 변환에 한 번만 적용한다.
-/// `reverse=true`이므로 실물 +X 2.5cm 보정은 보드 목표에서 2.5cm를 뺀다.
-/// 기존 +4.0cm 기준에서 2.5cm를 뺀 최종 좌표 오프셋이다.
-pub const RAIL_COORDINATE_POSITIVE_X_OFFSET_M: f64 = 0.015;
-/// 보드 실측 0.745m를 준비 중앙 0.675m로 해석하는 영점 이동.
-pub const RAIL_POSITIVE_X_TRIM_M: f64 = 0.030;
-pub const RAIL_NEGATIVE_X_ZERO_SHIFT_M: f64 =
-    (RAIL_PHYSICAL_X_MAX_M - RAIL_PHYSICAL_X_MIN_M) / 2.0 - RAIL_POSITIVE_X_TRIM_M;
-pub const RAIL_BOARD_ZERO_DOMAIN_M: f64 =
-    0.7050 + RAIL_COORDINATE_POSITIVE_X_OFFSET_M + RAIL_NEGATIVE_X_ZERO_SHIFT_M;
-/// sim·real 공통 이동 범위 [m].
-pub const RAIL_X_MIN_M: f64 = RAIL_PHYSICAL_X_MIN_M + RAIL_LEFT_END_MARGIN_M;
-pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_RIGHT_END_MARGIN_M;
-/// 탁구대 실측 중앙 보정 위치 [m].
-pub const RAIL_READY_X_M: f64 = 0.6750;
 /// 손목 q3(ID 5) 실물 혼·라켓 장착 영점 보정 [rad].
 ///
 /// 2026-08-06 시작 자세에서 Goal-Present는 5 tick으로 정상이었지만,
@@ -133,11 +111,11 @@ impl Default for RailConfig {
             x_max_m: RAIL_X_MAX_M,
             physical_x_min_m: RAIL_PHYSICAL_X_MIN_M,
             physical_x_max_m: RAIL_PHYSICAL_X_MAX_M,
-            vel: crate::defaults::robot::RAIL_MAX_SPEED,
+            vel: RAIL_MAX_SPEED,
             accel: RAIL_ACCEL_M_S2,
             decel: RAIL_ACCEL_M_S2,
             min_vel: 0.001,
-            max_vel: crate::defaults::robot::RAIL_MAX_SPEED,
+            max_vel: RAIL_MAX_SPEED,
             pulse_out_method: 4,
             enc_input_method: 3,
             abs_rel_mode: 0,

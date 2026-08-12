@@ -299,7 +299,7 @@ impl DirectController {
             minimum_trapezoid_time(
                 rail_distance_m,
                 rail.max_speed,
-                crate::defaults::motion::RAIL_ACCEL_M_S2,
+                crate::defaults::rail::RAIL_ACCEL_M_S2,
             )
         });
         let aim_current_rad = *start
@@ -863,7 +863,7 @@ mod tests {
         let start = Pose::new(rail.x_max, robot.arm.default_joints.clone());
         let trajectory = Planner::return_to_center(&robot.arm, &start).unwrap();
         assert!(
-            trajectory.peak_rail_acceleration() <= crate::defaults::motion::RAIL_ACCEL_M_S2 + 1e-9
+            trajectory.peak_rail_acceleration() <= crate::defaults::rail::RAIL_ACCEL_M_S2 + 1e-9
         );
         assert!(
             trajectory.duration_secs > 0.36,

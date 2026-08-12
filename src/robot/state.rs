@@ -123,7 +123,7 @@ impl State {
     pub fn set_rail_target_in_secs(&mut self, arm: &Arm, rail_x: f64, duration_secs: f64) {
         self.rail_target = rail_x;
         let distance = (rail_x - self.rail_x).abs();
-        let acceleration = crate::defaults::motion::RAIL_ACCEL_M_S2;
+        let acceleration = crate::defaults::rail::RAIL_ACCEL_M_S2;
         let discriminant = duration_secs * duration_secs - 4.0 * distance / acceleration;
         let velocity = if discriminant <= 0.0 {
             f64::INFINITY
@@ -244,7 +244,7 @@ impl State {
     }
 
     /// 레일을 `rail_target` 쪽으로 한 틱 옮긴다 — 속도 한계(`rail.max_speed`)와
-    /// **가속도 한계**([`RAIL_ACCEL_M_S2`](crate::defaults::motion::RAIL_ACCEL_M_S2))를
+    /// **가속도 한계**([`RAIL_ACCEL_M_S2`](crate::defaults::rail::RAIL_ACCEL_M_S2))를
     /// 모두 지키는 사다리꼴 프로파일 근사.
     ///
     /// 남은 거리 `d`에서 `a`로 정확히 멈출 수 있는 속도는 `√(2a|d|)`다. 목표
@@ -262,7 +262,7 @@ impl State {
         if diff == 0.0 && self.rail_vel == 0.0 {
             return;
         }
-        let accel = crate::defaults::motion::RAIL_ACCEL_M_S2;
+        let accel = crate::defaults::rail::RAIL_ACCEL_M_S2;
         let brake_speed = (2.0 * accel * diff.abs()).sqrt();
         let speed_limit = self.rail_speed_limit.unwrap_or(rail.max_speed);
         let desired_vel = diff.signum() * speed_limit.min(rail.max_speed).min(brake_speed);
@@ -562,7 +562,7 @@ mod tests {
         let goal = rail.x_max;
         state.set_rail_target(goal);
 
-        let accel = crate::defaults::motion::RAIL_ACCEL_M_S2;
+        let accel = crate::defaults::rail::RAIL_ACCEL_M_S2;
         state.step_commands(&arm, DT);
         let first = (state.rail_x() - start).abs();
         assert!(

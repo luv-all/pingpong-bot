@@ -51,8 +51,9 @@ use super::super::impact_target::solve_impact_target;
 use crate::defaults::motion::{
     JACOBIAN_DAMPING, JDOT_STEP, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
     POSITION_TOLERANCE_RAD_OR_M, RACKET_DIRECTION_TOLERANCE_DEG, RACKET_SPEED_RATIO_TOLERANCE,
-    RAIL_ACCEL_M_S2, TIME_TO_GO_BIAS,
+    TIME_TO_GO_BIAS,
 };
+use crate::defaults::rail::RAIL_ACCEL_M_S2;
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
 use crate::robot::collision::{clamp_above_table, table_penetration};

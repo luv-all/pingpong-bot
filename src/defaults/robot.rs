@@ -1,7 +1,7 @@
 //! 활성 로봇 · URDF 프리셋.
 //!
 //! 런타임이 쓰는 것은 [`robot`]. 바꾸려면 그 본문만 고친다.
-//! 리니어모터 철제 프레임 위치는 [`rail_frame`].
+//! 리니어모터 철제 프레임 위치는 [`crate::defaults::rail::rail_frame`].
 //!
 //! 공유·배선은 항상 [`Robot`] (`shared_robot`). FK/IK가 필요하면 `robot.arm`을 본다.
 
@@ -15,17 +15,11 @@ use crate::constants::geometry;
 use crate::defaults::dxl_limits::{
     DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, joint_reflected_inertias_4dof, joint_torque_limits_4dof,
 };
-use crate::defaults::hardware::{RAIL_READY_X_M, RAIL_X_MAX_M, RAIL_X_MIN_M};
+use crate::defaults::rail::{RAIL_MAX_SPEED, RAIL_READY_X_M, RAIL_X_MAX_M, RAIL_X_MIN_M, rail_frame};
 use crate::robot::{
-    Arm, JointLimit, Joints, LinkInertial, MountPreset, RailFrame, Robot, RobotBuildError,
-    RobotBuilder, SerialChain, SerialJoint,
+    Arm, JointLimit, Joints, LinkInertial, MountPreset, Robot, RobotBuildError, RobotBuilder,
+    SerialChain, SerialJoint,
 };
-
-/// 리니어 레일 최대 속도 [m/s].
-///
-/// 발사기 실기 시험 기준값 7.5 m/s. 계획기와 AXL 설정이 공유한다.
-/// 기존의 1.5배 오버드라이브는 제거해 레일 보정 때 갑자기 튀는 동작을 줄인다.
-pub const RAIL_MAX_SPEED: f64 = 7.5;
 
 /// 4-DOF 휴지(ready) 자세 [rad] — yaw, 어깨, 팔꿈치, 손목 순.
 ///
@@ -90,30 +84,6 @@ pub const RAIL_MAX_SPEED: f64 = 7.5;
 /// 계속 명령하면 실물은 항상 약 1–2.5° 다른 자세에 멈춰 sim·real
 /// 시작 자세가 어긋났다. 이 값은 기본 자세에서 그 괴리를 없앤다.
 pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
-
-/// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·바닥 기준).
-///
-/// **높이는 실측(2026-07-30).** 바닥→프로파일 하단 0.88 m,
-/// 두께 [`RAIL_THICKNESS`](crate::constants::geometry::RAIL_THICKNESS) 0.055 m →
-/// 베이스 z = **0.935**. 이전 값은 `SURFACE_Z + 0.05` = 0.81로, "실기 브래킷
-/// (~면 위 3~5cm)과 맞춤"이라는 추정에 기대고 있었는데 실측이 그 가정을
-/// 뒤집었다 — 시뮬 베이스가 실물보다 12.5 cm 낮았다.
-///
-/// `mount_y`는 실측값 **-0.128**을 쓴다 — `mount_search`(2026-07-26)가 낮은
-/// 베이스 기준으로 추천한 `behind=0.10`(y=−0.10, `behind=0.02` 대비 ratio≤1이
-/// **10/150**, mean≈2.48)은 그 스윕이 **낮은 베이스 기준**이라 0.935에서는
-/// 최적값이 아니었고, 이후 실측이 이 값으로 대체했다.
-///
-/// 두 값 모두 sim GUI "Rig" 패널에서 공이 주차된 동안 런타임 조정 가능하다
-/// (`SimRuntimeControls::rail_frame`). 좋은 위치를 눈으로 찾은 뒤
-/// `mount_search`/`--rest-pose-search`를 그 위치에서 다시 돌려 여기와
-/// [`READY_JOINTS_4DOF`]를 확정하는 것이 순서다.
-pub fn rail_frame() -> RailFrame {
-    return RailFrame {
-        mount_y: -0.128,
-        rail_bottom_z: 0.88,
-    };
-}
 
 /// 경연용 단순 4-dof (URDF 없음) → [`Robot`].
 ///
