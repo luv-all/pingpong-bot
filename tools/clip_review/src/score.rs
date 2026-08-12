@@ -8,6 +8,7 @@
 
 use pingpong_bot::Vector3;
 use pingpong_bot::constants::table;
+use pingpong_bot::physics::TrajPoint;
 use pingpong_bot::robot::motion::InterceptWindow;
 
 use crate::track::Reviewed;
@@ -50,6 +51,14 @@ pub struct Score {
     /// RMSE 는 궤적 전체의 값이라 "그래서 몇 cm 빗맞나"를 안 알려 준다. 접수 창의 평면마다
     /// 재면 그게 곧 라켓을 놓을 자리의 오차다. y 는 평면이 고정하므로 면내 `(x, z)` 만 센다.
     pub plane_error: Vec<(f64, Option<(f64, f64, f64)>)>,
+    /// (예측 바운스 수, 실제 바운스 수) — 겹치는 구간 안에서만.
+    ///
+    /// `plane_error`·`impact_error`는 평면 **한 점**의 (dx, dz)만 본다 — 예측이 튐을
+    /// 한 번 덜/더 겪어 궤적 모양 자체가 틀렸어도, 그 평면에서 우연히 자리가 비슷하면
+    /// 오차가 작게 나온다(실측 fly_47: 실제 2바운스, 예측 1바운스인데 접수 평면에서
+    /// 우연히 가까움). 개수가 다르면 위치가 맞아도 **물리 국면을 잘못 봤다는 뜻** — 이건
+    /// 그 자체로 하드 신호로 남긴다.
+    pub bounce_counts: Option<(usize, usize)>,
     /// 리드타임과 타점 오차를 잰 기준 평면 [m]. 클립마다 다를 수 있다.
     pub reference_plane: f64,
     /// 그 평면의 타점 오차 [m]. 제어가 실제로 쓰는 한 점이라 같이 둔다.
@@ -159,6 +168,11 @@ impl Score {
 
         let raw_speed = speed_early_late(reviewed);
 
+        let bounce_counts = reviewed
+            .contract
+            .as_ref()
+            .and_then(|contract| count_bounces(reviewed, &contract.at_trigger.predicted));
+
         // 로봇이 실제로 칠 수 있는 평면들. 여기서 빗나간 거리가 곧 라켓 오차다.
         let plane_error = InterceptWindow::default()
             .hit_planes()
@@ -187,6 +201,7 @@ impl Score {
             reference_plane: reference_plane(reviewed).unwrap_or(plane),
             lead_error,
             plane_error,
+            bounce_counts,
             predicted_rmse,
             best_shift,
             raw_speed,
@@ -204,8 +219,14 @@ impl Score {
         let impact = self
             .impact_error
             .map_or("--".to_owned(), |e| format!("{:.0}cm", e * 100.0));
+        // 위치가 맞아도 튐 횟수가 다르면 조용히 안 넘긴다 — 화면 두 줄 예산 안에서도 이건
+        // 그냥 숫자가 아니라 "다른 물리를 맞았다"는 경보라 예외로 넣는다.
+        let bounce = match self.bounce_counts {
+            Some((p, o)) if p != o => format!("  BOUNCE 예측{p}≠실제{o}"),
+            _ => String::new(),
+        };
         return format!(
-            "{resid}  fit {}  tracks {}  MISS {impact}",
+            "{resid}  fit {}  tracks {}  MISS {impact}{bounce}",
             self.trigger
                 .map_or("--".to_owned(), |(_, _, n)| n.to_string()),
             self.track_switches + 1
@@ -300,6 +321,14 @@ impl Score {
                 .map_or("--".to_owned(), |e| format!("{:.1} cm", e * 100.0)),
             self.reference_plane
         ));
+        out.push(match self.bounce_counts {
+            Some((p, o)) if p == o => format!("  바운스 횟수 예측 {p} = 실제 {o}"),
+            Some((p, o)) => format!(
+                "  바운스 횟수 예측 {p} ≠ 실제 {o} — 평면 오차가 작아도 믿지 마라. \
+                 튐 국면 자체를 놓쳤다"
+            ),
+            None => "  바운스 횟수 -- (예측 없음)".to_owned(),
+        });
         out.push("  접수 창에서 라켓이 빗나가는 거리 (면내 x·z):".to_owned());
         for (y, gap) in &self.plane_error {
             out.push(match gap {
@@ -350,6 +379,67 @@ fn speed_early_late(reviewed: &Reviewed) -> Option<(f64, f64)> {
         span(0, third)?,
         span(points.len() - 1 - third, points.len() - 1)?,
     ));
+}
+
+/// (예측 바운스 수, 실제 바운스 수) — 예측 궤적이 덮는 시간 구간 안의 실제 관측만 센다.
+/// 예측 뒤(로봇을 이미 지난 자리)에서 실제가 몇 번 더 튀든 그건 이 예측의 책임이 아니다.
+///
+/// `TrajAnalysis::detect_bounces`는 안 쓴다 — 그건 e·μ **측정**용이라 신뢰도 필터가
+/// 빡빡해서(창 회귀 vin_z·접선속도·e 범위) 애매한 바운스를 조용히 버린다. 여기서는
+/// "튕겼는가"만 알면 되고, 놓치는 쪽이 훨씬 나쁘다. 그래서 원래의 느슨한 감지 조건만 쓴다.
+///
+/// **한계**: `predicted`는 `PREDICT_UNTIL_Y`(로봇 마운트)에서 끊긴다 — 실제가 그 뒤에서
+/// 튀는 건 이 함수의 창 밖이라 여기 안 잡힌다(실측 fly_47: 예측이 마운트 도달 전에 끝나서
+/// 둘 다 0으로 나옴, 진짜 갈라짐은 `predicted_rmse`가 잡음 — 20.4→23.3cm). 이 필드는
+/// "겹치는 구간 안에서 튐 국면 자체가 갈렸나"만 보는 보조 신호고, 전체 궤적 오차의
+/// 최종 판정은 여전히 `predicted_rmse`다.
+fn count_bounces(reviewed: &Reviewed, predicted: &pingpong_bot::vision::Track) -> Option<(usize, usize)> {
+    let (first, last) = (predicted.first()?.t.as_secs_f64(), predicted.last()?.t.as_secs_f64());
+    let predicted_points: Vec<TrajPoint> = predicted
+        .iter()
+        .map(|s| TrajPoint {
+            t: s.t.as_secs_f64(),
+            pos: s.position,
+            pixels: Vec::new(),
+        })
+        .collect();
+    let observed_points: Vec<TrajPoint> = reviewed
+        .observed
+        .iter()
+        .filter(|o| o.t >= first && o.t <= last)
+        .map(|o| TrajPoint {
+            t: o.t,
+            pos: o.point,
+            pixels: Vec::new(),
+        })
+        .collect();
+    return Some((
+        count_touchdowns(&predicted_points),
+        count_touchdowns(&observed_points),
+    ));
+}
+
+/// 테이블 근처에서 vz 부호가 뒤집히는 횟수 — `detect_bounces`의 감지 조건과 같지만
+/// 신뢰도 재확인 없이 다 센다. 목적이 다르면(측정 vs 있었나 없었나) 필터도 다르다.
+fn count_touchdowns(points: &[TrajPoint]) -> usize {
+    let floor = table::SURFACE_Z + 0.10;
+    let mut count = 0usize;
+    let mut i = 1usize;
+    while i + 1 < points.len() {
+        let dt_in = points[i].t - points[i - 1].t;
+        let dt_out = points[i + 1].t - points[i].t;
+        if dt_in > 1e-4 && dt_out > 1e-4 {
+            let vin_z = (points[i].pos.z - points[i - 1].pos.z) / dt_in;
+            let vout_z = (points[i + 1].pos.z - points[i].pos.z) / dt_out;
+            if vin_z < -0.25 && vout_z > 0.15 && points[i].pos.z < floor {
+                count += 1;
+                i += 3;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    return count;
 }
 
 /// 예측을 `shift` [s] 만큼 민 뒤의 (RMSE, 축별 RMSE, 짝 수) [m].

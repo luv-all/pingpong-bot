@@ -10,7 +10,8 @@
 //! |---|---|
 //! | 6 | `p0`, `v0` — 지금 코드가 푸는 것 |
 //! | 7 | `+ drag` |
-//! | 10 | `+ ω` — Magnus 와 바운스 접선 임펄스 |
+//! | 9 | `+ restitution, friction` — 바운스 법선·접선 계수 |
+//! | 12 | `+ ω` — Magnus 와 바운스 접선 임펄스 |
 //!
 //! `ω_z`(수직축 스핀)는 바운스에서 안 보인다. 접촉점 속도가
 //! `v + ω × (0,0,-R) = (v_x - Rω_y, v_y + Rω_x, 0)` 이라 `ω_z` 가 아예 안 들어간다.
@@ -57,12 +58,14 @@ fn theoretical(drag_coefficient: f64) -> f64 {
     return 0.5 * AIR_DENSITY * drag_coefficient * area / ball::MASS;
 }
 
-/// 미지수 10개: `p0`(3), `v0`(3), `drag`(1), `ω`(3).
+/// 미지수 12개: `p0`(3), `v0`(3), `drag`(1), `restitution`(1), `friction`(1), `ω`(3).
 #[derive(Debug, Clone, Copy)]
 struct Guess {
     position: Point3,
     velocity: Vector3,
     drag: f64,
+    restitution: f64,
+    friction: f64,
     omega: Vector3,
 }
 
@@ -70,7 +73,7 @@ struct Guess {
 fn step_of(axis: usize) -> f64 {
     return match axis {
         0..=5 => 1e-5,
-        6 => 1e-4,
+        6..=8 => 1e-4,
         _ => 1e-2,
     };
 }
@@ -81,7 +84,9 @@ impl Guess {
             0..=2 => self.position[axis] += step,
             3..=5 => self.velocity[axis - 3] += step,
             6 => self.drag += step,
-            _ => self.omega[axis - 7] += step,
+            7 => self.restitution += step,
+            8 => self.friction += step,
+            _ => self.omega[axis - 9] += step,
         }
         return self;
     }
@@ -90,10 +95,12 @@ impl Guess {
         match axis {
             0..=2 => self.position[axis] -= delta,
             3..=5 => self.velocity[axis - 3] -= delta,
-            // 항력은 음수가 될 수 없다. 물리적으로 없는 값을 해로 받으면 안 된다.
+            // 항력·반발계수·마찰계수는 음수가 될 수 없다. 반발·마찰은 1을 넘지도 않는다.
             6 => self.drag = (self.drag - delta).clamp(0.0, 1.0),
+            7 => self.restitution = (self.restitution - delta).clamp(0.0, 1.0),
+            8 => self.friction = (self.friction - delta).clamp(0.0, 1.0),
             _ => {
-                self.omega[axis - 7] = (self.omega[axis - 7] - delta).clamp(-OMEGA_MAX, OMEGA_MAX);
+                self.omega[axis - 9] = (self.omega[axis - 9] - delta).clamp(-OMEGA_MAX, OMEGA_MAX);
             }
         }
     }
@@ -103,6 +110,8 @@ impl Guess {
 fn walk(guess: &Guess, times: &[f64]) -> Vec<Point3> {
     let physics = PhysicsParams {
         drag: guess.drag,
+        restitution: guess.restitution,
+        friction: guess.friction,
         ..PhysicsParams::default()
     };
     let (mut p, mut v, mut w) = (guess.position.coords, guess.velocity, guess.omega);
@@ -136,11 +145,16 @@ fn rmse(residual: &[f64]) -> f64 {
     return (residual.iter().map(|r| r * r).sum::<f64>() / (residual.len() / 3) as f64).sqrt();
 }
 
-/// 미지수 `unknowns` 개를 레벤버그-마쿼트로 푼다.
+/// `free` 에 있는 축만 레벤버그-마쿼트로 푼다. 나머지는 `seed` 값에 고정된다.
 ///
 /// 순수 가우스-뉴턴을 안 쓰는 이유는 바운스 때문이다. 반발 시각이 미지수에 따라 움직여서
 /// 잔차가 그 지점에서 매끄럽지 않고, 감쇠 없이는 한 걸음에 뛰어넘어 발산한다.
-fn solve(samples: &[(f64, Point3)], unknowns: usize, drag: f64) -> Option<(Guess, f64)> {
+///
+/// 예전엔 `unknowns: usize`(0..unknowns 연속 구간)였다 — `calibrate_shared_physics`가
+/// drag·e·mu는 고정하고 p0,v0만(ω 빼고) 풀어야 해서 임의의 부분집합을 받게 넓혔다. 축
+/// 번호 자체(`step_of`·`nudged`·`apply`)는 그대로라 기존 호출부는 `0..unknowns`를
+/// 그대로 넘기면 이전과 동일하게 동작한다.
+fn solve(samples: &[(f64, Point3)], free: &[usize], seed: PhysicsParams) -> Option<(Guess, f64)> {
     if samples.len() < 6 {
         return None;
     }
@@ -151,16 +165,19 @@ fn solve(samples: &[(f64, Point3)], unknowns: usize, drag: f64) -> Option<(Guess
     let mut guess = Guess {
         position: measured[0],
         velocity: (measured[measured.len() - 1] - measured[0]) / span.max(1e-6),
-        drag,
+        drag: seed.drag,
+        restitution: seed.restitution,
+        friction: seed.friction,
         omega: Vector3::zeros(),
     };
     let mut best = rmse(&residuals(&guess, &times, &measured));
     let mut lambda = 1e-3;
+    let n = free.len();
 
     for _ in 0..120 {
         let base = residuals(&guess, &times, &measured);
-        let mut columns: Vec<Vec<f64>> = Vec::with_capacity(unknowns);
-        for axis in 0..unknowns {
+        let mut columns: Vec<Vec<f64>> = Vec::with_capacity(n);
+        for &axis in free {
             let step = step_of(axis);
             let moved = residuals(&guess.nudged(axis, step), &times, &measured);
             if moved.len() != base.len() {
@@ -174,10 +191,10 @@ fn solve(samples: &[(f64, Point3)], unknowns: usize, drag: f64) -> Option<(Guess
                     .collect(),
             );
         }
-        let mut normal = nalgebra::DMatrix::<f64>::zeros(unknowns, unknowns);
-        let mut gradient = nalgebra::DVector::<f64>::zeros(unknowns);
-        for a in 0..unknowns {
-            for b in 0..unknowns {
+        let mut normal = nalgebra::DMatrix::<f64>::zeros(n, n);
+        let mut gradient = nalgebra::DVector::<f64>::zeros(n);
+        for a in 0..n {
+            for b in 0..n {
                 normal[(a, b)] = (0..base.len()).map(|i| columns[a][i] * columns[b][i]).sum();
             }
             gradient[a] = (0..base.len()).map(|i| columns[a][i] * base[i]).sum();
@@ -187,7 +204,7 @@ fn solve(samples: &[(f64, Point3)], unknowns: usize, drag: f64) -> Option<(Guess
         let mut improved = false;
         for _ in 0..8 {
             let mut damped = normal.clone();
-            for a in 0..unknowns {
+            for a in 0..n {
                 damped[(a, a)] += lambda * (normal[(a, a)].abs() + 1e-12);
             }
             let Some(delta) = damped.try_inverse().map(|inverse| &inverse * &gradient) else {
@@ -195,8 +212,8 @@ fn solve(samples: &[(f64, Point3)], unknowns: usize, drag: f64) -> Option<(Guess
                 continue;
             };
             let mut candidate = guess;
-            for axis in 0..unknowns {
-                candidate.apply(axis, delta[axis]);
+            for (i, &axis) in free.iter().enumerate() {
+                candidate.apply(axis, delta[i]);
             }
             let score = rmse(&residuals(&candidate, &times, &measured));
             if score < best {
@@ -214,6 +231,11 @@ fn solve(samples: &[(f64, Point3)], unknowns: usize, drag: f64) -> Option<(Guess
     }
     return Some((guess, best));
 }
+
+const P_V: [usize; 6] = [0, 1, 2, 3, 4, 5];
+const P_V_DRAG: [usize; 7] = [0, 1, 2, 3, 4, 5, 6];
+const P_V_BOUNCE: [usize; 9] = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+const P_V_ALL: [usize; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
 /// 클립의 생 삼각측량 궤적. `stop_at_bounce` 면 첫 바운스에서 끊는다 —
 /// 항력을 잴 때는 반발계수 오차가 섞이면 안 된다.
@@ -268,17 +290,26 @@ fn flight(clip: &str, stop_at_bounce: bool) -> Option<Vec<(f64, Point3)>> {
     }
     let mut flight = runs.into_iter().max_by_key(Vec::len)?;
 
-    // 첫 바운스까지 — 반발계수 오차가 항력으로 새면 안 된다. 테이블 **가까이서** z 가
-    // 다시 오르는 지점만 바운스로 본다. 잡음이 만드는 높은 곳의 극소점은 바운스가 아니다.
+    // 첫 바운스를 찾는다. 테이블 **가까이서** z 가 다시 오르는 지점만 바운스로 본다 —
+    // 잡음이 만드는 높은 곳의 극소점은 바운스가 아니다.
     let near_table = table::SURFACE_Z + 0.15;
-    if stop_at_bounce
-        && let Some(bounce) = (1..flight.len().saturating_sub(1)).find(|&i| {
-            flight[i].1.z < near_table
-                && flight[i].1.z <= flight[i - 1].1.z
-                && flight[i + 1].1.z > flight[i].1.z
-        })
-    {
-        flight.truncate(bounce + 1);
+    let bounce = (1..flight.len().saturating_sub(1)).find(|&i| {
+        flight[i].1.z < near_table
+            && flight[i].1.z <= flight[i - 1].1.z
+            && flight[i + 1].1.z > flight[i].1.z
+    });
+    if let Some(bounce) = bounce {
+        if stop_at_bounce {
+            // 항력만 잴 때는 반발계수 오차가 안 섞이게 바운스 자체를 뺀다.
+            flight.truncate(bounce + 1);
+        } else {
+            // 바운스는 포함하되 그 뒤로 딱 한 토막만 남긴다 — 서브 촬영엔 던지기·되받아치기
+            // 등 두 번째 바운스·방향 반전이 같은 "가장 긴 토막" 안에 이어붙어 있을 수 있다.
+            // 테이블 바운스 모델 하나로 못 맞는 국면까지 들어오면 반발·마찰 적합이 그걸
+            // 억지로 설명하려고 극단값(e=1, ω=OMEGA_MAX)으로 도망간다 (실측 fly_45~54).
+            const POST_BOUNCE_TAIL: usize = 20;
+            flight.truncate((bounce + 1 + POST_BOUNCE_TAIL).min(flight.len()));
+        }
     }
     return (flight.len() >= 8).then_some(flight);
 }
@@ -291,13 +322,15 @@ fn fit_physics_from_the_clips() {
         theoretical(0.40),
         theoretical(0.50)
     );
-    println!("바운스를 **포함한** 구간으로 푼다 — 스핀은 거기서 속도로 바뀌며 보인다.\n");
+    println!("바운스를 **포함한** 구간으로 푼다 — 반발·마찰·스핀 다 거기서 속도로 바뀌며 보인다.\n");
     println!(
-        "{:<8} {:>4} {:>9} {:>9} {:>9} {:>7} {:>22}",
-        "clip", "점", "p,v", "+drag", "+omega", "drag", "omega [rad/s]"
+        "{:<8} {:>4} {:>9} {:>9} {:>9} {:>9} {:>7} {:>7} {:>7} {:>22}",
+        "clip", "점", "p,v", "+drag", "+bounce", "+omega", "drag", "e", "mu", "omega [rad/s]"
     );
 
     let mut drags: Vec<f64> = Vec::new();
+    let mut restitutions: Vec<f64> = Vec::new();
+    let mut frictions: Vec<f64> = Vec::new();
     let mut spins: Vec<f64> = Vec::new();
     let mut gain: Vec<f64> = Vec::new();
     for clip in CLIPS {
@@ -305,23 +338,39 @@ fn fit_physics_from_the_clips() {
             println!("{clip:<8} {:>4}", "부족");
             continue;
         };
-        let plain = solve(&samples, 6, 0.0).map(|(_, rmse)| rmse);
-        let with_drag = solve(&samples, 7, 0.12).map(|(_, rmse)| rmse);
-        let full = solve(&samples, 10, 0.12);
-        let (Some(plain), Some(with_drag), Some((guess, best))) = (plain, with_drag, full) else {
+        let no_drag = PhysicsParams {
+            drag: 0.0,
+            ..PhysicsParams::default()
+        };
+        let with_drag_seed = PhysicsParams {
+            drag: 0.12,
+            ..PhysicsParams::default()
+        };
+        let plain = solve(&samples, &P_V, no_drag).map(|(_, rmse)| rmse);
+        let with_drag = solve(&samples, &P_V_DRAG, with_drag_seed).map(|(_, rmse)| rmse);
+        let with_bounce = solve(&samples, &P_V_BOUNCE, with_drag_seed).map(|(_, rmse)| rmse);
+        let full = solve(&samples, &P_V_ALL, with_drag_seed);
+        let (Some(plain), Some(with_drag), Some(with_bounce), Some((guess, best))) =
+            (plain, with_drag, with_bounce, full)
+        else {
             println!("{clip:<8} {:>4}", "실패");
             continue;
         };
         drags.push(guess.drag);
+        restitutions.push(guess.restitution);
+        frictions.push(guess.friction);
         spins.push(guess.omega.norm());
         gain.push(plain / best.max(1e-9));
         println!(
-            "{clip:<8} {:>4} {:>7.1}cm {:>7.1}cm {:>7.1}cm {:>7.3} {:>7.0}{:>7.0}{:>7.0}",
+            "{clip:<8} {:>4} {:>7.1}cm {:>7.1}cm {:>7.1}cm {:>7.1}cm {:>7.3} {:>7.3} {:>7.3} {:>7.0}{:>7.0}{:>7.0}",
             samples.len(),
             plain * 100.0,
             with_drag * 100.0,
+            with_bounce * 100.0,
             best * 100.0,
             guess.drag,
+            guess.restitution,
+            guess.friction,
             guess.omega.x,
             guess.omega.y,
             guess.omega.z
@@ -343,11 +392,21 @@ fn fit_physics_from_the_clips() {
         );
     };
     let (drag_low, drag_high) = spread(&drags);
+    let (rest_low, rest_high) = spread(&restitutions);
+    let (fric_low, fric_high) = spread(&frictions);
     let (spin_low, spin_high) = spread(&spins);
     println!(
         "\ndrag   중앙값 {:.3}  범위 {drag_low:.3}~{drag_high:.3}   (이론 대비 C_d {:.2})",
         median(&mut drags),
         median(&mut drags.clone()) / theoretical(1.0)
+    );
+    println!(
+        "restitution 중앙값 {:.3}  범위 {rest_low:.3}~{rest_high:.3}",
+        median(&mut restitutions.clone())
+    );
+    println!(
+        "friction    중앙값 {:.3}  범위 {fric_low:.3}~{fric_high:.3}",
+        median(&mut frictions.clone())
     );
     println!(
         "|omega| 중앙값 {:.0} rad/s  범위 {spin_low:.0}~{spin_high:.0}  ({:.0} rps)",
@@ -361,6 +420,149 @@ fn fit_physics_from_the_clips() {
     println!(
         "\n주의: omega_z 는 바운스에서 안 보인다 (접촉점 속도에 안 들어간다). Magnus 로만\n\
          잡히므로 다른 둘보다 훨씬 약하다 — 흩어지면 그게 이유다."
+    );
+    println!(
+        "\n{}",
+        pingpong_bot::physics::PhysicsIdentify::format_physics_for_defaults(
+            Some(median(&mut restitutions)),
+            Some(median(&mut frictions)),
+            Some(median(&mut drags)),
+        )
+    );
+}
+
+/// 중심값 근처를 촘촘히 훑어 `try_value`가 가장 작아지는 자리로 옮긴다. 실패(`None`)한
+/// 후보는 무시 — 셋 다 유효 범위 안이라 보통 안 일어나지만, 경계 근처에서 LM이 못
+/// 풀 때를 대비한다.
+fn sweep(
+    center: f64,
+    radius: f64,
+    steps: usize,
+    (lo, hi): (f64, f64),
+    mut try_value: impl FnMut(f64) -> Option<f64>,
+) -> f64 {
+    let mut best = (center, try_value(center).unwrap_or(f64::INFINITY));
+    for i in 0..steps {
+        let frac = i as f64 / (steps - 1) as f64 * 2.0 - 1.0; // -1..1
+        let candidate = (center + frac * radius).clamp(lo, hi);
+        if let Some(score) = try_value(candidate)
+            && score < best.1
+        {
+            best = (candidate, score);
+        }
+    }
+    return best.0;
+}
+
+/// e·mu·drag를 **클립 하나가 아니라 9개 전부에 공유**로 걸어 좌표하강으로 찾는다.
+///
+/// `fit_physics_from_the_clips`의 클립별 12-미지수 적합은 점이 20~40개뿐이라 못 믿는다 —
+/// restitution이 경계 1.0으로 튀는 클립이 태반이었다(실측 2026-08-12). 여기서는 e·mu·drag를
+/// **9클립 공유**로 묶고 클립마다는 p0,v0만 푼다(ω=0 고정, 축 6개뿐) — 실질 미지수가
+/// 27(9클립×3)이 아니라 3개짜리 문제가 되어 훨씬 잘 걸린다.
+///
+/// ω를 0으로 고정하는 이유: 라이브 파이프라인도 바운스에서 스핀이 안 풀리면 0으로
+/// 접는다(`ASSUMED_SPIN`, 9클립 중 6개가 지금 이 경로) — 그 조건에서 e·mu·drag가
+/// 최선이어야 실전과 맞는다. ω도 같이 풀게 두면 ω가 e·mu 오차를 조용히 흡수해서 셋을
+/// 못 가른다 — 이게 클립별 12-미지수 적합이 못 미더웠던 바로 그 원인이다.
+///
+/// 좌표하강(e→mu→drag 순, 반경을 라운드마다 줄임)을 쓴다 — 3차원 완전 그리드서치보다
+/// 훨씬 적은 평가로 같은 자리에 수렴하고, 목적함수가 부드럽지 않을 수 있어서(바운스
+/// 시각이 미지수에 따라 움직인다, `solve`의 감쇠 설명과 같은 이유) 경사법보다 안전하다.
+///
+/// **점수는 `solve`가 본 바로 그 구간의 잔차가 아니다.** 처음 그렇게 짰다가 drag가
+/// 0으로 수렴했다 — 원인을 보니, 그 구간을 그대로 다시 맞히는 거라 v0를 물리에 맞게
+/// 조정해 버리면 drag=0이든 0.126이든 **본 구간 안에서는** 둘 다 똑같이 잘 맞더라(v0가
+/// 자유 미지수라 그 구간 안에서 서로 보상함). 그런데 그건 로봇이 실제로 겪는 문제가
+/// 아니다 — 로봇은 트리거 시점까지 본 것으로 **아직 못 본 나머지**를 맞혀야 한다
+/// (`clip-review`의 리드타임 오차와 정확히 같은 질문). 그래서 각 클립을 앞 60%(적합용)
+/// 뒤 40%(채점용)로 쪼갠다 — 앞부분만으로 p0,v0를 풀고, 그 결과를 뒷부분 시각까지
+/// **굴려서** 뒷부분과 비교한다. 이게 실측 drag=0.126이 `clip-review`에서 크게 이겼던
+/// 것과 이 도구가 같은 답을 내게 만드는 핵심 수정이다.
+fn split_extrapolation_rmse(samples: &[(f64, Point3)], physics: PhysicsParams) -> Option<f64> {
+    // 6(최소 관측)+3(채점용 최소) 은 너무 빠듯하다 — 양쪽 다 넉넉히 두려고 12를 요구한다.
+    if samples.len() < 12 {
+        return None;
+    }
+    let split = (samples.len() * 3 / 5).max(6);
+    let (train, test) = samples.split_at(split);
+    if test.len() < 3 {
+        return None;
+    }
+    let (guess, _) = solve(train, &P_V, physics)?;
+    let t0 = train[0].0;
+    let times: Vec<f64> = test.iter().map(|(t, _)| t - t0).collect();
+    let predicted = walk(&guess, &times);
+    if predicted.len() != test.len() {
+        return None;
+    }
+    let sum_sq: f64 = predicted
+        .iter()
+        .zip(test)
+        .map(|(p, (_, m))| (p.coords - m.coords).norm_squared())
+        .sum();
+    return Some((sum_sq / test.len() as f64).sqrt());
+}
+
+#[test]
+#[ignore = "클립 필요: cargo test --release --test diag_physics calibrate_shared_physics -- --ignored --nocapture"]
+fn calibrate_shared_physics_across_clips() {
+    let clips: Vec<Vec<(f64, Point3)>> = CLIPS
+        .iter()
+        .filter_map(|clip| flight(clip, false))
+        .collect();
+    println!("{}개 클립 로드 (전 {}개 중)", clips.len(), CLIPS.len());
+
+    let score = |e: f64, mu: f64, drag: f64| -> Option<f64> {
+        let physics = PhysicsParams {
+            restitution: e,
+            friction: mu,
+            drag,
+            ..PhysicsParams::default()
+        };
+        let mut total = 0.0;
+        let mut n = 0usize;
+        for samples in &clips {
+            let Some(rmse) = split_extrapolation_rmse(samples, physics) else {
+                continue;
+            };
+            total += rmse;
+            n += 1;
+        }
+        return (n > 0).then_some(total / n as f64);
+    };
+
+    let default = PhysicsParams::default();
+    let (mut e, mut mu, mut drag) = (default.restitution, default.friction, default.drag);
+    println!(
+        "시작(지금 기본값): e={e:.3} mu={mu:.3} drag={drag:.3}  평균 외삽오차={:.2}cm",
+        score(e, mu, drag).unwrap_or(f64::INFINITY) * 100.0
+    );
+
+    const ROUNDS: [f64; 4] = [0.20, 0.08, 0.03, 0.01];
+    for (round, &radius) in ROUNDS.iter().enumerate() {
+        e = sweep(e, radius, 9, (0.3, 0.98), |cand| score(cand, mu, drag));
+        mu = sweep(mu, radius, 9, (0.0, 0.9), |cand| score(e, cand, drag));
+        drag = sweep(drag, radius.min(0.15), 9, (0.0, 0.35), |cand| {
+            score(e, mu, cand)
+        });
+        println!(
+            "라운드 {round} (반경 {radius:.2}): e={e:.4} mu={mu:.4} drag={drag:.4}  평균 외삽오차={:.3}cm",
+            score(e, mu, drag).unwrap_or(f64::INFINITY) * 100.0
+        );
+    }
+
+    println!(
+        "\n주의: ω=0 고정(스핀은 여전히 라이브 `solve_spin_from_bounce`가 담당) — 이 e·mu·drag는\n\
+         '스핀 못 풀렸을 때 최선'을 찾은 것이지 스핀까지 아는 참값이 아니다."
+    );
+    println!(
+        "\n{}",
+        pingpong_bot::physics::PhysicsIdentify::format_physics_for_defaults(
+            Some(e),
+            Some(mu),
+            Some(drag),
+        )
     );
 }
 

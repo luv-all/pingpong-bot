@@ -43,13 +43,23 @@ pub struct Vision {
 
 impl Vision {
     pub fn load(calibration: &Calibration, trigger: Box<dyn Trigger>) -> Result<Self> {
+        return Self::load_with(calibration, trigger, |c, t| Fit::new(c, t));
+    }
+
+    /// [`Self::load`]와 같지만 [`Fit`] 생성을 밖에서 받는다 — 물리 상수 탐색처럼
+    /// [`Fit::with_physics`]로 바꿔 끼울 때 쓴다.
+    pub fn load_with(
+        calibration: &Calibration,
+        trigger: Box<dyn Trigger>,
+        make_fit: impl FnOnce(&Calibration, Box<dyn Trigger>) -> Fit,
+    ) -> Result<Self> {
         let detectors = calibration
             .cameras
             .iter()
             .map(|params| Ok((params.camera_id, crate::defaults::vision::cascade(params)?)))
             .collect::<Result<Vec<_>>>()?;
         return Ok(Self {
-            fit: Fit::new(calibration, trigger),
+            fit: make_fit(calibration, trigger),
             detectors,
             origin: None,
             last_outcome: None,

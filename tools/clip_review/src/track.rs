@@ -209,27 +209,64 @@ impl Reviewed {
 
 /// 클립을 한 번 훑어 검출·필터 재생을 끝낸다.
 pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
+    // `Fit::new`가 실제로 쓰는 물리(`RESTITUTION`·`FRICTION`·`DRAG` 포함)와 정확히 같은
+    // 값 — 아래 물리를 바꿔 끼우는 버전([`review_with_physics`])과 결과가 갈리면 안 된다.
+    let physics = pingpong_bot::defaults::PhysicsParams {
+        restitution: pingpong_bot::defaults::vision::fit::RESTITUTION,
+        friction: pingpong_bot::defaults::vision::fit::FRICTION,
+        drag: pingpong_bot::defaults::vision::fit::DRAG,
+        ..pingpong_bot::defaults::PhysicsParams::default()
+    };
+    return review_with_physics(left, right, fps, physics);
+}
+
+/// [`review`]와 같지만 물리 상수를 밖에서 받는다 — e·mu·drag 탐색이 재빌드 없이 후보를
+/// 빠르게 돌려 볼 때 쓴다(`--calibrate`).
+///
+/// 검출(비디오 디코드+캐스케이드)이 압도적으로 무겁고 물리와 무관한데, 후보마다 이걸
+/// 통째로 다시 도는 게 `--calibrate` 첫 버전이 느렸던 원인이다(실측: 후보 하나 채점에
+/// `--all` 전체보다 훨씬 오래 걸림). [`detect_all`]로 검출을 한 번만 캐싱하고
+/// [`replay_with_physics`]로 물리만 바꿔 재적합하면 후보마다 비디오를 다시 안 연다 —
+/// 여기(단발 호출)는 그 둘을 그냥 이어 붙인 것뿐이라 기존 동작과 동일하다.
+pub fn review_with_physics(
+    left: &Path,
+    right: &Path,
+    fps: f64,
+    physics: pingpong_bot::defaults::PhysicsParams,
+) -> Result<Reviewed, String> {
+    let detected = detect_all(left, right, fps)?;
+    return replay_with_physics(&detected, physics);
+}
+
+/// 캠별 검출 픽셀만 남긴 캐시. 물리(e·mu·drag)와 무관하다 — [`detect_all`] 참고.
+pub struct DetectedFrames {
+    pixels: Vec<[Option<camera::Pixel>; 2]>,
+    fps: f64,
+}
+
+/// 클립의 검출만 한 번 돌린다. 비디오 디코드·검출 캐스케이드가 이 함수의 비용 전부고,
+/// 물리와는 무관하다 — 결과를 캐싱해 두면 [`replay_with_physics`]로 물리 후보를 몇
+/// 개를 돌리든 이 함수는 한 번만 부르면 된다.
+///
+/// 안에서 [`Vision`]을 만들긴 하지만 그 안의 `Fit`(트리거·물리)은 안 쓴다 — 캠별 검출
+/// 픽셀만 뽑아 버린다. 트리거 값은 아무거나 상관없다.
+pub fn detect_all(left: &Path, right: &Path, fps: f64) -> Result<DetectedFrames, String> {
     let calibration = Calibration::load_json(&defaults::calibration_path())
         .map_err(|e| format!("calibration 로드: {e}"))?;
-    // 실기와 **같은** 트리거다. 도구가 더 늦게 걸면 실기에서 쓸 수 있는 구간을 못 본다.
     let mut vision = Vision::load(&calibration, defaults::vision::trigger())
         .map_err(|e| format!("vision 조립: {e}"))?;
 
     let mut left_frames = load_all(left, camera::Id(0))?;
     let mut right_frames = load_all(right, camera::Id(1))?;
     let count = left_frames.len().min(right_frames.len());
-
     let epoch = Instant::now();
-    let mut frames: Vec<FrameState> = Vec::with_capacity(count);
-    let mut observed: Vec<Observed> = Vec::new();
-    let mut contract: Option<Contract> = None;
 
+    let mut pixels: Vec<[Option<camera::Pixel>; 2]> = Vec::with_capacity(count);
     for index in 0..count {
-        let t = index as f64 / fps;
-        let stamp = epoch + Duration::from_secs_f64(t);
-        let mut state = FrameState::default();
-
-        // 왼쪽부터 먹인다. 시드는 두 시선이 다 들어온 뒤에 선다.
+        let stamp = epoch + Duration::from_secs_f64(index as f64 / fps);
+        let mut row = [None, None];
+        // 왼쪽부터 먹인다 — [`replay_with_physics`]도 같은 순서로 다시 먹여야 시드
+        // 타이밍이 갈리지 않는다.
         for (slot, source) in [&mut left_frames, &mut right_frames]
             .into_iter()
             .enumerate()
@@ -239,11 +276,53 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
             vision
                 .feed(&source[index])
                 .map_err(|e| format!("검출: {e}"))?;
-            state.pixels[slot] = vision.last_found().map(|candidate| candidate.pixel);
-            state.outcomes[slot] = vision.last_outcome();
+            row[slot] = vision.last_found().map(|candidate| candidate.pixel);
+        }
+        pixels.push(row);
+    }
+    return Ok(DetectedFrames { pixels, fps });
+}
+
+/// [`detect_all`]의 검출 캐시를 물리만 바꿔 가며 다시 채점한다 — 비디오도 검출도
+/// 다시 안 돈다. `Fit::observe`가 픽셀만 쓰므로(`radius_px`·`circularity`는 안 읽는다)
+/// 캐시가 픽셀만 들고 있어도 충분하다.
+pub fn replay_with_physics(
+    detected: &DetectedFrames,
+    physics: pingpong_bot::defaults::PhysicsParams,
+) -> Result<Reviewed, String> {
+    let calibration = Calibration::load_json(&defaults::calibration_path())
+        .map_err(|e| format!("calibration 로드: {e}"))?;
+    let mut fit = pingpong_bot::vision::Fit::with_physics(
+        &calibration,
+        defaults::vision::trigger(),
+        physics,
+    );
+    let origin = Instant::now();
+    let fps = detected.fps;
+
+    let mut frames: Vec<FrameState> = Vec::with_capacity(detected.pixels.len());
+    let mut observed: Vec<Observed> = Vec::new();
+    let mut contract: Option<Contract> = None;
+
+    for (index, row) in detected.pixels.iter().enumerate() {
+        let t = index as f64 / fps;
+        let stamp = Duration::from_secs_f64(t);
+        let mut state = FrameState::default();
+
+        for slot in 0..2 {
+            state.pixels[slot] = row[slot];
+            let candidate = row[slot].map(|pixel| pingpong_bot::vision::Candidate {
+                pixel,
+                // Fit::observe는 pixel만 읽는다 — 나머지는 캐시에 없어도 뜻이 없다.
+                radius_px: 0.0,
+                circularity: 1.0,
+            });
+            state.outcomes[slot] = Some(fit.observe(camera::Id(slot as u8), candidate, stamp));
         }
 
-        if let Some(hit) = triangulate(&state.pixels, &calibration) {
+        if let Some(hit) = triangulate(&state.pixels, &calibration)
+            && plausible(hit.0)
+        {
             let hit = Observed {
                 frame: index,
                 t,
@@ -254,9 +333,9 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
             state.observed = Some(hit);
         }
 
-        state.filtered = vision.fit().measured().last().copied();
-        state.sightings = vision.fit().sightings();
-        state.seq = vision.fit().seq();
+        state.filtered = fit.measured().last().copied();
+        state.sightings = fit.sightings();
+        state.seq = fit.seq();
         state.tracking = state.filtered.is_some();
         // 적합이 이번 관측을 실제로 받아들였을 때만 잔차를 센다. 거부된 프레임의 상태는
         // 이전 시각의 것이라 지금 픽셀과 견주면 시간차가 잔차로 둔갑한다.
@@ -281,14 +360,14 @@ pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
                     .flatten();
             }
         }
-        state.predicted_impact = vision
-            .trajectory()
+        state.predicted_impact = fit
+            .trajectory(origin)
             .and_then(|t| t.predicted.at_plane(table::DEFAULT_HIT_PLANE_Y))
             .map(|s| s.position);
 
         // 계약이 생기면 잡고, 같은 공인 동안 갱신한다 — measured 가 계속 자란다.
         // 다른 공이 다시 트리거를 넘겨도 첫 계약만 본다 (실기도 샷당 한 번이다).
-        if let Some(trajectory) = vision.trajectory() {
+        if let Some(trajectory) = fit.trajectory(origin) {
             match &mut contract {
                 None => {
                     contract = Some(Contract {
@@ -345,6 +424,26 @@ fn triangulate(
         return None;
     }
     return Some((point, worst));
+}
+
+/// 삼각측량 결과가 물리적으로 말이 되는가 — 채점 기준(`observed`)에만 쓰는 문지방이다.
+///
+/// 재투영 오차만으로는 못 거른다 — 두 카메라가 동시에 라켓·그림자 등 딴 걸 잡으면
+/// 서로는 잘 맞아떨어져(재투영은 작게 나옴) 그럴싸한 3D 점을 낸다(실측 fly_49 frame 451:
+/// 라켓이 공을 잠깐 가린 순간 바닥 근처로 튐, `point=[-0.28, -0.13, 0.57]`, 이웃 프레임은
+/// x 0.68~0.70·z 0.8~1.3 대인데 재투영은 5.8px로 안 큼). 이 점이 그대로 `observed`(채점
+/// 정답)에 들어가면 리드타임을 아무리 줄여도 안 나아지는 평평한 큰 오차로 나온다 — 예측이
+/// 아니라 정답이 튄 것이다. z가 테이블면보다 한참 낮으면(뜬 공이 실제로 갈 자리가 아니다)
+/// 가장 확실한 신호라 그것만 본다. x,y는 여유를 크게 둔다 — 네트 밖·테이블 옆으로도 실제
+/// 공이 나갈 수 있어서, 좁히면 진짜 관측을 지운다.
+fn plausible(point: Point3) -> bool {
+    const Z_FLOOR_TOLERANCE: f64 = 0.10;
+    const XY_MARGIN: f64 = 0.5;
+    return point.z >= table::SURFACE_Z - Z_FLOOR_TOLERANCE
+        && point.x >= -XY_MARGIN
+        && point.x <= table::WIDTH_X + XY_MARGIN
+        && point.y >= -XY_MARGIN
+        && point.y <= table::LENGTH_Y + XY_MARGIN;
 }
 
 /// 리드타임 `lead` 뒤의 **예측**과 그때의 **생 관측**이 얼마나 벌어지는가 [m].

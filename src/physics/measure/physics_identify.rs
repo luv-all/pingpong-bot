@@ -2,11 +2,22 @@
 
 use nalgebra::Vector3;
 
-use super::identify;
+use crate::defaults::PhysicsParams;
+
+use super::{identify, spin_from_bounce};
 
 pub struct PhysicsIdentify;
 
 impl PhysicsIdentify {
+    /// 바운스 전후 속도로 되튐 후 스핀을 닫힌식으로 구한다. 구름이 아니면 `None`.
+    pub fn spin_after_bounce_if_rolling(
+        v_in: Vector3<f64>,
+        v_out: Vector3<f64>,
+        physics: &PhysicsParams,
+    ) -> Option<Vector3<f64>> {
+        return spin_from_bounce::spin_after_bounce_if_rolling(v_in, v_out, physics);
+    }
+
     pub fn restitution_from_bounce_heights(heights: &[f64]) -> Option<f64> {
         return identify::restitution_from_bounce_heights(heights);
     }

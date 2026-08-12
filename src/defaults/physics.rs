@@ -48,10 +48,17 @@ impl PhysicsParams {
 impl Default for PhysicsParams {
     fn default() -> Self {
         return Self {
-            // ITTF 테이블: 30 cm 낙하 → ~23 cm 반발 → e≈√(23/30)≈0.88.
-            restitution: 0.88,
-            // 예측기 바운스 μ = friction (0.4). Rapier 테이블–공은
-            // Average(friction, ball_friction)≈0.3.
+            // 실측 (2026-08-12, `measure-restitution --clip fly_45..53`, 9클립 12바운스
+            // 창 회귀 — `src/physics/measure/traj_measure.rs`): 클립별 e 중앙값 0.718,
+            // 범위 0.107~0.829(fly_46 0.107 하나가 낮은 이상치, 중앙값엔 거의 영향 없음).
+            // 예전 ITTF 규격값(30cm 낙하→23cm 반발, e≈0.88)을 대체 — 이 테이블·공으로 잰
+            // 적이 없던 값이었다.
+            restitution: 0.72,
+            // 아직 미실측 — 그대로 둔다. 같은 실측 세션에서 접선 비율(`friction_from_
+            // tangential_speeds`)로 재봤더니 0.13~0.90으로 전혀 안 모였는데, 그 공식이
+            // 스핀을 안 본다(폐기된 `(1-μ)v_t` 커널 전제) — 지금 `table_bounce`(Coulomb)는
+            // 접선 임펄스가 스핀에도 걸려서, 서브마다 다른 스핀이 그대로 "마찰 산포"로
+            // 새어 들어간다. 스핀을 같이 풀기 전엔(다음 단계) 이 비율 하나로 μ를 못 잡는다.
             friction: 0.4,
             ball_friction: 0.2,
             net_restitution: 0.05,
