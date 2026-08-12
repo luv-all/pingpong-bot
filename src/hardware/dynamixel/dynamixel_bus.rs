@@ -166,7 +166,8 @@ impl DynamixelBus {
         };
     }
 
-    /// 미러 슬레이브의 실측 tick이 `2*zero-master`와 맞는지 검사한다.
+    /// 미러 슬레이브의 실측 tick이
+    /// `2*zero-master+조립 영점 보정`과 맞는지 검사한다.
     /// 이 검사는 시작·중립 복귀 직후에만 호출해 실시간 명령 경로를 느리게 하지 않는다.
     pub fn verify_mirror_alignment(&mut self) -> Result<(), HwError> {
         let config = self.mapping.config.clone();
