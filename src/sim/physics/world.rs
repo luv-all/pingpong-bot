@@ -122,7 +122,7 @@ pub struct SimWorld {
     flight_started_at: f64,
     /// 위치 정렬·타격 후 중립 준비 자세 복귀를 시작할 sim 시각.
     direct_return_at: Option<f64>,
-    /// 예상 타격 시각보다 0.25초 앞서 직진 푸시를 시작할 sim 시각.
+    /// 예상 타격 시각보다 0.20초 앞서 직진 푸시를 시작할 sim 시각.
     ///
     /// `None`이면 아직 정렬이 확정되지 않았거나, 이번 공의 스윙을 이미
     /// 실행/생략했다. 실기 `control_worker`의 `swing_due_at`과 같은 역할이다.
@@ -1003,7 +1003,7 @@ impl SimWorld {
         );
     }
 
-    /// 예상 타격 0.25초 전에 접힌 정렬 자세에서 백스윙 없는 푸시를 시작한다.
+    /// 예상 타격 0.20초 전에 접힌 정렬 자세에서 백스윙 없는 푸시를 시작한다.
     ///
     /// 정렬이 아직 진행 중이어도 레일 목표는 계속 추종하고 팔 관절 궤적만
     /// 교체한다. 그렇지 않으면 sim의 `is_swinging()`이 레일 정렬까지
@@ -2192,7 +2192,7 @@ mod tests {
                         - crate::defaults::FIXED_JOINT_SWING_DURATION_SECS)
                         .abs()
                         < 1e-12,
-                    "스윙은 예상 타격 0.25초 전에 시작해야 함"
+                    "스윙은 예상 타격 0.20초 전에 시작해야 함"
                 );
                 assert!(
                     trajectory.end.values[2] < trajectory.start.values[2]

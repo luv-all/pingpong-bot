@@ -2,7 +2,7 @@
 //!
 //! `run`이 워커 시작 전에 레일과 4축 Dynamixel을 최초 중립 자세에 둔다.
 //! 이후 공 하나당 보정된 접촉점 뒤에 팔을 접어 정렬하고, 예상 타격
-//! 0.25초 전에 j0~j3 백스윙 없는 10cm 직진 푸시를 시작한다. 타격 계획이
+//! 0.20초 전에 j0~j3 백스윙 없는 10cm 직진 푸시를 시작한다. 타격 계획이
 //! 불가능하면 동작을 생략하고 정렬 자세를 유지한 뒤 준비 자세로 복귀한다.
 
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use super::{
 };
 
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
-const FIXED_SWING_LEAD: Duration = Duration::from_millis(250);
+const FIXED_SWING_LEAD: Duration = Duration::from_millis(200);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const BUSY_POLL: Duration = Duration::from_millis(5);
 const AUTO_NEXT_AFTER_HIT_WAIT: Duration = Duration::from_millis(300);

@@ -70,14 +70,14 @@ pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 pub const DETECTION_WINDUP_MIN_DURATION_SECS: f64 = 0.120;
 /// 임팩트 순간 목표 라켓 선속도 [m/s].
 /// 백스윙 없이 길게 바로 밀 때 사용할 임팩트 목표 선속도.
-pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 0.70;
+pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 0.85;
 /// 정렬 시 공의 접촉점보다 뒤에서 대기해 다관절 푸시 가속거리를 확보한다 [m].
 /// 전역 READY 자세는 실물 캘리브레이션이므로 바꾸지 않고, 공별 타격 준비
 /// 자세만 이 거리만큼 접는다.
 pub const FIXED_JOINT_PUSH_DISTANCE_M: f64 = 0.100;
 /// 백스윙 없는 다관절 직진 푸시 시작부터 예상 타격점에 도달하는 시간 [s].
 /// 뒤로 거리를 벌리지 않고 현재 자세에서 바로 미는 짧은 타격 구간.
-pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.250;
+pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.200;
 /// 임팩트 순간 다관절 푸시가 사용할 설정상 관절 속도 상한 비율.
 /// 설정상 상한 자체가 모터 무부하 최고속의 95%이므로 여기서는 전부 사용한다.
 pub const FIXED_JOINT_SNAP_SPEED_RATIO: f64 = 1.0;

@@ -1854,9 +1854,9 @@ mod tests {
             .expect("impact velocity FK");
         let forward_speed = ((after_impact_pose.position - impact.position) / velocity_probe_dt)
             .dot(&impact.normal);
-        // 10cm 직진 뒤 임팩트 끝속도 0.7m/s를 유지한다.
+        // 10cm 직진 뒤 임팩트 끝속도 0.85m/s를 유지한다.
         assert!(
-            forward_speed > 0.69,
+            forward_speed > 0.84,
             "직진 타격 속도가 유지돼야 함: {forward_speed:.3}m/s"
         );
         assert!(
