@@ -218,6 +218,32 @@ impl AxlRail {
             RailKind::Live(live) => live.stop(self.config.axis),
         }
     }
+
+    /// AXL 서보 알람 비트를 읽기만 한다 — 이동하지 않는다. 진단 전용:
+    /// 정상 이동 명령이 에러 없이 반환되는데도 레일이 실제로 움직이지 않을 때,
+    /// 원인이 AXL 쪽에 남아있는 래치된 알람인지 확인하는 데 쓴다. `DryRun`에는
+    /// 알람 개념이 없어 에러를 반환한다.
+    pub fn alarm_status(&mut self) -> Result<bool, HwError> {
+        match &mut self.kind {
+            RailKind::DryRun { .. } => Err(HwError::InvalidConfig {
+                reason: "AxlRail::alarm_status는 Live(실기) 레일에서만 지원됩니다".into(),
+            }),
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => live.read_alarm(self.config.axis),
+        }
+    }
+
+    /// AXL 서보 알람을 해제한다(LOW→대기→HIGH→해제 대기→LOW 시퀀스) — 이동하지
+    /// 않는다. `DryRun`에는 알람 개념이 없어 에러를 반환한다.
+    pub fn clear_alarm(&mut self) -> Result<(), HwError> {
+        match &mut self.kind {
+            RailKind::DryRun { .. } => Err(HwError::InvalidConfig {
+                reason: "AxlRail::clear_alarm은 Live(실기) 레일에서만 지원됩니다".into(),
+            }),
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => live.reset_alarm(self.config.axis),
+        }
+    }
 }
 
 /// [`AxlRail::home`] 결과 — 캘리브레이션 파일에 그대로 옮겨 담는다.
@@ -531,6 +557,21 @@ mod tests {
         };
         let mut rail = AxlRail::dry_run(cfg).unwrap();
         assert!(rail.home(crate::hardware::rail::RailEnd::Min).is_err());
+    }
+
+    #[test]
+    fn alarm_status_and_clear_alarm_reject_dry_run() {
+        let cfg = RailConfig {
+            enabled: true,
+            dll_path: PathBuf::from("unused.dll"),
+            pulses_per_meter: 1000,
+            x_min_m: 0.0,
+            x_max_m: 1.0,
+            ..RailConfig::default()
+        };
+        let mut rail = AxlRail::dry_run(cfg).unwrap();
+        assert!(rail.alarm_status().is_err());
+        assert!(rail.clear_alarm().is_err());
     }
 
     #[cfg(all(windows, feature = "real"))]

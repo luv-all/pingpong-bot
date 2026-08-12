@@ -31,6 +31,11 @@ pub struct Args {
     /// AXL.dll 경로 (`RailConfig::default().dll_path` 덮어씀).
     #[arg(long)]
     pub dll_path: Option<PathBuf>,
+    /// 홈잉 없이 AXL 서보 알람 비트만 확인한다(켜져 있으면 해제도 시도). 이동
+    /// 없음 — 정상 명령엔 에러가 없는데 레일이 실제로 안 움직일 때, 원인이
+    /// AXL 쪽에 남은 래치된 알람인지 확인하는 진단용.
+    #[arg(long)]
+    pub check_alarm: bool,
     /// debug 로그 (AXL API 실패 code 등).
     #[arg(long)]
     pub debug: bool,

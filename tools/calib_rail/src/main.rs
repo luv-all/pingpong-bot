@@ -8,6 +8,10 @@
 //! `AxlRail::open`만 쓴다 — Dynamixel 팔은 레일 홈잉과 무관하고,
 //! `RealHardware::new`를 거치면 팔의 듀얼 모터 정렬 검사(`verify_mirror_alignment`)
 //! 때문에 팔이 정렬 안 됐다는 이유로 레일 홈잉 자체가 막힌다.
+//!
+//! `--check-alarm`을 주면 홈잉을 하지 않고 AXL 서보 알람 비트만 확인·해제한다 —
+//! 정상 이동 명령이 에러 없이 반환되는데도 레일이 실제로 움직이지 않을 때, 원인이
+//! AXL 쪽에 남은 래치된 알람인지 확인하는 진단용이다.
 
 mod args;
 
@@ -16,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use clap::Parser;
 use pingpong_bot::defaults;
-use pingpong_bot::hardware::rail::{AxlRail, RailCalibration, RailConfig};
+use pingpong_bot::hardware::rail::{AxlRail, RailCalibration, RailConfig, RailEnd};
 use pingpong_bot::telemetry::init_tracing;
 use tracing::info;
 
@@ -31,7 +35,40 @@ fn main() -> Result<()> {
         rail_cfg.dll_path = dll_path.clone();
     }
 
-    let end: pingpong_bot::hardware::rail::RailEnd = args.end.into();
+    if args.check_alarm {
+        return check_alarm(rail_cfg);
+    }
+
+    let end: RailEnd = args.end.into();
+    home_and_save(rail_cfg, end)
+}
+
+/// 홈잉 없이 AXL 서보 알람 비트만 읽고, 켜져 있으면 해제까지 시도한다.
+fn check_alarm(rail_cfg: RailConfig) -> Result<()> {
+    info!(
+        dll_path = %rail_cfg.dll_path.display(),
+        "AXL 서보 알람 상태 확인 — 이동 없음"
+    );
+    let mut rail = AxlRail::open(rail_cfg).context("레일 초기화 실패")?;
+
+    let alarm = rail.alarm_status().context("알람 상태 조회")?;
+    info!(alarm, "AXL 서보 알람 상태");
+    if !alarm {
+        info!("알람 없음 — 레일이 움직이지 않는다면 AXL/소프트웨어 쪽 문제는 아닙니다");
+        return Ok(());
+    }
+
+    info!("알람이 켜져 있습니다 — 해제를 시도합니다");
+    rail.clear_alarm().context("알람 해제")?;
+    let alarm_after = rail.alarm_status().context("알람 상태 재조회")?;
+    info!(
+        alarm_after,
+        "알람 해제 시도 후 상태 — false여야 정상입니다"
+    );
+    return Ok(());
+}
+
+fn home_and_save(rail_cfg: RailConfig, end: RailEnd) -> Result<()> {
     info!(
         dll_path = %rail_cfg.dll_path.display(),
         end = ?end,
