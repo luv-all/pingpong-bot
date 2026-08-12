@@ -3,7 +3,7 @@
 use crate::error::HwError;
 use tracing::info;
 
-use super::rail_config::RailConfig;
+use super::rail_config::{RailConfig, RailEnd};
 use super::rail_kind::RailKind;
 
 /// 팔 궤적 종료시간에 맞춰 계산한 레일 속도에 적용하는 배율.
@@ -80,6 +80,22 @@ impl AxlRail {
     pub fn open(_config: RailConfig) -> Result<Self, HwError> {
         return Err(HwError::InvalidConfig {
             reason: "AxlRail::open은 Windows + feature=real 에서만 지원됩니다".into(),
+        });
+    }
+
+    /// 저속으로 물리적 엔드스톱까지 이동해 AXL 알람으로 도달을 감지하고, 그 지점을
+    /// 기준으로 `board_zero_domain_m`을 다시 계산한다. `DryRun`엔 물리 엔드스톱이 없어
+    /// 항상 에러를 반환한다. 온디맨드 호출 전용 — 기동 시 자동으로 부르지 않는다.
+    pub fn home(
+        &mut self,
+        #[cfg_attr(not(all(windows, feature = "real")), allow(unused_variables))] end: RailEnd,
+    ) -> Result<f64, HwError> {
+        #[cfg(all(windows, feature = "real"))]
+        if let RailKind::Live(live) = &mut self.kind {
+            return home_live(live, &mut self.config, end);
+        }
+        return Err(HwError::InvalidConfig {
+            reason: "AxlRail::home은 Live(실기) 레일에서만 지원됩니다".into(),
         });
     }
 
@@ -202,6 +218,53 @@ impl AxlRail {
             RailKind::Live(live) => live.stop(self.config.axis),
         }
     }
+}
+
+#[cfg(all(windows, feature = "real"))]
+fn home_live(
+    live: &mut super::axl_live::AxlLive,
+    config: &mut RailConfig,
+    end: RailEnd,
+) -> Result<f64, HwError> {
+    let target_domain_m = match end {
+        RailEnd::Min => config.physical_x_min_m,
+        RailEnd::Max => config.physical_x_max_m,
+    };
+    let target_board_m = normalize_m(config.domain_to_board_abs(target_domain_m));
+    live.start_move_abs_m(
+        config,
+        target_board_m,
+        crate::defaults::rail::RAIL_HOMING_VELOCITY_M_S,
+    )?;
+
+    let deadline = std::time::Instant::now() + super::axl_live::MOVE_POLL_TIMEOUT;
+    loop {
+        if live.read_alarm(config.axis)? {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            live.stop(config.axis)?;
+            return Err(HwError::InvalidConfig {
+                reason: "레일 홈잉: 엔드스톱 도달 못 함 — 배선/알람 설정 확인".into(),
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    live.stop(config.axis)?;
+    let (board_position_m, _command_position_m) = live.read_actual_and_command_m(config.axis)?;
+    live.reset_alarm(config.axis)?;
+
+    let new_board_zero_domain_m = config.board_zero_domain_m_from_reference(end, board_position_m);
+    config.board_zero_domain_m = new_board_zero_domain_m;
+    info!(
+        axis = config.axis,
+        end = ?end,
+        board_position_m,
+        new_board_zero_domain_m,
+        "레일 홈잉 완료"
+    );
+    return Ok(new_board_zero_domain_m);
 }
 
 fn velocity_for_distance_duration(distance: f64, duration: f64, acceleration: f64) -> f64 {
@@ -340,6 +403,20 @@ mod tests {
         let commanded = rail.move_rel_m(0.05).unwrap();
         assert_eq!(commanded, 0.3);
         assert_eq!(rail.read_board_x_m().unwrap(), -0.1);
+    }
+
+    #[test]
+    fn home_rejects_dry_run() {
+        let cfg = RailConfig {
+            enabled: true,
+            dll_path: PathBuf::from("unused.dll"),
+            pulses_per_meter: 1000,
+            x_min_m: 0.0,
+            x_max_m: 1.0,
+            ..RailConfig::default()
+        };
+        let mut rail = AxlRail::dry_run(cfg).unwrap();
+        assert!(rail.home(crate::hardware::rail::RailEnd::Min).is_err());
     }
 
     #[cfg(all(windows, feature = "real"))]
