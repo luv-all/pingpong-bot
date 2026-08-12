@@ -13,7 +13,7 @@ use pingpong_bot::defaults::vision::detector_for;
 use pingpong_bot::defaults::{self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, robot};
 use pingpong_bot::hardware::RealHardware;
 use pingpong_bot::hardware::dynamixel::DynamixelConfig;
-use pingpong_bot::hardware::rail::RailConfig;
+use pingpong_bot::hardware::rail::{RailCalibration, RailConfig};
 use tracing::{debug, info, warn};
 
 use crate::cli::Args;
@@ -307,7 +307,16 @@ fn open_hardware(options: &Options) -> Result<RealHardware> {
         dxl.port = port.clone();
     }
     dxl.hold_torque_on_close = !options.release_torque;
-    let rail = RailConfig::default();
+    let mut rail = RailConfig::default();
+    let calibration_path = defaults::rail::rail_calibration_path();
+    if let Some(calibration) = RailCalibration::load(&calibration_path) {
+        info!(
+            path = %calibration_path.display(),
+            board_zero_domain_m = calibration.board_zero_domain_m,
+            "레일 캘리브레이션 파일 적용"
+        );
+        calibration.apply_to(&mut rail);
+    }
     info!(
         port = %dxl.port,
         dry_run = options.dry_run,
