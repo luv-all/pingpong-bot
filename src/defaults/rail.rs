@@ -44,6 +44,14 @@ pub const RAIL_ACCEL_M_S2: f64 = 12.0;
 /// 홈잉 이동 속도 [m/s] — `min_vel`보다 크고 `max_vel`보다 훨씬 작다. 엔드스톱에
 /// 부딪히는 순간의 충격·오버런을 줄이려는 값이다.
 pub const RAIL_HOMING_VELOCITY_M_S: f64 = 0.02;
+/// 홈잉 중 알람 대기 타임아웃 [s].
+///
+/// 전체 물리 범위(`RAIL_PHYSICAL_X_MAX_M` - `RAIL_PHYSICAL_X_MIN_M` ≈ 1.41m)를
+/// `RAIL_HOMING_VELOCITY_M_S`(0.02 m/s)로 끝까지 가는 데 최대 ~70초가 걸린다.
+/// 일반 이동에 쓰는 `MOVE_POLL_TIMEOUT`(30s)를 그대로 재사용하면 현재 위치가
+/// 엔드스톱에서 먼 경우 도달 전에 타임아웃돼 정지하고, 다시 실행해야 남은 거리를
+/// 이어서 가는 문제가 있었다 — 여유를 크게 둔다.
+pub const RAIL_HOMING_TIMEOUT_SECS: f64 = 120.0;
 
 /// 홈잉 결과 캘리브레이션 JSON 경로. `data/calibration.json`(카메라)과 같은 자리.
 pub const DEFAULT_RAIL_CALIBRATION_PATH: &str = "data/rail_calibration.json";

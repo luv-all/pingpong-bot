@@ -246,7 +246,8 @@ fn home_live(
         crate::defaults::rail::RAIL_HOMING_VELOCITY_M_S,
     )?;
 
-    let deadline = std::time::Instant::now() + super::axl_live::MOVE_POLL_TIMEOUT;
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs_f64(crate::defaults::rail::RAIL_HOMING_TIMEOUT_SECS);
     loop {
         if live.read_alarm(config.axis)? {
             break;
