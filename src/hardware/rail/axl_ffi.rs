@@ -65,6 +65,8 @@ pub struct AxlFfi {
     pub axm_move_pos: AxmMovePos,
     pub axm_move_start_pos: AxmMoveStartPos,
     pub axm_move_s_stop: AxmMoveSStop,
+    pub axm_signal_read_servo_alarm: AxmSignalReadServoAlarm,
+    pub axm_signal_servo_alarm_reset: AxmSignalServoAlarmReset,
 }
 
 impl AxlFfi {
@@ -121,6 +123,12 @@ impl AxlFfi {
                 axm_move_pos: *library.get(b"AxmMovePos\0").map_err(symbol_error)?,
                 axm_move_start_pos: *library.get(b"AxmMoveStartPos\0").map_err(symbol_error)?,
                 axm_move_s_stop: *library.get(b"AxmMoveSStop\0").map_err(symbol_error)?,
+                axm_signal_read_servo_alarm: *library
+                    .get(b"AxmSignalReadServoAlarm\0")
+                    .map_err(symbol_error)?,
+                axm_signal_servo_alarm_reset: *library
+                    .get(b"AxmSignalServoAlarmReset\0")
+                    .map_err(symbol_error)?,
                 _library: ManuallyDrop::new(library),
             });
         }
