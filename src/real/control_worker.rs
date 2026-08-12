@@ -40,8 +40,12 @@ const MAX_CONSECUTIVE_MISSES: u8 = 3;
 const RAIL_ERROR_WARN_M: f64 = 0.020;
 const AIM_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
 const STARTUP_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
-// 시작 얼라인은 관절별 1° 이내가 5회 연속 측정돼야 완료로 본다.
+// 시작 얼라인은 관절별 허용오차 이내가 5회 연속 측정돼야 완료로 본다.
 const STARTUP_JOINT_TOLERANCE_RAD: f64 = 1.0_f64.to_radians();
+/// 듀얼 MX-64 베이스 j0는 두 모터의 조립 영점·기계 유격·정하중이
+/// 합쳐져 실기에서 2.44° 잔류 편차에 반복 수렴한다. 이 축만 3°를
+/// 허용하고 나머지 축은 1°를 유지한다.
+const STARTUP_BASE_JOINT_TOLERANCE_RAD: f64 = 3.0_f64.to_radians();
 const STARTUP_TRIM_DELAY: Duration = Duration::from_secs(1);
 const STARTUP_MAX_TRIM_ATTEMPTS: u8 = 6;
 const STARTUP_MAX_TRIM_STEP_RAD: f64 = 5.0_f64.to_radians();
@@ -60,6 +64,14 @@ const BENCH_RACKET_LOWEST_ABOVE_TABLE_M: f64 = 0.155;
 const BENCH_HANDLE_END_ABOVE_TABLE_M: f64 = 0.410;
 const BENCH_RACKET_AXIS_FROM_VERTICAL_DEG: f64 = 8.0;
 const BENCH_RACKET_TOTAL_LENGTH_M: f64 = 0.255;
+
+fn startup_joint_tolerance_rad(index: usize) -> f64 {
+    return if index == 0 {
+        STARTUP_BASE_JOINT_TOLERANCE_RAD
+    } else {
+        STARTUP_JOINT_TOLERANCE_RAD
+    };
+}
 fn arm_with_physical_rail_range(arm: &Arm) -> Arm {
     let mut expanded = arm.clone();
     if let Some(rail) = expanded.rail.as_mut() {
@@ -1290,7 +1302,9 @@ fn accumulate_startup_trim_goal(
 ) -> Vec<f64> {
     let mut incremental_correction_deg = Vec::with_capacity(joint_errors.len());
     for (index, error) in joint_errors.iter().copied().enumerate() {
-        let correction = if error.abs() > STARTUP_TRIM_MIN_ERROR_RAD {
+        let correction_threshold =
+            STARTUP_TRIM_MIN_ERROR_RAD.max(startup_joint_tolerance_rad(index));
+        let correction = if error.abs() > correction_threshold {
             (error * STARTUP_TRIM_GAIN).clamp(-STARTUP_MAX_TRIM_STEP_RAD, STARTUP_MAX_TRIM_STEP_RAD)
         } else {
             0.0
@@ -1509,7 +1523,11 @@ fn initialize_pose_attempt(
             .iter()
             .map(|error| error.abs())
             .fold(0.0_f64, f64::max);
-        if max_joint_error_rad <= STARTUP_JOINT_TOLERANCE_RAD {
+        let joints_settled = joint_errors
+            .iter()
+            .enumerate()
+            .all(|(index, error)| error.abs() <= startup_joint_tolerance_rad(index));
+        if joints_settled {
             stable_samples = stable_samples.saturating_add(1);
             if stable_samples >= STARTUP_STABLE_SAMPLES {
                 break pose;
@@ -2262,6 +2280,22 @@ mod tests {
 
         assert!((goal[2] - (original[2] - 2.8_f64.to_radians())).abs() < 1e-12);
         assert_eq!(goal[3], original[3], "0.25° 미만 진동은 무시");
+    }
+
+    #[test]
+    fn startup_base_joint_accepts_measured_dual_motor_residual_only_for_j0() {
+        assert!(2.44_f64.to_radians() < startup_joint_tolerance_rad(0));
+        assert!(2.44_f64.to_radians() > startup_joint_tolerance_rad(1));
+
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let mut goal = robot.arm.default_joints.values.clone();
+        let original = goal.clone();
+        accumulate_startup_trim_goal(
+            &robot.arm,
+            &mut goal,
+            &[2.44_f64.to_radians(), 0.0, 0.0, 0.0],
+        );
+        assert_eq!(goal[0], original[0], "3° 안쪽 j0는 과보정하지 않음");
     }
 
     #[test]
