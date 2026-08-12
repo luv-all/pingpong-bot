@@ -6,4 +6,5 @@ pub enum Action {
     Discard,
     Apply,
     Preview,
+    HomeRail,
 }

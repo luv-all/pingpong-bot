@@ -225,6 +225,24 @@ impl RealHardware {
         }));
         return Ok(());
     }
+
+    /// 온디맨드 레일 홈잉. `--calibrate-rail`과 jog 툴 버튼이 이 메서드를 부른다.
+    pub fn home_rail(
+        &mut self,
+        end: super::rail::RailEnd,
+    ) -> Result<super::rail::RailHomeResult, HwError> {
+        let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
+            duration_secs: 0.0,
+            joint_count: 0,
+            reason: "레일 mutex poisoned".into(),
+        })?;
+        return match rail.as_mut() {
+            None => Err(HwError::InvalidConfig {
+                reason: "레일이 비활성화됨 — home_rail 호출 불가".into(),
+            }),
+            Some(rail) => rail.home(end),
+        };
+    }
 }
 
 impl Hardware for RealHardware {
@@ -402,6 +420,21 @@ mod tests {
             RealHardware::dry_run(dynamixel, Some(test_rail())).expect("dry-run hardware");
 
         assert_eq!(hardware.read_pose().expect("pose").rail_x, 0.0);
+    }
+
+    #[test]
+    fn home_rail_errors_when_dry_run() {
+        let dynamixel = DynamixelConfig {
+            stream_hz: 500.0,
+            ..DynamixelConfig::default()
+        };
+        let mut hardware =
+            RealHardware::dry_run(dynamixel, Some(test_rail())).expect("dry-run hardware");
+        assert!(
+            hardware
+                .home_rail(crate::hardware::rail::RailEnd::Min)
+                .is_err()
+        );
     }
 
     /// non-Windows live 레일은 soft-skip → `rail_x=0` (Dynamixel 버스는 dry로 대체).

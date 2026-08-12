@@ -1556,7 +1556,7 @@ fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'sta
     // 벤치 스텝 응답으로 실측해 `RAIL_ACCEL_M_S2`를 갱신할 것.
     if RAIL_ACCEL_CHECK_ENABLED
         && arm.rail.is_some()
-        && trajectory.peak_rail_acceleration() > crate::defaults::motion::RAIL_ACCEL_M_S2
+        && trajectory.peak_rail_acceleration() > crate::defaults::rail::RAIL_ACCEL_M_S2
     {
         return Some("레일 가속도");
     }
@@ -2837,7 +2837,7 @@ mod tests {
         let start = sample_start(&arm);
         let control = defaults::ControlParams::default();
         let rail_max_speed = arm.rail.as_ref().map_or(f64::INFINITY, |r| r.max_speed);
-        let rail_accel_limit = crate::defaults::motion::RAIL_ACCEL_M_S2;
+        let rail_accel_limit = crate::defaults::rail::RAIL_ACCEL_M_S2;
 
         println!(
             "arm.max_joint_speed={:.3} rad/s, max_joint_accel={:.0} rad/s², \

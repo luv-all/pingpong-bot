@@ -316,6 +316,12 @@ fn draw_actions(ui: &mut egui::Ui, app: &mut JogApp, swing_ok: bool) {
         {
             try_action(app, Action::Sync);
         }
+        if ui
+            .add_enabled(!app.dry_run, egui::Button::new("레일 홈잉"))
+            .clicked()
+        {
+            try_action(app, Action::HomeRail);
+        }
     });
 }
 
