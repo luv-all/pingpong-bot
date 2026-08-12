@@ -1,19 +1,18 @@
 //! 순수 물리/스윙 계획.
 
 use nalgebra::Vector3;
-use rayon::prelude::*;
 
 use crate::Point3;
 use crate::constants::table;
 use crate::defaults;
 use crate::defaults::motion::{
     ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-    ALIGNMENT_MIN_UPWARD_TILT_DEG, ALIGNMENT_TARGET_HEIGHT_OFFSET_M, DETECTION_WINDUP_DISTANCE_M,
-    DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S, FIXED_JOINT_SNAP_SPEED_RATIO,
-    FIXED_JOINT_SWING_DURATION_SECS, FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
-    IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M,
-    READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS,
-    RETURN_TO_CENTER_MIN_SECS,
+    ALIGNMENT_TARGET_HEIGHT_OFFSET_M, DETECTION_WINDUP_DISTANCE_M,
+    DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S, FIXED_JOINT_PUSH_DISTANCE_M,
+    FIXED_JOINT_SNAP_SPEED_RATIO, FIXED_JOINT_SWING_DURATION_SECS,
+    FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS, IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG,
+    READY_PREWIND_DISTANCE_M, READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH,
+    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
@@ -577,10 +576,18 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 /// 라켓 면 법선은 현재 공 위치에서 네트 너머 상대편 탁구대의 무게중심을 향한다. 위치와 방향을
 /// 함께 푼 뒤 정지→정지 궤적 검사를 통과시킨다. 임팩트 속도와 공 도착 시각은 이
 /// 기초 정렬 모드에서 사용하지 않는다. 공 중심과 라켓 중심을 겹치지 않도록
-/// `공 반지름 + 라켓 반두께` 만큼 법선 반대쪽에 라켓 중심을 둔다.
+/// `공 반지름 + 라켓 반두께 + 다관절 푸시 거리` 만큼 법선 반대쪽에 라켓
+/// 중심을 둔다. 따라서 공별 정렬 자세 자체가 팔을 접은 타격 준비 자세가 된다.
 /// 공의 x는 발사기 기준 오른쪽으로 6 cm, z는 위로 1.5 cm 보정한다. 공이 닿는 지점은
 /// 블레이드 중심보다 0.5 cm 아래라서, 라켓 중심은 공 중심보다 0.5 cm 위로 올린다.
 fn ball_alignment_geometry(ball: Point3) -> (Point3, Vector3<f64>, Point3) {
+    return ball_alignment_geometry_with_prewind(ball, FIXED_JOINT_PUSH_DISTANCE_M);
+}
+
+fn ball_alignment_geometry_with_prewind(
+    ball: Point3,
+    prewind_distance_m: f64,
+) -> (Point3, Vector3<f64>, Point3) {
     let corrected_ball = Point3::new(
         ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
         ball.y,
@@ -596,10 +603,11 @@ fn ball_alignment_geometry(ball: Point3) -> (Point3, Vector3<f64>, Point3) {
     } else {
         Vector3::y()
     };
-    // 위치 IK에는 25° 조건을 넣지 않는다. 먼저 수평 법선으로
-    // 전체 팔·레일을 정렬하고, 타격 직전 고정 스윙에서 q3만 돌려 25°를 만든다.
+    // 위치 IK에서 정한 면을 타격 중에도 유지해 라켓 중심이 뒤로 휘지 않게 한다.
     let target_normal = horizontal_normal;
-    let contact_offset = crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z;
+    let contact_offset = crate::constants::BALL_RADIUS
+        + crate::constants::geometry::RACKET_HALF_Z
+        + prewind_distance_m;
     let racket_center = Point3::from(
         corrected_ball.coords + Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
             - target_normal * contact_offset,
@@ -653,31 +661,42 @@ pub fn ball_alignment_pose(
     start: &robot::Pose,
     ball: Point3,
 ) -> Result<robot::Pose, DomainError> {
-    let (corrected_ball, target_normal, racket_center) = ball_alignment_geometry(ball);
-    let hint_rail_x = arm
-        .rail
-        .as_ref()
-        .map_or(start.rail_x, |rail| rail.clamp_x(racket_center.x));
-    let hint = robot::Pose::new(hint_rail_x, start.joints.clone());
-    let (aligned_pose, _) = arm
-        .inverse_pose_with_rail_best_normal(
-            racket_center,
-            target_normal,
-            &hint,
-            robot::IkSearch::Global,
-        )
-        .map_err(DomainError::InfeasibleSwing)?;
-    let reached = arm
-        .forward_kinematics_with_rail(aligned_pose.rail_x, &aligned_pose.joints)
-        .ok_or_else(|| {
-            DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
-                target_x: corrected_ball.x,
-                target_y: corrected_ball.y,
-                target_z: corrected_ball.z,
-            })
-        })?;
-    validate_ball_alignment_normal(corrected_ball, target_normal, reached.normal)?;
-    return Ok(aligned_pose);
+    let mut last_error = None;
+    for prewind_distance_m in [FIXED_JOINT_PUSH_DISTANCE_M, 0.025, 0.020] {
+        let (corrected_ball, target_normal, racket_center) =
+            ball_alignment_geometry_with_prewind(ball, prewind_distance_m);
+        let hint_rail_x = arm
+            .rail
+            .as_ref()
+            .map_or(start.rail_x, |rail| rail.clamp_x(racket_center.x));
+        let hint = robot::Pose::new(hint_rail_x, start.joints.clone());
+        let result = arm
+            .inverse_pose_with_rail_best_normal(
+                racket_center,
+                target_normal,
+                &hint,
+                robot::IkSearch::Global,
+            )
+            .map_err(DomainError::InfeasibleSwing)
+            .and_then(|(aligned_pose, _)| {
+                let reached = arm
+                    .forward_kinematics_with_rail(aligned_pose.rail_x, &aligned_pose.joints)
+                    .ok_or_else(|| {
+                        DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                            target_x: corrected_ball.x,
+                            target_y: corrected_ball.y,
+                            target_z: corrected_ball.z,
+                        })
+                    })?;
+                validate_ball_alignment_normal(corrected_ball, target_normal, reached.normal)?;
+                Ok(aligned_pose)
+            });
+        match result {
+            Ok(aligned_pose) => return Ok(aligned_pose),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    return Err(last_error.expect("정렬 준비 거리 후보가 하나 이상 있어야 함"));
 }
 
 pub fn ball_alignment_bearing_error_deg(
@@ -720,28 +739,39 @@ pub fn plan_ball_alignment_fixed_rail(
     start: &robot::Pose,
     ball: Point3,
 ) -> Result<Trajectory, DomainError> {
-    let (corrected_ball, target_normal, racket_center) = ball_alignment_geometry(ball);
     let hint = robot::Pose::new(start.rail_x, start.joints.clone());
-    let (aligned_pose, _) = arm
-        .inverse_pose_at_fixed_rail_best_normal(
-            start.rail_x,
-            racket_center,
-            target_normal,
-            &hint,
-            robot::IkSearch::Global,
-        )
-        .map_err(DomainError::InfeasibleSwing)?;
-    let reached = arm
-        .forward_kinematics_with_rail(start.rail_x, &aligned_pose.joints)
-        .ok_or_else(|| {
-            DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
-                target_x: corrected_ball.x,
-                target_y: corrected_ball.y,
-                target_z: corrected_ball.z,
-            })
-        })?;
-    validate_ball_alignment_normal(corrected_ball, target_normal, reached.normal)?;
-    return plan_move_to(arm, start, aligned_pose.joints, start.rail_x);
+    let mut last_error = None;
+    for prewind_distance_m in [FIXED_JOINT_PUSH_DISTANCE_M, 0.025, 0.020] {
+        let (corrected_ball, target_normal, racket_center) =
+            ball_alignment_geometry_with_prewind(ball, prewind_distance_m);
+        let result = arm
+            .inverse_pose_at_fixed_rail_best_normal(
+                start.rail_x,
+                racket_center,
+                target_normal,
+                &hint,
+                robot::IkSearch::Global,
+            )
+            .map_err(DomainError::InfeasibleSwing)
+            .and_then(|(aligned_pose, _)| {
+                let reached = arm
+                    .forward_kinematics_with_rail(start.rail_x, &aligned_pose.joints)
+                    .ok_or_else(|| {
+                        DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                            target_x: corrected_ball.x,
+                            target_y: corrected_ball.y,
+                            target_z: corrected_ball.z,
+                        })
+                    })?;
+                validate_ball_alignment_normal(corrected_ball, target_normal, reached.normal)?;
+                plan_move_to(arm, start, aligned_pose.joints, start.rail_x)
+            });
+        match result {
+            Ok(trajectory) => return Ok(trajectory),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    return Err(last_error.expect("정렬 준비 거리 후보가 하나 이상 있어야 함"));
 }
 
 /// 검출 직후 백스윙과 공 도착 시 임팩트 궤적.
@@ -943,21 +973,23 @@ fn plan_aligned_impact_sequence_for_target(
     });
 }
 
-/// 0.25초 q3 손목 각도 조정 결과.
+/// 정렬 자세에서 네 관절로 곧바로 전진 푸시한 결과.
 pub struct FixedJointSwing {
     pub trajectory: Trajectory,
-    /// q3만 움직이기 위해 의도적으로 고정한 관절.
+    /// 기구학적으로 움직임이 필요하지 않아 고정된 관절.
     pub skipped_joint_indices: Vec<usize>,
 }
 
-/// 수평 법선으로 위치 정렬된 자세에서 q3만 돌려, 예상 타격 시점에
-/// 라켓 면 법선이 수평보다 25° 위를 보게 한다. q0·q1·q2와 레일은
-/// 정렬 결과를 유지한다.
+/// 공 뒤쪽의 접힌 정렬 자세에서 별도 백스윙 없이 j0~j3로 라켓을 바로 민다.
+/// 예상 타격 시점에는 라켓 중심이 공 쪽으로 [`FIXED_JOINT_PUSH_DISTANCE_M`]
+/// 전진하고 정렬된 라켓 면은 그대로 유지한다.
+/// 레일은 정렬 결과를 유지한다.
 pub fn plan_fixed_joint_swing(
     arm: &Arm,
     start: &robot::Pose,
 ) -> Result<FixedJointSwing, DomainError> {
-    arm.forward_kinematics_with_rail(start.rail_x, &start.joints)
+    let start_racket = arm
+        .forward_kinematics_with_rail(start.rail_x, &start.joints)
         .ok_or_else(|| {
             DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
                 target_x: start.rail_x,
@@ -965,91 +997,117 @@ pub fn plan_fixed_joint_swing(
                 target_z: table::SURFACE_Z,
             })
         })?;
-    const WRIST_JOINT_INDEX: usize = 3;
-    const SEARCH_STEP_DEG: f64 = 0.25;
     let joint_count = start.joints.values.len();
-    let Some(limit) = arm.joint_limit(WRIST_JOINT_INDEX) else {
+    if joint_count < 4 {
         return Err(DomainError::InfeasibleSwing(
             SwingPlanError::JointOrTorqueLimit {
-                target_x: start.rail_x,
-                target_y: 0.0,
-                target_z: table::SURFACE_Z,
+                target_x: start_racket.position.x,
+                target_y: start_racket.position.y,
+                target_z: start_racket.position.z,
+            },
+        ));
+    }
+    let horizontal_normal = Vector3::new(start_racket.normal.x, start_racket.normal.y, 0.0);
+    if horizontal_normal.norm_squared() <= 1e-12 {
+        return Err(DomainError::InfeasibleSwing(
+            SwingPlanError::RacketOrientationUnreachable {
+                target_x: start_racket.position.x,
+                target_y: start_racket.position.y,
+                target_z: start_racket.position.z,
+                normal_x: start_racket.normal.x,
+                normal_y: start_racket.normal.y,
+                normal_z: start_racket.normal.z,
             },
         ));
     };
-    let target_tilt_rad = ALIGNMENT_MIN_UPWARD_TILT_DEG.to_radians();
-    let sample_count = ((limit.max - limit.min) / SEARCH_STEP_DEG.to_radians()).ceil() as usize;
-    let mut candidates: Vec<_> = (0..=sample_count)
-        .into_par_iter()
-        .filter_map(|sample_index| {
-            let wrist = limit.min
-                + (limit.max - limit.min) * sample_index as f64 / sample_count.max(1) as f64;
-            let mut impact = start.joints.clone();
-            impact.values[WRIST_JOINT_INDEX] = wrist;
-            let racket = arm.forward_kinematics_with_rail(start.rail_x, &impact)?;
-            let elevation = racket
-                .normal
-                .z
-                .atan2(racket.normal.x.hypot(racket.normal.y));
-            return Some(((elevation - target_tilt_rad).abs(), impact));
-        })
-        .collect();
-    candidates.sort_by(|(left_error, left), (right_error, right)| {
-        left_error
-            .partial_cmp(right_error)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| {
-                let left_delta =
-                    (left.values[WRIST_JOINT_INDEX] - start.joints.values[WRIST_JOINT_INDEX]).abs();
-                let right_delta = (right.values[WRIST_JOINT_INDEX]
-                    - start.joints.values[WRIST_JOINT_INDEX])
-                    .abs();
-                left_delta
-                    .partial_cmp(&right_delta)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-    });
-    let mut last_error = None;
-
-    for (_, impact) in candidates {
-        let delta = impact.values[WRIST_JOINT_INDEX] - start.joints.values[WRIST_JOINT_INDEX];
-        if delta.abs() < 1e-6 {
-            continue;
-        }
-        let mut impact_velocity = vec![0.0; joint_count];
-        // 궤적은 일찍 시작해 타격 시각까지 0.40초를 쓰되, 임팩트 순간 j3만
-        // 설정상 관절 속도 상한(모터 무부하 최고속의 95%)을 요청한다.
-        // 가속·감속까지 합친 궤적 피크는 kinematic gate가 같은 상한으로 자른다.
-        impact_velocity[WRIST_JOINT_INDEX] =
-            delta.signum() * arm.max_joint_speed * FIXED_JOINT_SNAP_SPEED_RATIO;
-        match build_feasible_trajectory_with_follow_time(
-            arm,
-            &start.joints,
-            impact,
-            vec![0.0; joint_count],
-            impact_velocity,
-            FIXED_JOINT_SWING_DURATION_SECS,
-            Rail::fixed(start.rail_x),
-            FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
-        ) {
-            Ok(trajectory) => {
-                return Ok(FixedJointSwing {
-                    trajectory,
-                    skipped_joint_indices: (0..joint_count)
-                        .filter(|index| *index != WRIST_JOINT_INDEX)
-                        .collect(),
-                });
-            }
-            Err(error) => last_error = Some(error),
+    let push_direction = horizontal_normal.normalize();
+    // 손목 각도를 새로 만들기 위해 먼저 뒤로 휘는 동작을 제거한다. 정렬된
+    // 라켓 면을 유지한 채 네 관절이 위치 전진에만 참여한다.
+    let target_normal = start_racket.normal;
+    // 사진 기준 10cm 전진을 우선한다. 관절 한계나 테이블 충돌 때문에 전체
+    // 거리가 불가능한 극단 자세에서는 타격 자체를 취소하지 않고 가장 긴
+    // 실행 가능 거리부터 순서대로 선택한다.
+    for push_distance_m in [
+        FIXED_JOINT_PUSH_DISTANCE_M,
+        FIXED_JOINT_PUSH_DISTANCE_M * 0.75,
+        FIXED_JOINT_PUSH_DISTANCE_M * 0.50,
+        FIXED_JOINT_PUSH_DISTANCE_M * 0.30,
+    ] {
+        let target_position =
+            Point3::from(start_racket.position.coords + push_direction * push_distance_m);
+        if let Ok(planned) =
+            plan_fixed_joint_swing_to_pose(arm, start, target_position, target_normal)
+        {
+            return Ok(planned);
         }
     }
-    return Err(DomainError::InfeasibleSwing(last_error.unwrap_or(
-        SwingPlanError::JointOrTorqueLimit {
-            target_x: start.rail_x,
-            target_y: 0.0,
-            target_z: table::SURFACE_Z,
-        },
-    )));
+    let fallback_position = Point3::from(start_racket.position.coords + push_direction * 0.020);
+    return plan_fixed_joint_swing_to_pose(arm, start, fallback_position, target_normal);
+}
+
+fn plan_fixed_joint_swing_to_pose(
+    arm: &Arm,
+    start: &robot::Pose,
+    target_position: Point3,
+    target_normal: Vector3<f64>,
+) -> Result<FixedJointSwing, DomainError> {
+    let joint_count = start.joints.values.len();
+    let (impact_pose, _) = arm
+        .inverse_pose_at_fixed_rail_best_normal(
+            start.rail_x,
+            target_position,
+            target_normal,
+            start,
+            robot::IkSearch::Global,
+        )
+        .map_err(DomainError::InfeasibleSwing)?;
+    let achieved = arm
+        .forward_kinematics_with_rail(start.rail_x, &impact_pose.joints)
+        .ok_or_else(|| {
+            DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: target_position.x,
+                target_y: target_position.y,
+                target_z: target_position.z,
+            })
+        })?;
+    let (_, mut impact_velocity) = arm
+        .linear_velocities_for_racket_velocity(
+            &impact_pose,
+            achieved.normal * FIXED_IMPACT_PUSH_SPEED_M_S,
+        )
+        .map_err(DomainError::InfeasibleSwing)?;
+    let peak = impact_velocity
+        .iter()
+        .map(|velocity| velocity.abs())
+        .fold(0.0_f64, f64::max);
+    let speed_limit = arm.max_joint_speed * FIXED_JOINT_SNAP_SPEED_RATIO;
+    if peak > speed_limit && speed_limit > 0.0 {
+        let scale = speed_limit / peak;
+        for velocity in &mut impact_velocity {
+            *velocity *= scale;
+        }
+    }
+    let skipped_joint_indices = (0..joint_count)
+        .filter(|index| {
+            (impact_pose.joints.values[*index] - start.joints.values[*index]).abs() < 1e-6
+                && impact_velocity[*index].abs() < 1e-6
+        })
+        .collect();
+    let trajectory = build_feasible_trajectory_with_follow_time(
+        arm,
+        &start.joints,
+        impact_pose.joints,
+        vec![0.0; joint_count],
+        impact_velocity,
+        FIXED_JOINT_SWING_DURATION_SECS,
+        Rail::fixed(start.rail_x),
+        FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
+    )
+    .map_err(DomainError::InfeasibleSwing)?;
+    return Ok(FixedJointSwing {
+        trajectory,
+        skipped_joint_indices,
+    });
 }
 
 /// 정지 → 정지로 임의의 포즈까지 잇는 최단 실행가능 궤적.
@@ -1706,7 +1764,7 @@ mod tests {
     const SAMPLE_IMPACT_HEIGHT_M: f64 = 0.18;
 
     #[test]
-    fn fixed_joint_swing_starts_at_aligned_pose_and_moves_only_wrist_to_twenty_five_degrees() {
+    fn fixed_joint_swing_pushes_forward_without_backswing() {
         let active = crate::defaults::robot().expect("active robot");
         let arm = &active.arm;
         let ready = robot::Pose::new(
@@ -1724,8 +1782,15 @@ mod tests {
             alignment.follow_through.clone(),
         );
         let planned = plan_fixed_joint_swing(arm, &start).expect("fixed joint swing");
-        assert_eq!(planned.skipped_joint_indices, vec![0, 1, 2]);
+        assert!(
+            planned.skipped_joint_indices.is_empty(),
+            "j0·j1·j2·j3를 모두 사용해야 함: {:?}",
+            planned.skipped_joint_indices
+        );
         let trajectory = planned.trajectory;
+        let aligned = arm
+            .forward_kinematics_with_rail(trajectory.rail.start, &trajectory.start)
+            .expect("alignment FK");
         let impact = arm
             .forward_kinematics_with_rail(trajectory.rail.end, &trajectory.end)
             .expect("impact FK");
@@ -1747,19 +1812,52 @@ mod tests {
                 .abs()
                 < 1e-12
         );
-        for index in 0..3 {
-            assert_eq!(trajectory.end.values[index], trajectory.start.values[index]);
-            assert_eq!(trajectory.end_velocity[index], 0.0);
-            assert_eq!(
-                trajectory.follow_through.values[index],
-                trajectory.start.values[index]
+        for index in 0..4 {
+            assert!(
+                (trajectory.end.values[index] - trajectory.start.values[index]).abs() > 1e-5
+                    || trajectory.end_velocity[index].abs() > 1e-5,
+                "j{index}가 타격에 참여해야 함"
             );
         }
-        let wrist_delta = trajectory.end.values[3] - trajectory.start.values[3];
-        assert_eq!(
-            trajectory.end_velocity[3].signum(),
-            wrist_delta.signum(),
-            "j3 스냅 방향"
+        let push_direction = Vector3::new(aligned.normal.x, aligned.normal.y, 0.0).normalize();
+        let mut minimum_forward = 0.0_f64;
+        for step in 0..=40 {
+            let time = trajectory.impact_time_secs * f64::from(step) / 40.0;
+            let sampled = arm
+                .forward_kinematics_with_rail(
+                    trajectory.sample_rail_at(time),
+                    &trajectory.sample_at(time),
+                )
+                .expect("swing path FK");
+            let forward = (sampled.position - aligned.position).dot(&push_direction);
+            minimum_forward = minimum_forward.min(forward);
+        }
+        assert!(
+            minimum_forward > -0.001,
+            "의도적인 백스윙이 없어야 함: 최대 후퇴={:.3}mm, q0={:?}, q1={:?}",
+            minimum_forward * 1e3,
+            trajectory.start.values,
+            trajectory.end.values,
+        );
+        let pushed_distance = (impact.position - aligned.position).dot(&push_direction);
+        assert!(
+            (pushed_distance - FIXED_JOINT_PUSH_DISTANCE_M).abs() < 2e-3,
+            "라켓 전진 거리: {pushed_distance:.4}m"
+        );
+        let velocity_probe_dt = 1e-5;
+        let mut after_impact = trajectory.end.clone();
+        for (angle, velocity) in after_impact.values.iter_mut().zip(&trajectory.end_velocity) {
+            *angle += velocity * velocity_probe_dt;
+        }
+        let after_impact_pose = arm
+            .forward_kinematics_with_rail(trajectory.rail.end, &after_impact)
+            .expect("impact velocity FK");
+        let forward_speed = ((after_impact_pose.position - impact.position) / velocity_probe_dt)
+            .dot(&impact.normal);
+        // 10cm 직진 뒤 임팩트 끝속도 0.7m/s를 유지한다.
+        assert!(
+            forward_speed > 0.69,
+            "직진 타격 속도가 유지돼야 함: {forward_speed:.3}m/s"
         );
         assert!(
             trajectory.peak_joint_speed() <= arm.max_joint_speed * (1.0 + 1e-9),
@@ -1770,30 +1868,31 @@ mod tests {
             .z
             .atan2(impact.normal.x.hypot(impact.normal.y))
             .to_degrees();
+        let aligned_tilt_deg = aligned
+            .normal
+            .z
+            .atan2(aligned.normal.x.hypot(aligned.normal.y))
+            .to_degrees();
         assert!(
-            (impact_tilt_deg - ALIGNMENT_MIN_UPWARD_TILT_DEG).abs() <= 0.3,
-            "q3만으로 타격 시점 라켓 면을 25°에 맞춰야 함: {impact_tilt_deg:.3}°"
+            (impact_tilt_deg - aligned_tilt_deg).abs() <= 3.0,
+            "백스윙을 없앤 직진 푸시는 정렬된 라켓 면을 유지해야 함: {impact_tilt_deg:.3}°"
         );
-        assert_ne!(follow_through.normal, impact.normal, "타격 후 q3 팔로스루");
+        assert_ne!(
+            follow_through.position, impact.position,
+            "타격 후 전진 팔로스루"
+        );
     }
 
     #[test]
-    fn fixed_joint_swing_moves_only_wrist_even_from_joint_limit() {
+    fn fixed_joint_swing_from_wrist_limit_stays_inside_limits() {
         let active = crate::defaults::robot().expect("active robot");
         let arm = &active.arm;
         let rail_x = arm.rail.as_ref().map_or(0.0, |rail| rail.default_x());
         let mut joints = arm.default_joints.clone();
         joints.values[3] = arm.joint_limit(3).expect("q3 limit").min;
         let start = robot::Pose::new(rail_x, joints);
-        let planned = plan_fixed_joint_swing(arm, &start).expect("wrist-only swing");
-
-        assert_ne!(planned.trajectory.end.values[3], start.joints.values[3]);
-        for index in 0..3 {
-            assert_eq!(
-                planned.trajectory.end.values[index],
-                start.joints.values[index]
-            );
-        }
+        let planned = plan_fixed_joint_swing(arm, &start).expect("wrist-limit straight push");
+        assert!(arm.joints_in_limits(&planned.trajectory.end));
     }
 
     #[test]

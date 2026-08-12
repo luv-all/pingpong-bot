@@ -91,6 +91,12 @@ pub const RAIL_MAX_SPEED: f64 = 7.5;
 /// 시작 자세가 어긋났다. 이 값은 기본 자세에서 그 괴리를 없앤다.
 pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
 
+/// 타격 후 리니어 레일 x를 유지한 채 관절만 사진의 높은 아치로 접는 복귀 자세.
+/// 상완은 위로 세우고 팔꿈치 이후는 아래로 접으며, 라켓 장축은 READY와 같은
+/// 실측 8°를 유지한다. 활성 URDF 기준 최고 관절은 마운트보다 약 27 cm 높고
+/// 라켓 중심은 마운트와 거의 같은 높이다.
+pub const POST_HIT_TUCKED_JOINTS_4DOF: [f64; 4] = [0.05, 0.0, 1.2, -1.5721];
+
 /// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·바닥 기준).
 ///
 /// **높이는 실측(2026-07-30).** 바닥→프로파일 하단 0.88 m,
@@ -553,6 +559,41 @@ mod tests {
         assert!(
             (lowest - 0.155).abs() < 0.003,
             "bench lowest=0.155m, model={lowest:.4}m"
+        );
+    }
+
+    #[test]
+    fn post_hit_pose_forms_high_arch_without_table_collision() {
+        let robot = urdf_4dof().expect("4-dof");
+        let arm = robot.arm.as_ref();
+        let rail_x = arm
+            .rail
+            .as_ref()
+            .map_or(RAIL_READY_X_M, |rail| rail.default_x());
+        let joints = Joints::from_slice(&POST_HIT_TUCKED_JOINTS_4DOF);
+        let chain = arm.chain_points(rail_x, &joints).expect("post-hit chain");
+        let mount_z = chain.first().expect("mount").z;
+        let peak_z = chain.iter().map(|point| point.z).fold(mount_z, f64::max);
+        let mount = chain.first().expect("mount");
+        let racket = chain.last().expect("racket");
+        let racket_z = racket.z;
+
+        assert!(peak_z - mount_z > 0.25, "팔꿈치가 충분히 높아야 함");
+        assert!(
+            peak_z - racket_z > 0.25,
+            "높은 아치 뒤 라켓이 아래로 접혀야 함"
+        );
+        assert!(
+            (racket_z - mount_z).abs() < 0.02,
+            "라켓 중심은 마운트 높이 근처"
+        );
+        assert!(
+            (racket.x - mount.x).hypot(racket.y - mount.y) < 0.20,
+            "라켓이 몸통 가까이 접혀야 함"
+        );
+        assert!(
+            crate::robot::collision::table_penetration(arm, rail_x, &joints) <= 1e-4,
+            "복귀 자세가 테이블을 관통하면 안 됨"
         );
     }
 }
