@@ -15,6 +15,18 @@ use crate::physics::Kinematics;
 
 /// 구름 판정 여유 — 잡음으로 살짝 넘친 슬립까지 구름으로 오판하지 않게.
 const ROLL_MARGIN: f64 = 0.85;
+/// 그래도 나오면 못 믿는 크기 [rad/s] — 실측 최대가 153(2026-08-12, fly_45~53
+/// 반발 역산)이라 2배 여유. `vision::fit::refine_spin`의 `SPIN_MAX`와 같은 값·같은
+/// 근거를 여기도 쓴다.
+///
+/// 왜 필요한가: 롤/슬립 판정 자체가 `physics.restitution`·`friction`을 쓰는데, 라이브
+/// 파이프라인은 이 값을 실측 반발계수(0.72)가 아니라 스핀 미보정을 흡수하려고 올린
+/// 값(`vision::fit::RESTITUTION≈0.86`)으로 쓴다 — cap이 커진 만큼 실제로는 슬립인
+/// 바운스도 롤로 오판할 여지가 생긴다. 실측(2026-08-12, 새 물리 적용 후 fly_46)으로
+/// 확인됨: 판정은 롤로 통과했는데 나온 값이 311 rad/s — 대수적으로는 유일해였지만
+/// 물리적으로 말이 안 된다. 판정 여유(`ROLL_MARGIN`)만으론 못 거른다 — 크기 자체를
+/// 한 번 더 본다.
+const MAX_PLAUSIBLE_SPIN: f64 = 300.0;
 
 /// 바운스 전후 속도(v_in: 바운스 직전, v_out: 바운스 직후)로 되튐 후 ω를 구한다.
 ///
@@ -42,7 +54,11 @@ pub fn spin_after_bounce_if_rolling(
         return None;
     }
     // 구름: 출사 접촉점 슬립이 정확히 0 → v + ω×(0,0,-R) = 0 을 풀면 ω_out이 v_out만으로 나온다.
-    return Some(Vector3::new(-v_out.y / ball::RADIUS, v_out.x / ball::RADIUS, 0.0));
+    let omega = Vector3::new(-v_out.y / ball::RADIUS, v_out.x / ball::RADIUS, 0.0);
+    if omega.norm() > MAX_PLAUSIBLE_SPIN {
+        return None; // 대수적으로는 유일해라도 물리적으로 말이 안 되면 안 믿는다.
+    }
+    return Some(omega);
 }
 
 #[cfg(test)]
