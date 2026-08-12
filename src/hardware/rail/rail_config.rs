@@ -3,6 +3,13 @@ use std::path::PathBuf;
 use super::rail_config_error::RailConfigError;
 use super::soft_limit_args::SoftLimitArgs;
 
+/// 홈잉 시 물리적으로 접근한 엔드스톱 방향.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RailEnd {
+    Min,
+    Max,
+}
+
 /// AXL 리니어 레일 설정.
 ///
 /// 앱 벤치 값은 [`crate::defaults::hardware`]의 `Default`.
@@ -150,13 +157,32 @@ impl RailConfig {
     ) -> f64 {
         return command_now_m + (actual_target_m - actual_now_m);
     }
+
+    /// 홈잉으로 얻은 `board_position_m`(엔드스톱 도달 순간의 보드 좌표)으로부터
+    /// `board_zero_domain_m`을 역산한다.
+    ///
+    /// `board_to_domain_abs(board_position_m) == (end이 가리키는 physical_x_{min,max}_m)`이
+    /// 성립해야 한다는 조건을 `board_zero_domain_m`에 대해 풀었다 — `domain_to_board_abs`/
+    /// `board_to_domain_abs`(위)와 같은 부호 규약을 쓴다. `reverse=false`면 보드·도메인
+    /// 좌표가 항등이라 `board_zero_domain_m`은 그 변환에 아무 영향이 없으므로, 이 경우엔
+    /// 알고 있는 도메인 값(끝점 위치) 그대로를 반환한다.
+    pub fn board_zero_domain_m_from_reference(&self, end: RailEnd, board_position_m: f64) -> f64 {
+        let domain_known_m = match end {
+            RailEnd::Min => self.physical_x_min_m,
+            RailEnd::Max => self.physical_x_max_m,
+        };
+        if self.reverse {
+            return domain_known_m + board_position_m;
+        }
+        return domain_known_m;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::RailConfig;
+    use super::{RailConfig, RailEnd};
 
     #[test]
     fn clamp_rail_m_respects_limits() {
@@ -257,6 +283,36 @@ mod tests {
         let args = cfg.soft_limit_args_for_command_offset(0.5192);
         assert!((args.positive_m - 1.2242).abs() < 1e-12);
         assert!((args.negative_m - -0.1858).abs() < 1e-12);
+    }
+
+    #[test]
+    fn board_zero_domain_m_from_reference_matches_existing_reverse_transform() {
+        let cfg = RailConfig {
+            reverse: true,
+            board_zero_domain_m: 0.705,
+            physical_x_min_m: 0.0,
+            physical_x_max_m: 1.41,
+            ..RailConfig::default()
+        };
+        // 홈잉이 물리적 min 끝에서 보드 위치를 읽었다면, 그 순간의 도메인 위치는
+        // physical_x_min_m(0.0)이었어야 한다. 기존 domain_to_board_abs로 역방향 확인.
+        let board_position_m = cfg.domain_to_board_abs(cfg.physical_x_min_m);
+        let derived = cfg.board_zero_domain_m_from_reference(RailEnd::Min, board_position_m);
+        assert!((derived - cfg.board_zero_domain_m).abs() < 1e-12);
+    }
+
+    #[test]
+    fn board_zero_domain_m_from_reference_works_at_max_end() {
+        let cfg = RailConfig {
+            reverse: true,
+            board_zero_domain_m: 0.705,
+            physical_x_min_m: 0.0,
+            physical_x_max_m: 1.41,
+            ..RailConfig::default()
+        };
+        let board_position_m = cfg.domain_to_board_abs(cfg.physical_x_max_m);
+        let derived = cfg.board_zero_domain_m_from_reference(RailEnd::Max, board_position_m);
+        assert!((derived - cfg.board_zero_domain_m).abs() < 1e-12);
     }
 
     #[test]
