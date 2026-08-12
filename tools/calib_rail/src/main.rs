@@ -4,6 +4,10 @@
 //! `board_zero_domain_m`을 다시 계산해 `data/rail_calibration.json`에 저장한다. 다음
 //! 실기 실행부터는 재빌드 없이 이 값이 하드코딩 기본값을 덮어쓴다
 //! (`pingpong_bot::defaults::rail::RAIL_BOARD_ZERO_DOMAIN_M`).
+//!
+//! `AxlRail::open`만 쓴다 — Dynamixel 팔은 레일 홈잉과 무관하고,
+//! `RealHardware::new`를 거치면 팔의 듀얼 모터 정렬 검사(`verify_mirror_alignment`)
+//! 때문에 팔이 정렬 안 됐다는 이유로 레일 홈잉 자체가 막힌다.
 
 mod args;
 
@@ -12,9 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use clap::Parser;
 use pingpong_bot::defaults;
-use pingpong_bot::hardware::RealHardware;
-use pingpong_bot::hardware::dynamixel::DynamixelConfig;
-use pingpong_bot::hardware::rail::{RailCalibration, RailConfig};
+use pingpong_bot::hardware::rail::{AxlRail, RailCalibration, RailConfig};
 use pingpong_bot::telemetry::init_tracing;
 use tracing::info;
 
@@ -24,10 +26,6 @@ fn main() -> Result<()> {
     let args = Args::parse();
     init_tracing(args.debug, &["calib_rail", "pingpong_bot"], false);
 
-    let mut dxl = DynamixelConfig::default();
-    if let Some(port) = &args.port {
-        dxl.port = port.clone();
-    }
     let mut rail_cfg = RailConfig::default();
     if let Some(dll_path) = &args.dll_path {
         rail_cfg.dll_path = dll_path.clone();
@@ -35,15 +33,13 @@ fn main() -> Result<()> {
 
     let end: pingpong_bot::hardware::rail::RailEnd = args.end.into();
     info!(
-        port = %dxl.port,
         dll_path = %rail_cfg.dll_path.display(),
         end = ?end,
         "레일 홈잉 시작 — 물리적 엔드스톱까지 저속 이동합니다"
     );
 
-    let mut hardware =
-        RealHardware::new(dxl, Some(rail_cfg)).context("하드웨어 초기화 실패")?;
-    let result = hardware.home_rail(end).context("레일 홈잉")?;
+    let mut rail = AxlRail::open(rail_cfg).context("레일 초기화 실패")?;
+    let result = rail.home(end).context("레일 홈잉")?;
 
     let measured_unix_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)

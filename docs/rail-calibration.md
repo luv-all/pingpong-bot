@@ -31,8 +31,8 @@ cargo run -p calib-rail
 # max(우측) 엔드스톱
 cargo run -p calib-rail -- --end max
 
-# 포트/DLL 경로가 기본값과 다르면
-cargo run -p calib-rail -- --port COM8 --dll-path "C:/path/to/AXL.dll"
+# DLL 경로가 기본값과 다르면
+cargo run -p calib-rail -- --dll-path "C:/path/to/AXL.dll"
 ```
 
 동작:
@@ -43,6 +43,9 @@ cargo run -p calib-rail -- --port COM8 --dll-path "C:/path/to/AXL.dll"
 3. 그 지점의 원시 보드 좌표로부터 `board_zero_domain_m`을 다시 계산하고, 알람을
    해제한다.
 4. 결과를 `data/rail_calibration.json`에 저장한다.
+
+`calib-rail`은 `AxlRail::open`만 사용한다 — Dynamixel 팔은 열지 않으므로, 팔이 정렬
+안 됐거나 연결 안 돼 있어도 레일 홈잉과는 무관하다.
 
 **안전 주의사항:**
 

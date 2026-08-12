@@ -1,4 +1,4 @@
-//! clap — 레일 홈잉 대상 엔드·포트·DLL 경로.
+//! clap — 레일 홈잉 대상 엔드·DLL 경로.
 
 use std::path::PathBuf;
 
@@ -28,10 +28,6 @@ pub struct Args {
     /// 홈잉이 향할 엔드스톱 방향.
     #[arg(long, value_enum, default_value = "min")]
     pub end: RailEndArg,
-    /// Dynamixel 시리얼 포트 (`DynamixelConfig::default().port` 덮어씀). 레일만
-    /// 다루지만 `RealHardware`가 Dynamixel 버스도 함께 열기 때문에 필요하다.
-    #[arg(long)]
-    pub port: Option<String>,
     /// AXL.dll 경로 (`RailConfig::default().dll_path` 덮어씀).
     #[arg(long)]
     pub dll_path: Option<PathBuf>,

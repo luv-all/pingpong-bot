@@ -11,6 +11,9 @@
 Windows + AXL 보드가 실제로 연결된 벤치에서만 동작한다(`feature = "real"`이 없는
 빌드나 비Windows에서는 하드웨어 초기화 단계에서 에러로 종료한다).
 
+`AxlRail::open`만 사용한다 — Dynamixel 팔은 열지 않는다. 팔이 정렬 안 됐거나 연결
+안 돼 있어도 레일 홈잉은 그와 무관하게 실행할 수 있다.
+
 ## 사용
 
 ```bash
@@ -20,8 +23,8 @@ cargo run -p calib-rail
 # 오른쪽(max) 엔드스톱
 cargo run -p calib-rail -- --end max
 
-# 포트/DLL 경로 오버라이드
-cargo run -p calib-rail -- --port COM8 --dll-path "C:/path/to/AXL.dll"
+# DLL 경로 오버라이드
+cargo run -p calib-rail -- --dll-path "C:/path/to/AXL.dll"
 ```
 
 ## 안전
