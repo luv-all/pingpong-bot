@@ -29,7 +29,10 @@ const BACKGROUND: Scalar = Scalar::new(28.0, 24.0, 20.0, 0.0);
 const TABLE_LINE: Scalar = Scalar::new(200.0, 160.0, 90.0, 0.0);
 const TEXT: Scalar = Scalar::new(230.0, 230.0, 230.0, 0.0);
 /// overlay 와 같은 색을 쓴다 — 두 화면을 나란히 놓고 봐야 한다.
-const RAW: Scalar = Scalar::new(60.0, 255.0, 60.0, 0.0);
+///
+/// raw(초록, `overlay::RAW`)는 여기(`_sim.png`)선 안 그린다 — fitted·predicted 둘만
+/// 비교하고 싶을 때 raw가 자꾸 겹쳐 가려서, 사용자 요청으로 뺐다(카메라 창의 raw는
+/// 그대로 남아 있다).
 const FITTED: Scalar = Scalar::new(255.0, 200.0, 0.0, 0.0);
 const PREDICTED: Scalar = Scalar::new(255.0, 0.0, 255.0, 0.0);
 
@@ -153,8 +156,6 @@ fn view(plan: &Plan, reviewed: &Reviewed) -> Result<Mat> {
     let mut img =
         Mat::new_rows_cols_with_default(VIEW_H, VIEW_W, opencv::core::CV_8UC3, BACKGROUND)?;
     draw_table(&mut img, plan)?;
-    let raw: Vec<Point3> = reviewed.observed.iter().map(|o| o.point).collect();
-    polyline(&mut img, plan, &raw, RAW, 2)?;
     if let Some(contract) = &reviewed.contract {
         let fitted: Vec<Point3> = contract
             .latest
