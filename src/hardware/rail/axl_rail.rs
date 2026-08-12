@@ -89,7 +89,7 @@ impl AxlRail {
     pub fn home(
         &mut self,
         #[cfg_attr(not(all(windows, feature = "real")), allow(unused_variables))] end: RailEnd,
-    ) -> Result<f64, HwError> {
+    ) -> Result<RailHomeResult, HwError> {
         #[cfg(all(windows, feature = "real"))]
         if let RailKind::Live(live) = &mut self.kind {
             return home_live(live, &mut self.config, end);
@@ -220,12 +220,21 @@ impl AxlRail {
     }
 }
 
+/// [`AxlRail::home`] 결과 — 캘리브레이션 파일에 그대로 옮겨 담는다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RailHomeResult {
+    /// 엔드스톱 도달 순간 읽은 원시 보드 좌표 [m] (`reverse` 해석 전).
+    pub board_position_m: f64,
+    /// 그 지점으로부터 역산한 새 영점.
+    pub board_zero_domain_m: f64,
+}
+
 #[cfg(all(windows, feature = "real"))]
 fn home_live(
     live: &mut super::axl_live::AxlLive,
     config: &mut RailConfig,
     end: RailEnd,
-) -> Result<f64, HwError> {
+) -> Result<RailHomeResult, HwError> {
     let target_domain_m = match end {
         RailEnd::Min => config.physical_x_min_m,
         RailEnd::Max => config.physical_x_max_m,
@@ -264,7 +273,10 @@ fn home_live(
         new_board_zero_domain_m,
         "레일 홈잉 완료"
     );
-    return Ok(new_board_zero_domain_m);
+    return Ok(RailHomeResult {
+        board_position_m,
+        board_zero_domain_m: new_board_zero_domain_m,
+    });
 }
 
 fn velocity_for_distance_duration(distance: f64, duration: f64, acceleration: f64) -> f64 {

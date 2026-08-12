@@ -12,7 +12,7 @@ mod rail_config_error;
 mod rail_kind;
 mod soft_limit_args;
 
-pub use axl_rail::AxlRail;
+pub use axl_rail::{AxlRail, RailHomeResult};
 pub use rail_calibration::RailCalibration;
 pub use rail_config::{RailConfig, RailEnd};
 pub use rail_config_error::RailConfigError;

@@ -227,7 +227,10 @@ impl RealHardware {
     }
 
     /// 온디맨드 레일 홈잉. `--calibrate-rail`과 jog 툴 버튼이 이 메서드를 부른다.
-    pub fn home_rail(&mut self, end: super::rail::RailEnd) -> Result<f64, HwError> {
+    pub fn home_rail(
+        &mut self,
+        end: super::rail::RailEnd,
+    ) -> Result<super::rail::RailHomeResult, HwError> {
         let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
             duration_secs: 0.0,
             joint_count: 0,
