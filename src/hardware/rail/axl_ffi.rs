@@ -35,6 +35,8 @@ type AxmStatusReadInMotion = unsafe extern "system" fn(i32, *mut u32) -> u32;
 type AxmMovePos = unsafe extern "system" fn(i32, f64, f64, f64, f64) -> u32;
 type AxmMoveStartPos = unsafe extern "system" fn(i32, f64, f64, f64, f64) -> u32;
 type AxmMoveSStop = unsafe extern "system" fn(i32) -> u32;
+type AxmSignalReadServoAlarm = unsafe extern "system" fn(i32, *mut u32) -> u32;
+type AxmSignalServoAlarmReset = unsafe extern "system" fn(i32, u32) -> u32;
 
 /// AXL 헤더와 동일한 stdcall 심볼 테이블.
 ///
