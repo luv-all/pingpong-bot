@@ -28,7 +28,7 @@ use state::JogApp;
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    init_tracing(args.debug, &["jog", "pingpong_bot"]);
+    init_tracing(args.debug, &["jog", "pingpong_bot"], false);
     if args.debug {
         info!("debug 로그 활성 — Dynamixel 재시도·AXL API 실패 code가 출력됩니다");
     }

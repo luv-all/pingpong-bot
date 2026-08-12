@@ -264,6 +264,22 @@ impl JogApp {
         self.error = Some(err.to_string());
     }
 
+    /// 물리적 엔드스톱(min)까지 저속 이동해 레일 영점을 다시 잡는다. dry-run에는
+    /// 물리 엔드스톱이 없어 항상 에러다. 결과는 재생/영속화하지 않는다 — 캘리브레이션
+    /// 파일 저장은 `calib-rail` 툴(CLI)이 맡는다.
+    pub fn home_rail(&mut self) -> Result<()> {
+        ensure!(!self.dry_run, "dry-run에서는 레일 홈잉을 실행할 수 없습니다");
+        let board_zero_domain_m = {
+            let mut hardware = self.hardware.lock().expect("hardware");
+            hardware
+                .home_rail(pingpong_bot::hardware::rail::RailEnd::Min)
+                .context("home_rail")?
+                .board_zero_domain_m
+        };
+        self.set_error(format!("레일 홈잉 완료: board_zero_domain_m={board_zero_domain_m:.4}"));
+        return Ok(());
+    }
+
     pub fn live_pose(&self) -> Option<robot::Pose> {
         return self.robot.as_ref().map(|r| r.pose());
     }
@@ -280,6 +296,7 @@ pub fn try_action(app: &mut JogApp, action: Action) {
         Action::Discard => app.discard(),
         Action::Apply => app.apply(),
         Action::Preview => app.preview_from_draft(),
+        Action::HomeRail => app.home_rail(),
     };
     if let Err(err) = result {
         app.set_error(format!("{err:#}"));
