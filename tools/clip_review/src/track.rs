@@ -292,11 +292,22 @@ pub fn replay_with_physics(
 ) -> Result<Reviewed, String> {
     let calibration = Calibration::load_json(&defaults::calibration_path())
         .map_err(|e| format!("calibration 로드: {e}"))?;
-    let mut fit = pingpong_bot::vision::Fit::with_physics(
+    let fit = pingpong_bot::vision::Fit::with_physics(
         &calibration,
         defaults::vision::trigger(),
         physics,
     );
+    return replay_with(detected, fit);
+}
+
+/// [`replay_with_physics`]와 같지만 `Fit`(물리+트리거)을 통째로 밖에서 받는다 —
+/// 트리거 상수 탐색처럼 물리는 고정하고 트리거만 바꿔 볼 때 쓴다.
+pub fn replay_with(
+    detected: &DetectedFrames,
+    mut fit: pingpong_bot::vision::Fit,
+) -> Result<Reviewed, String> {
+    let calibration = Calibration::load_json(&defaults::calibration_path())
+        .map_err(|e| format!("calibration 로드: {e}"))?;
     let origin = Instant::now();
     let fps = detected.fps;
 
