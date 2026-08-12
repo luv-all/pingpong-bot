@@ -58,8 +58,9 @@ pub const ALIGNMENT_TARGET_HEIGHT_OFFSET_M: f64 = 0.015;
 /// 타격 정렬 시 라켓 면이 수평에서 위로 보는 최소 각도 [deg].
 pub const ALIGNMENT_MIN_UPWARD_TILT_DEG: f64 = 25.0;
 /// 발사기 기준 오른쪽으로 적용하는 공별 타격 예측 위치 보정 [m].
-/// 현재 실물 레일은 `reverse=true`이므로 오른쪽은 제어 x 감소 방향이다.
-pub const ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M: f64 = 0.060;
+/// 기존 6cm 보정에 실물 타격점의 -X 4cm 편차를 추가해 총 10cm로 맞춘다.
+/// 이 값은 공 제어 명령을 만들 때만 적용되며 기본 레일 위치는 바꾸지 않는다.
+pub const ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M: f64 = 0.100;
 /// 공을 처음 검출한 뒤 첫 정렬 명령을 허용하기까지 기다리는 시간 [s].
 /// 첫 유효 예측에서 즉시 레일·팔을 출발시키고, 정확한 타격 확정은 별도의
 /// 연속 안정화 조건이 담당한다.
