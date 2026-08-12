@@ -94,7 +94,7 @@ pub fn rail_calibration_path() -> std::path::PathBuf {
 /// [`crate::defaults::robot::READY_JOINTS_4DOF`]를 확정하는 것이 순서다.
 pub fn rail_frame() -> RailFrame {
     return RailFrame {
-        mount_y: -0.128,
+        mount_y: -0.068,
         rail_bottom_z: 0.88,
     };
 }
