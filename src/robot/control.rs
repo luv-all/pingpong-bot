@@ -4,10 +4,11 @@ use nalgebra::Vector3;
 use thiserror::Error;
 
 use crate::Point3;
+use crate::error::DomainError;
 use crate::estimator::{BallTrajectory, TrajectorySample};
 
 use super::motion::{Planner, Trajectory};
-use super::{Arm, Pose};
+use super::{Arm, Joints, Pose};
 
 /// 위치 제어기가 받는 유일한 명령.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -170,10 +171,9 @@ impl From<TrajectorySample> for HitTarget {
 /// real과 sim이 함께 쓰는 위치 이동 계획기.
 pub struct PositionController;
 
-/// fly_07·08·09에서 최종 도달점과 10 cm 이내로 계속 유지되기 시작한
-/// 시점은 첫 정상 3D 관측 후 0.23~0.27 s였다. 중앙값 0.25 s와 실제
-/// 수렴폭 10 cm를 둘 다 만족해야 정밀 예측으로 올린다.
-pub const REFINED_MIN_OBSERVATION_SECS: f64 = 0.25;
+/// 앞당긴 접수점에서도 타격 시간을 확보하도록 0.10초부터 정밀 예측을 허용한다.
+/// 단일 관측으로 확정하지 않고 기존 3회 연속·10cm 수렴 조건은 유지한다.
+pub const REFINED_MIN_OBSERVATION_SECS: f64 = 0.10;
 pub const REFINED_TARGET_TOLERANCE_M: f64 = 0.10;
 const REFINED_STABLE_SAMPLES: usize = 3;
 
@@ -181,6 +181,200 @@ const REFINED_STABLE_SAMPLES: usize = 3;
 pub enum PredictionStage {
     Provisional,
     Refined,
+}
+
+/// sim·real이 같은 순서로 실행하는 공 하나의 정렬 단계.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignmentAction {
+    /// 첫 예비 예측: 레일을 먼저 출발시키고 팔도 가능한 만큼 정렬한다.
+    ProvisionalRailAndArm,
+    /// 정밀 기준 전 후속 예측: 레일은 유지하고 팔만 보정한다.
+    ProvisionalArmCorrection,
+    /// 첫 정밀 예측: 중앙 조준 통합 IK로 레일·팔 목표를 확정한다.
+    PrimaryRailAndArm,
+    /// 확정 후 최신 예측: 확정된 레일에서 팔만 미세 보정한다.
+    ArmCorrection,
+}
+
+impl AlignmentAction {
+    pub fn is_provisional(self) -> bool {
+        return matches!(
+            self,
+            Self::ProvisionalRailAndArm | Self::ProvisionalArmCorrection
+        );
+    }
+
+    pub fn is_refined(self) -> bool {
+        return !self.is_provisional();
+    }
+
+    pub fn commands_rail(self) -> bool {
+        return matches!(self, Self::ProvisionalRailAndArm | Self::PrimaryRailAndArm);
+    }
+}
+
+/// 트랙 하나에서 레일 예비/본 명령이 각각 한 번만 나가게 한다.
+#[derive(Debug, Default, Clone)]
+pub struct AlignmentLatch {
+    track_seq: Option<u64>,
+    provisional_rail_sent: bool,
+    primary_sent: bool,
+}
+
+impl AlignmentLatch {
+    pub fn next_action(&mut self, track_seq: u64, refined_ready: bool) -> Option<AlignmentAction> {
+        if self.track_seq != Some(track_seq) {
+            *self = Self::default();
+            self.track_seq = Some(track_seq);
+        }
+        if !refined_ready {
+            return Some(if self.primary_sent {
+                AlignmentAction::ArmCorrection
+            } else if self.provisional_rail_sent {
+                AlignmentAction::ProvisionalArmCorrection
+            } else {
+                AlignmentAction::ProvisionalRailAndArm
+            });
+        }
+        return Some(if self.primary_sent {
+            AlignmentAction::ArmCorrection
+        } else {
+            AlignmentAction::PrimaryRailAndArm
+        });
+    }
+
+    pub fn mark_rail_sent(&mut self, action: AlignmentAction) {
+        match action {
+            AlignmentAction::ProvisionalRailAndArm => self.provisional_rail_sent = true,
+            AlignmentAction::PrimaryRailAndArm => self.primary_sent = true,
+            AlignmentAction::ProvisionalArmCorrection | AlignmentAction::ArmCorrection => {}
+        }
+    }
+
+    pub fn mark_provisional_rail_sent(&mut self) {
+        self.provisional_rail_sent = true;
+    }
+
+    pub fn mark_primary_sent(&mut self) {
+        self.primary_sent = true;
+    }
+
+    pub fn track_seq(&self) -> Option<u64> {
+        return self.track_seq;
+    }
+
+    pub fn primary_sent(&self) -> bool {
+        return self.primary_sent;
+    }
+}
+
+/// 레일 명령을 먼저 내리기 위한 1단계 계획.
+///
+/// 실물 AXL이 안전 범위로 클램프한 실제 목표를 받은 뒤
+/// [`AlignmentController::plan_joints`]로 관절 궤적을 만든다.
+#[derive(Debug, Clone)]
+pub struct AlignmentPreparation {
+    pub action: AlignmentAction,
+    pub rail_target_m: Option<f64>,
+    primary_joints: Option<Joints>,
+}
+
+/// 예측 단계에서 레일 목표와 고정-레일 팔 IK를 만드는 공통 계획기.
+pub struct AlignmentController;
+
+impl AlignmentController {
+    pub fn prepare(
+        arm: &Arm,
+        start: &Pose,
+        ball: Point3,
+        action: AlignmentAction,
+    ) -> Result<AlignmentPreparation, DomainError> {
+        return match action {
+            AlignmentAction::ProvisionalRailAndArm => Ok(AlignmentPreparation {
+                action,
+                rail_target_m: arm
+                    .rail
+                    .map(|_| Planner::ball_alignment_rail_target(arm, ball)),
+                primary_joints: None,
+            }),
+            AlignmentAction::PrimaryRailAndArm => {
+                let aligned = Planner::ball_alignment_pose(arm, start, ball)?;
+                // 레일 명령 전에 통합해가 정지→정지 궤적으로도
+                // 실행 가능한지 검증한다.
+                let fixed_start = Pose::new(aligned.rail_x, start.joints.clone());
+                Planner::move_to(arm, &fixed_start, aligned.joints.clone(), aligned.rail_x)?;
+                Ok(AlignmentPreparation {
+                    action,
+                    rail_target_m: arm.rail.map(|_| aligned.rail_x),
+                    primary_joints: Some(aligned.joints),
+                })
+            }
+            AlignmentAction::ProvisionalArmCorrection | AlignmentAction::ArmCorrection => {
+                Ok(AlignmentPreparation {
+                    action,
+                    rail_target_m: None,
+                    primary_joints: None,
+                })
+            }
+        };
+    }
+
+    /// AXL/시뮬이 적용한 레일 위치에서 관절만 이동하는 궤적을 만든다.
+    pub fn plan_joints(
+        arm: &Arm,
+        start: &Pose,
+        ball: Point3,
+        prepared: &AlignmentPreparation,
+        applied_rail_m: Option<f64>,
+    ) -> Result<Trajectory, DomainError> {
+        let rail_x = applied_rail_m.unwrap_or(start.rail_x);
+        let planning_start = Pose::new(rail_x, start.joints.clone());
+        if let (Some(primary_joints), Some(requested_rail)) =
+            (&prepared.primary_joints, prepared.rail_target_m)
+            && (requested_rail - rail_x).abs() <= 1e-6
+        {
+            return Planner::move_to(arm, &planning_start, primary_joints.clone(), rail_x);
+        }
+        // 하드웨어 클램프로 요청 레일과 적용 레일이 다르거나
+        // 후속 보정이면 실제 레일에서 자세 IK를 다시 푼다.
+        return Planner::ball_alignment_fixed_rail(arm, &planning_start, ball);
+    }
+}
+
+/// 전역 IK가 다른 팔 접힘 가지를 골라 듀얼 베이스가 튀는 것을 막는 한계.
+/// 더 접힌 높은 기본자세에서 앞쪽 접수점까지 한 번에 전개할 수 있는 범위.
+/// 속도·가속도 한계는 궤적 계획기가 별도로 검사한다.
+pub const MAX_ALIGNMENT_BASE_STEP_RAD: f64 = 50.0_f64.to_radians();
+
+pub fn alignment_base_step_rad(start: &Pose, trajectory: &Trajectory) -> f64 {
+    return trajectory
+        .follow_through
+        .values
+        .first()
+        .zip(start.joints.values.first())
+        .map_or(0.0, |(target, measured)| target - measured);
+}
+
+/// 물리 한계 최단시간 대비 여유. sim·real 모두 같은 값을 쓴다.
+pub const RAIL_MOVE_DURATION_SCALE: f64 = 1.25;
+
+pub fn alignment_rail_move_duration(arm: &Arm, start_x: f64, target_x: f64) -> f64 {
+    let Some(rail) = arm.rail else {
+        return crate::defaults::RETURN_TO_CENTER_MIN_SECS;
+    };
+    let distance = (target_x - start_x).abs();
+    if distance <= f64::EPSILON {
+        return crate::defaults::RETURN_TO_CENTER_MIN_SECS;
+    }
+    let acceleration = crate::defaults::RAIL_ACCEL_M_S2;
+    let max_speed = rail.max_speed;
+    let ramp_distance = max_speed * max_speed / acceleration;
+    let minimum = if distance <= ramp_distance {
+        2.0 * (distance / acceleration).sqrt()
+    } else {
+        distance / max_speed + max_speed / acceleration
+    };
+    return (minimum * RAIL_MOVE_DURATION_SCALE).max(0.02);
 }
 
 /// 실기와 시뮬레이션이 함께 사용하는 라켓 수평 조준축.
@@ -615,6 +809,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn alignment_latch_runs_the_same_provisional_and_refined_sequence() {
+        let mut latch = AlignmentLatch::default();
+
+        assert_eq!(
+            latch.next_action(7, false),
+            Some(AlignmentAction::ProvisionalRailAndArm)
+        );
+        latch.mark_rail_sent(AlignmentAction::ProvisionalRailAndArm);
+        assert_eq!(
+            latch.next_action(7, false),
+            Some(AlignmentAction::ProvisionalArmCorrection)
+        );
+        assert_eq!(
+            latch.next_action(7, true),
+            Some(AlignmentAction::PrimaryRailAndArm)
+        );
+        latch.mark_rail_sent(AlignmentAction::PrimaryRailAndArm);
+        assert_eq!(
+            latch.next_action(7, true),
+            Some(AlignmentAction::ArmCorrection)
+        );
+
+        assert_eq!(
+            latch.next_action(8, false),
+            Some(AlignmentAction::ProvisionalRailAndArm),
+            "새 공 트랙에서는 예비 정렬부터 다시 시작해야 함"
+        );
+    }
+
+    #[test]
     fn selector_interpolates_one_n_by_seven_segment() {
         let trajectory = BallTrajectory::new(
             vec![],
@@ -786,15 +1010,15 @@ mod tests {
     fn refined_stage_needs_time_and_three_targets_within_ten_centimeters() {
         let mut stability = PredictionStability::default();
         assert_eq!(
-            stability.observe(Point3::new(0.0, 0.3, 0.4), 0.10),
+            stability.observe(Point3::new(0.0, 0.3, 0.4), 0.05),
             PredictionStage::Provisional
         );
         assert_eq!(
-            stability.observe(Point3::new(0.04, 0.3, 0.4), 0.24),
+            stability.observe(Point3::new(0.04, 0.3, 0.4), 0.09),
             PredictionStage::Provisional
         );
         assert_eq!(
-            stability.observe(Point3::new(0.05, 0.3, 0.4), 0.25),
+            stability.observe(Point3::new(0.05, 0.3, 0.4), 0.10),
             PredictionStage::Refined
         );
         // 정밀 단계는 한 번 성립하면 다시 1차로 내려가지 않는다.
@@ -807,10 +1031,10 @@ mod tests {
     #[test]
     fn refined_stage_rejects_a_single_large_prediction_jump() {
         let mut stability = PredictionStability::default();
-        stability.observe(Point3::new(0.0, 0.3, 0.4), 0.25);
-        stability.observe(Point3::new(0.02, 0.3, 0.4), 0.26);
+        stability.observe(Point3::new(0.0, 0.3, 0.4), 0.10);
+        stability.observe(Point3::new(0.02, 0.3, 0.4), 0.11);
         assert_eq!(
-            stability.observe(Point3::new(0.20, 0.3, 0.4), 0.27),
+            stability.observe(Point3::new(0.20, 0.3, 0.4), 0.12),
             PredictionStage::Provisional
         );
     }

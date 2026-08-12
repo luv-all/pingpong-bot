@@ -165,7 +165,7 @@ impl Planner {
         return physics::plan_aligned_impact_sequence(arm, start, ball, time_to_impact_secs);
     }
 
-    /// 정렬 자세에서 q3만 돌려 타격 시점 라켓 면을 25°로 만든다.
+    /// 접힌 정렬 자세에서 j0·j1·j2 전진 푸시와 j3 손목 스냅을 합성한다.
     pub fn fixed_joint_swing(
         arm: &Arm,
         start: &robot::Pose,
