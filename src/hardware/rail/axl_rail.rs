@@ -288,9 +288,19 @@ fn home_live(
     // 밖일 수 있다. 그대로 두면 다음 실기 기동의 ready-pose 이동 계획이 "현재 위치가
     // 이미 범위 밖"이라는 이유로 가속도 한계를 넘어 실패한다. 안전 범위 안의 준비
     // 위치로 복귀시켜 다음 기동이 정상 범위에서 시작하게 한다.
+    //
+    // `move_abs_m_blocking`은 항상 `config.vel`(정상 운전 최고 속도, 기본
+    // `RAIL_MAX_SPEED` 7.5 m/s)로 이동한다 — 엔드스톱에 막 부딪힌 직후 전속력 복귀는
+    // 적절하지 않아 `start_move_abs_m`으로 감속된 `RAIL_HOMING_RETURN_VELOCITY_M_S`를
+    // 직접 지정한다.
     let return_domain_m = config.clamp_m(crate::defaults::rail::RAIL_READY_X_M);
     let return_board_m = normalize_m(config.domain_to_board_abs(return_domain_m));
-    live.move_abs_m_blocking(config, return_board_m)?;
+    live.start_move_abs_m(
+        config,
+        return_board_m,
+        crate::defaults::rail::RAIL_HOMING_RETURN_VELOCITY_M_S,
+    )?;
+    live.wait_idle(config.axis)?;
     info!(
         axis = config.axis,
         return_domain_m, "레일 홈잉 후 준비 위치로 복귀"

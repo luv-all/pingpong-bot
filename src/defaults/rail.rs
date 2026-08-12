@@ -44,6 +44,12 @@ pub const RAIL_ACCEL_M_S2: f64 = 12.0;
 /// 홈잉 이동 속도 [m/s] — `min_vel`보다 크고 `max_vel`보다 훨씬 작다. 엔드스톱에
 /// 부딪히는 순간의 충격·오버런을 줄이려는 값이다.
 pub const RAIL_HOMING_VELOCITY_M_S: f64 = 0.02;
+/// 홈잉 완료 후 준비 위치로 복귀할 때의 속도 [m/s].
+///
+/// `RailConfig::vel`(기본 `RAIL_MAX_SPEED` 7.5 m/s)을 그대로 쓰면 엔드스톱에 막
+/// 부딪힌 직후 전속력으로 복귀하게 된다 — 홈잉 속도(0.02)보다는 빠르되 정상 운전
+/// 속도보다는 훨씬 느린 중간값을 쓴다.
+pub const RAIL_HOMING_RETURN_VELOCITY_M_S: f64 = 0.10;
 /// 홈잉 중 알람 대기 타임아웃 [s].
 ///
 /// 전체 물리 범위(`RAIL_PHYSICAL_X_MAX_M` - `RAIL_PHYSICAL_X_MIN_M` ≈ 1.41m)를
