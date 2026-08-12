@@ -258,7 +258,17 @@ fn home_live(
         Ok(board_position_m) => board_position_m,
         Err(error) => {
             // 소프트 리밋을 비활성 상태로 남기지 않는다 — 실패해도 원래 설정으로 되돌린다.
-            let _ = live.set_soft_limit(config.axis, config.soft_limit_args());
+            // 이 복구 자체가 실패하면 소프트 리밋이 꺼진 채로 남는 fail-open 상태이므로,
+            // 조용히 삼키지 않고 반드시 로그로 남긴다 — 다음 이동부터 안전장치 없이
+            // 움직인다는 것을 운용자가 알아야 한다.
+            if let Err(restore_error) = live.set_soft_limit(config.axis, config.soft_limit_args())
+            {
+                tracing::error!(
+                    axis = config.axis,
+                    %restore_error,
+                    "레일 홈잉 실패 후 소프트 리밋 복구도 실패 — 소프트 리밋이 비활성 상태로 남았습니다. 다음 이동 전 수동 확인 필요"
+                );
+            }
             return Err(error);
         }
     };
@@ -273,6 +283,19 @@ fn home_live(
         new_board_zero_domain_m,
         "레일 홈잉 완료"
     );
+
+    // 홈잉 직후 레일은 물리적 엔드스톱 근처 — 설정된 안전 이동 범위(x_min_m..x_max_m)
+    // 밖일 수 있다. 그대로 두면 다음 실기 기동의 ready-pose 이동 계획이 "현재 위치가
+    // 이미 범위 밖"이라는 이유로 가속도 한계를 넘어 실패한다. 안전 범위 안의 준비
+    // 위치로 복귀시켜 다음 기동이 정상 범위에서 시작하게 한다.
+    let return_domain_m = config.clamp_m(crate::defaults::rail::RAIL_READY_X_M);
+    let return_board_m = normalize_m(config.domain_to_board_abs(return_domain_m));
+    live.move_abs_m_blocking(config, return_board_m)?;
+    info!(
+        axis = config.axis,
+        return_domain_m, "레일 홈잉 후 준비 위치로 복귀"
+    );
+
     return Ok(RailHomeResult {
         board_position_m,
         board_zero_domain_m: new_board_zero_domain_m,

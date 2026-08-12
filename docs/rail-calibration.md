@@ -42,7 +42,11 @@ cargo run -p calib-rail -- --dll-path "C:/path/to/AXL.dll"
 2. AXL 서보 알람(`AxmSignalReadServoAlarm`)이 뜨면 도달로 간주해 즉시 정지한다.
 3. 그 지점의 원시 보드 좌표로부터 `board_zero_domain_m`을 다시 계산하고, 알람을
    해제한다.
-4. 결과를 `data/rail_calibration.json`에 저장한다.
+4. **레일을 안전 이동 범위(`x_min_m..x_max_m`) 안의 준비 위치(`RAIL_READY_X_M`)로
+   복귀시킨다.** 홈잉 직후 레일은 엔드스톱 근처, 즉 안전 범위 밖에 있다 — 복귀시키지
+   않으면 다음 `--mode real` 기동의 ready-pose 이동 계획이 "현재 위치가 이미 범위
+   밖"이라는 이유로 가속도 한계를 넘어 실패한다.
+5. 결과를 `data/rail_calibration.json`에 저장한다.
 
 `calib-rail`은 `AxlRail::open`만 사용한다 — Dynamixel 팔은 열지 않으므로, 팔이 정렬
 안 됐거나 연결 안 돼 있어도 레일 홈잉과는 무관하다.
