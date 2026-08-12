@@ -90,7 +90,16 @@ impl AxlLive {
             soft_limit_negative_m = soft_limit.negative_m,
             "AXL ActPos/CmdPos 원점 및 소프트 리밋 진단"
         );
-        check_axl("AxmSignalSetSoftLimit", unsafe {
+        self.set_soft_limit(axis, soft_limit)?;
+        return Ok(());
+    }
+
+    pub(super) fn set_soft_limit(
+        &mut self,
+        axis: i32,
+        soft_limit: super::soft_limit_args::SoftLimitArgs,
+    ) -> Result<(), HwError> {
+        return check_axl("AxmSignalSetSoftLimit", unsafe {
             (self.ffi.axm_signal_set_soft_limit)(
                 axis,
                 soft_limit.use_,
@@ -99,8 +108,7 @@ impl AxlLive {
                 soft_limit.positive_m,
                 soft_limit.negative_m,
             )
-        })?;
-        return Ok(());
+        });
     }
 
     pub(super) fn read_actual_and_command_m(&mut self, axis: i32) -> Result<(f64, f64), HwError> {

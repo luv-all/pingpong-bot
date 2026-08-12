@@ -52,6 +52,14 @@ pub const RAIL_HOMING_VELOCITY_M_S: f64 = 0.02;
 /// 엔드스톱에서 먼 경우 도달 전에 타임아웃돼 정지하고, 다시 실행해야 남은 거리를
 /// 이어서 가는 문제가 있었다 — 여유를 크게 둔다.
 pub const RAIL_HOMING_TIMEOUT_SECS: f64 = 120.0;
+/// 홈잉 이동이 현재 위치보다 얼마나 더 갈 수 있게 여유를 두는지 [m], 전체 물리
+/// 범위 위에 더한다.
+///
+/// 목표를 `domain_to_board_abs(physical_x_{min,max}_m)`으로 계산하면 그 변환 자체가
+/// 지금 갖고 있는(틀렸을 수 있는) `board_zero_domain_m`에 의존한다 — 재정렬하려는
+/// 값으로 재정렬용 이동 목표를 계산하는 순환 오류다. 대신 홈잉 이동은 **현재 보드
+/// 위치 + 방향 × (전체 범위 + 이 여유)**로 좌표계 원점과 무관하게 계산한다.
+pub const RAIL_HOMING_OVERTRAVEL_MARGIN_M: f64 = 0.20;
 
 /// 홈잉 결과 캘리브레이션 JSON 경로. `data/calibration.json`(카메라)과 같은 자리.
 pub const DEFAULT_RAIL_CALIBRATION_PATH: &str = "data/rail_calibration.json";

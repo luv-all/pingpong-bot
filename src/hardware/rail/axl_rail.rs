@@ -235,38 +235,37 @@ fn home_live(
     config: &mut RailConfig,
     end: RailEnd,
 ) -> Result<RailHomeResult, HwError> {
-    let target_domain_m = match end {
-        RailEnd::Min => config.physical_x_min_m,
-        RailEnd::Max => config.physical_x_max_m,
+    use super::soft_limit_args::SoftLimitArgs;
+
+    // 지금 설정된 소프트 리밋은 (틀렸을 수 있는) 기존 board_zero_domain_m으로
+    // 계산돼 있다 — 실제 엔드스톱보다 먼저 이동을 멈출 수 있으므로 홈잉 중엔
+    // 비활성화한다. 이동 결과와 무관하게 아래에서 항상 복원한다.
+    let disabled_soft_limit = SoftLimitArgs {
+        use_: 0,
+        stop_mode: config.soft_limit_stop_mode,
+        selection: config.soft_limit_selection,
+        positive_m: 0.0,
+        negative_m: 0.0,
     };
-    let target_board_m = normalize_m(config.domain_to_board_abs(target_domain_m));
-    live.start_move_abs_m(
-        config,
-        target_board_m,
-        crate::defaults::rail::RAIL_HOMING_VELOCITY_M_S,
-    )?;
+    live.set_soft_limit(config.axis, disabled_soft_limit)?;
 
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_secs_f64(crate::defaults::rail::RAIL_HOMING_TIMEOUT_SECS);
-    loop {
-        if live.read_alarm(config.axis)? {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            live.stop(config.axis)?;
-            return Err(HwError::InvalidConfig {
-                reason: "레일 홈잉: 엔드스톱 도달 못 함 — 배선/알람 설정 확인".into(),
-            });
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    // 목표를 domain_to_board_abs(physical_x_{min,max}_m)으로 잡으면 그 변환 자체가
+    // 재정렬하려는 board_zero_domain_m에 의존하는 순환 오류가 된다. 대신 **현재 보드
+    // 위치 + 방향 × (전체 범위 + 여유)**로 좌표계 원점과 무관하게 목표를 잡는다.
+    let move_result = home_move_toward_endstop(live, config, end);
 
-    live.stop(config.axis)?;
-    let (board_position_m, _command_position_m) = live.read_actual_and_command_m(config.axis)?;
-    live.reset_alarm(config.axis)?;
+    let board_position_m = match move_result {
+        Ok(board_position_m) => board_position_m,
+        Err(error) => {
+            // 소프트 리밋을 비활성 상태로 남기지 않는다 — 실패해도 원래 설정으로 되돌린다.
+            let _ = live.set_soft_limit(config.axis, config.soft_limit_args());
+            return Err(error);
+        }
+    };
 
     let new_board_zero_domain_m = config.board_zero_domain_m_from_reference(end, board_position_m);
     config.board_zero_domain_m = new_board_zero_domain_m;
+    live.set_soft_limit(config.axis, config.soft_limit_args())?;
     info!(
         axis = config.axis,
         end = ?end,
@@ -278,6 +277,75 @@ fn home_live(
         board_position_m,
         board_zero_domain_m: new_board_zero_domain_m,
     });
+}
+
+#[cfg(all(windows, feature = "real"))]
+fn read_current_board_m(
+    live: &mut super::axl_live::AxlLive,
+    config: &RailConfig,
+) -> Result<f64, HwError> {
+    let (actual_board_m, _command_board_m) = live.read_actual_and_command_m(config.axis)?;
+    return Ok(actual_board_m);
+}
+
+/// 현재 보드 위치 기준으로 엔드스톱 방향 목표를 잡고, 알람이 뜨거나 타임아웃할
+/// 때까지 기다린다. 도달 시 정지·알람 해제까지 끝내고 그 순간의 원시 보드 좌표를
+/// 반환한다.
+#[cfg(all(windows, feature = "real"))]
+fn home_move_toward_endstop(
+    live: &mut super::axl_live::AxlLive,
+    config: &RailConfig,
+    end: RailEnd,
+) -> Result<f64, HwError> {
+    let current_board_m = read_current_board_m(live, config)?;
+    let domain_direction = match end {
+        RailEnd::Min => -1.0,
+        RailEnd::Max => 1.0,
+    };
+    let board_direction = if config.reverse {
+        -domain_direction
+    } else {
+        domain_direction
+    };
+    let travel_margin_m = (config.physical_x_max_m - config.physical_x_min_m).abs()
+        + crate::defaults::rail::RAIL_HOMING_OVERTRAVEL_MARGIN_M;
+    let target_board_m = normalize_m(current_board_m + board_direction * travel_margin_m);
+
+    live.start_move_abs_m(
+        config,
+        target_board_m,
+        crate::defaults::rail::RAIL_HOMING_VELOCITY_M_S,
+    )?;
+
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs_f64(crate::defaults::rail::RAIL_HOMING_TIMEOUT_SECS);
+    let mut last_progress_log = std::time::Instant::now();
+    loop {
+        if live.read_alarm(config.axis)? {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            live.stop(config.axis)?;
+            return Err(HwError::InvalidConfig {
+                reason: "레일 홈잉: 엔드스톱 도달 못 함 — 배선/알람 설정 확인".into(),
+            });
+        }
+        if last_progress_log.elapsed() >= std::time::Duration::from_secs(2) {
+            if let Ok(actual_board_m) = read_current_board_m(live, config) {
+                info!(
+                    axis = config.axis,
+                    actual_board_m, target_board_m, "레일 홈잉 진행 중 — 아직 엔드스톱 미도달"
+                );
+            }
+            last_progress_log = std::time::Instant::now();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+
+    live.stop(config.axis)?;
+    let board_position_m = read_current_board_m(live, config)?;
+    live.reset_alarm(config.axis)?;
+    return Ok(board_position_m);
 }
 
 fn velocity_for_distance_duration(distance: f64, duration: f64, acceleration: f64) -> f64 {
