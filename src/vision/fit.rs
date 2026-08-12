@@ -26,9 +26,9 @@ use crate::camera::{self, Calibration, Triangulate};
 use crate::constants::table;
 use crate::defaults::PhysicsParams;
 use crate::defaults::vision::fit::{
-    ASSUMED_SPIN, DRAG, HORIZON, HUBER_SIGMA, INTEGRATE_DT, MIN_PIXEL_SPAN, MIN_SIGHTINGS,
-    MIN_SPEED, OUTLIER_LIMIT, OUTLIER_SIGMA, SAMPLE_DT, SHOOTER_X, SHOOTER_X_SIGMA, SIGMA_PX,
-    STALE_GAP, WINDOW,
+    ASSUMED_SPIN, DRAG, FRICTION, HORIZON, HUBER_SIGMA, INTEGRATE_DT, MIN_PIXEL_SPAN, MIN_SIGHTINGS,
+    MIN_SPEED, OUTLIER_LIMIT, OUTLIER_SIGMA, RESTITUTION, SAMPLE_DT, SHOOTER_X, SHOOTER_X_SIGMA,
+    SIGMA_PX, STALE_GAP, WINDOW,
 };
 use crate::physics::Kinematics;
 use crate::{Point3, Vector3};
@@ -91,19 +91,38 @@ pub struct Fit {
     predicting: bool,
     outliers: u32,
     seq: u64,
+    /// 이 트랙의 바운스에서 닫힌식으로 푼 스핀 — 구름 전이가 안 잡히면 계속 `None`이고
+    /// `ASSUMED_SPIN`으로 접는다. 바운스는 트랙당 한 번이라 한 번 풀리면 안 다시 푼다.
+    solved_spin: Option<Vector3>,
 }
 
 impl Fit {
     pub fn new(calibration: &Calibration, trigger: Box<dyn Trigger>) -> Self {
-        return Self {
-            cameras: calibration.cameras.clone(),
-            // TODO(합의): 이 둘을 `PhysicsParams::default()` 로 올리면 sim 도 같이 쓴다.
-            // 지금 올리면 jog 테스트 4개가 깨진다 — 기본 슈터 설정이 항력을 못 견뎌 접수
-            // 창에 도달을 못 한다. 슈터 속도를 같이 올려야 하고 그건 sim 담당 결정이다.
-            physics: PhysicsParams {
+        // TODO(합의): 이 셋을 `PhysicsParams::default()` 로 올리면 sim 도 같이 쓴다.
+        // 지금 올리면 jog 테스트가 깨진다 — 기본 슈터 설정이 그 힘을 못 견뎌 접수 창에
+        // 도달을 못 한다. 슈터 속도를 같이 올려야 하고 그건 sim 담당 결정이다. 게다가
+        // `RESTITUTION`·`FRICTION`·`DRAG`는 `ω=0` 가정을 보정하려고 맞춘 값이라(문서
+        // 참고) sim의 진짜 반발 시뮬레이션에 그대로 올리면 안 된다 — 이건 TODO가 아니라
+        // 원래 여기 있어야 하는 값이다.
+        return Self::with_physics(
+            calibration,
+            trigger,
+            PhysicsParams {
+                restitution: RESTITUTION,
+                friction: FRICTION,
                 drag: DRAG,
                 ..PhysicsParams::default()
             },
+        );
+    }
+
+    /// [`Self::new`]와 같지만 물리 상수를 밖에서 받는다 — e·mu·drag 보정 탐색처럼
+    /// `src/defaults`를 고쳐 재빌드하지 않고도 후보를 빠르게 돌려 볼 때 쓴다. 실기·클립
+    /// 도구는 항상 [`Self::new`]를 쓴다.
+    pub fn with_physics(calibration: &Calibration, trigger: Box<dyn Trigger>, physics: PhysicsParams) -> Self {
+        return Self {
+            cameras: calibration.cameras.clone(),
+            physics,
             trigger,
             sightings: Vec::new(),
             solution: None,
@@ -112,12 +131,247 @@ impl Fit {
             predicting: false,
             outliers: 0,
             seq: 0,
+            solved_spin: None,
         };
     }
 
     /// `false`면 아직 궤적이 안 섰다.
     pub fn has_track(&self) -> bool {
         return self.solution.is_some();
+    }
+
+    /// 이 트랙에 쓸 스핀 — 라이브 바운스에서 풀었으면 그걸, 아니면 사전값.
+    fn assumed_spin(&self) -> Vector3 {
+        return self.solved_spin.unwrap_or(ASSUMED_SPIN);
+    }
+
+    /// 지금까지 바운스에서 닫힌식으로 푼 스핀. 안 풀렸으면(구름 전이 안 잡혔거나 아직
+    /// 바운스 전이면) `None` — 진단·툴 전용, 소비자는 `assumed_spin`을 통해 간접으로만 쓴다.
+    pub fn solved_spin(&self) -> Option<Vector3> {
+        return self.solved_spin;
+    }
+
+    /// `self.sightings`를 원시 삼각측량 궤적으로 만든다 — 물리 모델이 전혀 안 낀 순수
+    /// 기하다.
+    ///
+    /// **`measured.position`을 안 쓰는 이유**: `measured`는 `walk()`가 (아직 모르는) 가정
+    /// 스핀으로 물리를 굴려 만든 값이다 — 바운스 앞은 거의 안 물들지만(스핀은 Magnus로만
+    /// 약하게 영향), 바운스 뒤는 그 가정된 반사 방향으로 통째로 굴러가 있다. 스핀을
+    /// 풀려는 바로 그 가정이 입력에 이미 섞여 있는 셈이라, 이걸로 v_out을 재면 순환이다
+    /// (실측: 이 값 대신 원시 삼각측량을 쓰기 전엔 라이브 발동률이 11%였다 — 오프라인
+    /// 전체 클립 스캔은 같은 자리에서 75%가 풀렸다. 격차가 그 순환 오염이었다).
+    ///
+    /// 카메라가 다른 두 관측을 **상호 최근접**으로 짝지어 삼각측량한다. 도착 순서로
+    /// 훑으며 "직전의 다른 카메라 관측"을 짝으로 삼으면 안 된다 — 두 카메라가 프레임을
+    /// 번갈아 도착시키므로, 그러면 매번 **한 프레임 전** 관측과 짝지어져(간격이 프레임
+    /// 주기보다도 가까워 통과는 하지만 같은 순간이 아니다) 시차가 그대로 위치 오차로
+    /// 새어 들어간다 — 처음 이렇게 짰다가 z가 원래 낙하 높이보다 더 높이 발산하는 걸
+    /// 보고서야 잡았다. 상호 최근접(서로가 서로의 가장 가까운 짝)만 채택하면 그 오프바이원이
+    /// 안 생긴다.
+    fn raw_trajectory(&self) -> Vec<crate::physics::TrajPoint> {
+        // 카메라 둘은 하드웨어 동기가 없다 — 실측 p95 skew가 18.9ms다(better-vision.md §0).
+        // 6ms로 뒀더니 실클립에서 짝이 거의 안 잡혀 라이브 발동률이 안 올랐다 — 그 skew를
+        // 덮을 만큼은 넉넉해야 한다.
+        const MAX_PAIR_GAP: Duration = Duration::from_millis(20);
+        let mut out = Vec::new();
+        for anchor in &self.sightings {
+            let Some(partner) = self
+                .sightings
+                .iter()
+                .filter(|s| s.camera != anchor.camera)
+                .min_by_key(|s| anchor.t.abs_diff(s.t))
+            else {
+                continue;
+            };
+            if anchor.t.abs_diff(partner.t) > MAX_PAIR_GAP {
+                continue;
+            }
+            // 상호 최근접 확인 — anchor도 partner 입장에서 가장 가까운 반대 카메라 관측
+            // 이어야 한다. 안 그러면 같은 partner가 여러 anchor에 중복으로 물린다.
+            let mutual_ok = self
+                .sightings
+                .iter()
+                .filter(|s| s.camera == anchor.camera)
+                .min_by_key(|s| partner.t.abs_diff(s.t))
+                .is_some_and(|m| m.t == anchor.t);
+            if !mutual_ok {
+                continue;
+            }
+            // 상호 최근접은 대칭이라 (anchor, partner)와 (partner, anchor) 양쪽에서 다
+            // 채택된다 — 같은 쌍을 두 번 넣지 않게 카메라 인덱스가 작은 쪽에서 볼 때만 낸다.
+            if anchor.camera > partner.camera {
+                continue;
+            }
+            let views = [
+                (
+                    self.cameras[anchor.camera].projection_matrix(),
+                    anchor.pixel,
+                ),
+                (
+                    self.cameras[partner.camera].projection_matrix(),
+                    partner.pixel,
+                ),
+            ];
+            let Some(point) = Triangulate::views(&views) else {
+                continue;
+            };
+            out.push(crate::physics::TrajPoint {
+                t: anchor.t.as_secs_f64(),
+                pos: point,
+                pixels: Vec::new(),
+            });
+        }
+        return out;
+    }
+
+    /// 원시 삼각측량 궤적에서 첫 바운스를 찾아 되튐 후 스핀을 닫힌식으로 푼다. 구름이
+    /// 아니면 `None`.
+    ///
+    /// 후보 자리를 찾는 것과 v_in/v_out을 재는 걸 **같은 창 회귀**로 한다. 처음엔
+    /// 인접 2점차로 후보를 찾고 그 자리에서만 창 회귀를 했는데, 라이브에서는(오프라인
+    /// 전체 클립 스캔과 달리 표본이 적어) 그 둘이 서로 다른 답을 냈다 — 2점차는 바운스로
+    /// 보이는데 같은 자리의 창 회귀는 `v_in.z`가 되레 양수로 나오는 경우가 실측
+    /// 383번 중 376번이었다. 인접 2점 잡음 하나에 후보 채택 여부가 갈리면 안 된다.
+    ///
+    /// 창 폭은 4가 아니라 2다 — 4로 뒀을 때 합성 구름-바운스 테스트에서 22% 어긋났다.
+    /// `after` 창의 중앙 시각이 접촉에서 멀수록(120fps 4칸이면 ~21ms) 그새 Magnus가
+    /// 이미 v_out을 실측만큼 휘어 놓는다(ω=60 rad/s면 그 21ms에 v_y가 0.27 m/s나
+    /// 움직였다) — 이건 잡음이 아니라 실제 물리라 창을 넓힌다고 안 지워진다. 2로
+    /// 줄이면 그 지연이 절반(~13ms)으로 줄어 합성 테스트가 15% 안으로 들어온다. 대신
+    /// 실클립 잡음 평균 효과는 그만큼 약해진다 — `spin_after_bounce_if_rolling`의 롤
+    /// 마진과 `refine_spin`의 `MIN_IMPROVEMENT_RATIO`가 그 잡음을 걸러내는 안전망이다.
+    fn solve_spin_from_bounce(&self) -> Option<Vector3> {
+        let raw = self.raw_trajectory();
+        const HALF_WINDOW: usize = 2;
+        if raw.len() <= 2 * HALF_WINDOW {
+            return None;
+        }
+        for index in HALF_WINDOW..=raw.len() - 1 - HALF_WINDOW {
+            // 접촉 자체(index)는 창 어느 쪽에도 안 넣는다 — 접히는 순간 자체를 넣으면 그
+            // 전이가 양쪽 회귀를 다 끌어당겨 v_in·v_out 둘 다 왜곡된다(실측: v_out.z가
+            // 물리상 나올 수 없는 값까지 깎여서 나옴 — e=0.72인데 e≈0.14로 보임).
+            let before = &raw[index - HALF_WINDOW..index];
+            let after = &raw[index + 1..=index + HALF_WINDOW];
+            let Some(v_in) = crate::physics::TrajAnalysis::windowed_velocity(before) else {
+                continue;
+            };
+            let Some(v_out) = crate::physics::TrajAnalysis::windowed_velocity(after) else {
+                continue;
+            };
+            if v_in.z >= -0.25 || v_out.z <= 0.15 {
+                continue;
+            }
+            // 닫힌식 먼저 — 구름 전이면 이걸로 끝난다(대수적 정확해, 반복 없음).
+            if let Some(spin) =
+                crate::physics::PhysicsIdentify::spin_after_bounce_if_rolling(v_in, v_out, &self.physics)
+            {
+                return Some(spin);
+            }
+            // 슬립이면 닫힌식은 원리상 못 푼다(슬립 방향만 보이고 크기는 안 보임,
+            // `spin_from_bounce.rs` 문서) — 바운스 뒤 비행의 Magnus로 대신 잡는다.
+            return self.refine_spin(&self.solution?);
+        }
+        return None;
+    }
+
+    /// 바운스 뒤 픽셀 잔차로 ω(x, y)를 다시 푼다. `p0`·`v0`는 이미 푼 값을 고정한다.
+    ///
+    /// `solve_spin_from_bounce`의 닫힌식은 슬립 바운스를 못 푼다 — 접선 임펄스가
+    /// `μ·J_n`에 고정돼 슬립 크기(=ω)가 출사 속도에 아예 안 남기 때문이다(대수적으로
+    /// 안 보임, 반복을 더 돌려도 안 풀린다). 그런데 바운스 **뒤** 비행에서는 Magnus
+    /// (`a += k_m · ω×v`)가 ω 크기에 그대로 걸린다 — 관측이 몇 개만 더 있어도 픽셀
+    /// 잔차가 ω를 구속한다. `walk`가 바운스를 물리로 자동으로 통과시키므로 여기서
+    /// 바운스 시각을 따로 몰라도 된다 — `p0,v0`에서 ω 후보로 쭉 굴리면 바운스도
+    /// 알아서 그 자리에서 일어난다.
+    fn refine_spin(&self, start: &Ballistic) -> Option<Vector3> {
+        const ITERATIONS: usize = 20;
+        const STEP: f64 = 1e-2;
+        // 이 리그 실측 최대가 153 rad/s였다(2026-08-12, fly_45~53 클립 반발 역산) — 여유
+        // 두 배 두고 300으로 막는다. `diag_physics.rs`의 940은 슈터-비행-전체 적합용
+        // 하한이라 여기(바운스 뒤 몇 표본짜리 국소 적합)엔 너무 느슨해서 폭주를 못 막았다
+        // (실측: 씨앗 0에서 228까지 뛰어가 버림 — Magnus가 `MAGNUS_OMEGA_MAX=80` 위에서는
+        // 클램프돼 그 방향으로 더 가도 안 막히는 평평한 골짜기가 있었다).
+        const SPIN_MAX: f64 = 300.0;
+        // 씨앗(보통 0) 대비 이만큼도 못 줄이면 못 믿는다 — 관측이 모자라 잡음을 스핀으로
+        // 착각한 것일 수 있다. 없는 값보다 나은 값만 내보낸다.
+        const MIN_IMPROVEMENT_RATIO: f64 = 0.7;
+
+        let rmse = |residual: &[f64]| -> f64 {
+            return (residual.iter().map(|r| r * r).sum::<f64>() / residual.len().max(1) as f64)
+                .sqrt();
+        };
+        let residuals_at = |spin: nalgebra::Vector2<f64>| -> Option<Vec<f64>> {
+            let path = self.walk_with_spin(start, Vector3::new(spin.x, spin.y, 0.0))?;
+            return self.residuals_with_spin(start, path);
+        };
+
+        let seed = self.assumed_spin();
+        let mut spin = nalgebra::Vector2::new(seed.x, seed.y);
+        let seeded_rmse = rmse(&residuals_at(spin)?);
+        let mut best = seeded_rmse;
+        // 감쇠 — 바운스 뒤 관측이 몇 개뿐일 때 순수 가우스-뉴턴은 한 걸음에 과하게
+        // 튈 수 있다(`diag_physics.rs`가 바운스 낀 적합에 감쇠를 쓰는 것과 같은 이유,
+        // 여기선 p0,v0가 고정이라 그 정도로 안 휘지만 관측이 적을 땐 여전히 보탬이 된다).
+        let mut lambda = 1e-3;
+
+        for _ in 0..ITERATIONS {
+            let base = residuals_at(spin)?;
+            let mut columns: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+            for (axis, column) in columns.iter_mut().enumerate() {
+                let mut bumped = spin;
+                bumped[axis] += STEP;
+                let moved = residuals_at(bumped)?;
+                if moved.len() != base.len() {
+                    return None;
+                }
+                *column = moved.iter().zip(&base).map(|(b, a)| (b - a) / STEP).collect();
+            }
+            let mut normal = nalgebra::Matrix2::<f64>::zeros();
+            let mut gradient = nalgebra::Vector2::<f64>::zeros();
+            for a in 0..2 {
+                for b in 0..2 {
+                    normal[(a, b)] = (0..base.len())
+                        .map(|i| columns[a][i] * columns[b][i])
+                        .sum();
+                }
+                gradient[a] = (0..base.len()).map(|i| columns[a][i] * base[i]).sum();
+            }
+
+            let mut improved = false;
+            for _ in 0..8 {
+                let mut damped = normal;
+                for a in 0..2 {
+                    damped[(a, a)] += lambda * (normal[(a, a)].abs() + 1e-9);
+                }
+                let Some(delta) = damped.try_inverse().map(|inverse| inverse * gradient) else {
+                    lambda *= 10.0;
+                    continue;
+                };
+                let mut candidate = spin - delta;
+                candidate.x = candidate.x.clamp(-SPIN_MAX, SPIN_MAX);
+                candidate.y = candidate.y.clamp(-SPIN_MAX, SPIN_MAX);
+                let Some(candidate_residual) = residuals_at(candidate) else {
+                    lambda *= 10.0;
+                    continue;
+                };
+                let score = rmse(&candidate_residual);
+                if score < best {
+                    spin = candidate;
+                    best = score;
+                    lambda = (lambda * 0.3).max(1e-9);
+                    improved = true;
+                    break;
+                }
+                lambda *= 10.0;
+            }
+            if !improved {
+                break;
+            }
+        }
+        if best > seeded_rmse * MIN_IMPROVEMENT_RATIO {
+            return None; // 씨앗보다 뚜렷이 낫지 않다 — 뭘 풀었다고 우기지 않는다.
+        }
+        return Some(Vector3::new(spin.x, spin.y, 0.0));
     }
 
     pub fn seq(&self) -> u64 {
@@ -233,6 +487,7 @@ impl Fit {
         self.predicted.0.clear();
         self.predicting = false;
         self.outliers = 0;
+        self.solved_spin = None;
     }
 
     /// 서 있던 트랙을 끝낸다: 관측 공백, 되돌아감, 부피 이탈, 멈춤.
@@ -244,6 +499,7 @@ impl Fit {
         self.predicting = false;
         self.outliers = 0;
         self.seq += 1;
+        self.solved_spin = None;
     }
 
     /// 관측 전부에 탄도를 맞춘다. 이전 해가 있으면 거기서 이어 푼다.
@@ -378,6 +634,12 @@ impl Fit {
         }
 
         // 후버 가중 — 크게 어긋난 행의 무게를 1/|r| 로 줄인다. 하나가 다 끌고 가지 않게.
+        //
+        // 터키 이중가중(문턱 밖 무게 0)으로 바꿔서 fly_45~53에 실측해 봤다(2026-08-12) —
+        // fly_46·50은 나아졌지만 45·48·53은 오히려 나빠졌고 47·48은 트랙이 더 잘게
+        // 쪼개졌다(7→10, 6→7). 순증거 없이 뒤섞여서 되돌림 — 원래 fly_49의 75cm 오차를
+        // 노리고 바꾼 거였는데, 그건 적합 문제가 아니라 채점 쪽 정답(`observed`)에 낀
+        // 확 튄 검출 하나였다(고쳤다: `tools/clip_review/src/track.rs`의 `plausible`).
         let weights: Vec<f64> = base
             .iter()
             .map(|r| {
@@ -414,7 +676,12 @@ impl Fit {
     /// 마지막 한 행은 슈터 위치 사전값이다. 같은 σ 정규화를 쓰므로 관측 하나와 같은
     /// 무게를 갖는다 — 관측이 몇 개 없을 때만 실질적으로 작용하고, 많아지면 묻힌다.
     fn residuals(&self, start: &Ballistic) -> Option<Vec<f64>> {
-        let path = self.walk(start)?;
+        return self.residuals_with_spin(start, self.walk(start)?);
+    }
+
+    /// [`Self::residuals`]와 같지만 이미 굴려 둔 경로(`path`)를 받는다 — [`Self::refine_spin`]이
+    /// [`Self::walk_with_spin`]으로 후보 ω를 굴린 경로를 그대로 넘기는 자리다.
+    fn residuals_with_spin(&self, start: &Ballistic, path: Vec<Point3>) -> Option<Vec<f64>> {
         let mut out = Vec::with_capacity(self.sightings.len() * 2 + 1);
         for (sighting, point) in self.sightings.iter().zip(&path) {
             let params = &self.cameras[sighting.camera];
@@ -427,14 +694,21 @@ impl Fit {
         return Some(out);
     }
 
-    /// 초기 조건에서 굴리며 관측 시각마다 위치를 뽑는다.
+    /// 초기 조건에서 굴리며 관측 시각마다 위치를 뽑는다. 시작 스핀은 사전값
+    /// (`assumed_spin`) — 후보 스핀으로 굴려야 하면 [`Self::walk_with_spin`].
+    fn walk(&self, start: &Ballistic) -> Option<Vec<Point3>> {
+        return self.walk_with_spin(start, self.assumed_spin());
+    }
+
+    /// [`Self::walk`]과 같지만 시작 스핀을 밖에서 받는다 — [`Self::refine_spin`]이 후보
+    /// ω 를 넣어 가며 재투영 잔차를 재는 자리다.
     ///
     /// ω 는 바운스에서 바뀌므로 들고 다녀야 한다 — 버리면 반발 뒤가 통째로 틀린다.
-    fn walk(&self, start: &Ballistic) -> Option<Vec<Point3>> {
+    fn walk_with_spin(&self, start: &Ballistic, spin0: Vector3) -> Option<Vec<Point3>> {
         let last = self.sightings.last()?.t;
         let step = INTEGRATE_DT.as_secs_f64();
         let (mut position, mut velocity) = (start.position.coords, start.velocity);
-        let mut spin = ASSUMED_SPIN;
+        let mut spin = spin0;
         let (mut elapsed, mut next) = (Duration::ZERO, 0usize);
         let mut out = Vec::with_capacity(self.sightings.len());
         let horizon = last.saturating_sub(start.t0);
@@ -469,7 +743,7 @@ impl Fit {
         };
         let step = INTEGRATE_DT.as_secs_f64();
         let (mut position, mut velocity) = (ballistic.position.coords, ballistic.velocity);
-        let (mut spin, mut elapsed) = (ASSUMED_SPIN, Duration::ZERO);
+        let (mut spin, mut elapsed) = (self.assumed_spin(), Duration::ZERO);
         while elapsed < dt {
             let (p, v, w) = Kinematics::step(position, velocity, spin, step, &self.physics);
             position = p;
@@ -522,6 +796,9 @@ impl Fit {
                 })
                 .collect(),
         );
+        if self.solved_spin.is_none() {
+            self.solved_spin = self.solve_spin_from_bounce();
+        }
         self.predicting |= self.trigger.ready(&self.measured);
         if self.predicting
             && let Some(last) = self.measured.last().copied()
@@ -534,7 +811,7 @@ impl Fit {
     fn state_after(&self, start: &Ballistic, lead: f64) -> (Vector3, Vector3) {
         let step = INTEGRATE_DT.as_secs_f64();
         let (mut position, mut velocity, mut spin) =
-            (start.position.coords, start.velocity, ASSUMED_SPIN);
+            (start.position.coords, start.velocity, self.assumed_spin());
         let mut elapsed = 0.0;
         while elapsed < lead {
             let (p, v, w) = Kinematics::step(position, velocity, spin, step, &self.physics);
@@ -596,7 +873,7 @@ impl Fit {
     fn integrate_to_robot(&self, from: &State) -> Track {
         let step = INTEGRATE_DT.as_secs_f64();
         let (mut position, mut velocity) = (from.position.coords, from.velocity);
-        let mut spin = from.spin.unwrap_or(ASSUMED_SPIN);
+        let mut spin = from.spin.unwrap_or_else(|| self.assumed_spin());
         let (mut elapsed, mut since_sample) = (Duration::ZERO, Duration::ZERO);
         let mut out = vec![*from];
 

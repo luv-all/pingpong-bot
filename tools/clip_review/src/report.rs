@@ -272,8 +272,15 @@ pub fn summary_row(name: &str, score: &Score) -> String {
                 .and_then(|(_, gap)| gap.map(|(all, _, _)| all)),
         )
     };
+    // 평면 오차는 위치가 우연히 맞아도 좋게 나온다 — 튐 횟수가 다르면 그 옆에 바로 보이게
+    // 붙인다. 위치 칸만 보고 "괜찮네" 하고 넘어가는 걸 막는 게 요점이다.
+    let bounce = match score.bounce_counts {
+        Some((p, o)) if p != o => format!("{p}≠{o}"),
+        Some((p, o)) => format!("{p}={o}"),
+        None => "--".to_owned(),
+    };
     return format!(
-        "{name:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+        "{name:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
         score.both,
         score.track_switches + 1,
         resid(0),
@@ -289,6 +296,7 @@ pub fn summary_row(name: &str, score: &Score) -> String {
         plane(0.0),
         plane(0.5),
         plane(1.0),
+        bounce,
     );
 }
 
@@ -305,7 +313,7 @@ pub fn summary_header() -> String {
             .map_or("y--".to_owned(), |plane| format!("y{:.2}", plane.y))
     };
     return format!(
-        "{:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+        "{:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
         "clip",
         "동시",
         "트랙",
@@ -320,5 +328,6 @@ pub fn summary_header() -> String {
         y(0.0),
         y(0.5),
         y(1.0),
+        "튐예=실",
     );
 }

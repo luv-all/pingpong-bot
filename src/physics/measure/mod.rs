@@ -4,6 +4,7 @@ mod bounce_event;
 mod identify;
 mod physics_identify;
 mod roll_event;
+mod spin_from_bounce;
 mod traj_analysis;
 mod traj_measure;
 mod traj_point;

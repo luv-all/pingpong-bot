@@ -52,9 +52,18 @@ fn main() -> Result<()> {
             args.max_frames,
             args.timeline_fps,
         )?;
+        let tangential = |v: Vector3<f64>| (v.x * v.x + v.y * v.y).sqrt();
         for (i, b) in result.bounces.iter().enumerate() {
+            let spin = physics::PhysicsIdentify::spin_after_bounce_if_rolling(
+                b.v_in,
+                b.v_out,
+                &PhysicsParams::default(),
+            );
+            let spin_text = spin.map_or("슬립(못 풂)".to_owned(), |w| {
+                format!("({:.0},{:.0},{:.0}) rad/s", w.x, w.y, w.z)
+            });
             println!(
-                "bounce[{i}] e={:.4}  v_in=({:.3},{:.3},{:.3})  v_out=({:.3},{:.3},{:.3})",
+                "bounce[{i}] e={:.4}  v_in=({:.3},{:.3},{:.3})  v_out=({:.3},{:.3},{:.3})  spin_out={spin_text}",
                 b.e, b.v_in.x, b.v_in.y, b.v_in.z, b.v_out.x, b.v_out.y, b.v_out.z
             );
         }
@@ -65,6 +74,21 @@ fn main() -> Result<()> {
             result.traj.len()
         );
         patch.restitution = Some(e);
+
+        // 접선 μ — 같은 바운스에서 공짜로 나온다 (BounceEvent가 이미 v_in/v_out을 든다).
+        // 롤(굴러가는 공)이 있어야 하는 measure-friction과 달리 접촉 하나로 족하다.
+        let tangential_pairs: Vec<(f64, f64)> = result
+            .bounces
+            .iter()
+            .map(|b| (tangential(b.v_in), tangential(b.v_out)))
+            .collect();
+        if let Some(mu) = physics::PhysicsIdentify::friction_from_tangential_speeds(&tangential_pairs) {
+            println!(
+                "friction mu = {mu:.6}  (from {} bounces, tangential)",
+                tangential_pairs.len()
+            );
+            patch.friction = Some(mu);
+        }
     }
 
     if let Some(ref raw) = args.heights {

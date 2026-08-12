@@ -87,6 +87,11 @@ struct Args {
     /// 캘리브가 지금 카메라 자세와 맞는지 눈으로 확인하는 용도.
     #[arg(long)]
     grid: bool,
+
+    /// 창을 안 띄우고 `data/clips` 전 클립에 e·mu·drag를 공유로 좌표하강 탐색한다 —
+    /// 매 후보마다 재빌드 없이 실제 `Fit`/트리거로 다시 채점한다(`review_with_physics`).
+    #[arg(long)]
+    calibrate: bool,
 }
 
 /// `--grid` — 격자가 탁구대·네트에 붙는지로 캘리브 자세를 확인한다. 공은 필요 없어서
@@ -194,6 +199,156 @@ fn run_all(out: &std::path::Path) -> Result<()> {
     return Ok(());
 }
 
+/// 중심값 근처를 촘촘히 훑어 `try_value`가 가장 작아지는 자리로 옮긴다.
+fn sweep(
+    center: f64,
+    radius: f64,
+    steps: usize,
+    (lo, hi): (f64, f64),
+    mut try_value: impl FnMut(f64) -> Option<f64>,
+) -> f64 {
+    let mut best = (center, try_value(center).unwrap_or(f64::INFINITY));
+    for i in 0..steps {
+        let frac = i as f64 / (steps - 1) as f64 * 2.0 - 1.0; // -1..1
+        let candidate = (center + frac * radius).clamp(lo, hi);
+        if let Some(score) = try_value(candidate)
+            && score < best.1
+        {
+            best = (candidate, score);
+        }
+    }
+    return best.0;
+}
+
+/// e·mu·drag를 9클립 공유로 좌표하강 탐색한다. 매 후보를 재빌드 없이 **실제**
+/// `Vision`→`Fit`→트리거→`Score` 파이프라인으로 다시 채점한다(`review_with_physics`).
+///
+/// `tests/diag_physics.rs::calibrate_shared_physics_across_clips`가 같은 질문을
+/// 손으로 짠 별도 궤적 적합기로 물어봤는데 결과가 실측과 어긋났다(항력 0으로 수렴 —
+/// 실측 `clip-review`는 drag=0.126이 크게 이겼다). 그 도구는 트리거·관측 창·아웃라이어
+/// 배제 없이 raw 궤적을 통째로 다시 맞히는 거라 로봇이 실제로 겪는 "본 것으로 못 본
+/// 걸 맞히는" 문제와 다른 걸 재고 있었다 — 여기는 진짜 파이프라인을 그대로 써서
+/// 그 간극을 없앤다.
+///
+/// 점수는 클립별 0.2s 리드 타점 오차의 **중앙값**이다(`min_swing_secs=0.20`이 로봇이
+/// 실제로 쓸 수 있는 하한 — `src/defaults/control.rs`). 평균 대신 중앙값을 쓰는 이유는
+/// fly_49류(검출 하나가 튀어 그 클립만 구조적으로 나쁜 경우)가 평균을 통째로 흔드는 걸
+/// 막기 위해서다.
+///
+/// **검출은 클립당 한 번만.** 첫 버전은 후보마다 `review_with_physics`(비디오 디코드+
+/// 검출 캐스케이드까지 포함)를 통째로 다시 돌려서, 후보 1개 채점이 `--all` 전체보다도
+/// 오래 걸렸다(실측 2026-08-12: 시작값 하나 채점에 31분+, 킬 전까지 라운드 하나도
+/// 못 끝냄). 검출은 물리와 무관하니 [`track::detect_all`]로 클립당 한 번만 캐싱하고,
+/// 후보마다는 [`track::replay_with_physics`](비디오·검출 없이 `Fit`만 다시 굴림)만
+/// 돈다 — 총 비용이 "클립 수 × 검출 1회" + "후보 수 × (클립 수 × 재적합, 훨씬 쌈)"으로
+/// 바뀐다.
+fn run_calibrate() -> Result<()> {
+    let root = std::path::Path::new("data/clips");
+    let names: Vec<String> = defaults::CURRENT_RIG_CLIPS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .filter(|name| root.join(name).join("left.avi").is_file())
+        .collect();
+    if names.is_empty() {
+        bail!(
+            "지금 리그 클립이 하나도 없다 ({:?}) — 카메라를 옮긴 뒤로 찍은 클립이 필요하다",
+            defaults::CURRENT_RIG_CLIPS
+        );
+    }
+
+    let start = std::time::Instant::now();
+    let mut detected = Vec::with_capacity(names.len());
+    for (i, name) in names.iter().enumerate() {
+        let clip = camera::StereoOfflineArgs {
+            clip: Some(root.join(name)),
+        }
+        .resolve()
+        .map_err(anyhow::Error::msg)?
+        .with_context(|| format!("{name} 클립 해석 실패"))?;
+        let Some(fps) = clip.meas_fps else {
+            println!("{name}: meas_fps 없음 — 건너뜀");
+            continue;
+        };
+        print!(
+            "검출 {}/{} — {name} ... ",
+            i + 1,
+            names.len()
+        );
+        std::io::stdout().flush().ok();
+        let t0 = std::time::Instant::now();
+        let cache = track::detect_all(&clip.left, &clip.right, fps).map_err(anyhow::Error::msg)?;
+        println!("{:.1}s", t0.elapsed().as_secs_f64());
+        detected.push(cache);
+    }
+    if detected.is_empty() {
+        bail!("검출된 클립이 없다");
+    }
+    println!(
+        "검출 캐싱 끝 — {}개 클립, {:.1}초 (탐색은 이제부터 비디오를 안 연다)",
+        detected.len(),
+        start.elapsed().as_secs_f64()
+    );
+
+    let score = |e: f64, mu: f64, drag: f64| -> Option<f64> {
+        let physics = defaults::PhysicsParams {
+            restitution: e,
+            friction: mu,
+            drag,
+            ..defaults::PhysicsParams::default()
+        };
+        let mut errors: Vec<f64> = Vec::new();
+        for cache in &detected {
+            let Ok(reviewed) = track::replay_with_physics(cache, physics) else {
+                continue;
+            };
+            if let Some(err) = Score::of(&reviewed).lead_error.get(2).copied().flatten() {
+                errors.push(err);
+            }
+        }
+        if errors.is_empty() {
+            return None;
+        }
+        errors.sort_by(|a, b| a.partial_cmp(b).expect("유한"));
+        return Some(errors[errors.len() / 2]);
+    };
+
+    let default = defaults::PhysicsParams::default();
+    let (mut e, mut mu, mut drag) = (
+        default.restitution,
+        default.friction,
+        defaults::vision::fit::DRAG,
+    );
+    let t0 = std::time::Instant::now();
+    println!(
+        "시작(지금 기본값): e={e:.3} mu={mu:.3} drag={drag:.3}  0.2s 리드 중앙값={:.2}cm  ({:.1}s)",
+        score(e, mu, drag).unwrap_or(f64::INFINITY) * 100.0,
+        t0.elapsed().as_secs_f64()
+    );
+
+    const ROUNDS: [f64; 3] = [0.10, 0.04, 0.015];
+    for (round, &radius) in ROUNDS.iter().enumerate() {
+        let t0 = std::time::Instant::now();
+        e = sweep(e, radius, 7, (0.5, 0.95), |cand| score(cand, mu, drag));
+        mu = sweep(mu, radius, 7, (0.0, 0.7), |cand| score(e, cand, drag));
+        drag = sweep(drag, radius, 7, (0.0, 0.30), |cand| score(e, mu, cand));
+        println!(
+            "라운드 {round} (반경 {radius:.3}): e={e:.4} mu={mu:.4} drag={drag:.4}  0.2s 리드 중앙값={:.3}cm  ({:.1}s)",
+            score(e, mu, drag).unwrap_or(f64::INFINITY) * 100.0,
+            t0.elapsed().as_secs_f64()
+        );
+    }
+
+    println!(
+        "\n{}",
+        pingpong_bot::physics::PhysicsIdentify::format_physics_for_defaults(
+            Some(e),
+            Some(mu),
+            Some(drag),
+        )
+    );
+    return Ok(());
+}
+
 /// 표시용 프레임 공급 — 순차 재생이면 그냥 읽고, 되감으면 seek한다.
 struct Player {
     left: OpenCvCapture,
@@ -217,6 +372,9 @@ impl Player {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.calibrate {
+        return run_calibrate();
+    }
     if args.all {
         return run_all(&args.out);
     }
