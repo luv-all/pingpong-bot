@@ -8,7 +8,13 @@ use crate::robot::motion::InterceptWindow;
 /// 마운트 실측 -0.128일 때 검증된 하한 0.08(`0.08 - (-0.128)`)로 고정한다 —
 /// 마운트가 옮겨져도 팔 기준 도달 가능 범위는 그대로이므로, 월드 y 하한은
 /// 마운트를 따라 같은 만큼 이동해야 한다.
-pub const INTERCEPT_Y_MIN_OFFSET_FROM_MOUNT_M: f64 = 0.350;
+///
+/// 2026-08-14: 실기 튜닝으로 0.350까지 좁혔다가(마운트에 3cm 더 가까운
+/// 타점 포함) 같은 세션에서 모든 트랙이 스윙 계획에 실패(관절속도 한계·
+/// 라켓 방향 불가)하는 회귀가 나와 검증된 0.380으로 되돌린다 — 마운트에
+/// 더 가까운 타점일수록 관절 각도가 더 극단적이라 이 축소가 유력한
+/// 원인으로 지목됐다.
+pub const INTERCEPT_Y_MIN_OFFSET_FROM_MOUNT_M: f64 = 0.380;
 /// [`RAIL_MOUNT_Y_M`]에서 인터셉트 구간 상한까지의 고정 오프셋 [m].
 /// 마운트 실측 -0.128일 때 검증된 상한 0.35(`0.35 - (-0.128)`)로 고정한다.
 pub const INTERCEPT_Y_MAX_OFFSET_FROM_MOUNT_M: f64 = 0.480;
@@ -87,13 +93,31 @@ pub const ALIGNMENT_TARGET_HEIGHT_OFFSET_M: f64 = 0.015;
 /// 3.475cm로 복원한다.
 pub const ALIGNMENT_TARGET_X_OFFSET_M: f64 = 0.03475;
 /// 타격 정렬 시 라켓 면이 수평에서 위로 보는 최소 각도 [deg].
+///
+/// 2026-08-14: 이름·의도와 달리 실제로는 어디서도 쓰이지 않아 실기 타격
+/// 경로(`ball_alignment_geometry_with_prewind`/`plan_fixed_joint_swing_
+/// power_sweep_from_alignment`)의 `target_normal`이 완전히 수평(z=0)으로
+/// 나가고 있다 — "라켓 각도가 너무 낮다"는 실기 보고의 진짜 원인.
+/// 실제로 반영해 봤으나(같은 세션 내, 정렬 단계 전체에 한 번, 파워
+/// 스윙의 impact IK 목표에만 한 번, 두 가지 방식으로 시도) 이 각도만큼도
+/// 파워 스윙 테스트 다수(관절 속도 한계·2cm 비상 폴백 붕괴)를 깨뜨려
+/// 되돌렸다 — 이 팔은 파워 스윙에서 이미 관절 속도 상한 가까이 쓰고
+/// 있어 여유가 거의 없다. 값은 남겨 두되 아직 실제 코드 경로에는 연결돼
+/// 있지 않다 — 재도입 전에 도달성 예산과 각도 요구를 함께 검토해야 한다.
 pub const ALIGNMENT_MIN_UPWARD_TILT_DEG: f64 = 25.0;
 /// 공을 처음 검출한 뒤 첫 정렬 명령을 허용하기까지 기다리는 시간 [s].
 /// 첫 유효 예측에서 즉시 레일·팔을 출발시키고, 정확한 타격 확정은 별도의
 /// 연속 안정화 조건이 담당한다.
 pub const FIRST_CONTROL_AFTER_DETECTION_SECS: f64 = 0.010;
 /// 공을 상대편으로 넘기기 위한 라켓 면의 위쪽 기울기 [deg].
-pub const IMPACT_UPWARD_TILT_DEG: f64 = 40.0;
+///
+/// 2026-08-14: 40°까지 실기 튜닝으로 올렸으나, 이 상수는
+/// `plan_aligned_impact_sequence`(실기 미사용 스윙 모드)와
+/// `Impact::rally_return`(마찬가지로 실기 파워 스윙 경로에서는 안 쓰임 —
+/// `ball_alignment_geometry_with_prewind`가 그 경로의 법선을 정한다)에서만
+/// 읽힌다. 즉 이 값을 올려도 실제 로봇이 만드는 라켓 각도는 바뀌지
+/// 않는다 — 원래의 보수적 값으로 되돌린다.
+pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 /// 검출 직후 추가 백스윙의 첫 시도 시간 [s].
 pub const DETECTION_WINDUP_MIN_DURATION_SECS: f64 = 0.120;
 /// 임팩트 순간 목표 라켓 선속도 [m/s].
