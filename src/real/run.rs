@@ -11,9 +11,9 @@ use pingpong_bot::camera::{
 };
 use pingpong_bot::defaults::vision::detector_for;
 use pingpong_bot::defaults::{self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, robot};
-use pingpong_bot::hardware::RealHardware;
 use pingpong_bot::hardware::dynamixel::DynamixelConfig;
 use pingpong_bot::hardware::rail::{AxlRail, RailCalibration, RailConfig, RailEnd};
+use pingpong_bot::hardware::{Hardware, RealHardware};
 use tracing::{debug, info, warn};
 
 use crate::cli::Args;
@@ -33,6 +33,12 @@ const PREVIEW_CAPACITY: usize = 2;
 const IDLE_TICK: Duration = Duration::from_millis(5);
 /// 실기 시작 홈잉은 기존 +X 왕복과 같은 논리 +X 엔드스톱을 사용한다.
 const STARTUP_RAIL_HOME_END: RailEnd = RailEnd::Max;
+/// 홈잉 뒤 실제 이동 스케일을 자로 확인하기 위한 편도 거리 [m].
+const STARTUP_RAIL_SCALE_CHECK_DISTANCE_M: f64 = 0.50;
+/// 스케일 점검은 육안으로 방향과 거리를 확인할 수 있게 천천히 움직인다.
+const STARTUP_RAIL_SCALE_CHECK_MOVE_SECS: f64 = 2.0;
+/// 각 목표에 도착한 뒤 육안 측정을 위해 멈춰 있는 시간.
+const STARTUP_RAIL_SCALE_CHECK_HOLD: Duration = Duration::from_secs(6);
 
 /// 보정된 공 접촉점에 라켓을 맞추고 상대편 반코트의 무게중심을 조준한다.
 /// 종료는 ESC·`q`(preview) 또는 제어 워커 `Done`이다.
@@ -40,6 +46,10 @@ pub fn run(args: &Args) -> Result<()> {
     let options = Options::from_args(args);
     let robot = robot().context("defaults::robot")?;
     let arm = Arc::clone(&robot.arm);
+
+    if options.rail_scale_check {
+        return run_rail_scale_check_command(&options, &arm);
+    }
 
     if options.home && !options.dry_run {
         calibrate_rail_on_startup()?;
@@ -175,6 +185,130 @@ fn calibrate_rail_on_startup() -> Result<()> {
     return Ok(());
 }
 
+/// 카메라·공 제어를 시작하지 않고 레일 스케일과 최종 홈 자세의 테이블 간격만 점검한다.
+fn run_rail_scale_check_command(options: &Options, arm: &pingpong_bot::robot::Arm) -> Result<()> {
+    ensure!(
+        !options.dry_run,
+        "--rail-scale-check는 실제 레일의 이동 스케일을 확인하는 명령이므로 --dry-run과 함께 사용할 수 없습니다"
+    );
+    info!("레일 스케일 점검 명령 시작 — 카메라·공 제어는 실행하지 않음");
+    calibrate_rail_on_startup()?;
+    let mut hardware = open_hardware(options)?;
+    let home = control_worker::initialize_pose(&mut hardware, arm)
+        .map_err(|error| anyhow::anyhow!("레일 스케일 점검 홈 자세 초기화 실패: {error}"))?;
+    run_startup_rail_scale_check(&mut hardware, arm)?;
+    let final_home = hardware
+        .read_pose()
+        .context("레일 스케일 점검 최종 홈 자세 읽기 실패")?;
+    log_home_racket_table_clearance(arm, &final_home)?;
+    info!(
+        start_rail_x = f2(home.rail_x),
+        final_rail_x = f2(final_home.rail_x),
+        return_error_m = f2(final_home.rail_x - home.rail_x),
+        "레일 스케일 점검 명령 완료"
+    );
+    return Ok(());
+}
+
+/// 홈잉·시작 자세 초기화가 끝난 레일을 현재 위치 기준으로 -X 50cm 이동한 뒤
+/// 6초 유지하고, +X 50cm 이동해 원위치에서 다시 6초 유지한다.
+fn run_startup_rail_scale_check(
+    hardware: &mut dyn Hardware,
+    arm: &pingpong_bot::robot::Arm,
+) -> Result<()> {
+    let rail = arm
+        .rail
+        .context("시작 레일 스케일 점검에 레일 모델이 없습니다")?;
+    let start_x = hardware
+        .read_pose()
+        .context("시작 레일 스케일 점검 기준 위치 읽기 실패")?
+        .rail_x;
+    let (negative_target_x, return_target_x) =
+        startup_rail_scale_targets(start_x, rail.x_min, rail.x_max)?;
+
+    for (direction, target_x) in [("-X", negative_target_x), ("+X", return_target_x)] {
+        info!(
+            direction,
+            start_x = f2(start_x),
+            target_x = f2(target_x),
+            distance_m = STARTUP_RAIL_SCALE_CHECK_DISTANCE_M,
+            move_secs = STARTUP_RAIL_SCALE_CHECK_MOVE_SECS,
+            "시작 레일 스케일 점검 이동"
+        );
+        let applied_x = hardware
+            .command_rail(target_x, STARTUP_RAIL_SCALE_CHECK_MOVE_SECS)
+            .with_context(|| format!("시작 레일 스케일 점검 {direction} 50cm 이동 실패"))?;
+        ensure!(
+            (applied_x - target_x).abs() <= 1e-6,
+            "시작 레일 스케일 점검 목표가 안전 범위에서 변경됨: 요청={target_x:.4}m 적용={applied_x:.4}m"
+        );
+        thread::sleep(Duration::from_secs_f64(STARTUP_RAIL_SCALE_CHECK_MOVE_SECS));
+        let measured_x = hardware
+            .read_pose()
+            .with_context(|| format!("시작 레일 스케일 점검 {direction} 도착 위치 읽기 실패"))?
+            .rail_x;
+        info!(
+            direction,
+            target_x = f2(target_x),
+            measured_x = f2(measured_x),
+            error_m = f2(measured_x - target_x),
+            hold_secs = STARTUP_RAIL_SCALE_CHECK_HOLD.as_secs(),
+            "시작 레일 스케일 점검 도착 — 6초 정지"
+        );
+        thread::sleep(STARTUP_RAIL_SCALE_CHECK_HOLD);
+    }
+    return Ok(());
+}
+
+/// 최종 홈 자세에서 라켓 OBB의 물리적 최하단과 탁구대 윗면 간격을 계산한다.
+fn log_home_racket_table_clearance(
+    arm: &pingpong_bot::robot::Arm,
+    pose: &pingpong_bot::robot::Pose,
+) -> Result<()> {
+    let racket = arm
+        .forward_kinematics_with_rail(pose.rail_x, &pose.joints)
+        .context("최종 홈 자세 라켓 FK 실패")?;
+    let [w, x, y, z] = racket.orientation;
+    let rotation = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(w, x, y, z));
+    let axis_x = rotation * nalgebra::Vector3::x();
+    let axis_y = rotation * nalgebra::Vector3::y();
+    let axis_z = rotation * nalgebra::Vector3::z();
+    let vertical_half_extent = axis_x.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_X
+        + axis_y.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_Y
+        + axis_z.z.abs() * pingpong_bot::constants::geometry::RACKET_HALF_Z;
+    let racket_tip_z = racket.position.z - vertical_half_extent;
+    let table_z = pingpong_bot::constants::table::SURFACE_Z;
+    let clearance_m = racket_tip_z - table_z;
+    let robot_table_penetration_m =
+        pingpong_bot::robot::collision::table_penetration(arm, pose.rail_x, &pose.joints);
+    info!(
+        rail_x = f2(pose.rail_x),
+        joints_deg = %format!("{:?}", pose.joints.values.iter().map(|angle| angle.to_degrees()).collect::<Vec<_>>()),
+        racket_center_z_m = f2(racket.position.z),
+        racket_tip_z_m = f2(racket_tip_z),
+        table_surface_z_m = f2(table_z),
+        racket_tip_clearance_m = f2(clearance_m),
+        racket_tip_contacts_table = clearance_m <= 0.0,
+        robot_table_safety_penetration_m = f2(robot_table_penetration_m),
+        "최종 홈 자세 라켓 끝·탁구대 충돌 계산"
+    );
+    return Ok(());
+}
+
+fn startup_rail_scale_targets(start_x: f64, x_min: f64, x_max: f64) -> Result<(f64, f64)> {
+    ensure!(start_x.is_finite(), "시작 레일 위치가 유한값이 아닙니다");
+    let negative_target_x = start_x - STARTUP_RAIL_SCALE_CHECK_DISTANCE_M;
+    ensure!(
+        negative_target_x >= x_min && negative_target_x <= x_max,
+        "시작 위치 {start_x:.4}m에서 -X 50cm 목표 {negative_target_x:.4}m가 안전 범위 [{x_min:.4}, {x_max:.4}]m 밖입니다"
+    );
+    ensure!(
+        start_x >= x_min && start_x <= x_max,
+        "+X 50cm 복귀 목표 {start_x:.4}m가 안전 범위 [{x_min:.4}, {x_max:.4}]m 밖입니다"
+    );
+    return Ok((negative_target_x, start_x));
+}
+
 #[cfg(test)]
 mod startup_rail_tests {
     use super::*;
@@ -182,6 +316,29 @@ mod startup_rail_tests {
     #[test]
     fn startup_homing_targets_positive_x_end() {
         assert_eq!(STARTUP_RAIL_HOME_END, RailEnd::Max);
+    }
+
+    #[test]
+    fn startup_scale_check_moves_negative_then_returns_positive() {
+        let (negative, returned) = startup_rail_scale_targets(
+            defaults::RAIL_READY_X_M,
+            defaults::RAIL_X_MIN_M,
+            defaults::RAIL_X_MAX_M,
+        )
+        .expect("scale check targets");
+        assert!((negative - 0.175).abs() < 1e-12);
+        assert!((returned - defaults::RAIL_READY_X_M).abs() < 1e-12);
+    }
+
+    #[test]
+    fn startup_scale_check_rejects_negative_target_outside_safe_range() {
+        let error = startup_rail_scale_targets(
+            defaults::RAIL_X_MIN_M + 0.10,
+            defaults::RAIL_X_MIN_M,
+            defaults::RAIL_X_MAX_M,
+        )
+        .expect_err("unsafe -X target");
+        assert!(error.to_string().contains("안전 범위"));
     }
 }
 
