@@ -25,7 +25,7 @@ pub struct Args {
     /// real: 시작 시 레일 홈잉·영점 저장 후 센터(ready) 자세로 이동. 끄려면 `--home=false`
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub home: bool,
-    /// real: 홈잉 뒤 레일을 -X/+X로 각각 50cm 움직여 스케일을 점검하고 종료한다.
+    /// real: 홈잉 뒤 레일을 -X/+X 안전 마진 끝으로 움직여 정렬을 점검하고 종료한다.
     #[arg(long)]
     pub rail_scale_check: bool,
     /// real: 라이브 캠 대신 녹화 클립을 재생한다 (`fly_02` 또는 디렉터리).

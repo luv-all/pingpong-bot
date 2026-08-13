@@ -13,7 +13,7 @@ pub struct Options {
     pub preview: bool,
     /// 시작 시 레일 홈잉·영점 저장 후 센터(ready) 자세로 이동.
     pub home: bool,
-    /// 카메라 제어 대신 홈잉·±50cm 레일 스케일 점검만 실행한다.
+    /// 카메라 제어 대신 홈잉·양쪽 안전 마진 끝 레일 정렬 점검만 실행한다.
     pub rail_scale_check: bool,
     /// 녹화 클립 재생 경로 — `None`이면 라이브 캠.
     pub clip: Option<std::path::PathBuf>,

@@ -334,7 +334,7 @@ cargo run -p pingpong-bot -- --mode real --dry-run
 # 실기
 cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 
-# 레일 스케일 전용 점검 — 홈잉, 중앙↔±X 50cm, 라켓 수직·끝 1cm 기준 자세 후 종료
+# 레일 정렬 전용 점검 — 홈잉, 양쪽 안전 마진 끝, 라켓 수직·끝 1cm 기준 자세 후 종료
 cargo run -p pingpong-bot -- --mode real --rail-scale-check --dxl-port COM8 --debug
 ```
 
@@ -343,7 +343,7 @@ cargo run -p pingpong-bot -- --mode real --rail-scale-check --dxl-port COM8 --de
 | `--dry-run` | off | 모터·레일 정지. 나머지 체인은 그대로 |
 | `--preview` | on | 좌/우 검출 오버레이 창 (ESC·`q` 종료) |
 | `--home` | on | 시작 시 센터(ready) 자세로 이동 |
-| `--rail-scale-check` | off | 카메라 없이 중앙 기준 ±X 50cm를 점검하고 라켓을 수직·상판 위 1cm 자세로 유지한다. 측정 후 Enter로 종료 |
+| `--rail-scale-check` | off | 카메라 없이 -X/+X 안전 마진 끝(`x_min`/`x_max`)으로 이동해 각 끝에서 Enter까지 유지한다. 양쪽 측정 후 라켓을 수직·상판 위 1cm 자세로 유지한다. 마지막 Enter로 종료 |
 
 레일 거리 스케일은 좌우 50cm 명령이 모두 52cm로 실측된 결과를 반영해
 `240385 pulse/m`를 사용한다. 이 값을 바꾼 뒤에는 홈잉을 다시 실행해 영점 파일도
