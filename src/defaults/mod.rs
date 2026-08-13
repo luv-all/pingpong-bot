@@ -123,6 +123,7 @@ mod tests {
         let rail_config = RailConfig::default();
         assert_eq!(rail_config.accel, RAIL_ACCEL_M_S2);
         assert_eq!(rail_config.decel, RAIL_ACCEL_M_S2);
+        assert!((RAIL_ACCEL_M_S2 - 24.0).abs() < 1e-12);
         assert_eq!(rail_config.pulses_per_meter, RAIL_PULSES_PER_METER);
         assert_eq!(RAIL_PULSES_PER_METER, 240_385);
         let robot = robot().unwrap();
@@ -136,7 +137,7 @@ mod tests {
         assert!((rail_config.domain_to_board_abs(0.0100) - 1.3850).abs() < 1e-12);
         assert!((rail_config.domain_to_board_abs(1.3395) - 0.0555).abs() < 1e-12);
         assert!((rail_config.domain_to_board_abs(0.6750) - 0.7200).abs() < 1e-12);
-        assert!((ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M - 0.0050).abs() < 1e-12);
+        assert!((ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M - 0.0200).abs() < 1e-12);
         assert!((RAIL_COORDINATE_POSITIVE_X_OFFSET_M - 0.0150).abs() < 1e-12);
         assert!((rail_frame().mount_x() - 0.09025).abs() < 1e-12);
         assert!((ALIGNMENT_TARGET_X_OFFSET_M - 0.09475).abs() < 1e-12);

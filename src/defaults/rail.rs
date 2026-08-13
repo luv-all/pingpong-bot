@@ -42,11 +42,9 @@ pub const RAIL_MAX_SPEED: f64 = 7.5;
 /// 영점·백래시가 아니라 전역 거리 스케일로 반영한다.
 pub const RAIL_PULSES_PER_METER: u32 = 240_385;
 /// 실기 AXL 레일 가속/감속 [m/s²] — `RailConfig::default()`도 이 값을 쓴다.
-///
-/// 기존 24 m/s²는 최단시간 이동과 겹치면 출발·정지 충격이 크다.
-/// 실물 안전 운전은 12 m/s²로 낮춰 예측 보정 중에도 부드럽게
-/// 가감속하고, 시뮬레이션과 계획기도 같은 한계를 사용한다.
-pub const RAIL_ACCEL_M_S2: f64 = 12.0;
+/// 짧은 정렬 이동에서는 7.5m/s 최고속도보다 가속도 제한이 먼저 걸리므로,
+/// 실제 이동을 빠르게 하기 위해 12m/s²에서 24m/s²로 올렸다.
+pub const RAIL_ACCEL_M_S2: f64 = 24.0;
 /// 홈잉 이동 속도 [m/s] — `min_vel`보다 크고 `max_vel`보다 훨씬 작다. 엔드스톱에
 /// 부딪히는 순간의 충격·오버런을 줄이려는 값이다.
 pub const RAIL_HOMING_VELOCITY_M_S: f64 = 0.02;

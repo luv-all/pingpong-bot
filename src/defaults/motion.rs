@@ -45,8 +45,8 @@ pub const DETECTION_WINDUP_DISTANCE_M: f64 = 0.020;
 /// 기본 타격에서 라켓 중심을 공 중심보다 아래에 둘 거리 [m].
 pub const IMPACT_CENTER_BELOW_BALL_M: f64 = 0.020;
 /// 기초 정렬 모드에서 공이 닿을 지점을 블레이드 중심보다 낮추는 거리 [m].
-/// 현재는 블레이드 중심보다 0.5cm 아래를 맞춘다.
-pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.005;
+/// 현재는 블레이드 중심보다 2cm 아래를 맞춘다.
+pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.020;
 /// 예측된 공 높이에서 실제 정렬 타격점을 올리는 보정 [m].
 pub const ALIGNMENT_TARGET_HEIGHT_OFFSET_M: f64 = 0.015;
 /// 레일 마운트 X 9.025cm를 기구학에 반영한 뒤에도 남는 타격 X 보정 [m].
