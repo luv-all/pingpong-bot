@@ -247,7 +247,7 @@ impl Trajectory {
     /// 가속-순항)을 섞어 쓰는 "파워 스윙" 궤적을 만든다. 세 프로파일 모두
     /// `start_velocity=0`을 전제한다.
     #[allow(clippy::too_many_arguments)]
-    pub fn with_power_sweep(
+    pub(crate) fn with_power_sweep(
         start: Joints,
         impact: Joints,
         end: Joints,
