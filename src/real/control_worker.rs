@@ -104,11 +104,24 @@ fn refined_prediction_ready(request: &CommitRequest) -> bool {
     return last.sigma_position < position_limit && last.sigma_velocity < velocity_limit;
 }
 
-fn corrected_alignment_target(target: pingpong_bot::Point3) -> pingpong_bot::Point3 {
+/// 실제 정렬 계획에 넘길 공 좌표.
+///
+/// 높이 보정은 정렬 플래너가 내부에서 적용하므로, 여기서는 X 보정만
+/// 적용해 Z 보정이 두 번 들어가지 않게 한다.
+fn alignment_planning_target(target: pingpong_bot::Point3) -> pingpong_bot::Point3 {
     return pingpong_bot::Point3::new(
         target.x - pingpong_bot::defaults::ALIGNMENT_TARGET_X_OFFSET_M,
         target.y,
-        target.z + pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
+        target.z,
+    );
+}
+
+fn corrected_alignment_target(target: pingpong_bot::Point3) -> pingpong_bot::Point3 {
+    let planning_target = alignment_planning_target(target);
+    return pingpong_bot::Point3::new(
+        planning_target.x,
+        planning_target.y,
+        planning_target.z + pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
     );
 }
 
@@ -723,6 +736,7 @@ pub fn spawn(
                     continue;
                 }
             };
+            let planning_target_position = alignment_planning_target(target.position);
             let corrected_target_position = corrected_alignment_target(target.position);
             let corrected_target_x = corrected_target_position.x;
             if let Some(zone) = zone_filter
@@ -775,18 +789,21 @@ pub fn spawn(
             let mut rail_command_ms = 0.0;
             let mut rail_move_duration_secs = 0.0;
             let alignment_arm = arm_for_rail_position(&arm, start.rail_x);
-            let preparation =
-                match AlignmentController::prepare(&alignment_arm, &start, target.position, action)
-                {
-                    Ok(preparation) => preparation,
-                    Err(error) => {
-                        let _ = event_tx.send(RuntimeEvent::Failed {
-                            track_seq: Some(track_seq),
-                            reason: format!("{action:?} 정렬 목표 계획 불가: {error}"),
-                        });
-                        continue;
-                    }
-                };
+            let preparation = match AlignmentController::prepare(
+                &alignment_arm,
+                &start,
+                planning_target_position,
+                action,
+            ) {
+                Ok(preparation) => preparation,
+                Err(error) => {
+                    let _ = event_tx.send(RuntimeEvent::Failed {
+                        track_seq: Some(track_seq),
+                        reason: format!("{action:?} 정렬 목표 계획 불가: {error}"),
+                    });
+                    continue;
+                }
+            };
             let planning_start = match action {
                 RefinedAction::PrimaryRailAndArm => {
                     // 본 예측이 처음 안정 기준을 넘은 순간에만 레일을 한 번
@@ -832,7 +849,7 @@ pub fn spawn(
             let alignment = AlignmentController::plan_joints(
                 &alignment_arm,
                 &start,
-                target.position,
+                planning_target_position,
                 &preparation,
                 Some(planning_start.rail_x),
             );
@@ -854,7 +871,7 @@ pub fn spawn(
             let alignment_bearing_error_deg = Planner::ball_alignment_bearing_error_deg(
                 &alignment_arm,
                 &aligned_pose,
-                target.position,
+                planning_target_position,
             )
             .unwrap_or(f64::NAN);
             let dual_base_step_rad = alignment_base_step_rad(&start, &alignment);
@@ -2296,8 +2313,12 @@ mod tests {
     #[test]
     fn alignment_target_applies_negative_x_twelve_point_five_centimeters() {
         let target = Point3::new(0.80, 0.20, 0.90);
+        let planning = alignment_planning_target(target);
         let corrected = corrected_alignment_target(target);
 
+        assert!((planning.x - 0.675).abs() < 1e-12);
+        assert!((planning.y - target.y).abs() < 1e-12);
+        assert!((planning.z - target.z).abs() < 1e-12);
         assert!((corrected.x - 0.675).abs() < 1e-12);
         assert!((corrected.y - target.y).abs() < 1e-12);
         assert!(
