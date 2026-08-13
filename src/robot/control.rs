@@ -186,10 +186,6 @@ pub enum PredictionStage {
 /// sim·real이 같은 순서로 실행하는 공 하나의 정렬 단계.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignmentAction {
-    /// 첫 예비 예측: 레일을 먼저 출발시키고 팔도 가능한 만큼 정렬한다.
-    ProvisionalRailAndArm,
-    /// 정밀 기준 전 후속 예측: 레일은 유지하고 팔만 보정한다.
-    ProvisionalArmCorrection,
     /// 첫 정밀 예측: 중앙 조준 통합 IK로 레일·팔 목표를 확정한다.
     PrimaryRailAndArm,
     /// 확정 후 최신 예측: 확정된 레일에서 팔만 미세 보정한다.
@@ -197,27 +193,15 @@ pub enum AlignmentAction {
 }
 
 impl AlignmentAction {
-    pub fn is_provisional(self) -> bool {
-        return matches!(
-            self,
-            Self::ProvisionalRailAndArm | Self::ProvisionalArmCorrection
-        );
-    }
-
-    pub fn is_refined(self) -> bool {
-        return !self.is_provisional();
-    }
-
     pub fn commands_rail(self) -> bool {
-        return matches!(self, Self::ProvisionalRailAndArm | Self::PrimaryRailAndArm);
+        return matches!(self, Self::PrimaryRailAndArm);
     }
 }
 
-/// 트랙 하나에서 레일 예비/본 명령이 각각 한 번만 나가게 한다.
+/// 트랙 하나에서 본 레일 명령이 한 번만 나가게 한다.
 #[derive(Debug, Default, Clone)]
 pub struct AlignmentLatch {
     track_seq: Option<u64>,
-    provisional_rail_sent: bool,
     primary_sent: bool,
 }
 
@@ -227,14 +211,8 @@ impl AlignmentLatch {
             *self = Self::default();
             self.track_seq = Some(track_seq);
         }
-        if !refined_ready {
-            return Some(if self.primary_sent {
-                AlignmentAction::ArmCorrection
-            } else if self.provisional_rail_sent {
-                AlignmentAction::ProvisionalArmCorrection
-            } else {
-                AlignmentAction::ProvisionalRailAndArm
-            });
+        if !refined_ready && !self.primary_sent {
+            return None;
         }
         return Some(if self.primary_sent {
             AlignmentAction::ArmCorrection
@@ -244,15 +222,9 @@ impl AlignmentLatch {
     }
 
     pub fn mark_rail_sent(&mut self, action: AlignmentAction) {
-        match action {
-            AlignmentAction::ProvisionalRailAndArm => self.provisional_rail_sent = true,
-            AlignmentAction::PrimaryRailAndArm => self.primary_sent = true,
-            AlignmentAction::ProvisionalArmCorrection | AlignmentAction::ArmCorrection => {}
+        if matches!(action, AlignmentAction::PrimaryRailAndArm) {
+            self.primary_sent = true;
         }
-    }
-
-    pub fn mark_provisional_rail_sent(&mut self) {
-        self.provisional_rail_sent = true;
     }
 
     pub fn mark_primary_sent(&mut self) {
@@ -290,13 +262,6 @@ impl AlignmentController {
         action: AlignmentAction,
     ) -> Result<AlignmentPreparation, DomainError> {
         return match action {
-            AlignmentAction::ProvisionalRailAndArm => Ok(AlignmentPreparation {
-                action,
-                rail_target_m: arm
-                    .rail
-                    .map(|_| Planner::ball_alignment_rail_target(arm, ball)),
-                primary_joints: None,
-            }),
             AlignmentAction::PrimaryRailAndArm => {
                 let aligned = Planner::ball_alignment_pose(arm, start, ball)?;
                 // 레일 명령 전에 통합해가 정지→정지 궤적으로도
@@ -309,13 +274,11 @@ impl AlignmentController {
                     primary_joints: Some(aligned.joints),
                 })
             }
-            AlignmentAction::ProvisionalArmCorrection | AlignmentAction::ArmCorrection => {
-                Ok(AlignmentPreparation {
-                    action,
-                    rail_target_m: None,
-                    primary_joints: None,
-                })
-            }
+            AlignmentAction::ArmCorrection => Ok(AlignmentPreparation {
+                action,
+                rail_target_m: None,
+                primary_joints: None,
+            }),
         };
     }
 
@@ -809,18 +772,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn alignment_latch_runs_the_same_provisional_and_refined_sequence() {
+    fn alignment_latch_waits_for_refined_and_commands_rail_once() {
         let mut latch = AlignmentLatch::default();
 
-        assert_eq!(
-            latch.next_action(7, false),
-            Some(AlignmentAction::ProvisionalRailAndArm)
-        );
-        latch.mark_rail_sent(AlignmentAction::ProvisionalRailAndArm);
-        assert_eq!(
-            latch.next_action(7, false),
-            Some(AlignmentAction::ProvisionalArmCorrection)
-        );
+        assert_eq!(latch.next_action(7, false), None);
         assert_eq!(
             latch.next_action(7, true),
             Some(AlignmentAction::PrimaryRailAndArm)
@@ -833,8 +788,8 @@ mod tests {
 
         assert_eq!(
             latch.next_action(8, false),
-            Some(AlignmentAction::ProvisionalRailAndArm),
-            "새 공 트랙에서는 예비 정렬부터 다시 시작해야 함"
+            None,
+            "새 공 트랙은 본 예측이 안정될 때까지 명령하지 않아야 함"
         );
     }
 

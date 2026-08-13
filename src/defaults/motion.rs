@@ -67,8 +67,11 @@ pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 0.85;
 /// 자세만 이 거리만큼 접는다.
 pub const FIXED_JOINT_PUSH_DISTANCE_M: f64 = 0.100;
 /// 백스윙 없는 다관절 직진 푸시 시작부터 예상 타격점에 도달하는 시간 [s].
-/// 뒤로 거리를 벌리지 않고 현재 자세에서 바로 미는 짧은 타격 구간.
+/// 10cm 전진과 0.85m/s 임팩트 속도를 백스윙 없이 만족하는 기존 궤적 길이다.
 pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.200;
+/// 예상 공 도착 시각보다 스윙 명령을 앞서 시작할 시간 [s].
+/// 궤적 길이는 0.20초로 유지하고 명령만 기존보다 0.20초 앞당긴다.
+pub const FIXED_JOINT_SWING_LEAD_SECS: f64 = 0.400;
 /// 임팩트 순간 다관절 푸시가 사용할 설정상 관절 속도 상한 비율.
 /// 설정상 상한 자체가 모터 무부하 최고속의 95%이므로 여기서는 전부 사용한다.
 pub const FIXED_JOINT_SNAP_SPEED_RATIO: f64 = 1.0;

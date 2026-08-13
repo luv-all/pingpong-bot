@@ -90,6 +90,11 @@ impl State {
         return self.rail_x;
     }
 
+    /// 현재 리니어 레일 목표 x [m].
+    pub fn rail_target(&self) -> f64 {
+        return self.rail_target;
+    }
+
     /// 스윙 궤적 재생 중인지.
     pub fn is_swinging(&self) -> bool {
         return self.active_swing.is_some();

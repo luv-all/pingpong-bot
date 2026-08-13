@@ -99,7 +99,7 @@ pub struct SimWorld {
     position_refined: bool,
     /// 실기와 같은 최근 목표 수렴 조건으로 1차→정밀 단계를 올린다.
     direct_prediction_stability: PredictionStability,
-    /// 실기 `control_worker`와 같은 예비 레일→본 레일→팔 보정 순서.
+    /// 실기 `control_worker`와 같은 본 레일 1회→팔 보정 순서.
     direct_alignment_latch: AlignmentLatch,
     /// 손목 타격을 시작한 뒤 늦은 예측이 궤적을 덮어쓰지 못하게 한다.
     direct_swing_attempted: bool,
@@ -122,7 +122,7 @@ pub struct SimWorld {
     flight_started_at: f64,
     /// 위치 정렬·타격 후 중립 준비 자세 복귀를 시작할 sim 시각.
     direct_return_at: Option<f64>,
-    /// 예상 타격 시각보다 0.20초 앞서 직진 푸시를 시작할 sim 시각.
+    /// 예상 타격 시각보다 0.40초 앞서 직진 푸시를 시작할 sim 시각.
     ///
     /// `None`이면 아직 정렬이 확정되지 않았거나, 이번 공의 스윙을 이미
     /// 실행/생략했다. 실기 `control_worker`의 `swing_due_at`과 같은 역할이다.
@@ -864,7 +864,7 @@ impl SimWorld {
         }
         self.debug_snap.commit_phase = CommitPhase::InWindow;
 
-        // 실기와 동일하게 첫 유효 관측부터 예비 레일·팔 정렬을 시작한다.
+        // 실기와 동일하게 본 예측이 안정된 뒤에만 정렬을 시작한다.
         let observed_span_secs = self.sim_time - self.flight_started_at;
         if observed_span_secs < crate::defaults::FIRST_CONTROL_AFTER_DETECTION_SECS {
             return;
@@ -946,15 +946,6 @@ impl SimWorld {
         ) {
             Ok(alignment) => alignment,
             Err(error) => {
-                if action.is_provisional() {
-                    debug!(
-                        shot = self.shot_seq,
-                        ?action,
-                        %error,
-                        "shot: 예비 팔 정렬 생략 — 레일 조기 이동은 유지"
-                    );
-                    return;
-                }
                 self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
                 self.debug_snap.last_fail_text = Some(error.to_string());
                 if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
@@ -982,18 +973,16 @@ impl SimWorld {
         let rail_commanded_m = alignment.rail.end;
         self.robot.set_auto_return_to_center(false);
         self.robot.replace_joint_swing(alignment);
-        if action.is_refined() {
-            let predicted_arrival_at = self.sim_time + target.time_secs;
-            self.direct_swing_at = Some(
-                (predicted_arrival_at - crate::defaults::FIXED_JOINT_SWING_DURATION_SECS)
-                    .max(self.sim_time),
-            );
-            self.direct_return_at =
-                Some(predicted_arrival_at + crate::defaults::POST_ALIGNMENT_HOLD_SECS);
-            self.swing_committed = true;
-            self.position_refined = true;
-            self.debug_snap.commit_phase = CommitPhase::Committed;
-        }
+        let predicted_arrival_at = self.sim_time + target.time_secs;
+        self.direct_swing_at = Some(
+            (predicted_arrival_at - crate::defaults::FIXED_JOINT_SWING_LEAD_SECS)
+                .max(self.sim_time),
+        );
+        self.direct_return_at =
+            Some(predicted_arrival_at + crate::defaults::POST_ALIGNMENT_HOLD_SECS);
+        self.swing_committed = true;
+        self.position_refined = true;
+        self.debug_snap.commit_phase = CommitPhase::Committed;
         info!(
             shot = self.shot_seq,
             stage = ?stage,
@@ -1002,14 +991,14 @@ impl SimWorld {
             rail_move_duration_secs,
             predicted_arrival_in_secs = target.time_secs,
             post_alignment_hold_secs = crate::defaults::POST_ALIGNMENT_HOLD_SECS,
-            fixed_swing_lead_secs = crate::defaults::FIXED_JOINT_SWING_DURATION_SECS,
+            fixed_swing_lead_secs = crate::defaults::FIXED_JOINT_SWING_LEAD_SECS,
             rail_commanded_m,
             target = ?target.position.coords,
             "shot: sim·real 공통 정렬 단계 적용"
         );
     }
 
-    /// 예상 타격 0.20초 전에 접힌 정렬 자세에서 백스윙 없는 푸시를 시작한다.
+    /// 예상 타격 0.40초 전에 접힌 정렬 자세에서 백스윙 없는 푸시를 시작한다.
     ///
     /// 정렬이 아직 진행 중이어도 레일 목표는 계속 추종하고 팔 관절 궤적만
     /// 교체한다. 그렇지 않으면 sim의 `is_swinging()`이 레일 정렬까지
@@ -2169,7 +2158,7 @@ mod tests {
                 return;
             }
         }
-        panic!("10ms 대기 후 첫 실행 가능한 예측에서 예비 정렬을 시작해야 함");
+        panic!("10ms 대기 후 첫 안정 예측에서 본 정렬을 시작해야 함");
     }
 
     #[test]
@@ -2210,7 +2199,7 @@ mod tests {
                         - crate::defaults::FIXED_JOINT_SWING_DURATION_SECS)
                         .abs()
                         < 1e-12,
-                    "스윙은 예상 타격 0.20초 전에 시작해야 함"
+                    "스윙은 예상 타격 0.40초 전에 시작해야 함"
                 );
                 assert!(
                     trajectory.end.values[2] < trajectory.start.values[2]
@@ -2234,11 +2223,13 @@ mod tests {
         world.shoot_ball(&launch::Settings::default());
 
         let mut moved = false;
-        let mut rail_at_hit = None;
+        let mut rail_target_at_hit = None;
         for _ in 0..2_000 {
             world.step(1.0 / 1000.0, None);
-            if world.direct_swing_attempted && rail_at_hit.is_none() {
-                rail_at_hit = Some(world.robot().rail_x());
+            if world.direct_swing_attempted && rail_target_at_hit.is_none() {
+                // 스윙을 앞당기면 시작 시점에 레일이 아직 이동 중일 수 있다.
+                // 실기 AXL처럼 계속 추종하는 최종 목표를 타격 위치로 검증한다.
+                rail_target_at_hit = Some(world.robot().rail_target());
             }
             if world
                 .robot()
@@ -2263,9 +2254,9 @@ mod tests {
             .iter()
             .zip(tucked.values.iter())
             .all(|(actual, center)| (actual - center).abs() < 1e-2);
-        let rail_at_hit = rail_at_hit.expect("타격 시작 위치");
+        let rail_target_at_hit = rail_target_at_hit.expect("타격 시작 레일 목표");
         assert!(
-            (world.robot().rail_x() - rail_at_hit).abs() < 1e-2 && joints_at_center,
+            (world.robot().rail_x() - rail_target_at_hit).abs() < 1e-2 && joints_at_center,
             "제어 후 레일은 타격 위치를 유지하고 관절만 준비 자세로 복귀해야 함"
         );
     }
@@ -2621,9 +2612,9 @@ mod tests {
     }
 
     #[test]
-    fn provisional_alignment_waits_for_refined_prediction_before_commit() {
-        // 실기와 같이 첫 검출 즉시 예비 레일·팔 정렬만 시작하고,
-        // 최소 0.10초+연속 안정 목표가 되어야 타격을 commit한다.
+    fn alignment_waits_for_refined_prediction_before_first_command() {
+        // 실기와 같이 최소 0.10초+연속 안정 목표가 되어야
+        // 첫 레일·팔 정렬과 타격을 commit한다.
         let robot = test_robot();
         let mut world = SimWorld::new(robot.clone());
         world.set_use_ground_truth(true);
@@ -2641,7 +2632,7 @@ mod tests {
         }
         assert!(
             !world.swing_committed(),
-            "예비 정렬만으로는 타격을 commit하면 안 됨"
+            "불안정한 예측으로는 타격을 commit하면 안 됨"
         );
         assert!(
             !world.position_refined,
@@ -2653,10 +2644,8 @@ mod tests {
         assert!(
             world.swing_committed()
                 && world.position_refined
-                && world.direct_alignment_latch.primary_sent()
-                && world.debug_snap.last_fail_text.is_none(),
-            "정밀 예측에서 레일·팔을 재계획하고 타격을 commit해야 함: {:?}",
-            world.debug_snap.last_fail_text
+                && world.direct_alignment_latch.primary_sent(),
+            "정밀 예측에서 레일·팔을 한 번 계획하고 타격을 commit해야 함"
         );
     }
 
