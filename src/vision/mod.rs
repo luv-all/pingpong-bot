@@ -23,7 +23,7 @@ pub use contract::{State, Track, Trajectory};
 pub use detect::{Candidate, Detector, Layer};
 pub use fit::{Fit, Outcome};
 pub use trace::Trace;
-pub use trigger::Trigger;
+pub use trigger::{Evidence, Trigger};
 
 use std::time::{Duration, Instant};
 

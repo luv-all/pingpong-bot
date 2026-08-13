@@ -12,45 +12,65 @@ pub mod seed;
 
 use anyhow::{Context, Result, bail};
 
-use crate::Vector3;
 use crate::camera;
 use crate::camera::Calibration;
 use crate::constants::table;
-use crate::defaults::EstimatorParams;
 use crate::defaults::calib::{calibration_path, colormask_path};
 use crate::vision::detect::colormask::{ColormaskParams, load_colormask_set};
 use crate::vision::detect::{Background, ColorBox, Layer, Picker, Spatial};
-use crate::vision::triggers::{All, Any, PlaneCrossing, SigmaThreshold};
+use crate::vision::triggers::{All, PlaneCrossing, StereoSamples};
 use crate::vision::{Detector, Trigger};
 
 /// 픽셀 정밀 찍기용 loupe 배율.
 pub const PIXEL_LOUPE_ZOOM: i32 = 8;
 /// loupe 소스 반경 [px].
 pub const PIXEL_LOUPE_SRC_HALF: i32 = 7;
-/// 필터 불확실성이 먼저 줄지 않아도 궤적 예측을 시작할 탁구대 y 비율.
-/// 발사기 쪽 0.75에서 궤적은 생성하지만, 실제 레일·팔 명령은 제어측
-/// 위치·속도 불확실성 기준을 통과한 뒤에만 내린다.
+/// 예측을 굳힐 수 있는 가장 이른 탁구대 y 비율 — 발사기 쪽 0.75.
 ///
-/// 2026-08-12: 0.85(+`max_impact_sigma` 0.30)로 느슨하게 해서 fly_45~53에
-/// `clip-review --all`을 돌려 봤다 — 트리거 시점 관측 수는 늘긴커녕 줄었고
-/// (더 일찍 거니 그때까지 쌓인 관측 자체가 적다, 당연한 결과), RMSE는 9개 중
-/// 8개에서 더 나빠졌다(예: fly_45 11.9→58.6cm, fly_49 27.2→74.2cm) — 관측이
-/// 적은 채로 굳혀서 조건이 나쁜 p0,v0 적합을 그대로 커밋해 버리는 것으로 보임.
-/// 되돌림. 병목은 트리거 타이밍이 아니라 다른 데 있다.
+/// 표본 수([`MIN_STEREO_SAMPLES`])와 **다른 축**을 잰다. 표본 수는 정보량("적합을
+/// 세울 만큼 봤나")이고 이건 외삽 거리("여기서 굳히면 접수 평면까지 얼마나 멀리
+/// 내다봐야 하나")다. 느린 서브는 공이 아직 저 뒤에 있는데도 짝이 금방 쌓여서,
+/// 정보는 충분한데 외삽이 길어 오차가 커진다 — 표본 수만으로는 그걸 못 본다.
 pub const ALIGNMENT_TRIGGER_TABLE_Y_FRAC: f64 = 0.75;
 
-/// [`PlaneCrossing`]가 같이 봐야 할 속도 σ 상한 [m/s] — 위치만 보고 확신은 안 보는
-/// 원래 성질을 못 건드리게, 아주 나쁜 조건일 때만 걸러낸다.
+/// 예측을 굳히기 전에 **두 캠이 같은 순간에 함께 본** 표본이 최소 몇 개는 있어야 하나.
 ///
-/// fly_48 사후분석(2026-08-13): 우캠이 서브 스윙 도중 배경차분에 공을 23프레임 먹혀
-/// 그 구간 동안 좌캠 단안 관측만 쌓였다. 그 상태로 `PlaneCrossing`이 발동해(관측 26개,
-/// sigma_v.x=0.376) v0.x가 안 잡힌 채 예측이 얼었다 — `SigmaThreshold`는 원래 이걸
-/// 막게 설계됐는데(x축 속도 σ가 문턱 0.075를 5배 넘음) `Any`라 `PlaneCrossing` 혼자
-/// 우회해 버린 것. 반면 정상 클립(fly_45, fly_50)은 트리거 시점 sigma_v가 축마다
-/// 0.06~0.10 대 — 이 상수를 그 사이 넉넉한 자리(0.15)에 두면 정상 클립 트리거 시점은
-/// 그대로고 fly_48류만 카메라가 다시 잡을 때까지 미뤄진다(n=26→31, stereo 회복 시점).
-/// 위치 σ는 안 본다 — `SHOOTER_X` 사전값이 늘 작게 눌러놔서 신호가 안 된다.
-pub const PLANE_CROSSING_MAX_VELOCITY_SIGMA: f64 = 0.15;
+/// 다른 조건(σ·평면)은 전부 적합에서 나온 파생값이라, 적합이 스스로 속으면 같이
+/// 속는다. 표본 **개수**는 셈이라 그런 우회가 없어서 하방을 막는 데 쓴다 —
+/// [`StereoSamples`] 문서 참고.
+///
+/// 여기 오기 전에 `PLANE_CROSSING_MAX_VELOCITY_SIGMA`(평면 조건에 속도 σ 상한을
+/// `All`로 물린 것)를 먼저 넣었었다. fly_48은 그것도 막았지만, 클립별로 갈라 재 보니
+/// 스테레오 하방이 모든 지표에서 이겨서 그쪽을 지웠다 (fly_45~53, 접수 평면 오차
+/// 평균 / 최악 / 평균 리드):
+///
+/// | 하방 | 평균 | 최악 | 리드 |
+/// |---|---|---|---|
+/// | 없음 | 13.9cm | 51.9cm (fly_52) | 464ms |
+/// | σ 게이트 | 7.6cm | 11.5cm | 431ms |
+/// | 둘 다 | 7.4cm | 11.5cm | 424ms |
+/// | **스테레오 하방** | **6.9cm** | **9.2cm** | **469ms** |
+///
+/// σ 게이트는 평면 경로를 늦춰 리드타임을 45ms 깎으면서 정확도는 더 나빴다 — 파생값
+/// 문턱이라 "적합이 확신하지만 틀린" 국면을 못 걸러서다. 표본 수는 그 국면에서도
+/// 정직하게 모자란다.
+///
+/// **이 값이 곧 리드타임 다이얼이다.** 게이트를 지운 뒤로 트리거를 지배하는 건 이
+/// 하나뿐이라(σ를 0.15에서 0.50까지 올려도 결과가 거의 안 변한다 — 평면 경로가 9/9에서
+/// 먼저 걸린다), 제어가 시간을 더 원하면 여기를 내리면 된다. `--trigger-sweep` 실측:
+///
+/// | 표본 | 리드 | 접수 평면 오차 |
+/// |---|---|---|
+/// | 0 | 520ms | 8.58cm |
+/// | 4 | 496ms | 5.67cm |
+/// | **6** | **469ms** | **5.40cm** |
+/// | 10 | 420ms | 5.45cm |
+/// | 15 | 357ms | 4.51cm |
+///
+/// 0~4 구간이 무릎이다 — 24ms를 내고 2.9cm를 얻는다. 그 뒤는 완만해서 12ms당 0.1cm쯤
+/// 이고, 풀링 중앙값의 잡음이 ±0.6cm쯤이라(표의 8 근처가 한 번 되튄다) 6과 4의 차이는
+/// 잡음과 비슷한 크기다. 6은 무릎을 막 지난 자리 — 더 벌어야 하면 4가 다음 칸이다.
+pub const MIN_STEREO_SAMPLES: usize = 6;
 
 /// [`crate::defaults::DEFAULT_COLORMASK_PATH`]에서 캠별 params. 파일·해당 cam 없으면 에러.
 pub fn colormask_for(camera_id: camera::Id) -> Result<ColormaskParams> {
@@ -118,33 +138,28 @@ pub fn picker(params: &camera::Params) -> Result<Picker> {
     return Picker::from_calib(params, detect::MIN_CIRCULARITY);
 }
 
-/// 본선 트리거 — 필터가 좁혀졌거나, 늦어도 네트를 넘으면.
+/// 본선 트리거 — **두 캠이 같은 순간에 함께 본 표본이 쌓이면** 건다.
 ///
-/// [`Any`]인 이유는 둘 중 하나만 쓰면 하나를 포기해야 해서다. σ만 보면 검출이 나쁜 샷에서
-/// 영영 안 걸리고, 평면만 보면 이미 확신이 선 샷도 네트까지 기다린다.
+/// 조건이 이것 하나뿐이다. 원래는 [`Any`]로 σ(빠르면 빠르게)와 [`PlaneCrossing`]
+/// (늦어도 반드시)을 묶어 뒀는데, 스테레오 하방을 넣고 재 보니 둘 다 할 일이 없었다:
+/// 표본 수가 9/9 클립에서 마지막으로 걸리는 조건이라(즉 늘 이게 제일 늦다) `Any` 안의
+/// 둘은 결과를 못 바꾼다. σ는 0.15에서 0.50까지 올려도 표가 거의 안 움직였고, 평면은
+/// 표본 수보다 늘 먼저 걸렸다. 안 쓰이는 조건을 조립에 남겨 두면 "이게 뭘 지키고 있나"를
+/// 매번 다시 따져야 하므로 지웠다.
+///
+/// 멀어지는 공은 여기서 안 봐도 된다 — [`Fit`](crate::vision::Fit)이 `velocity.y >= 0`
+/// 이면 트랙 자체를 끝낸다. `PlaneCrossing`이 같은 검사를 들고 있었지만 그건 중복이었다.
 ///
 /// 실기와 클립 도구가 **같은 걸** 써야 한다. 도구가 더 늦게 거는 트리거를 쓰면 도구가 재는
 /// 리드타임이 실기보다 짧아져, 실기에서 쓸 수 있는 구간을 도구가 못 본다.
 pub fn trigger() -> Box<dyn Trigger> {
-    let params = EstimatorParams::default();
-    let sigma = params.max_impact_sigma;
-    return Box::new(Any(vec![
-        Box::new(SigmaThreshold {
-            position: Vector3::repeat(sigma),
-            // 속도 σ는 리드타임을 곱해 도달점 오차가 되므로 같은 예산을 최대 리드로 나눈다.
-            velocity: Vector3::repeat(sigma / params.max_lead),
+    return Box::new(All(vec![
+        Box::new(StereoSamples {
+            min_samples: MIN_STEREO_SAMPLES,
         }),
-        Box::new(All(vec![
-            Box::new(PlaneCrossing {
-                y: table::LENGTH_Y * ALIGNMENT_TRIGGER_TABLE_Y_FRAC,
-            }),
-            // 위치만 보고 확신은 안 보는 `PlaneCrossing`이 한쪽 카메라가 잠깐 죽은
-            // 단안 구간에도 그대로 발동하는 걸 막는다 — [`PLANE_CROSSING_MAX_VELOCITY_SIGMA`].
-            Box::new(SigmaThreshold {
-                position: Vector3::repeat(f64::INFINITY),
-                velocity: Vector3::repeat(PLANE_CROSSING_MAX_VELOCITY_SIGMA),
-            }),
-        ])),
+        Box::new(PlaneCrossing {
+            y: table::LENGTH_Y * ALIGNMENT_TRIGGER_TABLE_Y_FRAC,
+        }),
     ]));
 }
 
@@ -153,46 +168,36 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::Point3;
-    use crate::vision::State;
+    use crate::vision::{Evidence, State};
+    use crate::{Point3, Vector3};
 
-    /// 메인 `SigmaThreshold`(position/velocity 문턱)는 못 넘지만
-    /// [`PLANE_CROSSING_MAX_VELOCITY_SIGMA`]는 넉넉히 통과하는 자리 — 상수가 바뀌어도
-    /// 매직넘버로 안 깨지게 문턱에서 직접 유도한다. `PlaneCrossing`의 위치 문턱만
-    /// 따로 보이게 하는 게 목적.
-    fn confident_state(y: f64) -> State {
-        let params = EstimatorParams::default();
-        let tight_velocity = params.max_impact_sigma / params.max_lead;
-        let velocity_sigma = (tight_velocity + PLANE_CROSSING_MAX_VELOCITY_SIGMA) / 2.0;
+    fn state() -> State {
         return State {
             t: Duration::from_millis(100),
-            position: Point3::new(0.70, y, 1.0),
+            position: Point3::new(0.70, table::LENGTH_Y * 0.3, 1.0),
             velocity: Vector3::new(0.0, -4.0, 0.0),
-            sigma_position: Vector3::repeat(params.max_impact_sigma * 2.0),
-            sigma_velocity: Vector3::repeat(velocity_sigma),
+            sigma_position: Vector3::repeat(0.01),
+            sigma_velocity: Vector3::repeat(0.01),
             spin: None,
         };
     }
 
-    /// 속도 σ가 [`PLANE_CROSSING_MAX_VELOCITY_SIGMA`]를 넘는, fly_48류 단안 구간 흉내.
-    fn ill_conditioned_state(y: f64) -> State {
-        return State {
-            sigma_velocity: Vector3::repeat(PLANE_CROSSING_MAX_VELOCITY_SIGMA * 2.0),
-            ..confident_state(y)
-        };
-    }
-
+    /// fly_48·fly_52 회귀 — 적합이 아무리 확신에 차 있어도 두 캠이 같이 본 표본이
+    /// 모자라면 안 건다. 이 조건은 파생값이 아니라 셈이라 우회가 없다.
     #[test]
-    fn fallback_trigger_starts_at_seventy_five_percent_table_length() {
+    fn nothing_fires_without_enough_stereo_samples() {
         let trigger = trigger();
-        assert!(!trigger.ready(&[confident_state(table::LENGTH_Y * 0.76)]));
-        assert!(trigger.ready(&[confident_state(table::LENGTH_Y * 0.74)]));
-    }
-
-    /// fly_48 사후분석 회귀 — 평면은 넘었어도 속도 σ가 나쁘면 아직 안 걸린다.
-    #[test]
-    fn fallback_trigger_waits_out_a_badly_conditioned_fit_past_the_plane() {
-        let trigger = trigger();
-        assert!(!trigger.ready(&[ill_conditioned_state(table::LENGTH_Y * 0.3)]));
+        let track = [state()];
+        assert!(
+            !trigger.ready(&Evidence {
+                measured: &track,
+                stereo_samples: MIN_STEREO_SAMPLES - 1,
+            }),
+            "표본이 문턱 하나 모자라면 확신이 서 있어도 안 걸린다"
+        );
+        assert!(trigger.ready(&Evidence {
+            measured: &track,
+            stereo_samples: MIN_STEREO_SAMPLES,
+        }));
     }
 }

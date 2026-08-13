@@ -192,7 +192,7 @@ fn never() -> impl Trigger {
         fn name(&self) -> &'static str {
             return "never";
         }
-        fn ready(&self, _measured: &[State]) -> bool {
+        fn ready(&self, _evidence: &Evidence) -> bool {
             return false;
         }
     }

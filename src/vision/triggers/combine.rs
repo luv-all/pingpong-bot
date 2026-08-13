@@ -1,5 +1,4 @@
-use crate::vision::contract::State;
-use crate::vision::trigger::Trigger;
+use crate::vision::trigger::{Evidence, Trigger};
 
 /// 전부 만족할 때. 빈 목록은 **발동하지 않는다** — 아무 조건도 안 걸었는데 즉시 참이 되면
 /// 안 된다.
@@ -10,8 +9,8 @@ impl Trigger for All {
         return "all";
     }
 
-    fn ready(&self, measured: &[State]) -> bool {
-        return !self.0.is_empty() && self.0.iter().all(|t| t.ready(measured));
+    fn ready(&self, evidence: &Evidence) -> bool {
+        return !self.0.is_empty() && self.0.iter().all(|t| t.ready(evidence));
     }
 }
 
@@ -33,7 +32,7 @@ impl Trigger for Any {
         return "any";
     }
 
-    fn ready(&self, measured: &[State]) -> bool {
-        return self.0.iter().any(|t| t.ready(measured));
+    fn ready(&self, evidence: &Evidence) -> bool {
+        return self.0.iter().any(|t| t.ready(evidence));
     }
 }

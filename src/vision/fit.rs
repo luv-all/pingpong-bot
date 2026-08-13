@@ -35,7 +35,7 @@ use crate::{Point3, Vector3};
 
 use super::contract::{State, Track, Trajectory};
 use super::detect::Candidate;
-use super::trigger::Trigger;
+use super::trigger::{Evidence, Trigger};
 
 /// 트랙을 유지할 부피 여유 [m].
 const VOLUME_MARGIN: f64 = 1.0;
@@ -161,14 +161,42 @@ impl Fit {
     /// (실측: 이 값 대신 원시 삼각측량을 쓰기 전엔 라이브 발동률이 11%였다 — 오프라인
     /// 전체 클립 스캔은 같은 자리에서 75%가 풀렸다. 격차가 그 순환 오염이었다).
     ///
-    /// 카메라가 다른 두 관측을 **상호 최근접**으로 짝지어 삼각측량한다. 도착 순서로
-    /// 훑으며 "직전의 다른 카메라 관측"을 짝으로 삼으면 안 된다 — 두 카메라가 프레임을
-    /// 번갈아 도착시키므로, 그러면 매번 **한 프레임 전** 관측과 짝지어져(간격이 프레임
-    /// 주기보다도 가까워 통과는 하지만 같은 순간이 아니다) 시차가 그대로 위치 오차로
-    /// 새어 들어간다 — 처음 이렇게 짰다가 z가 원래 낙하 높이보다 더 높이 발산하는 걸
-    /// 보고서야 잡았다. 상호 최근접(서로가 서로의 가장 가까운 짝)만 채택하면 그 오프바이원이
-    /// 안 생긴다.
+    /// 짝은 [`Self::stereo_pairs`]가 만든다.
     fn raw_trajectory(&self) -> Vec<crate::physics::TrajPoint> {
+        let mut out = Vec::new();
+        for (anchor, partner) in self.stereo_pairs() {
+            let views = [
+                (
+                    self.cameras[anchor.camera].projection_matrix(),
+                    anchor.pixel,
+                ),
+                (
+                    self.cameras[partner.camera].projection_matrix(),
+                    partner.pixel,
+                ),
+            ];
+            let Some(point) = Triangulate::views(&views) else {
+                continue;
+            };
+            out.push(crate::physics::TrajPoint {
+                t: anchor.t.as_secs_f64(),
+                pos: point,
+                pixels: Vec::new(),
+            });
+        }
+        return out;
+    }
+
+    /// 두 카메라가 **같은 순간에** 본 것끼리 짝지은 목록. 깊이를 실제로 묶는 관측이
+    /// 이것뿐이라, 삼각측량도 [`Self::stereo_samples`]도 여기서 나온다.
+    ///
+    /// 카메라가 다른 두 관측을 **상호 최근접**으로 짝짓는다. 도착 순서로 훑으며 "직전의
+    /// 다른 카메라 관측"을 짝으로 삼으면 안 된다 — 두 카메라가 프레임을 번갈아
+    /// 도착시키므로, 그러면 매번 **한 프레임 전** 관측과 짝지어져(간격이 프레임 주기보다도
+    /// 가까워 통과는 하지만 같은 순간이 아니다) 시차가 그대로 위치 오차로 새어 들어간다 —
+    /// 처음 이렇게 짰다가 z가 원래 낙하 높이보다 더 높이 발산하는 걸 보고서야 잡았다.
+    /// 상호 최근접(서로가 서로의 가장 가까운 짝)만 채택하면 그 오프바이원이 안 생긴다.
+    fn stereo_pairs(&self) -> Vec<(&Sighting, &Sighting)> {
         // 카메라 둘은 하드웨어 동기가 없다 — 실측 p95 skew가 18.9ms다(better-vision.md §0).
         // 6ms로 뒀더니 실클립에서 짝이 거의 안 잡혀 라이브 발동률이 안 올랐다 — 그 skew를
         // 덮을 만큼은 넉넉해야 한다.
@@ -202,24 +230,7 @@ impl Fit {
             if anchor.camera > partner.camera {
                 continue;
             }
-            let views = [
-                (
-                    self.cameras[anchor.camera].projection_matrix(),
-                    anchor.pixel,
-                ),
-                (
-                    self.cameras[partner.camera].projection_matrix(),
-                    partner.pixel,
-                ),
-            ];
-            let Some(point) = Triangulate::views(&views) else {
-                continue;
-            };
-            out.push(crate::physics::TrajPoint {
-                t: anchor.t.as_secs_f64(),
-                pos: point,
-                pixels: Vec::new(),
-            });
+            out.push((anchor, partner));
         }
         return out;
     }
@@ -242,16 +253,22 @@ impl Fit {
     /// 마진과 `refine_spin`의 `MIN_IMPROVEMENT_RATIO`가 그 잡음을 걸러내는 안전망이다.
     fn solve_spin_from_bounce(&self) -> Option<Vector3> {
         let raw = self.raw_trajectory();
-        const HALF_WINDOW: usize = 2;
-        if raw.len() <= 2 * HALF_WINDOW {
+        // 한쪽에 최소 이만큼은 있어야 속도를 잰다. 넓히면 정확하지만 바운스가 창 앞쪽에
+        // 있는 샷을 통째로 놓친다(실측: 바운스가 raw 인덱스 2~3에 오는 클립이 있다).
+        const MIN_SIDE: usize = 2;
+        // 있으면 여기까지 쓴다 — 오프라인 분석과 같은 폭(SSOT). 2점차는 접촉 프레임
+        // 잡음이 그대로 속도로 증폭돼서, 롤/슬립 판정이 물리적으로 불가능한 값
+        // (접선 임펄스 > Coulomb 한계)까지 내놓는다(실측 2026-08-13: 바운스 6개 중 4개).
+        const MAX_SIDE: usize = crate::physics::TrajAnalysis::BOUNCE_VELOCITY_WINDOW;
+        if raw.len() <= 2 * MIN_SIDE {
             return None;
         }
-        for index in HALF_WINDOW..=raw.len() - 1 - HALF_WINDOW {
+        for index in MIN_SIDE..=raw.len() - 1 - MIN_SIDE {
             // 접촉 자체(index)는 창 어느 쪽에도 안 넣는다 — 접히는 순간 자체를 넣으면 그
             // 전이가 양쪽 회귀를 다 끌어당겨 v_in·v_out 둘 다 왜곡된다(실측: v_out.z가
             // 물리상 나올 수 없는 값까지 깎여서 나옴 — e=0.72인데 e≈0.14로 보임).
-            let before = &raw[index - HALF_WINDOW..index];
-            let after = &raw[index + 1..=index + HALF_WINDOW];
+            let before = &raw[index.saturating_sub(MAX_SIDE)..index];
+            let after = &raw[index + 1..=(index + MAX_SIDE).min(raw.len() - 1)];
             let Some(v_in) = crate::physics::TrajAnalysis::windowed_velocity(before) else {
                 continue;
             };
@@ -510,6 +527,16 @@ impl Fit {
         self.outliers = 0;
         self.seq += 1;
         self.solved_spin = None;
+    }
+
+    /// 두 캠이 같은 순간에 함께 본 표본 수 — 깊이가 실제로 묶인 관측만 센다.
+    ///
+    /// 총 관측 수로는 "한쪽이 죽은 채 한쪽만 잔뜩 쌓인" 상태를 정상과 못 가른다
+    /// (실측 fly_48: 트리거 시점 관측 26개인데 우캠은 두어 개뿐이었다). 캠별 개수의
+    /// 최솟값도 근사일 뿐이다 — 한쪽이 여섯 번 봤어도 그게 다 반대편이 못 본 순간이면
+    /// 짝은 0이다. 짝을 직접 세면 그 착시가 없다.
+    pub fn stereo_samples(&self) -> usize {
+        return self.stereo_pairs().len();
     }
 
     /// 관측 전부에 탄도를 맞춘다. 이전 해가 있으면 거기서 이어 푼다.
@@ -809,7 +836,10 @@ impl Fit {
         if self.solved_spin.is_none() {
             self.solved_spin = self.solve_spin_from_bounce();
         }
-        self.predicting |= self.trigger.ready(&self.measured);
+        self.predicting |= self.trigger.ready(&Evidence {
+            measured: &self.measured,
+            stereo_samples: self.stereo_samples(),
+        });
         if self.predicting
             && let Some(last) = self.measured.last().copied()
         {

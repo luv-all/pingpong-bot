@@ -21,7 +21,7 @@ use pingpong_bot::constants::{ball, table};
 use pingpong_bot::defaults::PhysicsParams;
 use pingpong_bot::defaults::vision::fit::{DRAG, FRICTION, RESTITUTION};
 use pingpong_bot::physics::Kinematics;
-use pingpong_bot::vision::{Candidate, Fit, State, Trigger};
+use pingpong_bot::vision::{Candidate, Evidence, Fit, State, Trigger};
 use pingpong_bot::Point3;
 
 const FPS: f64 = 120.0;
@@ -88,7 +88,7 @@ fn never() -> Box<dyn Trigger> {
         fn name(&self) -> &'static str {
             return "never";
         }
-        fn ready(&self, _measured: &[State]) -> bool {
+        fn ready(&self, _evidence: &Evidence) -> bool {
             return false;
         }
     }
