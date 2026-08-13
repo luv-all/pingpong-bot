@@ -22,7 +22,7 @@ pub struct Args {
     /// real: 좌/우 검출 오버레이 프리뷰 창. 끄려면 `--preview=false`
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub preview: bool,
-    /// real: 시작 시 센터(ready) 자세로 이동. 끄려면 `--home=false`
+    /// real: 시작 시 레일 홈잉·영점 저장 후 센터(ready) 자세로 이동. 끄려면 `--home=false`
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub home: bool,
     /// real: 라이브 캠 대신 녹화 클립을 재생한다 (`fly_02` 또는 디렉터리).

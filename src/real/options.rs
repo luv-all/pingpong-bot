@@ -11,7 +11,7 @@ pub struct Options {
     pub dry_run: bool,
     /// 좌/우 검출 오버레이 프리뷰 창.
     pub preview: bool,
-    /// 시작 시 센터(ready) 자세로 이동.
+    /// 시작 시 레일 홈잉·영점 저장 후 센터(ready) 자세로 이동.
     pub home: bool,
     /// 녹화 클립 재생 경로 — `None`이면 라이브 캠.
     pub clip: Option<std::path::PathBuf>,

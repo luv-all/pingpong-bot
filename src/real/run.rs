@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
@@ -13,7 +13,7 @@ use pingpong_bot::defaults::vision::detector_for;
 use pingpong_bot::defaults::{self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, robot};
 use pingpong_bot::hardware::RealHardware;
 use pingpong_bot::hardware::dynamixel::DynamixelConfig;
-use pingpong_bot::hardware::rail::{RailCalibration, RailConfig};
+use pingpong_bot::hardware::rail::{AxlRail, RailCalibration, RailConfig, RailEnd};
 use tracing::{debug, info, warn};
 
 use crate::cli::Args;
@@ -39,6 +39,9 @@ pub fn run(args: &Args) -> Result<()> {
     let robot = robot().context("defaults::robot")?;
     let arm = Arc::clone(&robot.arm);
 
+    if options.home && !options.dry_run {
+        calibrate_rail_on_startup()?;
+    }
     let mut hardware = open_hardware(&options)?;
     // 카메라·추정·제어 스레드를 시작하기 전에 실기 자세부터 확정한다. 초기화 중에
     // 공을 잘못 추적하거나, 정렬 전 포즈를 sim에 보내는 일을 막는다.
@@ -128,6 +131,44 @@ pub fn run(args: &Args) -> Result<()> {
         warn!("제어 워커 패닉");
     }
     log_summary(&outcome, &camera_stats, estimator_stats.as_ref());
+    return Ok(());
+}
+
+/// 실기 기동 시 calib-rail과 같은 방식으로 min 엔드스톱을 찾아 영점을 저장한다.
+/// `AxlRail`만 먼저 열어 팔의 Dynamixel 정렬 상태와 무관하게 홈잉하고, 홈잉 내부에서
+/// 중앙 준비 위치로 복귀한 뒤 `open_hardware`가 방금 저장한 영점을 다시 읽는다.
+fn calibrate_rail_on_startup() -> Result<()> {
+    let end = RailEnd::Min;
+    let rail_config = RailConfig::default();
+    info!(
+        dll_path = %rail_config.dll_path.display(),
+        end = ?end,
+        "실기 시작 레일 홈잉 — 물리적 엔드스톱까지 저속 이동"
+    );
+    let mut rail = AxlRail::open(rail_config).context("시작 레일 초기화 실패")?;
+    let result = rail.home(end).context("시작 레일 홈잉 실패")?;
+
+    let measured_unix_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let calibration = RailCalibration::from_home(
+        end,
+        result.board_position_m,
+        result.board_zero_domain_m,
+        measured_unix_secs,
+    );
+    let path = defaults::rail::rail_calibration_path();
+    calibration
+        .save(&path)
+        .with_context(|| format!("시작 레일 캘리브레이션 저장: {}", path.display()))?;
+    info!(
+        path = %path.display(),
+        board_position_m = result.board_position_m,
+        board_zero_domain_m = result.board_zero_domain_m,
+        end = ?end,
+        "실기 시작 레일 홈잉·중앙 복귀·캘리브레이션 저장 완료"
+    );
     return Ok(());
 }
 
