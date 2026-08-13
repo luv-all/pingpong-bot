@@ -31,6 +31,8 @@ const VISION_CAPACITY: usize = 8;
 const PREVIEW_CAPACITY: usize = 2;
 /// 프리뷰가 없을 때 메인 루프 tick.
 const IDLE_TICK: Duration = Duration::from_millis(5);
+/// 실기 시작 홈잉은 기존 +X 왕복과 같은 논리 +X 엔드스톱을 사용한다.
+const STARTUP_RAIL_HOME_END: RailEnd = RailEnd::Max;
 
 /// 보정된 공 접촉점에 라켓을 맞추고 상대편 반코트의 무게중심을 조준한다.
 /// 종료는 ESC·`q`(preview) 또는 제어 워커 `Done`이다.
@@ -134,16 +136,17 @@ pub fn run(args: &Args) -> Result<()> {
     return Ok(());
 }
 
-/// 실기 기동 시 calib-rail과 같은 방식으로 min 엔드스톱을 찾아 영점을 저장한다.
+/// 실기 기동 시 calib-rail과 같은 방식으로 논리 +X(max) 엔드스톱을 찾아 영점을 저장한다.
 /// `AxlRail`만 먼저 열어 팔의 Dynamixel 정렬 상태와 무관하게 홈잉하고, 홈잉 내부에서
 /// 중앙 준비 위치로 복귀한 뒤 `open_hardware`가 방금 저장한 영점을 다시 읽는다.
 fn calibrate_rail_on_startup() -> Result<()> {
-    let end = RailEnd::Min;
+    let end = STARTUP_RAIL_HOME_END;
     let rail_config = RailConfig::default();
     info!(
         dll_path = %rail_config.dll_path.display(),
         end = ?end,
-        "실기 시작 레일 홈잉 — 물리적 엔드스톱까지 저속 이동"
+        logical_direction = "+X",
+        "실기 시작 레일 홈잉 — +X 물리적 엔드스톱까지 저속 이동"
     );
     let mut rail = AxlRail::open(rail_config).context("시작 레일 초기화 실패")?;
     let result = rail.home(end).context("시작 레일 홈잉 실패")?;
@@ -170,6 +173,16 @@ fn calibrate_rail_on_startup() -> Result<()> {
         "실기 시작 레일 홈잉·중앙 복귀·캘리브레이션 저장 완료"
     );
     return Ok(());
+}
+
+#[cfg(test)]
+mod startup_rail_tests {
+    use super::*;
+
+    #[test]
+    fn startup_homing_targets_positive_x_end() {
+        assert_eq!(STARTUP_RAIL_HOME_END, RailEnd::Max);
+    }
 }
 
 /// 세션 요약용 — 추적한 공과 보낸 제어 명령 수.
