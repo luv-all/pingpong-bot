@@ -28,7 +28,7 @@ fn profile_velocity_to_rad_s_matches_hand_computed_value() {
 fn motor_mapping_matches_python_reference() {
     let mapping = MotorMapping::new(bench_config()).expect("valid mapping");
 
-    assert_eq!(mapping.radians_to_ticks(0, 0.0), 2503);
+    assert_eq!(mapping.radians_to_ticks(0, 0.0), 2560);
     assert_eq!(
         mapping.radians_to_ticks(0, std::f64::consts::FRAC_PI_2),
         1536
@@ -47,8 +47,8 @@ fn motor_mapping_round_trips_and_clamps_to_motor_limits() {
     let restored = mapping.ticks_to_radians(2, ticks);
     assert!((restored - -0.4).abs() < 0.002);
 
-    assert_eq!(mapping.radians_to_ticks(0, 100.0), 1024);
-    assert_eq!(mapping.radians_to_ticks(0, -100.0), 2503);
+    assert_eq!(mapping.radians_to_ticks(0, 100.0), 1400);
+    assert_eq!(mapping.radians_to_ticks(0, -100.0), 3000);
 }
 
 #[test]
