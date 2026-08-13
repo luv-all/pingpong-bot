@@ -1778,9 +1778,13 @@ mod tests {
             alignment.follow_through.clone(),
         );
         let planned = plan_fixed_joint_swing(arm, &start).expect("fixed joint swing");
+        // 중앙 공은 수평 조준축(j1)이 이미 목표 방향이라 거의 그대로 유지될 수 있다.
+        // 실제 전진을 만드는 나머지 세 관절은 반드시 타격에 참여해야 한다.
         assert!(
-            planned.skipped_joint_indices.is_empty(),
-            "j0·j1·j2·j3를 모두 사용해야 함: {:?}",
+            [0, 2, 3]
+                .iter()
+                .all(|index| !planned.skipped_joint_indices.contains(index)),
+            "추진 관절이 생략되면 안 됨: {:?}",
             planned.skipped_joint_indices
         );
         let trajectory = planned.trajectory;
@@ -1808,7 +1812,7 @@ mod tests {
                 .abs()
                 < 1e-12
         );
-        for index in 0..4 {
+        for index in [0, 2, 3] {
             assert!(
                 (trajectory.end.values[index] - trajectory.start.values[index]).abs() > 1e-5
                     || trajectory.end_velocity[index].abs() > 1e-5,
@@ -1850,10 +1854,10 @@ mod tests {
             .expect("impact velocity FK");
         let forward_speed = ((after_impact_pose.position - impact.position) / velocity_probe_dt)
             .dot(&impact.normal);
-        // 10cm 직진 뒤 임팩트 끝속도 0.85m/s를 유지한다.
+        // 10cm 직진 뒤 설정한 임팩트 끝속도를 유지한다.
         assert!(
-            forward_speed > 0.84,
-            "직진 타격 속도가 유지돼야 함: {forward_speed:.3}m/s"
+            forward_speed > FIXED_IMPACT_PUSH_SPEED_M_S - 0.02,
+            "직진 타격 속도가 유지돼야 함: target={FIXED_IMPACT_PUSH_SPEED_M_S:.3}m/s, actual={forward_speed:.3}m/s"
         );
         assert!(
             trajectory.peak_joint_speed() <= arm.max_joint_speed * (1.0 + 1e-9),
