@@ -36,6 +36,7 @@ use crate::{Point3, Vector3};
 use super::contract::{State, Track, Trajectory};
 use super::detect::Candidate;
 use super::trigger::{Evidence, Trigger};
+use tracing::debug;
 
 /// 트랙을 유지할 부피 여유 [m].
 const VOLUME_MARGIN: f64 = 1.0;
@@ -489,6 +490,18 @@ impl Fit {
 
         self.refresh();
         if self.finished() {
+            if !self.predicting
+                && let Some(last) = self.measured.last()
+            {
+                debug!(
+                    seq = self.seq,
+                    stereo_samples = self.stereo_samples(),
+                    y = last.position.y,
+                    vy = last.velocity.y,
+                    speed = last.velocity.norm(),
+                    "트리거 전 트랙 종료"
+                );
+            }
             // 이미 서 있던 트랙이 끝난 것과, 애초에 샷이 아니었던 것은 다르다. 후자까지
             // seq 를 올리면 라켓에 맞고 돌아가는 공이 매 프레임 트랙 하나를 세웠다 죽인다
             // (실측 fly_10 에서 51번). 소비자는 seq 로 "같은 공인가"를 판단한다.
@@ -836,10 +849,24 @@ impl Fit {
         if self.solved_spin.is_none() {
             self.solved_spin = self.solve_spin_from_bounce();
         }
+        let stereo_samples = self.stereo_samples();
+        let was_predicting = self.predicting;
         self.predicting |= self.trigger.ready(&Evidence {
             measured: &self.measured,
-            stereo_samples: self.stereo_samples(),
+            stereo_samples,
         });
+        if !was_predicting
+            && let Some(last) = self.measured.last()
+        {
+            debug!(
+                seq = self.seq,
+                stereo_samples,
+                y = last.position.y,
+                vy = last.velocity.y,
+                predicting = self.predicting,
+                "트리거 평가"
+            );
+        }
         if self.predicting
             && let Some(last) = self.measured.last().copied()
         {
