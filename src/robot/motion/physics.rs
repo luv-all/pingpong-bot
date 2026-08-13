@@ -1372,6 +1372,21 @@ fn plan_move_to_full_speed(
             rail,
         ) {
             Ok(trajectory) => return Ok(trajectory),
+            Err(error @ SwingPlanError::TablePenetration { .. }) => {
+                // 관절공간 직선 경로가 테이블을 관통하면, 시간을 늘려 같은
+                // 모양의 경로를 다시 그려봐야 관통은 그대로다(직전 재현:
+                // 관통 깊이가 목표와 무관하게 일정) — duration을 키우는
+                // 아래 재시도는 이 경우 무의미하므로, 정지→정지 이동에서만
+                // 안전한 경유점(관통이 가장 깊은 지점을 테이블 위로 들어
+                // 올린 자세)을 넣어 즉시 재시도한다.
+                if let Some(lifted) =
+                    plan_move_to_via_table_clearance(arm, start, center_joints.clone(), duration, rail)
+                {
+                    return Ok(lifted);
+                }
+                last_error = Some(error);
+                duration *= RETURN_TO_CENTER_GROWTH;
+            }
             Err(error) => {
                 last_error = Some(error);
                 duration *= RETURN_TO_CENTER_GROWTH;
@@ -1385,6 +1400,158 @@ fn plan_move_to_full_speed(
             target_z: table::SURFACE_Z,
         },
     )));
+}
+
+/// 관통이 가장 깊은 지점을 테이블 위로 들어 올린 여유[m] — 재시도 경유점이
+/// 다시 표면에 닿을 만큼 아슬아슬하지 않도록 관통 깊이 위에 더하는 고정 여유.
+const MOVE_TO_TABLE_CLEARANCE_MARGIN_M: f64 = 0.02;
+
+/// [`plan_move_to_full_speed`] 전용 — 정지→정지 직선(quintic) 경로가 테이블을
+/// 관통할 때만 쓴다. 관통이 가장 깊은 샘플의 관절 자세를 찾아 그 지점을
+/// 테이블 위로 들어 올린 자세를 경유점으로 넣고, 경유점에서 정지(속도 0)했다가
+/// 다시 출발하는 2구간 quintic으로 다시 계획한다.
+///
+/// 스윙(타격 직전 push, `build_feasible_trajectory_with_follow_time`/
+/// `build_feasible_trajectory_quadratic_push`)에는 이 경유점을 쓰지 않는다 —
+/// 스윙은 정확한 타이밍에 공을 맞혀야 해서 도중에 멈추면 그 자체로 실패다.
+/// 정지→정지 이동(정렬 접근, 홈 복귀)은 멈춰도 안전하므로 여기서만 쓴다.
+fn plan_move_to_via_table_clearance(
+    arm: &Arm,
+    start: &robot::Pose,
+    end: Joints,
+    duration: f64,
+    rail: Rail,
+) -> Option<Trajectory> {
+    let follow_time = defaults::ControlParams::default().swing_follow_through_secs;
+    let start_velocity = vec![0.0; start.joints.values.len()];
+    let end_velocity = vec![0.0; end.values.len()];
+    let (fitted, fitted_rail) = fit_end_velocity(
+        arm,
+        &start.joints,
+        &end,
+        &start_velocity,
+        end_velocity,
+        duration,
+        rail,
+    );
+    let direct = trajectory_with_follow_through_in(
+        arm,
+        &start.joints,
+        &end,
+        start_velocity.clone(),
+        fitted,
+        duration,
+        fitted_rail,
+        follow_time,
+    );
+    let worst = worst_table_penetration_sample(arm, &direct);
+    if worst.depth <= 0.0 {
+        return None;
+    }
+    let racket = arm.forward_kinematics_with_rail(worst.rail_x, &worst.joints)?;
+    let via_target = Point3::from(
+        racket.position.coords + Vector3::z() * (worst.depth + MOVE_TO_TABLE_CLEARANCE_MARGIN_M),
+    );
+    let hint = robot::Pose::new(worst.rail_x, worst.joints.clone());
+    let (via_pose, _) = arm
+        .inverse_pose_at_fixed_rail_best_normal(
+            worst.rail_x,
+            via_target,
+            racket.normal,
+            &hint,
+            robot::IkSearch::Global,
+        )
+        .ok()?;
+    let joint_count = end.values.len();
+    let via_time = worst.time.clamp(duration * 0.1, duration * 0.9);
+    let via_velocity = vec![0.0; joint_count];
+    let via_rail = Rail {
+        start: rail.start,
+        end: worst.rail_x,
+        start_velocity: 0.0,
+        end_velocity: 0.0,
+    };
+    let candidate = Trajectory::with_follow_through(
+        start.joints.clone(),
+        via_pose.joints,
+        end,
+        start_velocity,
+        via_velocity.clone(),
+        via_velocity,
+        vec![0.0; joint_count],
+        via_time,
+        duration,
+        via_rail,
+        rail.end,
+        rail.end_velocity,
+    );
+    evaluate_trajectory_feasibility(arm, &candidate, fitted_rail.end).ok()?;
+    return Some(candidate);
+}
+
+/// 궤적 샘플 중 테이블 관통이 가장 깊은 지점.
+struct WorstTablePenetration {
+    depth: f64,
+    time: f64,
+    joints: Joints,
+    rail_x: f64,
+}
+
+fn worst_table_penetration_sample(arm: &Arm, trajectory: &Trajectory) -> WorstTablePenetration {
+    let samples = (trajectory.duration_secs / 0.005).ceil() as usize;
+    let mut worst = WorstTablePenetration {
+        depth: 0.0,
+        time: 0.0,
+        joints: trajectory.sample_at(0.0),
+        rail_x: trajectory.sample_rail_at(0.0),
+    };
+    for index in 0..=samples.max(1) {
+        let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
+        let joints = trajectory.sample_at(time);
+        let rail_x = trajectory.sample_rail_at(time);
+        let depth = crate::robot::collision::table_penetration(arm, rail_x, &joints);
+        if depth > worst.depth {
+            worst = WorstTablePenetration {
+                depth,
+                time,
+                joints,
+                rail_x,
+            };
+        }
+    }
+    return worst;
+}
+
+/// 기구학/토크/테이블 충돌 세 실현가능성 검사를 한데 모은다 — quintic·quadratic
+/// 두 빌더가 그대로 재사용한다.
+fn evaluate_trajectory_feasibility(
+    arm: &Arm,
+    trajectory: &Trajectory,
+    rail_end_x: f64,
+) -> Result<(), SwingPlanError> {
+    if let Some(violated) = kinematic_limit_violation(arm, trajectory) {
+        return Err(SwingPlanError::TrajectoryExceedsLimits {
+            rail_end_x,
+            violated,
+        });
+    }
+    let torque_utilization = peak_torque_utilization(arm, trajectory);
+    if torque_utilization > 1.0 {
+        return Err(SwingPlanError::TrajectoryExceedsTorque {
+            rail_end_x,
+            utilization: torque_utilization,
+        });
+    }
+    if !trajectory_collision_free(arm, trajectory) {
+        let depth = worst_table_penetration_sample(arm, trajectory).depth;
+        return Err(SwingPlanError::TablePenetration {
+            target_x: rail_end_x,
+            target_y: 0.0,
+            target_z: table::SURFACE_Z,
+            depth,
+        });
+    }
+    return Ok(());
 }
 
 /// 속도/가속 한계 안에 들어오는 quintic을 만든다.
@@ -1442,42 +1609,7 @@ fn build_feasible_trajectory_with_follow_time(
         fitted_rail,
         follow_time,
     );
-    // 두 원인(관절 각도/속도 vs 토크)을 나눠 보고한다 — 어느 쪽이 병목인지에
-    // 따라 대응이 완전히 다르기 때문(전자는 기구학/마운트, 후자는 모터 선정).
-    if let Some(violated) = kinematic_limit_violation(arm, &trajectory) {
-        return Err(SwingPlanError::TrajectoryExceedsLimits {
-            rail_end_x: fitted_rail.end,
-            violated,
-        });
-    }
-    let torque_utilization = peak_torque_utilization(arm, &trajectory);
-    if torque_utilization > 1.0 {
-        return Err(SwingPlanError::TrajectoryExceedsTorque {
-            rail_end_x: fitted_rail.end,
-            utilization: torque_utilization,
-        });
-    }
-    if !trajectory_collision_free(arm, &trajectory) {
-        let depth = {
-            let samples = (trajectory.duration_secs / 0.005).ceil() as usize;
-            let mut worst = 0.0_f64;
-            for index in 0..=samples.max(1) {
-                let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
-                let joints = trajectory.sample_at(time);
-                let rail_x = trajectory.sample_rail_at(time);
-                worst = worst.max(crate::robot::collision::table_penetration(
-                    arm, rail_x, &joints,
-                ));
-            }
-            worst
-        };
-        return Err(SwingPlanError::TablePenetration {
-            target_x: fitted_rail.end,
-            target_y: 0.0,
-            target_z: table::SURFACE_Z,
-            depth,
-        });
-    }
+    evaluate_trajectory_feasibility(arm, &trajectory, fitted_rail.end)?;
     return Ok(trajectory);
 }
 
@@ -1505,40 +1637,7 @@ fn build_feasible_trajectory_quadratic_push(
         rail,
         follow_time,
     );
-    if let Some(violated) = kinematic_limit_violation(arm, &trajectory) {
-        return Err(SwingPlanError::TrajectoryExceedsLimits {
-            rail_end_x: rail.end,
-            violated,
-        });
-    }
-    let torque_utilization = peak_torque_utilization(arm, &trajectory);
-    if torque_utilization > 1.0 {
-        return Err(SwingPlanError::TrajectoryExceedsTorque {
-            rail_end_x: rail.end,
-            utilization: torque_utilization,
-        });
-    }
-    if !trajectory_collision_free(arm, &trajectory) {
-        let depth = {
-            let samples = (trajectory.duration_secs / 0.005).ceil() as usize;
-            let mut worst = 0.0_f64;
-            for index in 0..=samples.max(1) {
-                let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
-                let joints = trajectory.sample_at(time);
-                let rail_x = trajectory.sample_rail_at(time);
-                worst = worst.max(crate::robot::collision::table_penetration(
-                    arm, rail_x, &joints,
-                ));
-            }
-            worst
-        };
-        return Err(SwingPlanError::TablePenetration {
-            target_x: rail.end,
-            target_y: 0.0,
-            target_z: table::SURFACE_Z,
-            depth,
-        });
-    }
+    evaluate_trajectory_feasibility(arm, &trajectory, rail.end)?;
     return Ok(trajectory);
 }
 
