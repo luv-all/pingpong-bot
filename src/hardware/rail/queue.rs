@@ -208,4 +208,44 @@ mod tests {
         queue.wait_idle();
         assert_eq!(sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1.0);
     }
+
+    #[test]
+    fn latest_command_wins_while_previous_is_in_flight() {
+        let (queue, sent_rx, release_tx) = spawn_mock(None);
+
+        queue.enqueue(1.0, 0.1);
+        // Worker picks up 1.0 and blocks inside wait_idle() until released.
+        assert_eq!(sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1.0);
+
+        // These land while the worker is still executing 1.0 — only the last
+        // one should ever reach the driver.
+        queue.enqueue(2.0, 0.1);
+        queue.enqueue(3.0, 0.1);
+
+        release_tx.send(()).unwrap(); // finishes 1.0's wait_idle
+        release_tx.send(()).unwrap(); // finishes whichever command runs next
+
+        assert_eq!(sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 3.0);
+        queue.wait_idle();
+        assert!(sent_rx.try_recv().is_err(), "2.0 must never have been sent");
+    }
+
+    #[test]
+    fn is_moving_reflects_executing_and_pending_state() {
+        let (queue, sent_rx, release_tx) = spawn_mock(None);
+
+        assert!(!queue.is_moving());
+
+        queue.enqueue(1.0, 0.1);
+        assert_eq!(sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1.0);
+        assert!(queue.is_moving(), "worker is blocked inside wait_idle() for 1.0");
+
+        queue.enqueue(2.0, 0.1);
+        assert!(queue.is_moving(), "2.0 is pending even though not yet sent");
+
+        release_tx.send(()).unwrap(); // finishes 1.0
+        release_tx.send(()).unwrap(); // finishes 2.0
+        queue.wait_idle();
+        assert!(!queue.is_moving());
+    }
 }
