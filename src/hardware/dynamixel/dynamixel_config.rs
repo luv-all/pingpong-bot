@@ -36,6 +36,8 @@ pub struct DynamixelConfig {
     pub joint_offsets_rad: Vec<f64>,
     pub motor_angle_limits_deg: Vec<[f64; 2]>,
     pub mirror_slaves: Vec<MirrorSlave>,
+    /// 이론 대칭 슬레이브 목표에 더하는 실물 조립 영점 [tick].
+    pub mirror_slave_offset_ticks: i32,
     /// 버스를 닫을 때 토크를 **켠 채로 둘지**.
     ///
     /// 기본 `true` — 끄면 프로그램이 끝나는 순간 팔이 중력으로 주저앉는다. AXL 레일도 같은
@@ -117,7 +119,7 @@ impl DynamixelConfig {
     }
 
     pub fn mirror_tick(&self, master_ticks: i32) -> i32 {
-        let mirrored = 2 * self.zero_tick - master_ticks;
+        let mirrored = 2 * self.zero_tick - master_ticks + self.mirror_slave_offset_ticks;
         let max_tick = self.ticks_per_revolution.saturating_sub(1).max(0);
         return mirrored.clamp(0, max_tick);
     }
