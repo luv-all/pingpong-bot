@@ -44,6 +44,10 @@ pub const POST_ALIGNMENT_HOLD_SECS: f64 = 0.5;
 /// 관절·레일 속도를 이 비율만큼 늦춘다.
 pub const HOME_RETURN_SPEED_RATIO: f64 = 1.0 / 3.0;
 
+/// 타격 직후 준비 자세 복귀(실시간 랠리)는 다음 공을 최대한 빨리 받아야
+/// 하므로 한계 내에서 낼 수 있는 최고 속도로 복귀한다.
+pub const RALLY_RETURN_SPEED_RATIO: f64 = 1.0;
+
 /// 발사기 반복 시험용 고정 푸시가 한계를 지키며 임팩트를 만들 최소 시간.
 pub const FIXED_IMPACT_MIN_DURATION_SECS: f64 = 0.25;
 /// 공이 없을 때 기존 임팩트 자세보다 뒤에서 대기할 거리 [m].

@@ -51,7 +51,6 @@ fn target_impact_time_secs(predicted_arrival_at: Instant, now: Instant) -> f64 {
 
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const BUSY_POLL: Duration = Duration::from_millis(5);
-const AUTO_NEXT_AFTER_HIT_WAIT: Duration = Duration::from_millis(300);
 const VERIFY_POLL_PERIOD: Duration = Duration::from_millis(20);
 const VERIFY_STABLE_SAMPLES: u8 = 2;
 const MAX_CONSECUTIVE_MISSES: u8 = 3;
@@ -347,16 +346,12 @@ pub fn spawn(
         let mut last_filtered_track_seq: Option<u64> = None;
         let mut last_waiting_ignored_track_seq: Option<u64> = None;
         let mut last_detection_delay_track_seq: Option<u64> = None;
-        // 타격 후 자동으로 진입한 Waiting에만 설정한다.
-        // 수동 W는 `None`이므로 자동 만료되지 않는다.
-        let mut waiting_auto_next_at: Option<Instant> = None;
 
         'control: while !shutdown.is_down() {
             while let Ok(control) = test_control_rx.try_recv() {
                 match control {
                     TestControl::ResetPosition | TestControl::Wait => {
                         pending_test_control = None;
-                        waiting_auto_next_at = None;
                         if hardware.is_busy() {
                             hardware.cancel();
                             while hardware.is_busy() && !shutdown.is_down() {
@@ -392,15 +387,7 @@ pub fn spawn(
                             pending_verification = None;
                             pending_refined = None;
                             consecutive_misses = 0;
-                            if waiting_auto_next_at.take().is_some() {
-                                resume_waiting_in_place(
-                                    hardware.as_mut(),
-                                    &mut latch,
-                                    &mut state,
-                                    &mut cached_idle_pose,
-                                    &event_tx,
-                                );
-                            } else if apply_immediate_control(
+                            if apply_immediate_control(
                                 TestControl::Next,
                                 hardware.as_mut(),
                                 &arm,
@@ -446,19 +433,6 @@ pub fn spawn(
                 VerificationResult::Pending => {}
             }
             log_motion_done_if_idle(hardware.as_mut(), &mut motion_watch);
-            if matches!(state, BallControlState::Waiting)
-                && waiting_auto_next_at.is_some_and(|deadline| Instant::now() >= deadline)
-            {
-                waiting_auto_next_at = None;
-                resume_waiting_in_place(
-                    hardware.as_mut(),
-                    &mut latch,
-                    &mut state,
-                    &mut cached_idle_pose,
-                    &event_tx,
-                );
-                info!("W 대기 0.3초 경과 — 자동 N 전환, 레일·관절 유지");
-            }
             let due_swing = match &state {
                 BallControlState::Aligning {
                     swing_due_at,
@@ -670,17 +644,17 @@ pub fn spawn(
                         info!(
                             track_seq = returned_track_seq,
                             rail_held_m = f4(pose.rail_x),
-                            "타격 후 Dynamixel만 준비 자세 복귀 — 레일 타격 위치 유지, W 0.3초"
+                            "타격 후 Dynamixel만 준비 자세 복귀 — 레일 타격 위치 유지, 바로 다음 공 대기"
                         );
                     }
                     Err(error) => warn!(%error, "준비 자세 복귀 후 포즈 읽기 실패"),
                 }
-                // 타격 후 W 상태를 0.3초만 유지하고 자동으로 N(Idle)으로 전환한다.
-                state = BallControlState::Waiting;
-                waiting_auto_next_at = Some(Instant::now() + AUTO_NEXT_AFTER_HIT_WAIT);
+                // 실시간 랠리를 위해 타격 후 바로 Idle로 전환해 다음 공을 즉시 받는다.
+                latch = CommandLatch::default();
+                state = BallControlState::Idle;
                 pending_refined = None;
                 let _ = event_tx.send(RuntimeEvent::ControlState {
-                    state: ControlStateSnapshot::Waiting,
+                    state: ControlStateSnapshot::Idle,
                 });
             }
             let now = Instant::now();
@@ -1411,7 +1385,12 @@ fn initialize_pose_attempt(
     // 레일 이동과 큰 관절 동작을 동시에 보간하면 전완이 탁구대를 가로지를 수 있다.
     // 현재 레일 위치에서 준비 자세를 먼저 만든 뒤 그 자세로 중앙까지 이동한다.
     let mut trajectories =
-        match plan_neutral_return_segments(&startup_arm, &measured, measured.rail_x) {
+        match plan_neutral_return_segments(
+            &startup_arm,
+            &measured,
+            measured.rail_x,
+            pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+        ) {
             Ok(trajectories) => trajectories,
             Err(direct_error) if ready_joints.values.len() == 4 => {
                 // 12cm 낮아진 베이스에서 현재 자세→준비 자세를 곧장 보간할 수 없으면
@@ -1658,8 +1637,13 @@ fn move_to_ready(hardware: &mut dyn Hardware, arm: &Arm, rail_x: f64) -> Result<
         .map_err(MoveError::Hardware)?;
     let mut ready_arm = arm.clone();
     ready_arm.default_joints = Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF);
-    let trajectories =
-        plan_neutral_return_segments(&ready_arm, &start, rail_x).map_err(MoveError::Plan)?;
+    let trajectories = plan_neutral_return_segments(
+        &ready_arm,
+        &start,
+        rail_x,
+        pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+    )
+    .map_err(MoveError::Plan)?;
     if trajectories.len() > 1 {
         info!(
             segments = trajectories.len(),
@@ -1691,8 +1675,13 @@ fn move_joints_to_ready_in_place(hardware: &mut dyn Hardware, arm: &Arm) -> Resu
         .map_err(MoveError::Hardware)?;
     let mut ready_arm = arm.clone();
     ready_arm.default_joints = Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF);
-    let trajectories =
-        plan_neutral_return_segments(&ready_arm, &start, start.rail_x).map_err(MoveError::Plan)?;
+    let trajectories = plan_neutral_return_segments(
+        &ready_arm,
+        &start,
+        start.rail_x,
+        pingpong_bot::defaults::RALLY_RETURN_SPEED_RATIO,
+    )
+    .map_err(MoveError::Plan)?;
     for trajectory in trajectories {
         hardware
             .command_joints(&trajectory)
@@ -1837,23 +1826,6 @@ fn apply_immediate_control(
     };
 }
 
-/// 타격 후 자동 W가 0.3초 만료됐거나 그 전에 수동 N을 누른 경우,
-/// 하드웨어를 다시 움직이지 않고 다음 공을 받는 상태로만 전환한다.
-fn resume_waiting_in_place(
-    hardware: &mut dyn Hardware,
-    latch: &mut CommandLatch,
-    state: &mut BallControlState,
-    cached_idle_pose: &mut Option<pingpong_bot::robot::Pose>,
-    event_tx: &Sender<RuntimeEvent>,
-) {
-    *latch = CommandLatch::default();
-    *state = BallControlState::Idle;
-    *cached_idle_pose = hardware.read_pose().ok();
-    let _ = event_tx.send(RuntimeEvent::ControlState {
-        state: ControlStateSnapshot::Idle,
-    });
-}
-
 /// 직접 복귀가 테이블을 스치면 안전한 상승 중간 자세를 거치는 2구간을 찾는다.
 /// 모든 구간은 실행 전에 속도·토크·테이블 충돌 검사를 통과해야 한다. 목표
 /// 레일 x는 호출측이 고른다 — 시작 자세 초기화는 항상 `rail.default_x()`를,
@@ -1862,13 +1834,14 @@ fn plan_neutral_return_segments(
     arm: &Arm,
     start: &pingpong_bot::robot::Pose,
     rail_x: f64,
+    speed_ratio: f64,
 ) -> Result<Vec<pingpong_bot::robot::motion::Trajectory>, DomainError> {
     let planning_start = clamp_small_joint_limit_overshoot(arm, start);
     let direct_error = match Planner::return_to_center_at_speed_ratio(
         arm,
         &planning_start,
         rail_x,
-        pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+        speed_ratio,
     ) {
         Ok(direct) => return Ok(vec![direct]),
         Err(error) => error,
@@ -1916,7 +1889,7 @@ fn plan_neutral_return_segments(
             &planning_start,
             lifted_joints,
             planning_start.rail_x,
-            pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+            speed_ratio,
         ) {
             Ok(trajectory) => trajectory,
             Err(error) => {
@@ -1926,12 +1899,7 @@ fn plan_neutral_return_segments(
         };
         let lifted_pose =
             pingpong_bot::robot::Pose::new(lift.follow_through_rail_x, lift.follow_through.clone());
-        match Planner::return_to_center_at_speed_ratio(
-            arm,
-            &lifted_pose,
-            rail_x,
-            pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
-        ) {
+        match Planner::return_to_center_at_speed_ratio(arm, &lifted_pose, rail_x, speed_ratio) {
             Ok(ready) => return Ok(vec![lift, ready]),
             Err(error) => last_error = Some(error),
         }
@@ -2347,8 +2315,13 @@ mod tests {
             Joints::from_slice(&[1.264_000_169, -0.423_378_697, 0.115_048_559, -0.550_699_103]),
         );
 
-        let segments = plan_neutral_return_segments(&robot.arm, &start, rail.default_x())
-            .expect("직접 또는 상승 중간 자세를 거쳐 안전하게 복귀");
+        let segments = plan_neutral_return_segments(
+            &robot.arm,
+            &start,
+            rail.default_x(),
+            pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+        )
+        .expect("직접 또는 상승 중간 자세를 거쳐 안전하게 복귀");
         assert!(!segments.is_empty());
         assert!(segments.len() <= 2);
     }
@@ -2362,8 +2335,13 @@ mod tests {
         );
         let rail = robot.arm.rail.expect("rail");
 
-        let segments = plan_neutral_return_segments(&robot.arm, &start, rail.default_x())
-            .expect("극단 정렬 자세에서도 중간 자세를 거쳐 복귀");
+        let segments = plan_neutral_return_segments(
+            &robot.arm,
+            &start,
+            rail.default_x(),
+            pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+        )
+        .expect("극단 정렬 자세에서도 중간 자세를 거쳐 복귀");
 
         assert_eq!(
             segments.last().expect("ready segment").follow_through,
@@ -2377,8 +2355,13 @@ mod tests {
         let rail = robot.arm.rail.expect("rail 있는 로봇");
         let start = Pose::new(rail.x_max, robot.arm.default_joints.clone());
 
-        let home_segments = plan_neutral_return_segments(&robot.arm, &start, rail.x_min)
-            .expect("홈 포지션 복귀 계획");
+        let home_segments = plan_neutral_return_segments(
+            &robot.arm,
+            &start,
+            rail.x_min,
+            pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+        )
+        .expect("홈 포지션 복귀 계획");
         let full_speed = Planner::return_to_center_at(&robot.arm, &start, rail.x_min)
             .expect("전속 복귀 계획(비교 기준)");
 
@@ -2793,92 +2776,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_ignores_balls_while_waiting_and_resumes_after_next_before_auto_resume() {
-        let robot = pingpong_bot::defaults::robot().expect("robot");
-        let rail = robot.arm.rail.expect("rail 있는 로봇");
-        let hardware: Box<dyn Hardware> = Box::new(ReadCountingHardware {
-            reads: 0,
-            pose: Pose::new(rail.default_x(), robot.arm.default_joints.clone()),
-        });
-
-        let (commit_tx, commit_rx) = crossbeam_channel::unbounded();
-        let (test_control_tx, test_control_rx) = crossbeam_channel::unbounded();
-        let (event_tx, event_rx) = crossbeam_channel::unbounded();
-        let (guard, shutdown) = crate::real::shutdown_channel();
-
-        let handle = spawn(
-            hardware,
-            Arc::clone(&robot.arm),
-            commit_rx,
-            test_control_rx,
-            None,
-            event_tx,
-            shutdown,
-        );
-
-        let generous = Duration::from_secs(3);
-
-        commit_tx
-            .send(vision_request(Duration::ZERO))
-            .expect("보낼 수 있음");
-        assert!(
-            wait_for_event(&event_rx, generous, |event| matches!(
-                event,
-                RuntimeEvent::Commanded { .. }
-            )),
-            "첫 공은 명령돼야 한다"
-        );
-        assert!(
-            wait_for_event(&event_rx, generous, |event| matches!(
-                event,
-                RuntimeEvent::ControlState {
-                    state: ControlStateSnapshot::Waiting
-                }
-            )),
-            "스윙(정렬→유지→복귀) 완료 후 대기 상태로 들어가야 한다"
-        );
-
-        commit_tx
-            .send(vision_request(Duration::ZERO))
-            .expect("보낼 수 있음");
-        assert!(
-            !wait_for_event(&event_rx, Duration::from_millis(100), |event| matches!(
-                event,
-                RuntimeEvent::Commanded { .. }
-            )),
-            "0.3초 대기 중에는 두 번째 공을 명령하면 안 된다"
-        );
-
-        test_control_tx
-            .send(TestControl::Next)
-            .expect("보낼 수 있음");
-        assert!(
-            wait_for_event(&event_rx, generous, |event| matches!(
-                event,
-                RuntimeEvent::ControlState {
-                    state: ControlStateSnapshot::Idle
-                }
-            )),
-            "'n' 이후에는 다시 공을 받는 상태로 돌아와야 한다"
-        );
-
-        commit_tx
-            .send(vision_request(Duration::ZERO))
-            .expect("보낼 수 있음");
-        assert!(
-            wait_for_event(&event_rx, generous, |event| matches!(
-                event,
-                RuntimeEvent::Commanded { .. }
-            )),
-            "재개 후 세 번째 공은 다시 명령돼야 한다"
-        );
-
-        drop(guard);
-        handle.join().expect("워커 스레드가 정상 종료해야 한다");
-    }
-
-    #[test]
-    fn spawn_auto_switches_from_post_hit_w_to_n_after_300ms() {
+    fn spawn_auto_returns_to_idle_immediately_after_post_hit_return() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
         let rail = robot.arm.rail.expect("레일 있는 로봇");
         let hardware: Box<dyn Hardware> = Box::new(ReadCountingHardware {
@@ -2902,24 +2800,16 @@ mod tests {
         commit_tx
             .send(vision_request(Duration::ZERO))
             .expect("공 예측 전송");
+        // 실시간 랠리: 타격 후 Waiting을 거치지 않고 바로 Idle로 돌아와 다음
+        // 공을 즉시 받을 수 있어야 한다.
         assert!(wait_for_event(&event_rx, Duration::from_secs(3), |event| {
             matches!(
-                event,
-                RuntimeEvent::ControlState {
-                    state: ControlStateSnapshot::Waiting
-                }
-            )
-        }));
-        assert!(wait_for_event(
-            &event_rx,
-            AUTO_NEXT_AFTER_HIT_WAIT + Duration::from_secs(1),
-            |event| matches!(
                 event,
                 RuntimeEvent::ControlState {
                     state: ControlStateSnapshot::Idle
                 }
             )
-        ));
+        }));
 
         drop(guard);
         handle.join().expect("워커 스레드 종료");
