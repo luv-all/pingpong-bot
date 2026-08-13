@@ -11,7 +11,7 @@ use pingpong_bot::camera::{
 };
 use pingpong_bot::defaults::vision::detector_for;
 use pingpong_bot::defaults::{self, DEFAULT_STEREO_CAM_ROLES, camera_params_for, robot};
-use pingpong_bot::hardware::dynamixel::DynamixelConfig;
+use pingpong_bot::hardware::dynamixel::{DynamixelBus, DynamixelConfig};
 use pingpong_bot::hardware::rail::{AxlRail, RailCalibration, RailConfig, RailEnd};
 use pingpong_bot::hardware::{Hardware, RealHardware};
 use tracing::{debug, info, warn};
@@ -59,6 +59,14 @@ pub fn run(args: &Args) -> Result<()> {
         return run_rail_scale_check_command(&options, &arm);
     }
 
+    // 레일 홈잉·카메라 개방을 기다리며 몇 분을 버리기 전에 듀얼 모터 정렬부터
+    // 확인한다. 정렬이 어긋나 있으면 사용자가 여기서 바로 고칠 수 있다.
+    dynamixel_preflight_check(&options)?;
+
+    // 카메라 개방은 하드웨어와 무관하므로 레일 홈잉과 동시에 진행한다.
+    let camera_options = options.clone();
+    let camera_handle = thread::spawn(move || open_cameras(&camera_options));
+
     if options.home && !options.dry_run {
         calibrate_rail_on_startup()?;
     }
@@ -76,7 +84,9 @@ pub fn run(args: &Args) -> Result<()> {
         );
     }
     let calibration = load_calibration()?;
-    let sources = open_cameras(&options)?;
+    let sources = camera_handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("카메라 개방 스레드 패닉"))??;
     ensure!(
         sources.len() >= calibration.min_cameras_for_triangulation(),
         "새 픽셀 궤적 적합에 카메라 {}대가 필요한데 {}대만 열렸다",
@@ -151,6 +161,26 @@ pub fn run(args: &Args) -> Result<()> {
         warn!("제어 워커 패닉");
     }
     log_summary(&outcome, &camera_stats, estimator_stats.as_ref());
+    return Ok(());
+}
+
+/// 레일 홈잉·카메라 개방 전에 듀얼 MX-64 정렬을 먼저 검사한다. 이 포트는 확인만
+/// 하고 바로 닫으며, `open_hardware`가 뒤에서 실제로 쓸 포트를 다시 연다 — 두 번
+/// 열리는 대신 정렬이 어긋난 경우 레일 홈잉·카메라 개방을 기다리지 않고 바로
+/// 실패를 알 수 있다. dry-run은 실제 모터가 없으므로 건너뛴다.
+fn dynamixel_preflight_check(options: &Options) -> Result<()> {
+    if options.dry_run {
+        return Ok(());
+    }
+    let mut dxl = DynamixelConfig::default();
+    if let Some(port) = &options.dxl_port {
+        dxl.port = port.clone();
+    }
+    info!(port = %dxl.port, "듀얼 모터 정렬 사전 점검");
+    let mut bus = DynamixelBus::open(dxl).context("듀얼 모터 정렬 사전 점검: 포트 열기 실패")?;
+    bus.verify_mirror_alignment()
+        .context("듀얼 모터 정렬 사전 점검 실패")?;
+    info!("듀얼 모터 정렬 사전 점검 통과");
     return Ok(());
 }
 
