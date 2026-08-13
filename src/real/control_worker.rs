@@ -444,13 +444,20 @@ pub fn spawn(
                     measurement,
                     ..
                 } if !swing_attempted && Instant::now() >= *swing_due_at => {
-                    Some((measurement.track_seq, *swing_due_at))
+                    Some((
+                        measurement.track_seq,
+                        *swing_due_at,
+                        pingpong_bot::robot::Pose::new(
+                            measurement.rail_commanded_m,
+                            measurement.joints_commanded.clone(),
+                        ),
+                    ))
                 }
                 BallControlState::Idle
                 | BallControlState::Waiting
                 | BallControlState::Aligning { .. } => None,
             };
-            if let Some((track_seq, swing_due_at)) = due_swing {
+            if let Some((track_seq, swing_due_at, aligned_target)) = due_swing {
                 if let BallControlState::Aligning {
                     swing_attempted, ..
                 } = &mut state
@@ -459,12 +466,30 @@ pub fn spawn(
                     *swing_attempted = true;
                 }
                 match hardware.read_pose() {
-                    Ok(swing_start) => match Planner::fixed_joint_swing(
-                        &arm_for_rail_position(&arm, swing_start.rail_x),
-                        &swing_start,
-                    ) {
+                    Ok(swing_start) => {
+                        let swing_arm = arm_for_rail_position(&arm, swing_start.rail_x);
+                        match Planner::fixed_joint_swing_from_alignment(
+                            &swing_arm,
+                            &swing_start,
+                            &aligned_target,
+                        ) {
                         Ok(planned) => {
                             let swing = &planned.trajectory;
+                            let measured_racket_z = swing_arm
+                                .forward_kinematics_with_rail(
+                                    swing_start.rail_x,
+                                    &swing_start.joints,
+                                )
+                                .map(|pose| pose.position.z);
+                            let aligned_racket_z = swing_arm
+                                .forward_kinematics_with_rail(
+                                    aligned_target.rail_x,
+                                    &aligned_target.joints,
+                                )
+                                .map(|pose| pose.position.z);
+                            let impact_racket_z = swing_arm
+                                .forward_kinematics_with_rail(swing.rail.end, &swing.end)
+                                .map(|pose| pose.position.z);
                             let command_send_started = Instant::now();
                             let command_result = hardware.command_joints(swing);
                             let command_send_ms =
@@ -490,6 +515,9 @@ pub fn spawn(
                                         joints_impact = %format!("{:?}", swing.end.values),
                                         joints_follow_through = %format!("{:?}", swing.follow_through.values),
                                         skipped_joint_indices = ?planned.skipped_joint_indices,
+                                        measured_racket_z_m = ?measured_racket_z.map(f4),
+                                        aligned_racket_z_m = ?aligned_racket_z.map(f4),
+                                        impact_racket_z_m = ?impact_racket_z.map(f4),
                                         "j0~j3 백스윙 없는 직진 푸시 시작"
                                     );
                                 }
@@ -505,7 +533,8 @@ pub fn spawn(
                             %error,
                             "다관절 직진 푸시 계획 불가 — 타격 동작 생략"
                         ),
-                    },
+                    }
+                    }
                     Err(error) => warn!(
                         track_seq,
                         %error,

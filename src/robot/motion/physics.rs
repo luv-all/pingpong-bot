@@ -986,11 +986,22 @@ pub fn plan_fixed_joint_swing(
     arm: &Arm,
     start: &robot::Pose,
 ) -> Result<FixedJointSwing, DomainError> {
-    let start_racket = arm
-        .forward_kinematics_with_rail(start.rail_x, &start.joints)
+    return plan_fixed_joint_swing_from_alignment(arm, start, start);
+}
+
+/// `start`는 스윙 직전 실측 자세이고 `aligned`는 마지막으로 명령한 절대 정렬 자세다.
+/// 높이축 추종이 늦어도 낮은 실측 위치를 새 기준으로 삼지 않고 공에 맞춘 정렬 높이로
+/// 도착하도록 한다.
+pub fn plan_fixed_joint_swing_from_alignment(
+    arm: &Arm,
+    start: &robot::Pose,
+    aligned: &robot::Pose,
+) -> Result<FixedJointSwing, DomainError> {
+    let aligned_racket = arm
+        .forward_kinematics_with_rail(aligned.rail_x, &aligned.joints)
         .ok_or_else(|| {
             DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
-                target_x: start.rail_x,
+                target_x: aligned.rail_x,
                 target_y: 0.0,
                 target_z: table::SURFACE_Z,
             })
@@ -999,29 +1010,29 @@ pub fn plan_fixed_joint_swing(
     if joint_count < 4 {
         return Err(DomainError::InfeasibleSwing(
             SwingPlanError::JointOrTorqueLimit {
-                target_x: start_racket.position.x,
-                target_y: start_racket.position.y,
-                target_z: start_racket.position.z,
+                target_x: aligned_racket.position.x,
+                target_y: aligned_racket.position.y,
+                target_z: aligned_racket.position.z,
             },
         ));
     }
-    let horizontal_normal = Vector3::new(start_racket.normal.x, start_racket.normal.y, 0.0);
+    let horizontal_normal = Vector3::new(aligned_racket.normal.x, aligned_racket.normal.y, 0.0);
     if horizontal_normal.norm_squared() <= 1e-12 {
         return Err(DomainError::InfeasibleSwing(
             SwingPlanError::RacketOrientationUnreachable {
-                target_x: start_racket.position.x,
-                target_y: start_racket.position.y,
-                target_z: start_racket.position.z,
-                normal_x: start_racket.normal.x,
-                normal_y: start_racket.normal.y,
-                normal_z: start_racket.normal.z,
+                target_x: aligned_racket.position.x,
+                target_y: aligned_racket.position.y,
+                target_z: aligned_racket.position.z,
+                normal_x: aligned_racket.normal.x,
+                normal_y: aligned_racket.normal.y,
+                normal_z: aligned_racket.normal.z,
             },
         ));
     };
     let push_direction = horizontal_normal.normalize();
     // 손목 각도를 새로 만들기 위해 먼저 뒤로 휘는 동작을 제거한다. 정렬된
     // 라켓 면을 유지한 채 네 관절이 위치 전진에만 참여한다.
-    let target_normal = start_racket.normal;
+    let target_normal = aligned_racket.normal;
     // 사진 기준 10cm 전진을 우선한다. 관절 한계나 테이블 충돌 때문에 전체
     // 거리가 불가능한 극단 자세에서는 타격 자체를 취소하지 않고 가장 긴
     // 실행 가능 거리부터 순서대로 선택한다.
@@ -1033,7 +1044,7 @@ pub fn plan_fixed_joint_swing(
     ] {
         let lift_m = FIXED_JOINT_PUSH_LIFT_M * push_distance_m / FIXED_JOINT_PUSH_DISTANCE_M;
         let target_position = Point3::from(
-            start_racket.position.coords
+            aligned_racket.position.coords
                 + push_direction * push_distance_m
                 + Vector3::z() * lift_m,
         );
@@ -1047,7 +1058,7 @@ pub fn plan_fixed_joint_swing(
     let fallback_lift_m =
         FIXED_JOINT_PUSH_LIFT_M * fallback_distance_m / FIXED_JOINT_PUSH_DISTANCE_M;
     let fallback_position = Point3::from(
-        start_racket.position.coords
+        aligned_racket.position.coords
             + push_direction * fallback_distance_m
             + Vector3::z() * fallback_lift_m,
     );
@@ -1900,6 +1911,56 @@ mod tests {
         assert_ne!(
             follow_through.position, impact.position,
             "타격 후 전진 팔로스루"
+        );
+    }
+
+    #[test]
+    fn fixed_joint_swing_recovers_absolute_height_from_lagging_measured_pose() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let ready = robot::Pose::new(
+            arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+            arm.default_joints.clone(),
+        );
+        let alignment = plan_ball_alignment(
+            arm,
+            &ready,
+            Point3::new(table::WIDTH_X * 0.5, READY_RACKET_Y_M, 0.95),
+        )
+        .expect("alignment");
+        let aligned = robot::Pose::new(
+            alignment.follow_through_rail_x,
+            alignment.follow_through.clone(),
+        );
+        let mut lagging = aligned.clone();
+        lagging.joints.values[2] += 0.04;
+
+        let planned = plan_fixed_joint_swing_from_alignment(arm, &lagging, &aligned)
+            .expect("absolute-height swing");
+        let aligned_racket = arm
+            .forward_kinematics_with_rail(aligned.rail_x, &aligned.joints)
+            .expect("aligned FK");
+        let measured_racket = arm
+            .forward_kinematics_with_rail(lagging.rail_x, &lagging.joints)
+            .expect("measured FK");
+        let impact = arm
+            .forward_kinematics_with_rail(
+                planned.trajectory.rail.end,
+                &planned.trajectory.end,
+            )
+            .expect("impact FK");
+        let horizontal_normal =
+            Vector3::new(aligned_racket.normal.x, aligned_racket.normal.y, 0.0).normalize();
+        let pushed = (impact.position - aligned_racket.position).dot(&horizontal_normal);
+        let expected_lift = FIXED_JOINT_PUSH_LIFT_M * pushed / FIXED_JOINT_PUSH_DISTANCE_M;
+
+        assert!(
+            measured_racket.position.z < aligned_racket.position.z,
+            "시험용 실측 자세가 정렬 목표보다 낮아야 함"
+        );
+        assert!(
+            (impact.position.z - aligned_racket.position.z - expected_lift).abs() < 2e-3,
+            "임팩트 높이는 낮은 실측값이 아니라 절대 정렬 높이에서 계산돼야 함"
         );
     }
 
