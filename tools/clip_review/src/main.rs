@@ -199,7 +199,13 @@ fn run_all(out: &std::path::Path) -> Result<()> {
         "RMSEx·y·z=얼린 예측의 축별 RMSE — 합이 아니라 어느 방향이 나쁜지를 본다".into(),
     );
     lines.push("RMSE·리드타임 오차는 cm, 전부 생 삼각측량 기준".into());
-    lines.push("y0.08~y0.35 = 접수 창의 평면들 — 그 자리에서 라켓이 빗나가는 거리 [cm]".into());
+    // 접수 창은 제어측 상수에서 나오므로 여기 숫자를 박아 두면 창이 옮겨질 때 조용히
+    // 낡는다(실제로 0.08~0.35로 박혀 있던 게 창이 0.14~0.41로 옮겨진 뒤에도 남아 있었다).
+    let window = pingpong_bot::robot::motion::InterceptWindow::default();
+    lines.push(format!(
+        "y{:.2}~y{:.2} = 접수 창의 평면들 — 그 자리에서 라켓이 빗나가는 거리 [cm]",
+        window.y_min, window.y_max
+    ));
     let summary = out.join("summary.txt");
     std::fs::write(&summary, lines.join("\n") + "\n")
         .with_context(|| format!("write {}", summary.display()))?;
