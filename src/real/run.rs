@@ -334,8 +334,8 @@ fn validate_racket_table_reference_trajectory(
     return Ok(());
 }
 
-/// 홈잉·시작 자세 초기화가 끝난 레일을 현재 위치 기준으로 -X 50cm 이동한 뒤
-/// 6초 유지하고, +X 50cm 이동해 원위치에서 다시 6초 유지한다.
+/// 홈잉·시작 자세 초기화가 끝난 레일을 중앙 기준 -X/+X 양쪽으로 각각 50cm
+/// 이동하고 매 목표에서 6초 유지한다. 마지막에는 중앙으로 돌아온다.
 fn run_startup_rail_scale_check(
     hardware: &mut dyn Hardware,
     arm: &pingpong_bot::robot::Arm,
@@ -347,10 +347,15 @@ fn run_startup_rail_scale_check(
         .read_pose()
         .context("시작 레일 스케일 점검 기준 위치 읽기 실패")?
         .rail_x;
-    let (negative_target_x, return_target_x) =
+    let (negative_target_x, center_target_x, positive_target_x) =
         startup_rail_scale_targets(start_x, rail.x_min, rail.x_max)?;
 
-    for (direction, target_x) in [("-X", negative_target_x), ("+X", return_target_x)] {
+    for (direction, target_x) in [
+        ("-X 50cm", negative_target_x),
+        ("+X 50cm 중앙 복귀", center_target_x),
+        ("+X 50cm", positive_target_x),
+        ("-X 50cm 중앙 복귀", center_target_x),
+    ] {
         info!(
             direction,
             start_x = f2(start_x),
@@ -423,18 +428,19 @@ fn racket_tip_clearance_m(racket: &pingpong_bot::robot::RacketPose) -> f64 {
     return racket.position.z - vertical_half_extent - pingpong_bot::constants::table::SURFACE_Z;
 }
 
-fn startup_rail_scale_targets(start_x: f64, x_min: f64, x_max: f64) -> Result<(f64, f64)> {
+fn startup_rail_scale_targets(start_x: f64, x_min: f64, x_max: f64) -> Result<(f64, f64, f64)> {
     ensure!(start_x.is_finite(), "시작 레일 위치가 유한값이 아닙니다");
     let negative_target_x = start_x - STARTUP_RAIL_SCALE_CHECK_DISTANCE_M;
+    let positive_target_x = start_x + STARTUP_RAIL_SCALE_CHECK_DISTANCE_M;
     ensure!(
         negative_target_x >= x_min && negative_target_x <= x_max,
         "시작 위치 {start_x:.4}m에서 -X 50cm 목표 {negative_target_x:.4}m가 안전 범위 [{x_min:.4}, {x_max:.4}]m 밖입니다"
     );
     ensure!(
-        start_x >= x_min && start_x <= x_max,
-        "+X 50cm 복귀 목표 {start_x:.4}m가 안전 범위 [{x_min:.4}, {x_max:.4}]m 밖입니다"
+        positive_target_x >= x_min && positive_target_x <= x_max,
+        "시작 위치 {start_x:.4}m에서 +X 50cm 목표 {positive_target_x:.4}m가 안전 범위 [{x_min:.4}, {x_max:.4}]m 밖입니다"
     );
-    return Ok((negative_target_x, start_x));
+    return Ok((negative_target_x, start_x, positive_target_x));
 }
 
 #[cfg(test)]
@@ -448,7 +454,7 @@ mod startup_rail_tests {
 
     #[test]
     fn startup_scale_check_moves_negative_then_returns_positive() {
-        let (negative, returned) = startup_rail_scale_targets(
+        let (negative, returned, positive) = startup_rail_scale_targets(
             defaults::RAIL_READY_X_M,
             defaults::RAIL_X_MIN_M,
             defaults::RAIL_X_MAX_M,
@@ -456,6 +462,7 @@ mod startup_rail_tests {
         .expect("scale check targets");
         assert!((negative - 0.175).abs() < 1e-12);
         assert!((returned - defaults::RAIL_READY_X_M).abs() < 1e-12);
+        assert!((positive - 1.175).abs() < 1e-12);
     }
 
     #[test]
@@ -467,6 +474,17 @@ mod startup_rail_tests {
         )
         .expect_err("unsafe -X target");
         assert!(error.to_string().contains("안전 범위"));
+    }
+
+    #[test]
+    fn startup_scale_check_rejects_positive_target_outside_safe_range() {
+        let error = startup_rail_scale_targets(
+            defaults::RAIL_X_MAX_M - 0.10,
+            defaults::RAIL_X_MIN_M,
+            defaults::RAIL_X_MAX_M,
+        )
+        .expect_err("unsafe +X target");
+        assert!(error.to_string().contains("+X 50cm"));
     }
 
     #[test]
