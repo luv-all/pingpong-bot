@@ -61,6 +61,13 @@ pub struct Score {
     pub bounce_counts: Option<(usize, usize)>,
     /// 리드타임과 타점 오차를 잰 기준 평면 [m]. 클립마다 다를 수 있다.
     pub reference_plane: f64,
+    /// 트랙을 갈아엎은 횟수 중 **비행 중**에 일어난 것 — (비행 중, 전체).
+    ///
+    /// 전체 개수만 보면 해석이 안 된다. 클립엔 발사 전 굴러다니는 공·사람 움직임이
+    /// 길게 들어 있어서 거기서 뜬 헛트랙은 무해하다. 반면 비행 중에 끊기면 일괄 적합이
+    /// 그때까지 쌓은 관측을 통째로 버리고 다시 시작하므로 트리거 시점 관측 수와
+    /// 정확도를 직접 깎는다.
+    pub flight_track_switches: Option<(usize, u64)>,
     /// 실제 공이 처음 튄 시각 [s]. 트리거보다 **뒤**면 커밋 순간에는 튐 정보가 아직
     /// 없다는 뜻이라, 스핀이든 반사계수든 그 시점엔 원리적으로 못 푼다.
     pub first_bounce_t: Option<f64>,
@@ -134,7 +141,15 @@ impl Score {
                     .iter()
                     .enumerate()
                     .filter(|(index, _)| (reviewed.time_of(*index) - at).abs() <= tolerance)
-                    .find_map(|(_, state)| state.predicted_impact)
+                    // 정답과 **같은 평면**의 예측을 고른다 — 다른 평면과 견주면 평면
+                    // 간격이 그대로 오차로 둔갑한다(`FrameState::predicted_impacts` 참고).
+                    .find_map(|(_, state)| {
+                        state
+                            .predicted_impacts
+                            .iter()
+                            .find(|(y, _)| (y - plane).abs() < 1e-9)
+                            .map(|(_, point)| *point)
+                    })
                     .map(|guess| (guess - truth).norm());
             })
             .collect();
@@ -212,6 +227,7 @@ impl Score {
             residual: [percentiles(&mut residual[0]), percentiles(&mut residual[1])],
             reference_plane: reference_plane(reviewed).unwrap_or(plane),
             impact_t: impact.map(|observed| observed.t),
+            flight_track_switches: flight_switches(reviewed, impact.map(|o| o.t)),
             first_bounce_t: first_touchdown_t(reviewed),
             solved_spin: reviewed
                 .contract
@@ -304,6 +320,16 @@ impl Score {
             })
             .collect();
         out.push(format!("  예측 오차   {}", leads.join(" ")));
+        if let Some((during, total)) = self.flight_track_switches {
+            out.push(format!(
+                "  트랙 끊김   비행 중 {during}회 / 전체 {total}회{}",
+                if during > 0 {
+                    " — 비행 중 끊기면 그때까지 쌓은 관측을 버리고 다시 시작한다"
+                } else {
+                    " — 비행 중엔 안 끊겼다(전체는 발사 전 헛트랙)"
+                }
+            ));
+        }
         out.push(match (self.first_bounce_t, self.trigger) {
             (Some(bounce), Some((_, fired, _))) if bounce > fired => format!(
                 "  튐 시각      t={bounce:.3}s — 트리거({fired:.3}s)보다 {:.0}ms 뒤. 커밋 순간엔 튐 정보가 없다",
@@ -460,6 +486,26 @@ fn count_bounces(reviewed: &Reviewed, predicted: &pingpong_bot::vision::Track) -
 /// 신뢰도 재확인 없이 다 센다. 목적이 다르면(측정 vs 있었나 없었나) 필터도 다르다.
 /// 생 궤적에서 처음 튄 시각 [s]. [`count_touchdowns`]와 같은 판정을 쓴다 — 개수와
 /// 시각이 다른 규칙으로 갈리면 안 된다.
+/// 첫 스테레오 관측부터 도달까지 사이에 `seq`가 몇 번 바뀌나.
+fn flight_switches(reviewed: &Reviewed, impact_t: Option<f64>) -> Option<(usize, u64)> {
+    let total = reviewed.frames.last()?.seq;
+    let start = reviewed.observed.first()?.t;
+    let end = impact_t.unwrap_or(f64::INFINITY);
+    let mut during = 0usize;
+    let mut previous: Option<u64> = None;
+    for (index, state) in reviewed.frames.iter().enumerate() {
+        let t = reviewed.time_of(index);
+        if t < start || t > end {
+            continue;
+        }
+        if previous.is_some_and(|seq| seq != state.seq) {
+            during += 1;
+        }
+        previous = Some(state.seq);
+    }
+    return Some((during, total));
+}
+
 fn first_touchdown_t(reviewed: &Reviewed) -> Option<f64> {
     let points: Vec<TrajPoint> = reviewed
         .observed

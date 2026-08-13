@@ -14,6 +14,7 @@ use pingpong_bot::camera::{self, Calibration, Frame, FrameSource, OpenCvCapture,
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
 use pingpong_bot::defaults::vision::seed::MAX_REPROJECTION_PX;
+use pingpong_bot::robot::motion::InterceptWindow;
 use pingpong_bot::vision::{Outcome, State, Track, Trajectory, Vision};
 
 /// 로봇 마운트 y [m] — 궤적을 그릴 하한.
@@ -93,11 +94,18 @@ pub struct FrameState {
     /// 바운스에서 닫힌식으로 푼 스핀. `None`이면 `ASSUMED_SPIN`(=0)으로 굴렸다는 뜻 —
     /// 그 샷의 튐 반사는 무회전 가정이라 y·z가 어긋난다.
     pub solved_spin: Option<Vector3>,
-    /// 이 프레임의 **살아 있는** 예측이 접수 평면에서 찍은 점.
+    /// 이 프레임의 **살아 있는** 예측이 접수 창의 평면마다 찍은 점 — `(평면 y, 점)`.
     ///
     /// 얼린 예측은 한 점밖에 안 주므로 "리드가 줄면 나아지나"를 못 본다. 계약이 매
-    /// 관측마다 갱신되니 프레임마다 이 한 점만 남겨 두면 그 곡선이 나온다.
-    pub predicted_impact: Option<Point3>,
+    /// 관측마다 갱신되니 프레임마다 이걸 남겨 두면 그 곡선이 나온다.
+    ///
+    /// 한 평면만 담았다가 지표가 거짓말을 한 적이 있다. 예측은 `DEFAULT_HIT_PLANE_Y`
+    /// (0.08)에서 재고 정답은 클립별 기준 평면(공이 실제로 지나는 가장 깊은 것)에서
+    /// 쟀는데, 접수 창이 0.14~0.41로 옮겨지면서 0.08이 창 **밖**이 됐다 — 서로 다른
+    /// 평면의 두 점을 빼고 있었고 그 간격이 그대로 오차로 잡혔다(실측 fly_49:
+    /// 0.32 − 0.08 = 정확히 24.0cm가 리드 네 개 모두에서 나옴). 평면마다 담아 두면
+    /// 채점 쪽이 정답과 **같은 평면**을 골라 쓸 수 있다.
+    pub predicted_impacts: Vec<(f64, Point3)>,
     /// "같은 공인가"의 근거. 트랙을 버리면 올라간다.
     pub seq: u64,
     pub tracking: bool,
@@ -378,10 +386,18 @@ pub fn replay_with(
                     .flatten();
             }
         }
-        state.predicted_impact = fit
+        state.predicted_impacts = fit
             .trajectory(origin)
-            .and_then(|t| t.predicted.at_plane(table::DEFAULT_HIT_PLANE_Y))
-            .map(|s| s.position);
+            .map(|trajectory| {
+                InterceptWindow::default()
+                    .hit_planes()
+                    .into_iter()
+                    .filter_map(|plane| {
+                        Some((plane.y, trajectory.predicted.at_plane(plane.y)?.position))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // 계약이 생기면 잡고, 같은 공인 동안 갱신한다 — measured 가 계속 자란다.
         // 다른 공이 다시 트리거를 넘겨도 첫 계약만 본다 (실기도 샷당 한 번이다).
