@@ -6,6 +6,7 @@ use crate::Point3;
 use crate::constants::physics::G_Z;
 use crate::constants::table;
 use crate::defaults;
+use crate::defaults::motion::IMPACT_UPWARD_TILT_DEG;
 use crate::error::SwingPlanError;
 
 /// 임팩트 역산의 공개 진입점.
@@ -76,8 +77,42 @@ impl Impact {
 /// 되레 커진다. 즉 "필요 출사속도를 줄인다"는 목표는 `r`(실제 병목)의
 /// 대리지표로 부적절했다 — `r`은 v_out formula가 아니라 IK가 고르는
 /// 자세의 자코비안에 지배된다. 상세: `docs/wp3-rally-target-distance.md`.
-pub fn rally_return_velocity(impact: Point3, _v_in: Vector3<f64>) -> Vector3<f64> {
-    return rally_return_velocity_fixed_point(impact, &defaults::ImpactParams::default());
+///
+/// **2026-08-14 추가 — 최소 위쪽 기울기 보정.** 고정목표 공식은 네트
+/// 클리어런스만 보장할 뿐 `desired_normal = normalize(v_out - v_in)`의 기울기는
+/// 신경 쓰지 않는다. 입사속도의 z성분이 이미 큰 양수(바운드 직후 아직
+/// 올라오는 공)인 경우 `v_out.z - v_in.z`가 작아져, 네트는 20cm+ 여유로
+/// 넘기면서도 `desired_normal`은 수평에 가까워질 수 있다(실측
+/// `diag_rally_return_tilt_and_net_margin`: 인터셉트 구간·현실적 입사속도
+/// 전역에서 최소 4.06°, 순항 다수 구간이 10° 미만 — 네트 여유는 항상
+/// 0.21m 이상이라 병목이 아니다). `plan_aligned_impact_sequence`(다른 스윙
+/// 모드)가 이미 같은 문제를 [`IMPACT_UPWARD_TILT_DEG`]로 고정 기울기를
+/// 강제해 피해 왔으므로, 여기서도 좌우/깊이 조준(`v_out.x`, `v_out.y`)은
+/// 그대로 두고 `v_out.z`만 그 기울기 이상이 되도록 끌어올린다 — 조준도
+/// IK 시드 랭킹(WP2b)도 건드리지 않는, `v_out` 계산 안에서만 닫히는 보정.
+pub fn rally_return_velocity(impact: Point3, v_in: Vector3<f64>) -> Vector3<f64> {
+    let v_out = rally_return_velocity_fixed_point(impact, &defaults::ImpactParams::default());
+    return ensure_minimum_upward_tilt(v_in, v_out);
+}
+
+/// `v_out`이 만드는 `desired_normal`(`(v_out - v_in)` 방향)의 위쪽 기울기가
+/// [`IMPACT_UPWARD_TILT_DEG`] 미만이면 `v_out.z`만 올려 정확히 그 기울기가
+/// 되도록 한다. 좌우 조준(`v_out.x`)·네트 통과 타이밍(`v_out.y`)은 바꾸지
+/// 않는다 — 둘 다 `desired_normal`의 수평(XY) 성분에만 관여하고, 그
+/// 수평(XY) 성분은 그대로 둔 채 z만 필요한 만큼 늘리면 기하학적으로 기울기
+/// 하한을 정확히 만족시킬 수 있다(`delta.z >= horiz * tan(tilt)`).
+fn ensure_minimum_upward_tilt(v_in: Vector3<f64>, v_out: Vector3<f64>) -> Vector3<f64> {
+    let delta = v_out - v_in;
+    let horiz = (delta.x * delta.x + delta.y * delta.y).sqrt();
+    if horiz < 1e-9 {
+        return v_out;
+    }
+    let min_tilt_rad = IMPACT_UPWARD_TILT_DEG.to_radians();
+    let min_delta_z = horiz * min_tilt_rad.tan();
+    if delta.z >= min_delta_z {
+        return v_out;
+    }
+    return Vector3::new(v_out.x, v_out.y, v_in.z + min_delta_z);
 }
 
 /// 네트 y위치에서 클리어런스 높이(`clears_net_ballistic`과 같은 `z_min`)에
@@ -263,6 +298,105 @@ fn vector3_to_array(v: Vector3<f64>) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 진단(2026-08-14, 사용자 보고 "라켓 각도가 낮다") — **`Impact::rally_return`
+    /// (프로덕션 경로, `ensure_minimum_upward_tilt` 보정 포함)**이 인터셉트
+    /// 구간·현실적 입사속도 전체에서 [`IMPACT_UPWARD_TILT_DEG`] 이상의 기울기를
+    /// 만드는지, 네트 클리어런스 여유가 여전히 있는지를 잰다.
+    ///
+    /// 보정 전(고정목표 공식만) 실측: 최소 tilt=4.06°(net_margin은 항상
+    /// 0.21m+로 병목이 아니었다) — 네트는 20cm 넘게 여유 있게 넘기면서도
+    /// 라켓 면은 거의 수평이었다. `rally_return_velocity`에
+    /// `ensure_minimum_upward_tilt`를 넣은 뒤에는 최소 tilt가 정확히
+    /// `IMPACT_UPWARD_TILT_DEG`(8°) 근처로 바닥을 이뤄야 한다 — 아래 assert가
+    /// 그걸 회귀 가드로 굳힌다.
+    ///
+    /// 이제 회귀 가드(하단 assert)를 겸하므로 `--ignored` 없이도 돈다 —
+    /// stdout 표는 `--nocapture`로만 보인다.
+    ///
+    /// ```text
+    /// cargo test --lib diag_rally_return_tilt_and_net_margin -- --nocapture
+    /// ```
+    #[test]
+    fn diag_rally_return_tilt_and_net_margin() {
+        use crate::robot::motion::InterceptWindow;
+
+        let window = InterceptWindow::default();
+        let cfg = defaults::ImpactParams::default();
+
+        println!(
+            "{:>6} {:>6} {:>7} {:>7} {:>9} {:>10} {:>12}",
+            "y", "x", "v_in.y", "v_in.z", "tilt_deg", "net_margin", "clears_net"
+        );
+        let mut worst_tilt = f64::INFINITY;
+        let mut worst_margin = f64::INFINITY;
+        for hit_y in window.hit_planes().into_iter().map(|plane| plane.y) {
+            for impact_x in [
+                table::WIDTH_X * 0.2,
+                table::WIDTH_X * 0.5,
+                table::WIDTH_X * 0.8,
+            ] {
+                for impact_z_above_surface in [0.10_f64, 0.18, 0.28] {
+                    // 실측·기존 diag 테스트가 쓰는 대표 입사속도 범위 —
+                    // v_in.y(로봇 쪽으로 오는 속도), v_in.z(바운드 직후 상승/하강).
+                    for v_in_y in [-4.0_f64, -5.5, -7.0] {
+                        for v_in_z in [-1.0_f64, 0.0, 0.7, 1.5] {
+                            let impact = Point3::new(
+                                impact_x,
+                                hit_y,
+                                table::SURFACE_Z + impact_z_above_surface,
+                            );
+                            let v_in = Vector3::new(0.0, v_in_y, v_in_z);
+                            let v_out = rally_return_velocity(impact, v_in);
+                            let desired_normal = (v_out - v_in).normalize();
+                            // 수평(월드 XY)에서 위로 얼마나 기울었는지 — 0°면
+                            // 완전히 수평(면이 수평을 봄), 90°면 면이 하늘을 봄.
+                            let tilt_deg = desired_normal.z.asin().to_degrees();
+
+                            let y_net = table::LENGTH_Y * 0.5;
+                            let z_min = table::SURFACE_Z
+                                + table::NET_HEIGHT
+                                + cfg.net_clearance * 0.5;
+                            let clears = clears_net_ballistic(impact, v_out);
+                            let margin = if v_out.y > 1e-6 {
+                                let t = (y_net - impact.coords.y) / v_out.y;
+                                if t > 0.0 && t <= 2.0 {
+                                    let z = impact.coords.z
+                                        + v_out.z * t
+                                        + 0.5 * G_Z * t * t;
+                                    z - z_min
+                                } else {
+                                    f64::NAN
+                                }
+                            } else {
+                                f64::NAN
+                            };
+
+                            worst_tilt = worst_tilt.min(tilt_deg);
+                            if margin.is_finite() {
+                                worst_margin = worst_margin.min(margin);
+                            }
+                            println!(
+                                "{hit_y:>6.2} {impact_x:>6.2} {v_in_y:>7.1} {v_in_z:>7.1} \
+                                 {tilt_deg:>9.2} {margin:>10.4} {clears:>12}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        println!(
+            "\n최소 tilt_deg={worst_tilt:.2}  최소 net_margin={worst_margin:.4}m"
+        );
+        assert!(
+            worst_tilt >= IMPACT_UPWARD_TILT_DEG - 1e-6,
+            "ensure_minimum_upward_tilt 보정에도 최소기울기 미달: {worst_tilt:.2}° < {IMPACT_UPWARD_TILT_DEG}°"
+        );
+        assert!(
+            worst_margin > 0.0,
+            "기울기 보정 뒤에도 네트 클리어런스는 유지돼야 함: {worst_margin:.4}"
+        );
+    }
 
     #[test]
     fn rally_return_clears_net_toward_far_half() {
