@@ -1187,24 +1187,45 @@ pub fn plan_fixed_joint_swing_quadratic_from_alignment(
     };
     let push_direction = horizontal_normal.normalize();
     let target_normal = aligned_racket.normal;
-    for push_distance_m in [
-        FIXED_JOINT_PUSH_DISTANCE_M,
-        FIXED_JOINT_PUSH_DISTANCE_M * 0.75,
-        FIXED_JOINT_PUSH_DISTANCE_M * 0.50,
-        FIXED_JOINT_PUSH_DISTANCE_M * 0.30,
-    ] {
+
+    let try_push_distance = |push_distance_m: f64| -> Result<FixedJointSwing, DomainError> {
         let lift_m = FIXED_JOINT_PUSH_LIFT_M * push_distance_m / FIXED_JOINT_PUSH_DISTANCE_M;
         let target_position = Point3::from(
             aligned_racket.position.coords
                 + push_direction * push_distance_m
                 + Vector3::z() * lift_m,
         );
-        if let Ok(planned) =
-            plan_fixed_joint_swing_quadratic_to_pose(arm, start, target_position, target_normal)
-        {
-            return Ok(planned);
-        }
+        return plan_fixed_joint_swing_quadratic_to_pose(arm, start, target_position, target_normal);
+    };
+
+    if let Ok(planned) = try_push_distance(FIXED_JOINT_PUSH_DISTANCE_M) {
+        return Ok(planned);
     }
+
+    // 풀 거리(100%)가 관절 속도 한계를 넘으면, 실현 가능한 가장 큰 거리를
+    // 이분탐색으로 찾는다. 예전 고정 사다리([100,75,50,30]%)는 100% 바로
+    // 아래(예: 90%)에 있는, 여전히 실현 가능하면서 훨씬 빠른 지점을 건너뛰고
+    // 곧장 75%로 떨어졌다 — `fit_end_velocity`와 같은 불변식을 쓴다: `low`는
+    // 항상 검증된 실현가능 배율이므로 반환값은 반드시 한계 안이다.
+    let low_fraction = 0.30;
+    if let Ok(mut best) = try_push_distance(FIXED_JOINT_PUSH_DISTANCE_M * low_fraction) {
+        let mut low = low_fraction;
+        let mut high = 1.0_f64;
+        for _ in 0..PUSH_DISTANCE_BISECTION_STEPS {
+            let mid = (low + high) * 0.5;
+            match try_push_distance(FIXED_JOINT_PUSH_DISTANCE_M * mid) {
+                Ok(planned) => {
+                    low = mid;
+                    best = planned;
+                }
+                Err(_) => {
+                    high = mid;
+                }
+            }
+        }
+        return Ok(best);
+    }
+
     let fallback_distance_m = 0.020;
     let fallback_lift_m =
         FIXED_JOINT_PUSH_LIFT_M * fallback_distance_m / FIXED_JOINT_PUSH_DISTANCE_M;
@@ -1993,6 +2014,12 @@ fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'sta
 /// 무의미할 만큼 촘촘하고, 실현가능 판정 호출 수는 12회로 상한이 고정된다.
 const FIT_BISECTION_STEPS: usize = 12;
 
+/// [`plan_fixed_joint_swing_quadratic_from_alignment`]의 밀기 거리 이분탐색
+/// 스텝 수. 매 스텝이 IK 재풀이 + 궤적 실현가능성 전체 검사라
+/// [`FIT_BISECTION_STEPS`](속도 재스케일만 하는 가벼운 검사)보다 스텝당
+/// 비용이 크므로 더 적게 쓴다. 8스텝 해상도는 `2^-8 ≈ 0.4%`.
+const PUSH_DISTANCE_BISECTION_STEPS: usize = 8;
+
 /// quintic이 관절 속도/각가속도/토크 한계 안에 들어오는 **가장 큰** 임팩트
 /// 각속도 배율을 이분탐색한다.
 ///
@@ -2245,6 +2272,28 @@ mod tests {
         assert_ne!(
             follow_through.position, impact.position,
             "타격 후 전진 팔로스루"
+        );
+    }
+
+    /// 고정 사다리([100,75,50,30]%)는 100%가 관절 속도 한계를 넘으면 곧장
+    /// 75%로 떨어져, 그 사이(예: 90%)에 있는 더 빠른 실현가능 지점을
+    /// 건너뛰었다(READY_JOINTS_4DOF 홈 자세 실측: 75%→첨두 관절속도
+    /// 3.88rad/s, 90%→5.39rad/s, 한계 5.47rad/s). 이분탐색은 그 지점을
+    /// 찾아야 한다.
+    #[test]
+    fn fixed_joint_swing_quadratic_finds_faster_push_than_fixed_ladder() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let home = robot::Pose::new(
+            arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+            robot::Joints::from_slice(&crate::defaults::READY_JOINTS_4DOF),
+        );
+        let planned =
+            plan_fixed_joint_swing_quadratic(arm, &home).expect("quadratic fixed joint swing");
+        assert!(
+            planned.trajectory.peak_joint_speed() > 4.5,
+            "이분탐색이 고정 사다리(75%, 3.88rad/s)보다 빠른 실현가능 지점을 찾아야 함: peak={:.4}",
+            planned.trajectory.peak_joint_speed()
         );
     }
 
