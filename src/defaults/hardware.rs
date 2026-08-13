@@ -5,7 +5,7 @@ use crate::hardware::rail::RailConfig;
 
 use super::rail::{
     RAIL_ACCEL_M_S2, RAIL_BOARD_ZERO_DOMAIN_M, RAIL_MAX_SPEED, RAIL_PHYSICAL_X_MAX_M,
-    RAIL_PHYSICAL_X_MIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M,
+    RAIL_PHYSICAL_X_MIN_M, RAIL_PULSES_PER_METER, RAIL_X_MAX_M, RAIL_X_MIN_M,
 };
 
 /// 손목 q3(ID 5) 실물 혼·라켓 장착 영점 보정 [rad].
@@ -109,7 +109,7 @@ impl Default for RailConfig {
             ),
             axis: 0,
             irq_no: 7,
-            pulses_per_meter: 250_000,
+            pulses_per_meter: RAIL_PULSES_PER_METER,
             reverse: true,
             board_zero_domain_m: RAIL_BOARD_ZERO_DOMAIN_M,
             x_min_m: RAIL_X_MIN_M,

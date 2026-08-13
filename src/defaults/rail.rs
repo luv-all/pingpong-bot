@@ -35,6 +35,12 @@ pub const RAIL_X_MAX_M: f64 = RAIL_PHYSICAL_X_MAX_M - RAIL_RIGHT_END_MARGIN_M;
 pub const RAIL_READY_X_M: f64 = 0.6750;
 /// 최대 이동 속도 [m/s].
 pub const RAIL_MAX_SPEED: f64 = 7.5;
+/// AXL 위치 단위 1m당 엔코더 펄스 수 [pulse/m].
+///
+/// 기존 250,000에서 논리 0.50m 명령이 좌우 모두 실측 0.52m였으므로
+/// `250_000 * 0.50 / 0.52 = 240_384.6`을 반올림했다. 방향별 결과가 같아
+/// 영점·백래시가 아니라 전역 거리 스케일로 반영한다.
+pub const RAIL_PULSES_PER_METER: u32 = 240_385;
 /// 실기 AXL 레일 가속/감속 [m/s²] — `RailConfig::default()`도 이 값을 쓴다.
 ///
 /// 기존 24 m/s²는 최단시간 이동과 겹치면 출발·정지 충격이 크다.

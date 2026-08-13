@@ -198,6 +198,10 @@ fn run_rail_scale_check_command(options: &Options, arm: &pingpong_bot::robot::Ar
         !options.dry_run,
         "--rail-scale-check는 실제 레일의 이동 스케일을 확인하는 명령이므로 --dry-run과 함께 사용할 수 없습니다"
     );
+    ensure!(
+        !options.release_torque,
+        "--rail-scale-check 측정 중 자세를 유지해야 하므로 --release-torque와 함께 사용할 수 없습니다"
+    );
     info!("레일 스케일 점검 명령 시작 — 카메라·공 제어는 실행하지 않음");
     calibrate_rail_on_startup()?;
     let mut hardware = open_hardware(options)?;
@@ -216,8 +220,14 @@ fn run_rail_scale_check_command(options: &Options, arm: &pingpong_bot::robot::Ar
         start_rail_x = f2(home.rail_x),
         final_rail_x = f2(final_home.rail_x),
         return_error_m = f2(final_home.rail_x - home.rail_x),
-        "레일 스케일 점검 명령 완료"
+        "레일 스케일 점검 동작 완료"
     );
+    println!("\n최종 수직 라켓 측정 자세를 유지합니다. 측정을 마친 뒤 Enter를 누르면 종료합니다.");
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .context("레일 스케일 점검 종료 입력 읽기 실패")?;
+    info!("사용자 확인 — 레일 스케일 점검 명령 종료");
     return Ok(());
 }
 

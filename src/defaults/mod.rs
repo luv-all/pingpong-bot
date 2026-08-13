@@ -76,8 +76,8 @@ pub use rail::{
     RAIL_COORDINATE_POSITIVE_X_OFFSET_M, RAIL_HOMING_OVERTRAVEL_MARGIN_M,
     RAIL_HOMING_RETURN_VELOCITY_M_S, RAIL_HOMING_TIMEOUT_SECS, RAIL_HOMING_VELOCITY_M_S,
     RAIL_LEFT_END_MARGIN_M, RAIL_MAX_SPEED, RAIL_NEGATIVE_X_ZERO_SHIFT_M, RAIL_PHYSICAL_X_MAX_M,
-    RAIL_PHYSICAL_X_MIN_M, RAIL_POSITIVE_X_TRIM_M, RAIL_READY_X_M, RAIL_RIGHT_END_MARGIN_M,
-    RAIL_X_MAX_M, RAIL_X_MIN_M, rail_calibration_path, rail_frame,
+    RAIL_PHYSICAL_X_MIN_M, RAIL_POSITIVE_X_TRIM_M, RAIL_PULSES_PER_METER, RAIL_READY_X_M,
+    RAIL_RIGHT_END_MARGIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M, rail_calibration_path, rail_frame,
 };
 pub use robot::{
     POST_HIT_TUCKED_JOINTS_4DOF, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount,
@@ -123,6 +123,8 @@ mod tests {
         let rail_config = RailConfig::default();
         assert_eq!(rail_config.accel, RAIL_ACCEL_M_S2);
         assert_eq!(rail_config.decel, RAIL_ACCEL_M_S2);
+        assert_eq!(rail_config.pulses_per_meter, RAIL_PULSES_PER_METER);
+        assert_eq!(RAIL_PULSES_PER_METER, 240_385);
         let robot = robot().unwrap();
         let model_rail = robot.arm.rail.expect("기본 로봇 리니어 레일");
         assert_eq!(model_rail.x_min, rail_config.x_min_m);
