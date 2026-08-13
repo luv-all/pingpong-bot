@@ -119,6 +119,17 @@ pub const FIXED_JOINT_SWING_LEAD_SECS: f64 = 0.400;
 /// 설정상 상한 자체가 모터 무부하 최고속의 95%이므로 여기서는 전부 사용한다.
 pub const FIXED_JOINT_SNAP_SPEED_RATIO: f64 = 1.0;
 /// 임팩트 이후에도 같은 방향으로 계속 밀고 멈추는 시간 [s].
+///
+/// 이 값을 늘려 [`FIXED_JOINT_SWING_IMPACT_MARGIN_SECS`]와의 격차를 메우려
+/// 했으나(2026-08-14 시도), `target_impact_time_secs`가 이미
+/// [`FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS`] 하한에 걸린 온스케줄 표준
+/// 경우 j0·j2가 임팩트 순간 이미 관절속도 상한 근처라 팔로스루 끝점이
+/// 관절한계에 클램프되고, 그 늘어난 팔로스루 시간 동안 그 좁아진 거리를
+/// 감속으로 메우려는 quintic이 실현 불가능해져(`evaluate_trajectory_feasibility`
+/// 실패) 강제 2cm 비상 폴백으로 떨어지는 회귀를 만들었다(`diag_wp*` 기존
+/// 테스트가 이 회귀를 그대로 잡아냈다). 그래서 팔로스루 자체는 원래
+/// 값(0.120)으로 유지하고, 격차는 대신
+/// [`FIXED_JOINT_SWING_IMPACT_MARGIN_SECS`] 쪽을 줄여 메운다.
 pub const FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS: f64 = 0.120;
 /// 파워 스윙에서 j0·j2가 정지에서 관절 속도 상한까지 가속하는 데 쓰는
 /// 시간 [s]. `arm.max_joint_speed / FIXED_JOINT_SWING_RAMP_SECS`가 이 관절들의
@@ -151,13 +162,20 @@ pub const FIXED_JOINT_SWING_SNAP_VELOCITY_MARGIN: f64 = 0.85;
 pub const FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS: f64 = 0.120;
 /// 예상 공 도착 시각보다 몇 초 먼저 임팩트가 나야 하는지 — 파워 스윙의
 /// 목표 타격-전 시간을 `남은 시간 − 이 값`으로 계산하는 데 쓴다.
-/// [`FIXED_JOINT_SWING_POWER_SWEEP_LEAD_SECS`](0.320)와 짝을 이뤄 제때
-/// 스윙이 트리거되면 `0.320 − 0.200 = 0.120`으로
-/// [`FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS`]와 정확히 같아진다 — 오늘
-/// 고정값과 동일한 여유를 그대로 재현하되, 제어 루프가 늦게 응답한
-/// 경우에는 오래된 고정값을 그대로 쓰는 대신 실제 남은 시간을 반영해
-/// 자연히 하한까지 줄어든다.
-pub const FIXED_JOINT_SWING_IMPACT_MARGIN_SECS: f64 = 0.200;
+///
+/// **2026-08-14 축소(0.200→0.140):** 온스케줄 기준 궤적의 "임팩트"
+/// 키프레임은 도착 시각보다 이 마진만큼 앞서 잡히고, 그 뒤
+/// [`FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS`](0.120)짜리 팔로스루가 관절속도를
+/// 0으로 줄인다 — 마진이 팔로스루보다 크면(과거 0.200 vs 0.120, 격차
+/// 80ms) 라켓이 실제 공 도착보다 그 격차만큼 먼저 완전히 멈춰 "멈춘
+/// 라켓에 맞는" 문제가 있었다(사용자 보고, 2026-08-14). 팔로스루 쪽을
+/// 늘리는 대신(그러면 임팩트 순간 이미 관절한계 근접인 표준 스윙에서
+/// 클램프·감속 불가로 실현 불가능해짐 — 위 팔로스루 상수 문서 참고)
+/// 마진을 줄여 격차를 80ms→20ms로 좁힌다. 완전히 0으로 맞추지 않고
+/// 20ms를 남기는 건 제어 루프 응답 지연·예측 오차를 흡수할 여유를
+/// 완전히 없애지 않기 위해서다 — 남은 여유가 이전보다 줄었으므로 실기
+/// 재검증 전까지는 보수적으로 남긴 값.
+pub const FIXED_JOINT_SWING_IMPACT_MARGIN_SECS: f64 = 0.140;
 /// 예상 공 도착 시각보다 파워 스윙 명령을 앞서 시작할 시간 [s] —
 /// [`FIXED_JOINT_SWING_LEAD_SECS`]의 파워 스윙 전용 짝. 스윙이 언제
 /// 트리거되는지만 정하고, 스윙 자체의 소요 시간은

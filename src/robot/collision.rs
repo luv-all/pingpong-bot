@@ -120,6 +120,99 @@ pub fn table_penetration(arm: &Arm, rail_x: f64, joints: &Joints) -> f64 {
         .fold(0.0, f64::max);
 }
 
+/// 공이 목표 접촉점에 닿기 직전 마지막 구간에서, 라켓 면이 아니라 전완·손목
+/// (그립 쪽) 링크에 먼저 스칠 수 있는지 검사한다.
+///
+/// [`robot_obbs`]의 마지막 항목(라켓 면 OBB)은 공이 **닿아야 할** 대상이라
+/// 제외하고, 그 앞의 전완/손목 원통 근사([`LINK_FOREARM_RADIUS`])만 공의
+/// 접근 경로(`ball_from` → `ball_to`, 보통 임팩트 지점에서 입사 속도
+/// 반대방향으로 라켓 길이만큼 되짚은 구간)와의 최단거리를 잰다. 이 거리가
+/// 링크 반지름 + 공 반지름보다 좁으면 공이 면에 닿기 전에 그립 쪽에 먼저
+/// 부딪힌다는 뜻이다.
+///
+/// 반환값은 [`table_penetration`]과 같은 관례: 0이면 여유 있음, 양수면
+/// 그만큼 겹친다(관통 깊이 근사 — 링크 중심선까지의 최단거리가 안전
+/// 반지름에 못 미치는 만큼).
+pub fn grip_path_penetration(
+    arm: &Arm,
+    rail_x: f64,
+    joints: &Joints,
+    ball_from: Point3,
+    ball_to: Point3,
+    ball_radius: f64,
+) -> f64 {
+    let Some(points) = arm.chain_points(rail_x, joints) else {
+        return 0.0;
+    };
+    let mut worst = 0.0;
+    // `robot_obbs`와 같은 관례로 첫 구간(마운트~첫 관절, 상완)은 건너뛴다 —
+    // 마운트가 테이블 끝에 붙어 있어 원래도 별도 취급.
+    for segment in points.windows(2).skip(1) {
+        let clearance_needed = LINK_FOREARM_RADIUS + ball_radius;
+        let distance = segment_segment_distance(
+            segment[0],
+            segment[1],
+            ball_from.coords,
+            ball_to.coords,
+        );
+        let depth = clearance_needed - distance;
+        if depth > worst {
+            worst = depth;
+        }
+    }
+    return worst;
+}
+
+/// 두 3D 선분 사이 최단거리 (Ericson, *Real-Time Collision Detection* §5.1.9).
+fn segment_segment_distance(
+    p1: Vector3<f64>,
+    q1: Vector3<f64>,
+    p2: Vector3<f64>,
+    q2: Vector3<f64>,
+) -> f64 {
+    let d1 = q1 - p1;
+    let d2 = q2 - p2;
+    let r = p1 - p2;
+    let a = d1.dot(&d1);
+    let e = d2.dot(&d2);
+    let f = d2.dot(&r);
+
+    const EPS: f64 = 1e-12;
+    let (mut s, mut t);
+    if a <= EPS && e <= EPS {
+        s = 0.0;
+        t = 0.0;
+    } else if a <= EPS {
+        s = 0.0;
+        t = (f / e).clamp(0.0, 1.0);
+    } else {
+        let c = d1.dot(&r);
+        if e <= EPS {
+            t = 0.0;
+            s = (-c / a).clamp(0.0, 1.0);
+        } else {
+            let b = d1.dot(&d2);
+            let denom = a * e - b * b;
+            s = if denom.abs() > EPS {
+                ((b * f - c * e) / denom).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            t = (b * s + f) / e;
+            if t < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            }
+        }
+    }
+    let closest1 = p1 + d1 * s;
+    let closest2 = p2 + d2 * t;
+    return (closest1 - closest2).norm();
+}
+
 /// 관통 시 EE를 들어 올려 재IK - 손목 open/yaw 힌트 유지.
 pub fn clamp_above_table(arm: &Arm, rail_x: f64, joints: &Joints) -> Joints {
     let mut current = joints.clone();
@@ -242,5 +335,50 @@ mod tests {
         let rail_x = arm.rail.as_ref().map(|r| r.home_x()).unwrap_or(0.0);
         let depth = table_penetration(&arm, rail_x, &arm.default_joints);
         assert!(depth <= 1e-4, "기본 자세는 테이블 위: {depth}");
+    }
+
+    #[test]
+    fn segment_distance_zero_when_segments_cross() {
+        let d = segment_segment_distance(
+            Vector3::new(-1.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+        );
+        assert!(d < 1e-9, "교차하는 선분은 거리 0이어야 함: {d}");
+    }
+
+    #[test]
+    fn segment_distance_matches_parallel_offset() {
+        let d = segment_segment_distance(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, 0.5, 0.0),
+            Vector3::new(1.0, 0.5, 0.0),
+        );
+        assert!((d - 0.5).abs() < 1e-9, "평행 선분 거리: {d}");
+    }
+
+    #[test]
+    fn grip_path_penetration_flags_ball_path_through_forearm() {
+        let arm = crate::defaults::primitive_4dof().expect("arm").arm;
+        let rail_x = arm.rail.as_ref().map(|r| r.home_x()).unwrap_or(0.0);
+        let joints = arm.default_joints.clone();
+        let points = arm
+            .chain_points(rail_x, &joints)
+            .expect("chain points")
+            .clone();
+        // 전완 링크 중간점을 관통하는 짧은 공 경로 - 그립 충돌로 잡혀야 한다.
+        let mid = points[points.len().saturating_sub(2)];
+        let ball_from = Point3::from(mid);
+        let ball_to = Point3::from(mid + Vector3::new(0.001, 0.0, 0.0));
+        let depth = grip_path_penetration(&arm, rail_x, &joints, ball_from, ball_to, 0.02);
+        assert!(depth > 0.0, "전완 중심을 지나는 경로는 관통으로 잡혀야 함: {depth}");
+
+        // 아주 멀리 떨어진 경로는 여유가 있어야 한다.
+        let far_from = Point3::new(100.0, 100.0, 100.0);
+        let far_to = Point3::new(100.0, 100.0, 101.0);
+        let far_depth = grip_path_penetration(&arm, rail_x, &joints, far_from, far_to, 0.02);
+        assert!(far_depth <= 0.0, "멀리 떨어진 경로는 여유가 있어야 함: {far_depth}");
     }
 }

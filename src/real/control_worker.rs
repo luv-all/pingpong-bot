@@ -2013,13 +2013,18 @@ mod tests {
     }
 
     #[test]
-    fn target_impact_time_secs_matches_todays_fixed_value_when_on_schedule() {
+    fn target_impact_time_secs_stays_above_the_floor_when_on_schedule() {
+        // 2026-08-14: margin(0.140) < lead(0.320), so on-schedule no longer
+        // lands exactly on the MIN_IMPACT_TIME_SECS floor (that used to be
+        // true when margin was 0.200 == lead - floor) -- it now has slack
+        // above the floor, which is the point: less floor-clamped urgency
+        // means more room for the follow-through to still be moving at the
+        // real predicted arrival instead of stopping early.
         let now = Instant::now();
         let predicted_arrival_at = now + FIXED_SWING_LEAD;
         let target = target_impact_time_secs(predicted_arrival_at, now);
         assert!(
-            (target - pingpong_bot::defaults::FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS).abs()
-                < 1e-9,
+            (target - 0.180).abs() < 1e-9,
             "target={target}"
         );
     }
@@ -2027,10 +2032,10 @@ mod tests {
     #[test]
     fn target_impact_time_secs_uses_remaining_time_when_above_the_floor() {
         let now = Instant::now();
-        // 500ms left, margin 200ms -> 300ms raw, above the 120ms floor.
+        // 500ms left, margin 140ms -> 360ms raw, above the 120ms floor.
         let predicted_arrival_at = now + Duration::from_millis(500);
         let target = target_impact_time_secs(predicted_arrival_at, now);
-        assert!((target - 0.300).abs() < 1e-9, "target={target}");
+        assert!((target - 0.360).abs() < 1e-9, "target={target}");
     }
 
     #[test]

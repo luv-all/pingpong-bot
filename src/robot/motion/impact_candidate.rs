@@ -124,6 +124,29 @@ pub(crate) fn best_impact_candidate_for_outgoing(
         if crate::robot::collision::table_penetration(arm, solved.rail_x, &solved.joints) > 1e-3 {
             return;
         }
+        // 공이 면에 닿기 전에 전완/손목(그립 쪽)에 먼저 스치는 해는 버린다 —
+        // 종전에는 라켓 중심 위치·테이블 관통만 봤을 뿐, 공의 마지막 접근
+        // 경로가 그립 근처 링크를 지나는지는 아무도 검사하지 않았다.
+        // 라켓(손잡이+면) 전체 길이만큼 되짚어 확인하면 충분하다.
+        const BALL_PATH_CHECK_DISTANCE_M: f64 =
+            crate::constants::geometry::RACKET_HANDLE_LENGTH
+                + crate::constants::geometry::RACKET_BLADE_RADIUS;
+        if v_in.norm() > 1e-9 {
+            let ball_from = crate::Point3::from(
+                impact_position.coords - v_in.normalize() * BALL_PATH_CHECK_DISTANCE_M,
+            );
+            if crate::robot::collision::grip_path_penetration(
+                arm,
+                solved.rail_x,
+                &solved.joints,
+                ball_from,
+                impact_position,
+                crate::constants::BALL_RADIUS,
+            ) > 1e-3
+            {
+                return;
+            }
+        }
         let Some(pose) = arm.forward_kinematics_with_rail(solved.rail_x, &solved.joints) else {
             return;
         };
