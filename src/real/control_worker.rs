@@ -104,6 +104,14 @@ fn refined_prediction_ready(request: &CommitRequest) -> bool {
     return last.sigma_position < position_limit && last.sigma_velocity < velocity_limit;
 }
 
+fn corrected_alignment_target(target: pingpong_bot::Point3) -> pingpong_bot::Point3 {
+    return pingpong_bot::Point3::new(
+        target.x - pingpong_bot::defaults::ALIGNMENT_TARGET_X_OFFSET_M,
+        target.y,
+        target.z + pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
+    );
+}
+
 /// 첫 검출 관측부터 현재까지 지난 시간.
 fn detection_age(request: &CommitRequest) -> Option<Duration> {
     let first = request.trajectory.measured.first()?;
@@ -715,7 +723,8 @@ pub fn spawn(
                     continue;
                 }
             };
-            let corrected_target_x = target.position.x;
+            let corrected_target_position = corrected_alignment_target(target.position);
+            let corrected_target_x = corrected_target_position.x;
             if let Some(zone) = zone_filter
                 && let Some(rail) = arm.rail
                 && !zone.contains_x(rail, corrected_target_x)
@@ -735,11 +744,6 @@ pub fn spawn(
                 continue;
             }
             last_filtered_track_seq = None;
-            let corrected_target_position = pingpong_bot::Point3::new(
-                target.position.x,
-                target.position.y,
-                target.position.z + pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
-            );
             // 준비 자세 복귀 직후 읽어 둔 실측 자세를 재사용한다. 토크가 유지되는
             // 대기 중에는 자세가 바뀌지 않으므로 느린 4-ID 직렬 읽기를 없앤다.
             let pose_read_started = Instant::now();
@@ -2287,6 +2291,20 @@ mod tests {
         let mut provisional = vision_request(Duration::ZERO);
         provisional.trajectory.measured.0[0].sigma_position = nalgebra::Vector3::repeat(1.0);
         assert!(!refined_prediction_ready(&provisional));
+    }
+
+    #[test]
+    fn alignment_target_applies_negative_x_twelve_point_five_centimeters() {
+        let target = Point3::new(0.80, 0.20, 0.90);
+        let corrected = corrected_alignment_target(target);
+
+        assert!((corrected.x - 0.675).abs() < 1e-12);
+        assert!((corrected.y - target.y).abs() < 1e-12);
+        assert!(
+            (corrected.z - target.z - pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M)
+                .abs()
+                < 1e-12
+        );
     }
 
     #[test]
