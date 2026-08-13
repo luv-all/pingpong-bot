@@ -54,9 +54,9 @@ mod tests {
         let frame = RailFrame {
             mount_x: 0.09,
             mount_y: -0.10,
-            rail_bottom_z: 0.88,
+            rail_bottom_z: 0.76,
         };
-        assert!((frame.mount_z() - (0.88 + RAIL_THICKNESS)).abs() < 1e-12);
+        assert!((frame.mount_z() - (0.76 + RAIL_THICKNESS)).abs() < 1e-12);
         assert!((frame.mount_y() - -0.10).abs() < 1e-12);
         assert!((frame.mount_xyz0()[0] - 0.09).abs() < 1e-12);
     }
@@ -67,10 +67,10 @@ mod tests {
         let low = RailFrame {
             mount_x: 0.09,
             mount_y: -0.10,
-            rail_bottom_z: 0.88,
+            rail_bottom_z: 0.76,
         };
         let high = RailFrame {
-            rail_bottom_z: 0.95,
+            rail_bottom_z: 0.83,
             ..low
         };
         assert!((high.mount_z() - low.mount_z() - 0.07).abs() < 1e-12);
