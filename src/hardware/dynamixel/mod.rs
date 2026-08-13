@@ -23,7 +23,7 @@ pub use crate::constants::dynamixel::{
     PROFILE_VELOCITY_REV_MIN_PER_LSB, rev_min_to_rad_s,
 };
 
-pub use dynamixel_bus::DynamixelBus;
+pub use dynamixel_bus::{DynamixelBus, MirrorAlignmentSample};
 pub use dynamixel_config::DynamixelConfig;
 pub use dynamixel_config_error::DynamixelConfigError;
 pub use mirror_slave::MirrorSlave;

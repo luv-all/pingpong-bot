@@ -4881,6 +4881,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "verify-mirror"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "pingpong-bot",
+]
+
+[[package]]
 name = "verify-stereo"
 version = "0.1.0"
 dependencies = [

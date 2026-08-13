@@ -71,6 +71,21 @@ const CLAMP_WARN_PERIOD: std::time::Duration = std::time::Duration::from_secs(1)
 /// 듀얼 모터가 약 3.5° 이상 어긋나면 기계적으로 싸우거나 영점이 틀린 것으로 본다.
 const MIRROR_ALIGNMENT_MAX_ERROR_TICKS: i32 = 40;
 
+/// 미러 페어 한 쌍의 실측 스냅샷 (판정 전, 진단용 raw 값).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MirrorAlignmentSample {
+    pub master_id: u8,
+    pub slave_id: u8,
+    pub master_tick: i32,
+    pub slave_tick: i32,
+    /// 현재 `mirror_slave_offset_ticks` 기준 이론 기대값.
+    pub expected_slave_tick: i32,
+    /// `slave_tick - expected_slave_tick`. 이 값이 곧 "이 자세에서 필요한
+    /// 오프셋 보정"이며, 여러 자세에서 모아보면 오프셋이 자세에 무관한
+    /// 상수인지 아닌지 알 수 있다.
+    pub error_ticks: i32,
+}
+
 /// 전체 SyncRead가 불안정한 버스에서 모터별 일반 Read로
 /// Present Position을 읽는다. ID 하나에 broadcast SyncRead를 쓰지 않는다.
 #[cfg(feature = "real")]
@@ -122,6 +137,10 @@ impl DynamixelBus {
         });
     }
 
+    pub fn config(&self) -> &DynamixelConfig {
+        return self.mapping.config();
+    }
+
     /// dry-run 전용: 마지막 Goal에 실린 (id, tick), 미러 포함.
     pub fn last_bus_goals(&self) -> Option<&[(u8, i32)]> {
         return match &self.backend {
@@ -170,14 +189,46 @@ impl DynamixelBus {
     /// `2*zero-master+조립 영점 보정`과 맞는지 검사한다.
     /// 이 검사는 시작·중립 복귀 직후에만 호출해 실시간 명령 경로를 느리게 하지 않는다.
     pub fn verify_mirror_alignment(&mut self) -> Result<(), HwError> {
+        for sample in self.read_mirror_alignment_samples()? {
+            info!(
+                master_id = sample.master_id,
+                slave_id = sample.slave_id,
+                master_tick = sample.master_tick,
+                slave_tick = sample.slave_tick,
+                expected_slave_tick = sample.expected_slave_tick,
+                slave_minus_expected_tick = sample.error_ticks,
+                "듀얼 MX-64 실측 대칭 진단"
+            );
+            if sample.error_ticks.abs() > MIRROR_ALIGNMENT_MAX_ERROR_TICKS {
+                return Err(read_transport_error(format!(
+                    "듀얼 MX-64 정렬 불일치: ID{}={}tick, ID{}={}tick, 기대={}tick, 오차={:+}tick. 방향·혼 영점·체결을 확인할 때까지 구동 차단",
+                    sample.master_id,
+                    sample.master_tick,
+                    sample.slave_id,
+                    sample.slave_tick,
+                    sample.expected_slave_tick,
+                    sample.error_ticks,
+                )));
+            }
+        }
+        return Ok(());
+    }
+
+    /// 미러 페어별 실측 tick과 이론 기대값을 판정 없이 그대로 반환한다.
+    ///
+    /// `verify_mirror_alignment`가 이 값으로 임계값 판정을 하고, 진단 도구
+    /// (`--mirror-align-check`)는 판정 없이 매 샘플을 그대로 출력해 사용자가
+    /// 손으로 관절을 움직이며 오차가 자세에 따라 바뀌는지 직접 볼 수 있게 한다.
+    pub fn read_mirror_alignment_samples(&mut self) -> Result<Vec<MirrorAlignmentSample>, HwError> {
         let config = self.mapping.config.clone();
         if config.mirror_slaves.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         match &mut self.backend {
-            BusBackend::DryRun { .. } => return Ok(()),
+            BusBackend::DryRun { .. } => return Ok(Vec::new()),
             #[cfg(feature = "real")]
             BusBackend::Real(real) => {
+                let mut samples = Vec::with_capacity(config.mirror_slaves.len());
                 for pair in &config.mirror_slaves {
                     let ids = [pair.master_id, pair.slave_id];
                     let raw = read_present_positions_individually(
@@ -198,28 +249,44 @@ impl DynamixelBus {
                     let master_tick = ticks[0];
                     let slave_tick = ticks[1];
                     let expected_slave_tick = config.mirror_tick(master_tick);
-                    let slave_minus_expected_tick = slave_tick - expected_slave_tick;
-                    info!(
-                        master_id = pair.master_id,
-                        slave_id = pair.slave_id,
+                    samples.push(MirrorAlignmentSample {
+                        master_id: pair.master_id,
+                        slave_id: pair.slave_id,
                         master_tick,
                         slave_tick,
                         expected_slave_tick,
-                        slave_minus_expected_tick,
-                        "듀얼 MX-64 실측 대칭 진단"
-                    );
-                    if slave_minus_expected_tick.abs() > MIRROR_ALIGNMENT_MAX_ERROR_TICKS {
-                        return Err(read_transport_error(format!(
-                            "듀얼 MX-64 정렬 불일치: ID{}={}tick, ID{}={}tick, 기대={}tick, 오차={:+}tick. 방향·혼 영점·체결을 확인할 때까지 구동 차단",
-                            pair.master_id,
-                            master_tick,
-                            pair.slave_id,
-                            slave_tick,
-                            expected_slave_tick,
-                            slave_minus_expected_tick,
-                        )));
-                    }
+                        error_ticks: slave_tick - expected_slave_tick,
+                    });
                 }
+                return Ok(samples);
+            }
+        }
+    }
+
+    /// 진단 전용: 지정한 버스 ID들만 Torque Enable을 켜거나 끈다.
+    ///
+    /// `enable_torque`와 달리 Goal=Present 스냅을 하지 않는다 — 끄는 용도로만
+    /// 쓰라는 뜻이다. `--mirror-align-check`가 미러 페어만 풀어 손으로 돌려볼
+    /// 수 있게 하는 데 쓰며, 정상 구동 경로(`enable_torque`)를 대체하지 않는다.
+    #[cfg(feature = "real")]
+    pub fn diagnostic_set_torque_for_ids(
+        &mut self,
+        ids: &[u8],
+        enabled: bool,
+    ) -> Result<(), HwError> {
+        match &mut self.backend {
+            BusBackend::DryRun { .. } => return Ok(()),
+            BusBackend::Real(real) => {
+                let data = vec![pack_u8(u8::from(enabled)); ids.len()];
+                let address = self.mapping.config.addr_torque_enable;
+                let retries = self.mapping.config.comm_retries;
+                let retry_delay_ms = self.mapping.config.comm_retry_delay_ms;
+                real.sync_write_with_retry(ids, address, &data, retries, retry_delay_ms)
+                    .map_err(|error| {
+                        read_transport_error(format!(
+                            "진단용 Torque Enable sync_write 실패 (addr={address}): {error}"
+                        ))
+                    })?;
             }
         }
         return Ok(());
