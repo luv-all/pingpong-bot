@@ -212,7 +212,7 @@ cargo run -p calib-table-pnp -- --cam right
 
 `Space`로 화면을 고정하고 화면 안내 순서대로 8점을 클릭한다. 마젠타 평면·무지개 격자가 실제 탁구대와 맞는지 확인한 뒤 `s`로 저장한다. 잔차가 큰 점은 `1`–`8`로 고르고 방향키로 미세 조정할 수 있다. `q`로 나가도 pending은 남지만 **본 파일 반영은 `s`**다.
 
-RMSE는 기본 허용치 `7 px` 이하여야 한다. 숫자만 낮추기보다 격자가 영상 속 탁구대 평면과 일치하는지가 더 중요하다. 상세 키는 [calib-table-pnp](tools/calib_table_pnp/README.md)를 본다.
+RMSE는 기본 허용치 `8.5 px` 이하여야 한다. 숫자만 낮추기보다 격자가 영상 속 탁구대 평면과 일치하는지가 더 중요하다. 상세 키는 [calib-table-pnp](tools/calib_table_pnp/README.md)를 본다.
 
 #### 3. 탁구공 색 마스크
 

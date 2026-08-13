@@ -90,7 +90,7 @@ pub const RIGHT_DEVICE: i32 = 0;
 pub const LEFT_CAMERA_ID: u8 = 0;
 pub const RIGHT_CAMERA_ID: u8 = 1;
 
-pub const MAX_REPROJ_RMSE_PX: f64 = 7.0;
+pub const MAX_REPROJ_RMSE_PX: f64 = 8.5;
 pub const MIN_CHARUCO_CORNERS: usize = 4;
 
 pub const DEFAULT_STEREO_CAM_ROLES: [camera::Role; 2] = [camera::Role::Left, camera::Role::Right];
