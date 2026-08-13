@@ -1370,10 +1370,9 @@ fn initialize_pose_attempt(
     }
     // 시작과 타격 후 모두 라켓 전체가 상판보다 높은, 살짝 오므린 준비 자세를 쓴다.
     let mut startup_arm = arm.clone();
-    if arm.default_joints.values.len() == pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF.len()
-    {
+    if arm.default_joints.values.len() == pingpong_bot::defaults::READY_JOINTS_4DOF.len() {
         startup_arm.default_joints =
-            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF);
+            Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF);
     }
     let ready_joints = startup_arm.default_joints.clone();
     let ready_rail_x = arm
@@ -1629,8 +1628,7 @@ fn move_to_ready(hardware: &mut dyn Hardware, arm: &Arm, rail_x: f64) -> Result<
         .arm_joint_limit_escape(&start.joints)
         .map_err(MoveError::Hardware)?;
     let mut ready_arm = arm.clone();
-    ready_arm.default_joints =
-        Joints::from_slice(&pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF);
+    ready_arm.default_joints = Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF);
     let trajectories =
         plan_neutral_return_segments(&ready_arm, &start, rail_x).map_err(MoveError::Plan)?;
     if trajectories.len() > 1 {
@@ -1663,8 +1661,7 @@ fn move_joints_to_ready_in_place(hardware: &mut dyn Hardware, arm: &Arm) -> Resu
         .arm_joint_limit_escape(&start.joints)
         .map_err(MoveError::Hardware)?;
     let mut ready_arm = arm.clone();
-    ready_arm.default_joints =
-        Joints::from_slice(&pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF);
+    ready_arm.default_joints = Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF);
     let trajectories =
         plan_neutral_return_segments(&ready_arm, &start, start.rail_x).map_err(MoveError::Plan)?;
     for trajectory in trajectories {
@@ -2208,7 +2205,7 @@ mod tests {
         assert!((initialized.rail_x - rail.default_x()).abs() < 1e-12);
         assert_eq!(
             initialized.joints,
-            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF)
+            Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF)
         );
         assert!(
             hardware
@@ -2241,7 +2238,7 @@ mod tests {
         assert!((hardware.pose.rail_x - hit_rail_x).abs() < 1e-12);
         assert_eq!(
             hardware.pose.joints,
-            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF)
+            Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF)
         );
     }
 
