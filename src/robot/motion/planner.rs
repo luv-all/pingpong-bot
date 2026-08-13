@@ -203,13 +203,17 @@ impl Planner {
     }
 
     /// [`Self::fixed_joint_swing_quadratic`]를 대체하는 파워 스윙 — j0·j2가
-    /// 관절 속도 상한까지 가속-순항하며 임팩트를 만들고, j3는 접힌 자세로
-    /// 대기하다 임팩트 직전에만 스냅한다.
+    /// 관절 속도 상한까지 가속-순항하며 임팩트를 만들고, j3는 요구
+    /// 회전량에 맞춘 스냅 창으로 접힌 자세를 유지하다 스냅한다.
+    /// `target_impact_time_secs`는 타격-전 전체 시간의 목표값이다
+    /// (`FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS` 미만이면 그 값으로
+    /// 클램프된다).
     pub fn fixed_joint_swing_power_sweep(
         arm: &Arm,
         start: &robot::Pose,
+        target_impact_time_secs: f64,
     ) -> Result<physics::FixedJointSwing, DomainError> {
-        return physics::plan_fixed_joint_swing_power_sweep(arm, start);
+        return physics::plan_fixed_joint_swing_power_sweep(arm, start, target_impact_time_secs);
     }
 
     /// [`Self::fixed_joint_swing_power_sweep`]의 정렬-기준 버전.
@@ -217,8 +221,14 @@ impl Planner {
         arm: &Arm,
         start: &robot::Pose,
         aligned: &robot::Pose,
+        target_impact_time_secs: f64,
     ) -> Result<physics::FixedJointSwing, DomainError> {
-        return physics::plan_fixed_joint_swing_power_sweep_from_alignment(arm, start, aligned);
+        return physics::plan_fixed_joint_swing_power_sweep_from_alignment(
+            arm,
+            start,
+            aligned,
+            target_impact_time_secs,
+        );
     }
 
     /// 정지 → 정지로 임의 포즈까지 잇는 최단 실행가능 궤적 (coarse 선추종용).
