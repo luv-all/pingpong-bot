@@ -82,8 +82,8 @@ pub use rail::{
     rail_frame,
 };
 pub use robot::{
-    POST_HIT_READY_JOINTS_4DOF, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount,
-    robot, shared_robot, urdf_4dof, urdf_test,
+    READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount, robot, shared_robot, urdf_4dof,
+    urdf_test,
 };
 pub use sim::{
     EVAL_MAX_SCORE, EVAL_NET_PASSTHROUGH_RETRIES, EVAL_PASS_SCORE_EXCLUSIVE, EVAL_PITCH_JITTER_DEG,

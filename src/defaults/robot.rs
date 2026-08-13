@@ -85,16 +85,16 @@ use crate::robot::{
 /// 실측과 일치한 두 번의 안정 도달값을 평균했다. 예전 계획기 최적화값을
 /// 계속 명령하면 실물은 항상 약 1–2.5° 다른 자세에 멈춰 sim·real
 /// 시작 자세가 어긋났다. 이 값은 기본 자세에서 그 괴리를 없앤다.
-pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
-
-/// 타격을 마친 뒤 돌아가는 준비 자세 (실기 "홈" 자세) — **SSOT**.
 ///
-/// 실기 시작·타격 후 복귀가 모두 이 상수 하나를 쓴다(`control_worker::initialize_pose`
-/// 등). 값은 벤치에서 잰 모터 절대각([`crate::hardware::dynamixel::DynamixelConfig::motor_angle_limits_deg`]와
-/// 같은 `motor_deg = 180 + sign·joint_deg + offset_deg` 관례, `zero_tick` 2048 = 180°)을
+/// **2026-08-13 벤치 실측으로 교체(홈 자세 재측정) — 유일한 SSOT.**
+/// 이전에는 windup 탐색으로 계산한 `[0.5269, -0.0023, -0.1641, -0.6849]`와
+/// 별도의 `POST_HIT_READY_JOINTS_4DOF`(실기 홈) 두 상수가 쓰였는데, 코드
+/// 곳곳에서 어느 쪽을 써야 하는지 뒤섞여 실기 홈 복귀가 벤치 실측과
+/// 다른 자세로 어긋나는 사고가 반복됐다. 이제 시작·타격 후 복귀·sim
+/// 휴지 자세 모두 이 상수 하나만 쓴다. 값은 벤치에서 잰 모터 절대각
+/// ([`crate::hardware::dynamixel::DynamixelConfig::motor_angle_limits_deg`]와 같은
+/// `motor_deg = 180 + sign·joint_deg + offset_deg` 관례, `zero_tick` 2048 = 180°)을
 /// `joint_deg = sign·(motor_deg − 180 − offset_deg)`로 역산한 값이다.
-///
-/// **2026-08-13 벤치 실측(홈 자세 재측정).**
 ///
 /// | 관절 | 모터각 | sign | offset | joint_deg | joint_rad |
 /// |------|--------|------|--------|-----------|-----------|
@@ -104,15 +104,8 @@ pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
 /// | j3 | 144° | +1 | −8° | −28.000° | −0.488692 |
 ///
 /// 네 값 모두 `motor_angle_limits_deg` 소프트 한계 안이다(가장 좁은 여유는
-/// j2, 상단까지 8.7°).
-///
-/// 실제 상판까지는 약 2.47cm 남는다. 원래 `TABLE_CLEARANCE`가 3cm였을 때는
-/// 그 안전 여유를 5.3mm 잠식해 시작 자세 복귀 플래너가 항상 실패했다 — sim
-/// GUI로 실제 접촉은 없음을 확인한 뒤 `TABLE_CLEARANCE`를 2cm로 낮췄다
-/// (`post_hit_ready_pose_keeps_entire_racket_above_table`가 여유 없이 실제
-/// 상판 접촉만 검증).
-pub const POST_HIT_READY_JOINTS_4DOF: [f64; 4] =
-    [-0.331613, -0.0023, 0.925025, -0.488692];
+/// j2, 상단까지 8.7°). 실제 상판까지는 약 2.47cm 남는다.
+pub const READY_JOINTS_4DOF: [f64; 4] = [-0.331613, -0.0023, 0.925025, -0.488692];
 
 /// [`READY_JOINTS_4DOF`]의 FK 라켓 자세.
 ///
@@ -542,6 +535,10 @@ mod tests {
 
     /// 2026-08-05 버니어 실측(손잡이 끝이 로봇 쪽으로 8°)을 라켓
     /// 장착 변환의 회귀 기준으로 고정한다.
+    ///
+    /// 실측 당시의 관절값(예전 windup 휴지 자세)을 그대로 박아 쓴다 —
+    /// `READY_JOINTS_4DOF`가 2026-08-13에 벤치 실측 홈 자세로 교체돼
+    /// `arm.default_joints`로는 더 이상 이 측정 시점 자세를 재현할 수 없다.
     #[test]
     fn ready_racket_mount_matches_bench_geometry() {
         let robot = urdf_4dof().expect("4-dof");
@@ -550,8 +547,9 @@ mod tests {
             .rail
             .as_ref()
             .map_or(RAIL_READY_X_M, |rail| rail.default_x());
+        let bench_measured_joints = Joints::from_slice(&[0.5269, -0.0023, -0.1641, -0.6849]);
         let pose = arm
-            .forward_kinematics_with_rail(rail_x, &arm.default_joints)
+            .forward_kinematics_with_rail(rail_x, &bench_measured_joints)
             .expect("ready FK");
         let [w, x, y, z] = pose.orientation;
         let rotation = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(w, x, y, z));
@@ -591,7 +589,7 @@ mod tests {
             .rail
             .as_ref()
             .map_or(RAIL_READY_X_M, |rail| rail.default_x());
-        let joints = Joints::from_slice(&POST_HIT_READY_JOINTS_4DOF);
+        let joints = Joints::from_slice(&READY_JOINTS_4DOF);
         let racket = arm
             .forward_kinematics_with_rail(rail_x, &joints)
             .expect("post-hit FK");
