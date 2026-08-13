@@ -2057,7 +2057,6 @@ mod tests {
     /// 실제 런타임과 같은 URDF 4-DOF에서도 라켓 접촉 후 공의 y 속도가
     /// 상대편(+Y)으로 반전되는지 검증한다.
     #[test]
-    #[ignore = "main 레일 마운트에 motion-control의 10cm 정렬·0.20s 스윙을 결합한 기본 샷은 별도 shot_tune이 필요함"]
     fn fourdof_ground_truth_rally_contacts_racket_and_returns() {
         let robot = fourdof_robot();
         let arm = robot.arm.clone();

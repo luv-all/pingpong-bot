@@ -6,10 +6,9 @@ use crate::Point3;
 use crate::constants::table;
 use crate::defaults;
 use crate::defaults::motion::{
-    ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-    ALIGNMENT_TARGET_HEIGHT_OFFSET_M, DETECTION_WINDUP_DISTANCE_M,
-    DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S, FIXED_JOINT_PUSH_DISTANCE_M,
-    FIXED_JOINT_SNAP_SPEED_RATIO, FIXED_JOINT_SWING_DURATION_SECS,
+    ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
+    DETECTION_WINDUP_DISTANCE_M, DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S,
+    FIXED_JOINT_PUSH_DISTANCE_M, FIXED_JOINT_SNAP_SPEED_RATIO, FIXED_JOINT_SWING_DURATION_SECS,
     FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS, IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG,
     READY_PREWIND_DISTANCE_M, READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH,
     RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
@@ -578,7 +577,7 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 /// 기초 정렬 모드에서 사용하지 않는다. 공 중심과 라켓 중심을 겹치지 않도록
 /// `공 반지름 + 라켓 반두께 + 다관절 푸시 거리` 만큼 법선 반대쪽에 라켓
 /// 중심을 둔다. 따라서 공별 정렬 자세 자체가 팔을 접은 타격 준비 자세가 된다.
-/// 공의 x는 발사기 기준 오른쪽으로 10 cm, z는 위로 1.5 cm 보정한다. 공이 닿는 지점은
+/// 공의 x는 예측값을 그대로 쓰고, z는 위로 1.5 cm 보정한다. 공이 닿는 지점은
 /// 블레이드 중심보다 0.5 cm 아래라서, 라켓 중심은 공 중심보다 0.5 cm 위로 올린다.
 fn ball_alignment_geometry(ball: Point3) -> (Point3, Vector3<f64>, Point3) {
     return ball_alignment_geometry_with_prewind(ball, FIXED_JOINT_PUSH_DISTANCE_M);
@@ -588,11 +587,7 @@ fn ball_alignment_geometry_with_prewind(
     ball: Point3,
     prewind_distance_m: f64,
 ) -> (Point3, Vector3<f64>, Point3) {
-    let corrected_ball = Point3::new(
-        ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-        ball.y,
-        ball.z + ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
-    );
+    let corrected_ball = Point3::new(ball.x, ball.y, ball.z + ALIGNMENT_TARGET_HEIGHT_OFFSET_M);
     let toward_opponent_center = Vector3::new(
         table::WIDTH_X * 0.5 - corrected_ball.x,
         table::OPPONENT_HALF_CENTER_Y - corrected_ball.y,
@@ -2087,11 +2082,7 @@ mod tests {
         );
         // 중앙에서 벗어난 공으로 시험해 +Y만 보는 구현도 잡아낸다.
         let ball = Point3::new(table::WIDTH_X * 0.5 + 0.18, READY_RACKET_Y_M, 0.95);
-        let corrected_ball = Point3::new(
-            ball.x - ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-            ball.y,
-            ball.z + ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
-        );
+        let corrected_ball = Point3::new(ball.x, ball.y, ball.z + ALIGNMENT_TARGET_HEIGHT_OFFSET_M);
         let alignment = plan_ball_alignment(arm, &start, ball).expect("position alignment");
         let reached = arm
             .forward_kinematics_with_rail(
@@ -2129,7 +2120,7 @@ mod tests {
         );
         assert!(
             lateral_error_m < 2e-3,
-            "10cm x 보정 후 법선 방향으로만 접혀야 함: lateral_error={lateral_error_m:.4}m"
+            "x 보정 없이 법선 방향으로만 접혀야 함: lateral_error={lateral_error_m:.4}m"
         );
         assert!(
             alignment

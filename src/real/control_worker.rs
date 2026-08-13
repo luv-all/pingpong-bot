@@ -715,8 +715,7 @@ pub fn spawn(
                     continue;
                 }
             };
-            let corrected_target_x =
-                target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M;
+            let corrected_target_x = target.position.x;
             if let Some(zone) = zone_filter
                 && let Some(rail) = arm.rail
                 && !zone.contains_x(rail, corrected_target_x)
@@ -737,7 +736,7 @@ pub fn spawn(
             }
             last_filtered_track_seq = None;
             let corrected_target_position = pingpong_bot::Point3::new(
-                target.position.x - pingpong_bot::defaults::ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
+                target.position.x,
                 target.position.y,
                 target.position.z + pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
             );
