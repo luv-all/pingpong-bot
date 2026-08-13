@@ -36,6 +36,19 @@ const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
 /// 줄였다. `pingpong_bot::defaults::FIXED_JOINT_SWING_POWER_SWEEP_LEAD_SECS`와
 /// 값이 같아야 한다(테스트로 고정).
 const FIXED_SWING_LEAD: Duration = Duration::from_millis(320);
+
+/// 예상 도착 시각까지 남은 시간에서 여유를 뺀 만큼을 파워 스윙의 목표
+/// 타격-전 시간으로 쓴다. `Instant`는 임의 절대값으로 만들 수 없어서(원점이
+/// 없음) 순수함수로 분리해야 단위 테스트가 가능하다 — 실제 호출부는 항상
+/// `predicted_arrival_at`과 `Instant::now()`를 넘긴다.
+fn target_impact_time_secs(predicted_arrival_at: Instant, now: Instant) -> f64 {
+    let remaining = predicted_arrival_at
+        .saturating_duration_since(now)
+        .as_secs_f64();
+    return (remaining - pingpong_bot::defaults::FIXED_JOINT_SWING_IMPACT_MARGIN_SECS)
+        .max(pingpong_bot::defaults::FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS);
+}
+
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const BUSY_POLL: Duration = Duration::from_millis(5);
 const AUTO_NEXT_AFTER_HIT_WAIT: Duration = Duration::from_millis(300);
@@ -224,6 +237,10 @@ enum BallControlState {
         swing_due_at: Instant,
         swing_attempted: bool,
         return_due_at: Instant,
+        /// 파워 스윙 목표 타격-전 시간을 스윙 트리거 시점에 다시 계산하는 데
+        /// 쓴다 (`target_impact_time_secs`) — 매 새 예측마다 `swing_due_at`과
+        /// 함께 갱신된다.
+        predicted_arrival_at: Instant,
         measurement: PendingAlignmentMeasurement,
     },
     Waiting,
@@ -446,12 +463,14 @@ pub fn spawn(
                 BallControlState::Aligning {
                     swing_due_at,
                     swing_attempted,
+                    predicted_arrival_at,
                     measurement,
                     ..
                 } if !swing_attempted && Instant::now() >= *swing_due_at => {
                     Some((
                         measurement.track_seq,
                         *swing_due_at,
+                        *predicted_arrival_at,
                         pingpong_bot::robot::Pose::new(
                             measurement.rail_commanded_m,
                             measurement.joints_commanded.clone(),
@@ -462,7 +481,7 @@ pub fn spawn(
                 | BallControlState::Waiting
                 | BallControlState::Aligning { .. } => None,
             };
-            if let Some((track_seq, swing_due_at, aligned_target)) = due_swing {
+            if let Some((track_seq, swing_due_at, predicted_arrival_at, aligned_target)) = due_swing {
                 if let BallControlState::Aligning {
                     swing_attempted, ..
                 } = &mut state
@@ -473,10 +492,13 @@ pub fn spawn(
                 match hardware.read_pose() {
                     Ok(swing_start) => {
                         let swing_arm = arm_for_rail_position(&arm, swing_start.rail_x);
+                        let swing_target_impact_time_secs =
+                            target_impact_time_secs(predicted_arrival_at, Instant::now());
                         match Planner::fixed_joint_swing_power_sweep_from_alignment(
                             &swing_arm,
                             &swing_start,
                             &aligned_target,
+                            swing_target_impact_time_secs,
                         ) {
                         Ok(planned) => {
                             let swing = &planned.trajectory;
@@ -515,6 +537,7 @@ pub fn spawn(
                                         scheduled_lead_secs = FIXED_SWING_LEAD.as_secs_f64(),
                                         start_late_ms = f2(swing_due_at.elapsed().as_secs_f64() * 1e3),
                                         command_send_ms = f2(command_send_ms),
+                                        target_impact_time_secs = f4(swing_target_impact_time_secs),
                                         swing_duration_secs = f4(swing.duration_secs),
                                         joints_start = %format!("{:?}", swing.start.values),
                                         joints_impact = %format!("{:?}", swing.end.values),
@@ -969,6 +992,7 @@ pub fn spawn(
                 swing_due_at,
                 swing_attempted: false,
                 return_due_at,
+                predicted_arrival_at,
                 measurement: PendingAlignmentMeasurement {
                     track_seq,
                     rail_commanded_m,
@@ -2021,6 +2045,40 @@ mod tests {
     }
 
     #[test]
+    fn target_impact_time_secs_matches_todays_fixed_value_when_on_schedule() {
+        let now = Instant::now();
+        let predicted_arrival_at = now + FIXED_SWING_LEAD;
+        let target = target_impact_time_secs(predicted_arrival_at, now);
+        assert!(
+            (target - pingpong_bot::defaults::FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS).abs()
+                < 1e-9,
+            "target={target}"
+        );
+    }
+
+    #[test]
+    fn target_impact_time_secs_uses_remaining_time_when_above_the_floor() {
+        let now = Instant::now();
+        // 500ms left, margin 200ms -> 300ms raw, above the 120ms floor.
+        let predicted_arrival_at = now + Duration::from_millis(500);
+        let target = target_impact_time_secs(predicted_arrival_at, now);
+        assert!((target - 0.300).abs() < 1e-9, "target={target}");
+    }
+
+    #[test]
+    fn target_impact_time_secs_clamps_to_the_floor_when_late() {
+        let now = Instant::now();
+        // Only 50ms left -- far less than the 200ms margin needs.
+        let predicted_arrival_at = now + Duration::from_millis(50);
+        let target = target_impact_time_secs(predicted_arrival_at, now);
+        assert!(
+            (target - pingpong_bot::defaults::FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS).abs()
+                < 1e-9,
+            "target={target}"
+        );
+    }
+
+    #[test]
     fn primary_rail_selection_keeps_racket_aimed_at_opponent_center() {
         let robot = pingpong_bot::defaults::robot().expect("active robot");
         let arm = &robot.arm;
@@ -2497,6 +2555,7 @@ mod tests {
             swing_due_at: Instant::now(),
             swing_attempted: false,
             return_due_at: Instant::now(),
+            predicted_arrival_at: Instant::now(),
             measurement: PendingAlignmentMeasurement {
                 track_seq: 9,
                 rail_commanded_m: rail.default_x(),
