@@ -2542,6 +2542,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "measure-joint-speed"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "pingpong-bot",
+]
+
+[[package]]
 name = "measure-restitution"
 version = "0.1.0"
 dependencies = [
