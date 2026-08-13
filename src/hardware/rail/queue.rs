@@ -248,4 +248,37 @@ mod tests {
         queue.wait_idle();
         assert!(!queue.is_moving());
     }
+
+    #[test]
+    fn error_is_recorded_but_queue_keeps_processing() {
+        let (queue, sent_rx, release_tx) = spawn_mock(Some(2.0));
+
+        // 2.0 fails inside command_abs_in_secs itself, so no wait_idle() call
+        // happens for it and no release token is needed.
+        queue.enqueue(2.0, 0.1);
+        assert_eq!(sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 2.0);
+
+        // Poll until the worker has recorded the error and gone back to idle.
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        let error = loop {
+            if let Some(error) = queue.take_error() {
+                break error;
+            }
+            assert!(std::time::Instant::now() < deadline, "error was never recorded");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(
+            error,
+            HwError::InvalidConfig {
+                reason: "mock failure".into(),
+            }
+        );
+        assert!(queue.take_error().is_none(), "take_error must clear the slot");
+
+        // The queue must still accept and run the next command.
+        release_tx.send(()).unwrap();
+        queue.enqueue(3.0, 0.1);
+        queue.wait_idle();
+        assert_eq!(sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 3.0);
+    }
 }
