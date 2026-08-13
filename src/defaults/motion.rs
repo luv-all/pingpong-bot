@@ -8,7 +8,7 @@ use crate::robot::motion::InterceptWindow;
 /// 마운트 실측 -0.128일 때 검증된 하한 0.08(`0.08 - (-0.128)`)로 고정한다 —
 /// 마운트가 옮겨져도 팔 기준 도달 가능 범위는 그대로이므로, 월드 y 하한은
 /// 마운트를 따라 같은 만큼 이동해야 한다.
-pub const INTERCEPT_Y_MIN_OFFSET_FROM_MOUNT_M: f64 = 0.380;
+pub const INTERCEPT_Y_MIN_OFFSET_FROM_MOUNT_M: f64 = 0.350;
 /// [`RAIL_MOUNT_Y_M`]에서 인터셉트 구간 상한까지의 고정 오프셋 [m].
 /// 마운트 실측 -0.128일 때 검증된 상한 0.35(`0.35 - (-0.128)`)로 고정한다.
 pub const INTERCEPT_Y_MAX_OFFSET_FROM_MOUNT_M: f64 = 0.480;
@@ -93,7 +93,7 @@ pub const ALIGNMENT_MIN_UPWARD_TILT_DEG: f64 = 25.0;
 /// 연속 안정화 조건이 담당한다.
 pub const FIRST_CONTROL_AFTER_DETECTION_SECS: f64 = 0.010;
 /// 공을 상대편으로 넘기기 위한 라켓 면의 위쪽 기울기 [deg].
-pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
+pub const IMPACT_UPWARD_TILT_DEG: f64 = 40.0;
 /// 검출 직후 추가 백스윙의 첫 시도 시간 [s].
 pub const DETECTION_WINDUP_MIN_DURATION_SECS: f64 = 0.120;
 /// 임팩트 순간 목표 라켓 선속도 [m/s].
@@ -175,7 +175,7 @@ pub const FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS: f64 = 0.120;
 /// 20ms를 남기는 건 제어 루프 응답 지연·예측 오차를 흡수할 여유를
 /// 완전히 없애지 않기 위해서다 — 남은 여유가 이전보다 줄었으므로 실기
 /// 재검증 전까지는 보수적으로 남긴 값.
-pub const FIXED_JOINT_SWING_IMPACT_MARGIN_SECS: f64 = 0.140;
+pub const FIXED_JOINT_SWING_IMPACT_MARGIN_SECS: f64 = 0.050;
 /// 예상 공 도착 시각보다 파워 스윙 명령을 앞서 시작할 시간 [s] —
 /// [`FIXED_JOINT_SWING_LEAD_SECS`]의 파워 스윙 전용 짝. 스윙이 언제
 /// 트리거되는지만 정하고, 스윙 자체의 소요 시간은
