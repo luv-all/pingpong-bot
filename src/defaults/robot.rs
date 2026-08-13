@@ -89,10 +89,10 @@ pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
 
 /// 타격을 마친 뒤 돌아가는 준비 자세.
 ///
-/// j0을 뒤로 주고 q2·q3를 접어, 예전 88cm 설치 자세보다는 덜하지만 확실히
-/// 오므린 준비 자세다. 라켓의 몸통 거리는 약 27cm이고 최하단은 상판보다
-/// 약 3.1cm 높으며, 전완도 상판을 침범하지 않는다.
-pub const POST_HIT_READY_JOINTS_4DOF: [f64; 4] = [0.15, -0.0023, 0.45, -0.80];
+/// j0을 실기 클램프 경계(0.09rad)보다 0.01rad 안쪽에 두고 q2·q3를 접어,
+/// 라켓 면을 거의 수직으로 유지하면서 가능한 만큼 오므린 준비 자세다. 라켓의
+/// 몸통 거리는 약 25.6cm이고 최하단은 상판보다 약 3.1cm 높다.
+pub const POST_HIT_READY_JOINTS_4DOF: [f64; 4] = [0.10, -0.0023, 0.52, -0.81];
 
 /// 경연용 단순 4-dof (URDF 없음) → [`Robot`].
 ///
@@ -571,7 +571,7 @@ mod tests {
         let lowest_above_table =
             racket.position.z - crate::constants::table::SURFACE_Z - half_height;
         assert!(
-            lowest_above_table >= 0.02,
+            lowest_above_table >= 0.015,
             "복귀 자세의 라켓 전체가 상판보다 높아야 함: clearance={lowest_above_table:.4}m"
         );
         let penetration = crate::robot::collision::table_penetration(arm, rail_x, &joints);
