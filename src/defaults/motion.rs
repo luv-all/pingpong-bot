@@ -120,19 +120,34 @@ pub const FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS: f64 = 0.120;
 /// 시간 [s]. `arm.max_joint_speed / FIXED_JOINT_SWING_RAMP_SECS`가 이 관절들의
 /// 가속도로 쓰인다.
 pub const FIXED_JOINT_SWING_RAMP_SECS: f64 = 0.060;
-/// 가속 뒤 첨두속도를 그대로 유지(순항)하는 시간 [s] — 공 도착 시각 예측
-/// 오차를 흡수하는 창이다. `FIXED_JOINT_SWING_RAMP_SECS`와 합이 파워 스윙의
-/// 전체 타격-전 시간이 된다.
-pub const FIXED_JOINT_SWING_CRUISE_SECS: f64 = 0.060;
-/// 손목(j3)이 접힌 자세로 대기하다 등가속 스냅으로 목표각까지 움직이는
-/// 시간 [s] — 파워 스윙 전체 시간의 마지막 구간이다.
-pub const FIXED_JOINT_SWING_SNAP_DURATION_SECS: f64 = 0.050;
+/// 손목(j3)이 등가속 스냅에 쓸 최소 시간 [s] — 실제 스냅 시간은
+/// `2·|Δq3|/max_joint_speed`(정지에서 관절 속도 상한까지 걸리는 최소
+/// 시간)로 요구 회전량에 맞춰 계산하고, 이 값은 그 계산이 0에 가까운
+/// 회전량에도 지나치게 짧은 스냅을 만들지 않게 막는 하한이다.
+/// (2026-08-14 이전에는 이 값이 고정 스냅 시간 자체였다 — 임팩트까지
+/// j3 요구 회전량이 커질수록(최대 -24°) 50ms 창을 넘어서면서 궤적 전체가
+/// 강제로 2cm 비상 폴백까지 떨어지는 문제가 있었다.)
+pub const FIXED_JOINT_SWING_MIN_SNAP_SECS: f64 = 0.050;
+/// 파워 스윙 타격-전 시간의 하한 [s] — `FIXED_JOINT_SWING_RAMP_SECS`(0.06)
+/// + 이전에 고정이었던 순항 시간(0.06)과 같은 값으로, 오늘 출하되는
+/// 스윙보다 짧아지지 않도록 막는다. 실제 타격-전 시간은
+/// `control_worker`가 예상 도착 시각까지 남은 시간에서
+/// [`FIXED_JOINT_SWING_IMPACT_MARGIN_SECS`]를 뺀 값으로 동적으로 계산하고,
+/// 이 하한으로 클램프한다.
+pub const FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS: f64 = 0.120;
+/// 예상 공 도착 시각보다 몇 초 먼저 임팩트가 나야 하는지 — 파워 스윙의
+/// 목표 타격-전 시간을 `남은 시간 − 이 값`으로 계산하는 데 쓴다.
+/// [`FIXED_JOINT_SWING_POWER_SWEEP_LEAD_SECS`](0.320)와 짝을 이뤄 제때
+/// 스윙이 트리거되면 `0.320 − 0.200 = 0.120`으로
+/// [`FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS`]와 정확히 같아진다 — 오늘
+/// 고정값과 동일한 여유를 그대로 재현하되, 제어 루프가 늦게 응답한
+/// 경우에는 오래된 고정값을 그대로 쓰는 대신 실제 남은 시간을 반영해
+/// 자연히 하한까지 줄어든다.
+pub const FIXED_JOINT_SWING_IMPACT_MARGIN_SECS: f64 = 0.200;
 /// 예상 공 도착 시각보다 파워 스윙 명령을 앞서 시작할 시간 [s] —
-/// [`FIXED_JOINT_SWING_LEAD_SECS`]의 파워 스윙 전용 짝.
-/// 타격-전 시간이 `FIXED_JOINT_SWING_RAMP_SECS + FIXED_JOINT_SWING_CRUISE_SECS`
-/// (0.12s)로 quadratic 스윙(0.20s)보다 짧아진 만큼(0.08s), 원래 의도했던
-/// "예상 도착보다 0.20초 먼저 임팩트" 여유를 그대로 유지하도록
-/// `FIXED_JOINT_SWING_LEAD_SECS`(0.400)에서 그만큼 줄였다.
+/// [`FIXED_JOINT_SWING_LEAD_SECS`]의 파워 스윙 전용 짝. 스윙이 언제
+/// 트리거되는지만 정하고, 스윙 자체의 소요 시간은
+/// [`FIXED_JOINT_SWING_IMPACT_MARGIN_SECS`]로 별도 계산한다.
 pub const FIXED_JOINT_SWING_POWER_SWEEP_LEAD_SECS: f64 = 0.320;
 impl Default for InterceptWindow {
     fn default() -> Self {
