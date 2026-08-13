@@ -21,7 +21,7 @@ use pingpong_bot::constants::{ball, table};
 use pingpong_bot::defaults::PhysicsParams;
 use pingpong_bot::defaults::vision::fit::{DRAG, FRICTION, RESTITUTION};
 use pingpong_bot::physics::Kinematics;
-use pingpong_bot::vision::{Candidate, Evidence, Fit, State, Trigger};
+use pingpong_bot::vision::{Candidate, Evidence, Fit, Trigger};
 use pingpong_bot::Point3;
 
 const FPS: f64 = 120.0;

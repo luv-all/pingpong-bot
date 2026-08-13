@@ -53,8 +53,11 @@ pub struct PreviewWindow {
     ///
     /// 프레임마다 새로 그리므로 예측이 몇 프레임만 잡히면 마커가 번쩍하고 사라진다
     /// (30~120 fps에서는 눈에 안 띈다). 마지막 값을 붙들어 계속 그려서 "어디를 치려
-    /// 했는지"가 화면에 남게 한다.
+    /// 했는지"가 다음 공을 커밋할 때까지 화면에 남게 한다.
     last_target: BTreeMap<u8, camera::Pixel>,
+    /// [`Self::last_target`]이 어느 트랙의 것인가. 트랙이 바뀌면 지난 공의 조준점을
+    /// 버린다 — 안 버리면 새 공 위에 옛 빨간 점이 겹쳐 보인다.
+    last_target_seq: Option<u64>,
     /// 최근 제어 상태 — 다음 상태가 올 때까지 남는다.
     control_state: Option<ControlStateSnapshot>,
     /// 현재 테스트 존과 그 준비 레일 x — 상태 패널이 소비한다.
@@ -75,6 +78,7 @@ impl PreviewWindow {
             hud: Vec::new(),
             sticky: Vec::new(),
             last_target: BTreeMap::new(),
+            last_target_seq: None,
             control_state: None,
             current_zone: None,
             dirty: true,
@@ -115,6 +119,12 @@ impl PreviewWindow {
 
         // 빨강 = 예측 도달 위치. 화면 밖이면 가장자리로 끌어와 방향만 보여준다 —
         // 안 그리면 "예측이 없다"와 구분이 안 된다.
+        // 공이 바뀌면 먼저 지운다 — 새 공이 아직 트리거 전이라 조준점이 없을 수 있고,
+        // 그때 옛 마커가 남아 있으면 "여기를 치려 한다"는 거짓말이 된다.
+        if event.track_seq.is_some() && event.track_seq != self.last_target_seq {
+            self.last_target.clear();
+            self.last_target_seq = event.track_seq;
+        }
         if let Some(pixel) = event.target_pixel {
             let pixel = if event.target_offscreen {
                 clamp_to_frame(pixel, &image)

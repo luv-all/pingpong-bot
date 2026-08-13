@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TrySendError};
 use pingpong_bot::camera::Calibration;
+use pingpong_bot::constants::table;
 use pingpong_bot::vision::{Fit, Outcome};
 use tracing::{debug, info_span};
 
@@ -127,12 +128,29 @@ pub fn spawn(
                 let fitted_pixel = measured
                     .zip(params)
                     .and_then(|(state, params)| params.project_world_unclipped(state.position));
+                // 빨간 점 = 제어에 넘긴 그 예측이 접수 평면을 지나는 자리. `trajectory`가
+                // 곧 `send_latest_commit`이 보낸 것과 같은 값이라, 화면 표시와 실제 명령이
+                // 갈릴 수 없다. 트리거 전이면 `trajectory`가 `None`이라 마커도 안 뜬다.
+                let target = trajectory.as_ref().and_then(|trajectory| {
+                    trajectory.predicted.at_plane(table::DEFAULT_HIT_PLANE_Y)
+                });
+                // 화면 밖 좌표도 잘라내지 않고 그대로 넘긴다 — 프리뷰가 가장자리로 끌어와
+                // 방향을 보여준다. 여기서 `None`으로 만들면 "예측이 없다"와 안 갈린다.
+                let target_pixel = target
+                    .zip(params)
+                    .and_then(|(state, params)| params.project_world_unclipped(state.position));
+                let target_offscreen = target_pixel.zip(params).is_some_and(|(pixel, params)| {
+                    !(0.0..f64::from(params.width)).contains(&pixel.x)
+                        || !(0.0..f64::from(params.height)).contains(&pixel.y)
+                });
                 let hud = hud_lines(&fit, measured.as_ref(), trajectory.as_ref());
                 let preview = PreviewEvent {
                     frame: event.frame,
                     pixel: event.found.map(|candidate| candidate.pixel),
-                    target_pixel: None,
-                    target_offscreen: false,
+                    target_pixel,
+                    target_offscreen,
+                    // 공이 바뀌면 지난 공의 빨간 점을 붙들고 있으면 안 된다.
+                    track_seq: trajectory.as_ref().map(|trajectory| trajectory.seq),
                     fitted_pixel,
                     hud,
                 };
