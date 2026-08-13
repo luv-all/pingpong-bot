@@ -218,7 +218,9 @@ fn cameras(reviewed: &Reviewed, clip: &camera::ResolvedStereoOffline) -> Result<
     let Some(contract) = &reviewed.contract else {
         return Ok(None);
     };
-    let calibration = Calibration::load_json(&defaults::calibration_path())
+    // 오버레이도 클립 옆 스냅샷을 따라가야 한다 — 재생과 다른 기하로 그리면 그림만
+    // 어긋난 채 숫자는 멀쩡해 보인다.
+    let calibration = Calibration::load_json(&defaults::clip_calibration_path(&clip.dir))
         .map_err(anyhow::Error::msg)
         .context("calibration")?;
     let mut left =
@@ -322,7 +324,7 @@ pub fn summary_row(name: &str, score: &Score) -> String {
         None => "--".to_owned(),
     };
     return format!(
-        "{name:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+        "{name:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
         score.both,
         score.track_switches + 1,
         resid(0),
@@ -330,6 +332,14 @@ pub fn summary_row(name: &str, score: &Score) -> String {
         score
             .trigger
             .map_or("--".to_owned(), |(_, _, n)| n.to_string()),
+        // 제어는 하드 데드라인을 갖는다(`FIXED_JOINT_SWING_LEAD_SECS`) — 평균이 아니라
+        // **가장 짧은 클립**이 되는지가 판정 기준이라 클립마다 보인다.
+        score
+            .trigger
+            .zip(score.impact_t)
+            .map_or("--".to_owned(), |((_, fired, _), impact)| {
+                format!("{:.0}", (impact - fired) * 1000.0)
+            }),
         cell(score.predicted_rmse.map(|(all, _, _)| all)),
         cell(score.predicted_rmse.map(|(_, axis, _)| axis.x)),
         cell(score.predicted_rmse.map(|(_, axis, _)| axis.y)),
@@ -358,13 +368,14 @@ pub fn summary_header() -> String {
             .map_or("y--".to_owned(), |plane| format!("y{:.2}", plane.y))
     };
     return format!(
-        "{:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+        "{:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
         "clip",
         "동시",
         "트랙",
         "잔차0",
         "잔차1",
         "관측",
+        "리드ms",
         "RMSE",
         "RMSEx",
         "RMSEy",

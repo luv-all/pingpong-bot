@@ -199,6 +199,12 @@ fn run_all(out: &std::path::Path) -> Result<()> {
         "RMSEx·y·z=얼린 예측의 축별 RMSE — 합이 아니라 어느 방향이 나쁜지를 본다".into(),
     );
     lines.push("RMSE·리드타임 오차는 cm, 전부 생 삼각측량 기준".into());
+    // 제어가 스윙을 시작해야 하는 시점이 하드 데드라인이라, 평균이 아니라 최악 클립이
+    // 판정 기준이다. 요구치를 옆에 같이 찍어 눈으로 바로 갈리게 한다.
+    lines.push(format!(
+        "리드ms = 커밋부터 공 도달까지 — 제어 스윙 리드 {:.0}ms 이상이어야 한다",
+        pingpong_bot::defaults::motion::FIXED_JOINT_SWING_LEAD_SECS * 1000.0
+    ));
     // 접수 창은 제어측 상수에서 나오므로 여기 숫자를 박아 두면 창이 옮겨질 때 조용히
     // 낡는다(실제로 0.08~0.35로 박혀 있던 게 창이 0.14~0.41로 옮겨진 뒤에도 남아 있었다).
     let window = pingpong_bot::robot::motion::InterceptWindow::default();

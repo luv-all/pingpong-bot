@@ -220,6 +220,17 @@ impl Reviewed {
     }
 }
 
+/// 클립 옆에 캘리브 스냅샷이 있으면 그걸, 없으면 전역 파일을 읽는다.
+///
+/// 클립은 과거의 기록이고 전역 캘리브는 지금 리그를 가리키는 살아 있는 값이다. 카메라를
+/// 옮긴 뒤 옛 클립을 전역 캘리브로 돌리면 삼각측량이 통째로 어긋나는데, 그게 에러가
+/// 아니라 **빈 표**로 나와서 오늘만 두 번 조용히 거짓말을 했다(`fe94531`, `3db054e`).
+fn load_clip_calibration(any_clip_file: &Path) -> Result<Calibration, String> {
+    let dir = any_clip_file.parent().unwrap_or(Path::new("."));
+    let path = defaults::clip_calibration_path(dir);
+    return Calibration::load_json(&path).map_err(|e| format!("calibration 로드 ({}): {e}", path.display()));
+}
+
 /// 클립을 한 번 훑어 검출·필터 재생을 끝낸다.
 pub fn review(left: &Path, right: &Path, fps: f64) -> Result<Reviewed, String> {
     // `Fit::new`가 실제로 쓰는 물리(`RESTITUTION`·`FRICTION`·`DRAG` 포함)와 정확히 같은
@@ -255,6 +266,9 @@ pub fn review_with_physics(
 pub struct DetectedFrames {
     pixels: Vec<[Option<camera::Pixel>; 2]>,
     fps: f64,
+    /// **이 클립을 찍을 때의** 캘리브. 재생 단계가 검출 단계와 다른 기하를 쓰면
+    /// 삼각측량이 통째로 어긋나므로 캐시에 같이 담아 나른다.
+    calibration: Calibration,
 }
 
 /// 클립의 검출만 한 번 돌린다. 비디오 디코드·검출 캐스케이드가 이 함수의 비용 전부고,
@@ -264,8 +278,7 @@ pub struct DetectedFrames {
 /// 안에서 [`Vision`]을 만들긴 하지만 그 안의 `Fit`(트리거·물리)은 안 쓴다 — 캠별 검출
 /// 픽셀만 뽑아 버린다. 트리거 값은 아무거나 상관없다.
 pub fn detect_all(left: &Path, right: &Path, fps: f64) -> Result<DetectedFrames, String> {
-    let calibration = Calibration::load_json(&defaults::calibration_path())
-        .map_err(|e| format!("calibration 로드: {e}"))?;
+    let calibration = load_clip_calibration(left)?;
     let mut vision = Vision::load(&calibration, defaults::vision::trigger())
         .map_err(|e| format!("vision 조립: {e}"))?;
 
@@ -293,7 +306,11 @@ pub fn detect_all(left: &Path, right: &Path, fps: f64) -> Result<DetectedFrames,
         }
         pixels.push(row);
     }
-    return Ok(DetectedFrames { pixels, fps });
+    return Ok(DetectedFrames {
+        pixels,
+        fps,
+        calibration,
+    });
 }
 
 /// [`detect_all`]의 검출 캐시를 물리만 바꿔 가며 다시 채점한다 — 비디오도 검출도
@@ -303,10 +320,8 @@ pub fn replay_with_physics(
     detected: &DetectedFrames,
     physics: pingpong_bot::defaults::PhysicsParams,
 ) -> Result<Reviewed, String> {
-    let calibration = Calibration::load_json(&defaults::calibration_path())
-        .map_err(|e| format!("calibration 로드: {e}"))?;
     let fit = pingpong_bot::vision::Fit::with_physics(
-        &calibration,
+        &detected.calibration,
         defaults::vision::trigger(),
         physics,
     );
@@ -319,8 +334,7 @@ pub fn replay_with(
     detected: &DetectedFrames,
     mut fit: pingpong_bot::vision::Fit,
 ) -> Result<Reviewed, String> {
-    let calibration = Calibration::load_json(&defaults::calibration_path())
-        .map_err(|e| format!("calibration 로드: {e}"))?;
+    let calibration = &detected.calibration;
     let origin = Instant::now();
     let fps = detected.fps;
 
@@ -416,6 +430,19 @@ pub fn replay_with(
             }
         }
         frames.push(state);
+    }
+
+    // 두 캠이 각자 넉넉히 봤는데 삼각측량이 하나도 안 살아남으면 기하가 안 맞는 것이다 —
+    // 거의 항상 "이 클립을 찍은 뒤 카메라를 옮겼다"는 뜻이다. 그냥 두면 빈 칸만 늘어선
+    // 표가 나와서 "정확도가 나쁘다"로 읽히므로(오늘만 두 번 그랬다) 여기서 크게 실패한다.
+    let seen = |slot: usize| frames.iter().filter(|f| f.pixels[slot].is_some()).count();
+    let (left_seen, right_seen) = (seen(0), seen(1));
+    const ENOUGH: usize = 20;
+    if observed.is_empty() && left_seen >= ENOUGH && right_seen >= ENOUGH {
+        return Err(format!(
+            "두 캠이 각각 {left_seen}·{right_seen}프레임을 봤는데 스테레오 복원이 0개다 —              캘리브가 이 클립과 안 맞는다 (클립 옆에 {} 스냅샷을 두거나, 이 리그로 다시 찍어라)",
+            defaults::CLIP_CALIBRATION_NAME
+        ));
     }
 
     return Ok(Reviewed {
