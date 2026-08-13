@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use pingpong_bot::Point3;
+use pingpong_bot::{Point3, Vector3};
 use pingpong_bot::camera::{self, Calibration, Frame, FrameSource, OpenCvCapture, Triangulate};
 use pingpong_bot::constants::table;
 use pingpong_bot::defaults;
@@ -88,6 +88,11 @@ pub struct FrameState {
     pub residual_px: [Option<f64>; 2],
     /// 이 프레임에 적합이 쓰고 있던 관측 수. 오차의 지배 항이다.
     pub sightings: usize,
+    /// 두 캠이 같은 순간에 함께 본 표본 수 — 트리거가 보는 바로 그 값.
+    pub stereo_samples: usize,
+    /// 바운스에서 닫힌식으로 푼 스핀. `None`이면 `ASSUMED_SPIN`(=0)으로 굴렸다는 뜻 —
+    /// 그 샷의 튐 반사는 무회전 가정이라 y·z가 어긋난다.
+    pub solved_spin: Option<Vector3>,
     /// 이 프레임의 **살아 있는** 예측이 접수 평면에서 찍은 점.
     ///
     /// 얼린 예측은 한 점밖에 안 주므로 "리드가 줄면 나아지나"를 못 본다. 계약이 매
@@ -346,6 +351,8 @@ pub fn replay_with(
 
         state.filtered = fit.measured().last().copied();
         state.sightings = fit.sightings();
+        state.stereo_samples = fit.stereo_samples();
+        state.solved_spin = fit.solved_spin();
         state.seq = fit.seq();
         state.tracking = state.filtered.is_some();
         // 적합이 이번 관측을 실제로 받아들였을 때만 잔차를 센다. 거부된 프레임의 상태는

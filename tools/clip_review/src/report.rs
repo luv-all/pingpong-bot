@@ -231,8 +231,12 @@ fn cameras(reviewed: &Reviewed, clip: &camera::ResolvedStereoOffline) -> Result<
         .seek_frame(contract.frame as u64)
         .map_err(anyhow::Error::msg)?;
 
-    let actual_past = track::clip_to_mount(&reviewed.observed_to(contract.frame));
-    let filtered = track::clip_to_mount(&reviewed.measured_to(contract.frame));
+    // 트리거 프레임에서 잘라 그리면 "커밋한 뒤 실제로 어디로 갔나"가 안 보인다 —
+    // 자홍(얼린 예측)과 견줄 상대가 바로 그 뒷구간이므로 트랙이 끝나는 자리까지 그린다.
+    // 배경 프레임은 커밋 순간 그대로 둔다 (노란 검출 동그라미가 그 순간의 것이라서).
+    let end = reviewed.last_frame();
+    let actual_past = track::clip_to_mount(&reviewed.observed_to(end));
+    let filtered = track::clip_to_mount(&reviewed.measured_to(end));
     let committed = track::clip_to_mount(
         &reviewed
             .predicted()
@@ -318,7 +322,7 @@ pub fn summary_row(name: &str, score: &Score) -> String {
         None => "--".to_owned(),
     };
     return format!(
-        "{name:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+        "{name:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
         score.both,
         score.track_switches + 1,
         resid(0),
@@ -327,6 +331,9 @@ pub fn summary_row(name: &str, score: &Score) -> String {
             .trigger
             .map_or("--".to_owned(), |(_, _, n)| n.to_string()),
         cell(score.predicted_rmse.map(|(all, _, _)| all)),
+        cell(score.predicted_rmse.map(|(_, axis, _)| axis.x)),
+        cell(score.predicted_rmse.map(|(_, axis, _)| axis.y)),
+        cell(score.predicted_rmse.map(|(_, axis, _)| axis.z)),
         cell(score.lead_error.first().copied().flatten()),
         cell(score.lead_error.get(1).copied().flatten()),
         cell(score.lead_error.get(2).copied().flatten()),
@@ -351,7 +358,7 @@ pub fn summary_header() -> String {
             .map_or("y--".to_owned(), |plane| format!("y{:.2}", plane.y))
     };
     return format!(
-        "{:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+        "{:<8} {:>5} {:>5} {:>6} {:>6} {:>6} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
         "clip",
         "동시",
         "트랙",
@@ -359,6 +366,9 @@ pub fn summary_header() -> String {
         "잔차1",
         "관측",
         "RMSE",
+        "RMSEx",
+        "RMSEy",
+        "RMSEz",
         "0.4s",
         "0.3s",
         "0.2s",

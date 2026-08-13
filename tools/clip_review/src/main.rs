@@ -195,6 +195,9 @@ fn run_all(out: &std::path::Path) -> Result<()> {
     lines.push(
         "동시=두 캠 동시 검출 프레임, 잔차=적합 재투영 p50 [px], 관측=트리거 시점 관측 수".into(),
     );
+    lines.push(
+        "RMSEx·y·z=얼린 예측의 축별 RMSE — 합이 아니라 어느 방향이 나쁜지를 본다".into(),
+    );
     lines.push("RMSE·리드타임 오차는 cm, 전부 생 삼각측량 기준".into());
     lines.push("y0.08~y0.35 = 접수 창의 평면들 — 그 자리에서 라켓이 빗나가는 거리 [cm]".into());
     let summary = out.join("summary.txt");
@@ -402,7 +405,9 @@ fn run_trigger_sweep() -> Result<()> {
         let t0 = std::time::Instant::now();
         let cache = track::detect_all(&clip.left, &clip.right, fps).map_err(anyhow::Error::msg)?;
         println!("{:.1}s", t0.elapsed().as_secs_f64());
-        detected.push(cache);
+        // 이름을 같이 들고 간다 — meas_fps 없는 클립을 건너뛰므로 `names`와 인덱스가
+        // 어긋난다(실측 fly_54). 진단표가 엉뚱한 클립 이름을 달면 안 된다.
+        detected.push((name.clone(), cache));
     }
     if detected.is_empty() {
         bail!("검출된 클립이 없다");
@@ -419,11 +424,20 @@ fn run_trigger_sweep() -> Result<()> {
         .context("calibration")?;
     let base_max_lead = defaults::EstimatorParams::default().max_lead;
 
-    let make_trigger = |y_frac: f64, sigma: f64| -> Box<dyn pingpong_bot::vision::Trigger> {
-        return Box::new(pingpong_bot::vision::triggers::Any(vec![
-            Box::new(pingpong_bot::vision::triggers::SigmaThreshold {
-                position: pingpong_bot::Vector3::repeat(sigma),
-                velocity: pingpong_bot::Vector3::repeat(sigma / base_max_lead),
+    // 조립 모양이 `defaults::vision::trigger()`와 **같아야** 한다 — 도구가 생산과 다른
+    // 트리거를 재면 여기서 좋아 보이는 값이 실기에서 재현되지 않는다. 실제로 그 함정을
+    // 한 번 밟았다: 게이트를 넣기 전 이 스윕은 맨 `PlaneCrossing`을 썼고, 그래서 "0.75보다
+    // 이르게 가면 절벽(8.6cm -> 22.6cm)"이라는 결론이 나왔다. 그 절벽의 원인이 바로
+    // 게이트가 막는 실패(한쪽 캠이 죽은 단안 구간에서 확신 없이 얼어붙는 것)였으므로,
+    // 게이트를 낀 지금은 프런티어 자체가 달라진다.
+    let base_stereo = defaults::vision::MIN_STEREO_SAMPLES;
+    let base_y_frac = defaults::vision::ALIGNMENT_TRIGGER_TABLE_Y_FRAC;
+    // `defaults::vision::trigger()`와 **같은 모양**이어야 한다 — 도구가 생산과 다른
+    // 트리거를 재면 여기서 좋아 보이는 값이 실기에서 재현되지 않는다.
+    let make_trigger = |stereo: usize, y_frac: f64| -> Box<dyn pingpong_bot::vision::Trigger> {
+        return Box::new(pingpong_bot::vision::triggers::All(vec![
+            Box::new(pingpong_bot::vision::triggers::StereoSamples {
+                min_samples: stereo,
             }),
             Box::new(pingpong_bot::vision::triggers::PlaneCrossing {
                 y: table::LENGTH_Y * y_frac,
@@ -431,108 +445,217 @@ fn run_trigger_sweep() -> Result<()> {
         ]));
     };
 
-    // 클립별 (contract.t, plane_error) — 기본 트리거 기준.
-    let baseline: Vec<Option<(f64, Vec<f64>)>> = detected
+    /// 트리거 하나로 클립을 다시 굴린다 — (트리거 시각, 도달 시각, 접수 평면 오차 [cm]).
+    ///
+    /// 도달 시각을 같이 내는 이유: 리드타임을 기준값 대비 **상대**로만 재면 "그래서
+    /// 제어가 몇 ms를 손에 쥐나"를 끝내 모른다. `impact_t - contract.t`가 그 절대값이다.
+    fn run(
+        cache: &track::DetectedFrames,
+        calibration: &Calibration,
+        physics: defaults::PhysicsParams,
+        trigger: Box<dyn pingpong_bot::vision::Trigger>,
+    ) -> Option<(f64, Option<f64>, Vec<f64>)> {
+        return run_full(cache, calibration, physics, trigger).map(|(t, i, e, _, _)| (t, i, e));
+    }
+
+    /// [`run`]에 "그 순간 스테레오 표본이 몇 개였나"를 덧붙인다 — 조건이 걸린 자리를
+    /// 표본 수로 환산해 보면 서로 다른 축인지 같은 축인지가 드러난다.
+    fn run_full(
+        cache: &track::DetectedFrames,
+        calibration: &Calibration,
+        physics: defaults::PhysicsParams,
+        trigger: Box<dyn pingpong_bot::vision::Trigger>,
+    ) -> Option<(f64, Option<f64>, Vec<f64>, usize, bool)> {
+        let fit = pingpong_bot::vision::Fit::with_physics(calibration, trigger, physics);
+        let reviewed = track::replay_with(cache, fit).ok()?;
+        let contract_frame = reviewed.contract.as_ref()?.frame;
+        let pairs = reviewed.frames[contract_frame].stereo_samples;
+        let t = reviewed.contract.as_ref()?.t;
+        let score = Score::of(&reviewed);
+        let errs = score
+            .plane_error
+            .iter()
+            .filter_map(|(_, e)| e.map(|(hypot, _, _)| hypot * 100.0))
+            .collect();
+        return Some((t, score.impact_t, errs, pairs, score.solved_spin.is_some()));
+    }
+
+    // 클립별 (contract.t, impact_t, plane_error) — 지금 생산 트리거 기준.
+    let baseline: Vec<Option<(f64, Option<f64>, Vec<f64>)>> = detected
         .iter()
-        .map(|cache| {
-            let fit = pingpong_bot::vision::Fit::with_physics(
-                &calibration,
-                defaults::vision::trigger(),
-                physics,
-            );
-            let reviewed = track::replay_with(cache, fit).ok()?;
-            let contract = reviewed.contract.as_ref()?;
-            let errs: Vec<f64> = Score::of(&reviewed)
-                .plane_error
-                .iter()
-                .filter_map(|(_, e)| e.map(|(hypot, _, _)| hypot * 100.0))
-                .collect();
-            return Some((contract.t, errs));
-        })
+        .map(|(_, cache)| run(cache, &calibration, physics, defaults::vision::trigger()))
         .collect();
+    let median = |values: &mut Vec<f64>| -> f64 {
+        values.sort_by(|a, b| a.partial_cmp(b).expect("유한"));
+        return values.get(values.len() / 2).copied().unwrap_or(f64::INFINITY);
+    };
     let base_plane_median = {
-        let mut all: Vec<f64> = baseline.iter().flatten().flat_map(|(_, e)| e.clone()).collect();
-        all.sort_by(|a, b| a.partial_cmp(b).expect("유한"));
-        all.get(all.len() / 2).copied().unwrap_or(f64::INFINITY)
+        let mut all: Vec<f64> = baseline
+            .iter()
+            .flatten()
+            .flat_map(|(_, _, e)| e.clone())
+            .collect();
+        median(&mut all)
     };
     println!("기본 트리거 — 접수 평면 오차 중앙값 {base_plane_median:.2}cm");
 
-    // 후보 하나 채점 — (평균 리드타임 이득 ms, 접수 평면 오차 중앙값 cm, 계약 선 클립 수,
-    // 전체 클립 수). 클립 수를 따로 두는 이유: 문턱을 너무 조이면 일부 클립은 공이
-    // 지나갈 때까지 끝내 트리거가 안 걸려 contract 자체가 안 생긴다 — 그 클립은
-    // plane_error 표본에서 조용히 빠지므로, 정확도만 보면 "쉬운 클립만 남아서 좋아
-    // 보이는" 착시가 생긴다. n_total 대비 n_triggered로 그 착시를 걸러낸다.
-    let eval = |y_frac: f64, sigma: f64| -> Option<(f64, f64, usize, usize)> {
-        let mut lead_gain_ms = Vec::new();
+    // 어느 경로가 리드타임의 병목인가.
+    //
+    // 트리거는 `Any`라 두 경로 중 **빠른 쪽**이 건다. 그러니 "더 일찍 걸고 싶다"의
+    // 지렛대는 지금 실제로 먼저 걸리는 경로 쪽에 있다. 평면 경로가 늘 먼저라면 y_frac이
+    // 지렛대고, sigma 경로가 먼저라면 문턱을 푸는 것 말고도 **sigma가 더 빨리 떨어지게
+    // 만드는 것**(= 검출을 덜 놓쳐 관측이 빨리 쌓이게 하는 것)이 지렛대가 된다 —
+    // 후자는 정확도를 깎지 않고 리드타임만 버는 유일한 방향이라 값이 다르다.
+    // 평면이 "그냥 더 높은 표본 문턱"인지 다른 축인지 — 각 조건이 걸린 순간의 표본
+    // 수로 환산해서 본다. 같은 축이면 평면 시점 표본 수가 클립마다 비슷해야 한다.
+    println!(
+        "\n{:<9} {:>10} {:>10} {:>8}   조건이 걸린 순간의 스테레오 표본 수",
+        "clip", "표본문턱", "평면", "도달초"
+    );
+    let plane_only: Box<dyn Fn() -> Box<dyn pingpong_bot::vision::Trigger>> =
+        Box::new(|| Box::new(pingpong_bot::vision::triggers::PlaneCrossing {
+            y: table::LENGTH_Y * defaults::vision::ALIGNMENT_TRIGGER_TABLE_Y_FRAC,
+        }));
+    let mut plane_pairs = Vec::new();
+    for ((name, cache), base) in detected.iter().zip(&baseline) {
+        let at = |trigger| run_full(cache, &calibration, physics, trigger).map(|(t, _, _, n, _)| (t, n));
+        let stereo = at(Box::new(pingpong_bot::vision::triggers::StereoSamples {
+            min_samples: base_stereo,
+        }));
+        let plane = at(plane_only());
+        if let Some((_, n)) = plane {
+            plane_pairs.push(n);
+        }
+        let cell = |v: Option<(f64, usize)>| {
+            v.map_or("--".to_owned(), |(t, n)| format!("{n}개@{t:.2}s"))
+        };
+        let impact = base.as_ref().and_then(|(_, i, _)| *i);
+        println!(
+            "{name:<9} {:>10} {:>10} {:>8}",
+            cell(stereo),
+            cell(plane),
+            impact.map_or("--".to_owned(), |v| format!("{v:.2}")),
+        );
+    }
+    plane_pairs.sort_unstable();
+    println!(
+        "  평면이 걸린 순간의 표본 수: 최소 {} 중앙 {} 최대 {} — 흩어지면 다른 축이다",
+        plane_pairs.first().copied().unwrap_or(0),
+        plane_pairs.get(plane_pairs.len() / 2).copied().unwrap_or(0),
+        plane_pairs.last().copied().unwrap_or(0),
+    );
+
+    // (절대 리드타임 평균 ms, 기준 대비 이득 ms, 접수 평면 오차 중앙값 cm,
+    //  계약 선 클립 수, 전체 클립 수)
+    let eval = |stereo: usize, y_frac: f64| -> Option<(f64, f64, f64, usize, usize)> {
+        let mut lead_ms = Vec::new();
+        let mut gain_ms = Vec::new();
         let mut plane_errs = Vec::new();
         let n_total = detected.len();
         let mut n_triggered = 0usize;
-        for (cache, base) in detected.iter().zip(&baseline) {
-            let Some((base_t, _)) = base else { continue };
-            let fit = pingpong_bot::vision::Fit::with_physics(
+        for ((_, cache), base) in detected.iter().zip(&baseline) {
+            let Some((base_t, _, _)) = base else { continue };
+            let Some((t, impact, errs)) = run(
+                cache,
                 &calibration,
-                make_trigger(y_frac, sigma),
                 physics,
-            );
-            let Ok(reviewed) = track::replay_with(cache, fit) else {
-                continue;
-            };
-            let Some(contract) = &reviewed.contract else {
+                make_trigger(stereo, y_frac),
+            ) else {
                 continue;
             };
             n_triggered += 1;
-            lead_gain_ms.push((base_t - contract.t) * 1000.0);
-            plane_errs.extend(
-                Score::of(&reviewed)
-                    .plane_error
-                    .iter()
-                    .filter_map(|(_, e)| e.map(|(hypot, _, _)| hypot * 100.0)),
-            );
+            gain_ms.push((base_t - t) * 1000.0);
+            if let Some(impact) = impact {
+                lead_ms.push((impact - t) * 1000.0);
+            }
+            plane_errs.extend(errs);
         }
-        if lead_gain_ms.is_empty() {
+        if gain_ms.is_empty() {
             return None;
         }
-        plane_errs.sort_by(|a, b| a.partial_cmp(b).expect("유한"));
-        let median = plane_errs.get(plane_errs.len() / 2).copied().unwrap_or(f64::INFINITY);
-        let mean_gain = lead_gain_ms.iter().sum::<f64>() / lead_gain_ms.len() as f64;
-        return Some((mean_gain, median, n_triggered, n_total));
+        let mean = |values: &[f64]| -> f64 {
+            return values.iter().sum::<f64>() / values.len().max(1) as f64;
+        };
+        return Some((
+            mean(&lead_ms),
+            mean(&gain_ms),
+            median(&mut plane_errs),
+            n_triggered,
+            n_total,
+        ));
     };
 
-    // 앞쪽(더 이른 트리거)은 이미 확인함 — 여기부터는 반대로 더 늦게·더 확신 서야
-    // 거는 쪽으로 훑는다. y_frac을 낮추면(0.75 미만) 평면 폴백이 더 늦게 걸리고,
-    // sigma를 낮추면(0.15 미만) 확신 문턱이 더 엄격해진다.
-    const Y_FRACS: [f64; 6] = [0.55, 0.60, 0.65, 0.70, 0.75, 0.80];
-    const SIGMAS: [f64; 7] = [0.03, 0.05, 0.07, 0.09, 0.11, 0.13, 0.15];
+    // `vision::fit`의 e·mu·drag는 측정값이 아니라 **`ω=0` 가정을 흡수하려고** 올려 둔
+    // 보정치다(e=0.8617 vs 참값 0.72). 스핀 발동률이 오르면 그 보정이 필요한 몫도 줄어야
+    // 정상이라고 문서가 예고해 뒀는데, 지금이 그 시점이다 — 정직한 값으로 되돌렸을 때
+    // 정말 나아지는지 클립별로 본다(평균 하나로는 어느 클립이 움직였는지 안 보인다).
+    let honest = defaults::PhysicsParams::default();
+    let configs: [(&str, defaults::PhysicsParams); 3] = [
+        ("지금(보정)", physics),
+        (
+            "e만 참값",
+            defaults::PhysicsParams { restitution: honest.restitution, ..physics },
+        ),
+        ("전부 참값", defaults::PhysicsParams { drag: physics.drag.min(honest.drag), ..honest }),
+    ];
+    println!("\n하방 물리별 — 클립마다 접수 평면 오차 중앙값 [cm], 괄호는 스핀 풀림 여부");
+    print!("{:<12}", "");
+    for (name, _) in &detected {
+        print!("{name:>10}");
+    }
+    println!("{:>8}", "평균");
+    for (label, candidate) in &configs {
+        print!("{label:<12}");
+        let mut all = Vec::new();
+        for (_, cache) in &detected {
+            let cell = match run_full(cache, &calibration, *candidate, defaults::vision::trigger()) {
+                Some((_, _, mut errs, _, spin)) if !errs.is_empty() => {
+                    let value = median(&mut errs);
+                    all.push(value);
+                    format!("{value:.1}{}", if spin { "*" } else { "" })
+                }
+                _ => "--".to_owned(),
+            };
+            print!("{cell:>10}");
+        }
+        println!("{:>8.2}", all.iter().sum::<f64>() / all.len().max(1) as f64);
+    }
+    println!("  * = 그 클립에서 바운스 스핀이 풀렸다는 뜻");
+
+    // 조립의 두 축이 곧 이 격자다. 둘은 서로 다른 걸 재므로(표본 수 = 정보량,
+    // 평면 = 외삽 거리) 한쪽만 훑으면 다른 쪽이 병목인 클립을 못 본다.
+    const STEREOS: [usize; 6] = [0, 4, 6, 8, 10, 12];
+    const Y_FRACS: [f64; 5] = [0.65, 0.70, 0.75, 0.82, 0.90];
 
     println!(
-        "{:>7} {:>6} {:>10} {:>10} {:>10}   (5cm 밑이면 *, 트리거 못 건 클립 있으면 †)",
-        "y_frac", "sigma", "리드이득ms", "평면오차cm", "걸린수/전체"
+        "\n{:>7} {:>7} {:>8} {:>8} {:>10} {:>8}  (기준보다 이르면서 안 나빠지면 *)",
+        "stereo", "y_frac", "리드ms", "이득ms", "평면오차cm", "걸린수"
     );
-    let mut best: Option<(f64, f64, f64)> = None; // (y_frac, sigma, median)
-    for &y_frac in &Y_FRACS {
-        for &sigma in &SIGMAS {
-            let Some((gain, median, n_triggered, n_total)) = eval(y_frac, sigma) else {
+    // 목표가 제어에게 시간을 벌어 주는 것이므로 정확도는 기준선을 안 깎는 것만 조건으로
+    // 걸고, 그 안에서 리드타임을 최대화한다.
+    let mut best: Option<(usize, f64, f64, f64)> = None; // (stereo, y_frac, lead, err)
+    for &stereo in &STEREOS {
+        for &y_frac in &Y_FRACS {
+            let Some((lead, gain, err, n_triggered, n_total)) = eval(stereo, y_frac) else {
                 continue;
             };
-            let under_5cm = median <= 5.0;
-            let missed = n_triggered < n_total;
+            let ok = n_triggered == n_total && err <= base_plane_median && gain > 0.0;
             println!(
-                "{y_frac:>7.2} {sigma:>6.2} {gain:>10.1} {median:>10.2}      {n_triggered}/{n_total}   {}{}",
-                if under_5cm { "*" } else { "" },
-                if missed { "†" } else { "" },
+                "{stereo:>7} {y_frac:>7.2} {lead:>8.0} {gain:>8.0} {err:>10.2}    {n_triggered}/{n_total}  {}",
+                if ok { "*" } else { "" },
             );
-            if !missed && under_5cm && best.is_none_or(|(_, _, best_median)| median < best_median) {
-                best = Some((y_frac, sigma, median));
+            if ok && best.is_none_or(|(_, _, top, _)| lead > top) {
+                best = Some((stereo, y_frac, lead, err));
             }
         }
     }
 
     match best {
-        Some((y_frac, sigma, median)) => println!(
-            "\n최선(전 클립 트리거 걸리면서 5cm 밑, 오차 최소): y_frac={y_frac:.2} sigma={sigma:.2}  평면오차 {median:.2}cm"
+        Some((stereo, y_frac, lead, err)) => println!(
+            "\n최선(정확도 기준선 유지하면서 가장 이른 트리거): stereo={stereo} y_frac={y_frac:.2}\n  리드타임 {lead:.0}ms, 평면오차 {err:.2}cm (기준 {base_plane_median:.2}cm, 지금 stereo={base_stereo} y_frac={base_y_frac:.2})"
         ),
         None => println!(
-            "\n전 클립 트리거 걸면서 5cm 밑으로 가는 조합이 격자 안에 없다"
+            "\n정확도를 안 깎으면서 기준보다 이르게 거는 조합이 격자 안에 없다 — 지금 트리거가 이미 그 방향의 끝이다"
         ),
     }
     return Ok(());

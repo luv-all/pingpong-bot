@@ -61,6 +61,18 @@ pub struct Score {
     pub bounce_counts: Option<(usize, usize)>,
     /// 리드타임과 타점 오차를 잰 기준 평면 [m]. 클립마다 다를 수 있다.
     pub reference_plane: f64,
+    /// 실제 공이 처음 튄 시각 [s]. 트리거보다 **뒤**면 커밋 순간에는 튐 정보가 아직
+    /// 없다는 뜻이라, 스핀이든 반사계수든 그 시점엔 원리적으로 못 푼다.
+    pub first_bounce_t: Option<f64>,
+    /// 커밋 순간 바운스에서 스핀이 풀렸나. `None`이면 무회전(`ASSUMED_SPIN`=0)으로
+    /// 굴린 예측이라, 그 샷의 튐 반사는 원리적으로 못 맞힌다 — y·z 오차의 주범이다.
+    pub solved_spin: Option<Vector3>,
+    /// 공이 [`Self::reference_plane`]에 **실제로** 도달한 시각 [s].
+    ///
+    /// 제어가 실제로 쓸 수 있는 시간은 `impact_t - trigger.1`이다 — 트리거를 얼마나
+    /// 일찍 걸었나(리드타임)를 절대값으로 재는 유일한 기준이라, 스윕에서 후보끼리
+    /// 상대 비교만 하지 않고 "그래서 몇 ms를 벌어 줬나"를 바로 볼 수 있다.
+    pub impact_t: Option<f64>,
     /// 그 평면의 타점 오차 [m]. 제어가 실제로 쓰는 한 점이라 같이 둔다.
     pub impact_error: Option<f64>,
 }
@@ -199,6 +211,13 @@ impl Score {
             trigger,
             residual: [percentiles(&mut residual[0]), percentiles(&mut residual[1])],
             reference_plane: reference_plane(reviewed).unwrap_or(plane),
+            impact_t: impact.map(|observed| observed.t),
+            first_bounce_t: first_touchdown_t(reviewed),
+            solved_spin: reviewed
+                .contract
+                .as_ref()
+                .and_then(|contract| reviewed.frames.get(contract.frame))
+                .and_then(|state| state.solved_spin),
             lead_error,
             plane_error,
             bounce_counts,
@@ -285,6 +304,24 @@ impl Score {
             })
             .collect();
         out.push(format!("  예측 오차   {}", leads.join(" ")));
+        out.push(match (self.first_bounce_t, self.trigger) {
+            (Some(bounce), Some((_, fired, _))) if bounce > fired => format!(
+                "  튐 시각      t={bounce:.3}s — 트리거({fired:.3}s)보다 {:.0}ms 뒤. 커밋 순간엔 튐 정보가 없다",
+                (bounce - fired) * 1000.0
+            ),
+            (Some(bounce), Some((_, fired, _))) => format!(
+                "  튐 시각      t={bounce:.3}s — 트리거({fired:.3}s)보다 {:.0}ms 앞. 튐이 관측 안에 있다",
+                (fired - bounce) * 1000.0
+            ),
+            _ => "  튐 시각      생 궤적에서 튐을 못 찾았다".to_owned(),
+        });
+        out.push(match self.solved_spin {
+            Some(spin) => format!(
+                "  스핀        바운스에서 풀림 ({:.0}, {:.0}, {:.0}) rad/s",
+                spin.x, spin.y, spin.z
+            ),
+            None => "  스핀        안 풀림 — 무회전으로 굴렸다. 튐 반사가 y·z로 어긋난다".to_owned(),
+        });
 
         out.push(match self.predicted_rmse {
             Some((all, axes, count)) => format!(
@@ -421,9 +458,25 @@ fn count_bounces(reviewed: &Reviewed, predicted: &pingpong_bot::vision::Track) -
 
 /// 테이블 근처에서 vz 부호가 뒤집히는 횟수 — `detect_bounces`의 감지 조건과 같지만
 /// 신뢰도 재확인 없이 다 센다. 목적이 다르면(측정 vs 있었나 없었나) 필터도 다르다.
-fn count_touchdowns(points: &[TrajPoint]) -> usize {
+/// 생 궤적에서 처음 튄 시각 [s]. [`count_touchdowns`]와 같은 판정을 쓴다 — 개수와
+/// 시각이 다른 규칙으로 갈리면 안 된다.
+fn first_touchdown_t(reviewed: &Reviewed) -> Option<f64> {
+    let points: Vec<TrajPoint> = reviewed
+        .observed
+        .iter()
+        .map(|o| TrajPoint {
+            t: o.t,
+            pos: o.point,
+            pixels: Vec::new(),
+        })
+        .collect();
+    return touchdown_times(&points).first().copied();
+}
+
+/// 튄 순간들의 시각 [s].
+fn touchdown_times(points: &[TrajPoint]) -> Vec<f64> {
     let floor = table::SURFACE_Z + 0.10;
-    let mut count = 0usize;
+    let mut out = Vec::new();
     let mut i = 1usize;
     while i + 1 < points.len() {
         let dt_in = points[i].t - points[i - 1].t;
@@ -432,15 +485,20 @@ fn count_touchdowns(points: &[TrajPoint]) -> usize {
             let vin_z = (points[i].pos.z - points[i - 1].pos.z) / dt_in;
             let vout_z = (points[i + 1].pos.z - points[i].pos.z) / dt_out;
             if vin_z < -0.25 && vout_z > 0.15 && points[i].pos.z < floor {
-                count += 1;
+                out.push(points[i].t);
                 i += 3;
                 continue;
             }
         }
         i += 1;
     }
-    return count;
+    return out;
 }
+
+fn count_touchdowns(points: &[TrajPoint]) -> usize {
+    return touchdown_times(points).len();
+}
+
 
 /// 예측을 `shift` [s] 만큼 민 뒤의 (RMSE, 축별 RMSE, 짝 수) [m].
 fn rmse_at(
