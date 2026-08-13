@@ -95,7 +95,11 @@ fn run_scenario(
     );
 
     let mut rail = AxlRail::open(rail_cfg.clone()).context("레일 초기화 실패")?;
-    rail.move_abs_m(center_m).context("준비 이동: 중앙")?;
+    // move_abs_m은 기본 최고속(7.5 m/s)로 블로킹 이동해 시나리오 사이에 레일이
+    // 갑자기 전속력으로 튄다 — 검증 이동과 같은 duration 기반 속도로 준비한다.
+    rail.command_abs_in_secs(center_m, args.prep_duration_secs)
+        .context("준비 이동 시작: 중앙")?;
+    rail.wait_idle().context("준비 이동 대기: 중앙")?;
     let measured_start_m = rail.read_x_m().context("준비 위치 실측")?;
     info!(measured_start_m, "중앙 준비 완료 — RailQueue로 전환");
 
