@@ -22,6 +22,10 @@ impl TrajAnalysis {
     }
 
     /// 시간-위치 표본 창의 최소자승 기울기(=속도) — 인접 2점차보다 잡음에 강하다.
+    /// 바운스 앞뒤 속도를 잴 창 폭 [표본 수] — 라이브(`vision::Fit`)와 오프라인이
+    /// 같은 값을 써야 한다. 좁으면 접촉 프레임 잡음이 그대로 속도로 증폭된다.
+    pub const BOUNCE_VELOCITY_WINDOW: usize = traj_measure::BOUNCE_VELOCITY_WINDOW;
+
     pub fn windowed_velocity(points: &[TrajPoint]) -> Option<nalgebra::Vector3<f64>> {
         return traj_measure::windowed_velocity(points);
     }

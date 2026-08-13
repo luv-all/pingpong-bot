@@ -23,7 +23,7 @@ fn velocity(a: &TrajPoint, b: &TrajPoint) -> Option<Vector3<f64>> {
 /// ~79fps에서 접촉 프레임 인접 2점차는 삼각측량 잡음(몇 mm)이 그대로 속도 오차로
 /// 증폭된다 — 그 프레임이 하필 공이 테이블 색에 가깝고 모션블러도 최대라 SNR이 가장
 /// 낮다. 창을 넓혀 평균내면 이 증폭을 줄인다.
-const BOUNCE_VELOCITY_WINDOW: usize = 4;
+pub const BOUNCE_VELOCITY_WINDOW: usize = 4;
 
 /// 시간-위치 표본 창의 최소자승 기울기(=속도).
 pub fn windowed_velocity(points: &[TrajPoint]) -> Option<Vector3<f64>> {
