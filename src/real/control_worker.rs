@@ -444,13 +444,20 @@ pub fn spawn(
                     measurement,
                     ..
                 } if !swing_attempted && Instant::now() >= *swing_due_at => {
-                    Some((measurement.track_seq, *swing_due_at))
+                    Some((
+                        measurement.track_seq,
+                        *swing_due_at,
+                        pingpong_bot::robot::Pose::new(
+                            measurement.rail_commanded_m,
+                            measurement.joints_commanded.clone(),
+                        ),
+                    ))
                 }
                 BallControlState::Idle
                 | BallControlState::Waiting
                 | BallControlState::Aligning { .. } => None,
             };
-            if let Some((track_seq, swing_due_at)) = due_swing {
+            if let Some((track_seq, swing_due_at, aligned_target)) = due_swing {
                 if let BallControlState::Aligning {
                     swing_attempted, ..
                 } = &mut state
@@ -459,12 +466,30 @@ pub fn spawn(
                     *swing_attempted = true;
                 }
                 match hardware.read_pose() {
-                    Ok(swing_start) => match Planner::fixed_joint_swing(
-                        &arm_for_rail_position(&arm, swing_start.rail_x),
-                        &swing_start,
-                    ) {
+                    Ok(swing_start) => {
+                        let swing_arm = arm_for_rail_position(&arm, swing_start.rail_x);
+                        match Planner::fixed_joint_swing_from_alignment(
+                            &swing_arm,
+                            &swing_start,
+                            &aligned_target,
+                        ) {
                         Ok(planned) => {
                             let swing = &planned.trajectory;
+                            let measured_racket_z = swing_arm
+                                .forward_kinematics_with_rail(
+                                    swing_start.rail_x,
+                                    &swing_start.joints,
+                                )
+                                .map(|pose| pose.position.z);
+                            let aligned_racket_z = swing_arm
+                                .forward_kinematics_with_rail(
+                                    aligned_target.rail_x,
+                                    &aligned_target.joints,
+                                )
+                                .map(|pose| pose.position.z);
+                            let impact_racket_z = swing_arm
+                                .forward_kinematics_with_rail(swing.rail.end, &swing.end)
+                                .map(|pose| pose.position.z);
                             let command_send_started = Instant::now();
                             let command_result = hardware.command_joints(swing);
                             let command_send_ms =
@@ -490,6 +515,9 @@ pub fn spawn(
                                         joints_impact = %format!("{:?}", swing.end.values),
                                         joints_follow_through = %format!("{:?}", swing.follow_through.values),
                                         skipped_joint_indices = ?planned.skipped_joint_indices,
+                                        measured_racket_z_m = ?measured_racket_z.map(f4),
+                                        aligned_racket_z_m = ?aligned_racket_z.map(f4),
+                                        impact_racket_z_m = ?impact_racket_z.map(f4),
                                         "j0~j3 백스윙 없는 직진 푸시 시작"
                                     );
                                 }
@@ -505,7 +533,8 @@ pub fn spawn(
                             %error,
                             "다관절 직진 푸시 계획 불가 — 타격 동작 생략"
                         ),
-                    },
+                    }
+                    }
                     Err(error) => warn!(
                         track_seq,
                         %error,
@@ -1339,22 +1368,69 @@ fn initialize_pose_attempt(
             "시작 자세 초기화 전 실측"
         );
     }
-    // 전원이 꺼진 동안 손으로 팔을 움직였을 수 있다. 4-DOF는 안쪽으로 말린
-    // 높은 아치 자세로 초기화한다. 곧장 가는 경로가 테이블을 스치면 상승
-    // 중간 자세를 거치는 안전 복귀를 쓴다.
+    // 시작과 타격 후 모두 라켓 전체가 상판보다 높은, 살짝 오므린 준비 자세를 쓴다.
     let mut startup_arm = arm.clone();
-    if arm.default_joints.values.len() == pingpong_bot::defaults::POST_HIT_TUCKED_JOINTS_4DOF.len()
+    if arm.default_joints.values.len() == pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF.len()
     {
         startup_arm.default_joints =
-            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_TUCKED_JOINTS_4DOF);
+            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF);
     }
     let ready_joints = startup_arm.default_joints.clone();
     let ready_rail_x = arm
         .rail
         .as_ref()
         .map_or(measured.rail_x, |rail| rail.default_x());
-    let trajectories = plan_neutral_return_segments(&startup_arm, &measured, ready_rail_x)
+    // 레일 이동과 큰 관절 동작을 동시에 보간하면 전완이 탁구대를 가로지를 수 있다.
+    // 현재 레일 위치에서 준비 자세를 먼저 만든 뒤 그 자세로 중앙까지 이동한다.
+    let mut trajectories =
+        match plan_neutral_return_segments(&startup_arm, &measured, measured.rail_x) {
+            Ok(trajectories) => trajectories,
+            Err(direct_error) if ready_joints.values.len() == 4 => {
+                // 12cm 낮아진 베이스에서 현재 자세→준비 자세를 곧장 보간할 수 없으면
+                // 손목을 위로 접은 안전 자세를 먼저 거친다.
+                let escape_joints = Joints::from_slice(&[0.10, 0.0, -0.50, 2.00]);
+                let escape = Planner::move_to_at_speed_ratio(
+                    &startup_arm,
+                    &measured,
+                    escape_joints,
+                    measured.rail_x,
+                    pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+                )
+                .map_err(|_| MoveError::Plan(direct_error))?;
+                let escape_pose = pingpong_bot::robot::Pose::new(
+                    escape.follow_through_rail_x,
+                    escape.follow_through.clone(),
+                );
+                let ready = Planner::return_to_center_at_speed_ratio(
+                    &startup_arm,
+                    &escape_pose,
+                    measured.rail_x,
+                    pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+                )
+                .map_err(MoveError::Plan)?;
+                vec![escape, ready]
+            }
+            Err(error) => return Err(MoveError::Plan(error)),
+        };
+    if (ready_rail_x - measured.rail_x).abs() > 1e-9 {
+        let ready_pose = trajectories.last().map_or_else(
+            || pingpong_bot::robot::Pose::new(measured.rail_x, ready_joints.clone()),
+            |trajectory| {
+                pingpong_bot::robot::Pose::new(
+                    trajectory.follow_through_rail_x,
+                    trajectory.follow_through.clone(),
+                )
+            },
+        );
+        let rail_to_ready = Planner::return_to_center_at_speed_ratio(
+            &startup_arm,
+            &ready_pose,
+            ready_rail_x,
+            pingpong_bot::defaults::HOME_RETURN_SPEED_RATIO,
+        )
         .map_err(MoveError::Plan)?;
+        trajectories.push(rail_to_ready);
+    }
     let mapping = MotorMapping::new(DynamixelConfig::default()).map_err(|error| {
         MoveError::Hardware(HwError::InvalidConfig {
             reason: error.to_string(),
@@ -1585,7 +1661,7 @@ fn move_joints_to_ready_in_place(hardware: &mut dyn Hardware, arm: &Arm) -> Resu
         .map_err(MoveError::Hardware)?;
     let mut ready_arm = arm.clone();
     ready_arm.default_joints =
-        Joints::from_slice(&pingpong_bot::defaults::POST_HIT_TUCKED_JOINTS_4DOF);
+        Joints::from_slice(&pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF);
     let trajectories =
         plan_neutral_return_segments(&ready_arm, &start, start.rail_x).map_err(MoveError::Plan)?;
     for trajectory in trajectories {
@@ -2115,23 +2191,22 @@ mod tests {
     }
 
     #[test]
-    fn startup_initialization_sets_tucked_rail_and_all_joints() {
+    fn startup_initialization_keeps_safe_partially_tucked_pose_and_centers_rail() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
         let rail = robot.arm.rail.expect("rail");
+        let safe_start_joints = robot.arm.default_joints.clone();
         let mut hardware = PoseApplyingHardware {
-            pose: Pose::new(rail.x_min, Joints::from_slice(&[0.0; 4])),
+            pose: Pose::new(rail.x_min, safe_start_joints.clone()),
             rail_targets: Vec::new(),
         };
 
         let initialized = initialize_pose(&mut hardware, &robot.arm).expect("initialize");
-        let start = Pose::new(rail.x_min, Joints::from_slice(&[0.0; 4]));
-        let mut startup_arm = (*robot.arm).clone();
-        startup_arm.default_joints =
-            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_TUCKED_JOINTS_4DOF);
-        let expected = Planner::return_to_center(&startup_arm, &start).expect("tucked ready");
 
         assert!((initialized.rail_x - rail.default_x()).abs() < 1e-12);
-        assert_eq!(initialized.joints, expected.follow_through);
+        assert_eq!(
+            initialized.joints,
+            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF)
+        );
         assert!(
             hardware
                 .rail_targets
@@ -2146,8 +2221,11 @@ mod tests {
         let robot = pingpong_bot::defaults::robot().expect("robot");
         let rail = robot.arm.rail.expect("레일 있는 로봇");
         let hit_rail_x = (rail.default_x() + 0.20).min(rail.x_max);
+        // 실제 타격 로그의 팔로스루 자세에서 접힘 원위치로 복귀하는 경로를 검증한다.
+        let follow_through =
+            Joints::from_slice(&[1.264_000_169, -0.423_378_697, 0.115_048_559, -0.550_699_103]);
         let mut hardware = JointOnlyRecordingHardware {
-            pose: Pose::new(hit_rail_x, Joints::from_slice(&[0.0; 4])),
+            pose: Pose::new(hit_rail_x, follow_through),
             full_commands: 0,
             joint_only_commands: 0,
         };
@@ -2160,7 +2238,7 @@ mod tests {
         assert!((hardware.pose.rail_x - hit_rail_x).abs() < 1e-12);
         assert_eq!(
             hardware.pose.joints,
-            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_TUCKED_JOINTS_4DOF)
+            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF)
         );
     }
 

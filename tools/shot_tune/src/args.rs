@@ -40,10 +40,10 @@ pub struct Args {
     pub base_y_steps: usize,
 
     /// 레일 마운트 베이스 z [m] — **바닥(z=0) 기준 절대 좌표**.
-    /// 기본값은 실측 마운트(`defaults::rail_frame`, 0.88 + 두께 0.055).
-    #[arg(long, allow_hyphen_values = true, default_value_t = 0.935)]
+    /// 기본값은 실측 마운트(`defaults::rail_frame`, 0.76 + 두께 0.055).
+    #[arg(long, allow_hyphen_values = true, default_value_t = pingpong_bot::defaults::RAIL_MOUNT_Z_M)]
     pub mount_base_z_min: f64,
-    #[arg(long, allow_hyphen_values = true, default_value_t = 0.935)]
+    #[arg(long, allow_hyphen_values = true, default_value_t = pingpong_bot::defaults::RAIL_MOUNT_Z_M)]
     pub mount_base_z_max: f64,
     #[arg(long, default_value_t = 1)]
     pub mount_base_z_steps: usize,

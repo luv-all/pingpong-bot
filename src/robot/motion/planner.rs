@@ -173,6 +173,15 @@ impl Planner {
         return physics::plan_fixed_joint_swing(arm, start);
     }
 
+    /// 실측 시작 자세와 별개로 마지막 정렬 목표를 절대 푸시 기준으로 사용한다.
+    pub fn fixed_joint_swing_from_alignment(
+        arm: &Arm,
+        start: &robot::Pose,
+        aligned: &robot::Pose,
+    ) -> Result<physics::FixedJointSwing, DomainError> {
+        return physics::plan_fixed_joint_swing_from_alignment(arm, start, aligned);
+    }
+
     /// 정지 → 정지로 임의 포즈까지 잇는 최단 실행가능 궤적 (coarse 선추종용).
     pub fn move_to(
         arm: &Arm,

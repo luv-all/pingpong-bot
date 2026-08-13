@@ -20,7 +20,7 @@ use crate::defaults::EstimatorParams;
 use crate::defaults::calib::{calibration_path, colormask_path};
 use crate::vision::detect::colormask::{ColormaskParams, load_colormask_set};
 use crate::vision::detect::{Background, ColorBox, Layer, Picker, Spatial};
-use crate::vision::triggers::{Any, PlaneCrossing, SigmaThreshold};
+use crate::vision::triggers::{All, Any, PlaneCrossing, SigmaThreshold};
 use crate::vision::{Detector, Trigger};
 
 /// 픽셀 정밀 찍기용 loupe 배율.
@@ -38,6 +38,19 @@ pub const PIXEL_LOUPE_SRC_HALF: i32 = 7;
 /// 적은 채로 굳혀서 조건이 나쁜 p0,v0 적합을 그대로 커밋해 버리는 것으로 보임.
 /// 되돌림. 병목은 트리거 타이밍이 아니라 다른 데 있다.
 pub const ALIGNMENT_TRIGGER_TABLE_Y_FRAC: f64 = 0.75;
+
+/// [`PlaneCrossing`]가 같이 봐야 할 속도 σ 상한 [m/s] — 위치만 보고 확신은 안 보는
+/// 원래 성질을 못 건드리게, 아주 나쁜 조건일 때만 걸러낸다.
+///
+/// fly_48 사후분석(2026-08-13): 우캠이 서브 스윙 도중 배경차분에 공을 23프레임 먹혀
+/// 그 구간 동안 좌캠 단안 관측만 쌓였다. 그 상태로 `PlaneCrossing`이 발동해(관측 26개,
+/// sigma_v.x=0.376) v0.x가 안 잡힌 채 예측이 얼었다 — `SigmaThreshold`는 원래 이걸
+/// 막게 설계됐는데(x축 속도 σ가 문턱 0.075를 5배 넘음) `Any`라 `PlaneCrossing` 혼자
+/// 우회해 버린 것. 반면 정상 클립(fly_45, fly_50)은 트리거 시점 sigma_v가 축마다
+/// 0.06~0.10 대 — 이 상수를 그 사이 넉넉한 자리(0.15)에 두면 정상 클립 트리거 시점은
+/// 그대로고 fly_48류만 카메라가 다시 잡을 때까지 미뤄진다(n=26→31, stereo 회복 시점).
+/// 위치 σ는 안 본다 — `SHOOTER_X` 사전값이 늘 작게 눌러놔서 신호가 안 된다.
+pub const PLANE_CROSSING_MAX_VELOCITY_SIGMA: f64 = 0.15;
 
 /// [`crate::defaults::DEFAULT_COLORMASK_PATH`]에서 캠별 params. 파일·해당 cam 없으면 에러.
 pub fn colormask_for(camera_id: camera::Id) -> Result<ColormaskParams> {
@@ -121,9 +134,17 @@ pub fn trigger() -> Box<dyn Trigger> {
             // 속도 σ는 리드타임을 곱해 도달점 오차가 되므로 같은 예산을 최대 리드로 나눈다.
             velocity: Vector3::repeat(sigma / params.max_lead),
         }),
-        Box::new(PlaneCrossing {
-            y: table::LENGTH_Y * ALIGNMENT_TRIGGER_TABLE_Y_FRAC,
-        }),
+        Box::new(All(vec![
+            Box::new(PlaneCrossing {
+                y: table::LENGTH_Y * ALIGNMENT_TRIGGER_TABLE_Y_FRAC,
+            }),
+            // 위치만 보고 확신은 안 보는 `PlaneCrossing`이 한쪽 카메라가 잠깐 죽은
+            // 단안 구간에도 그대로 발동하는 걸 막는다 — [`PLANE_CROSSING_MAX_VELOCITY_SIGMA`].
+            Box::new(SigmaThreshold {
+                position: Vector3::repeat(f64::INFINITY),
+                velocity: Vector3::repeat(PLANE_CROSSING_MAX_VELOCITY_SIGMA),
+            }),
+        ])),
     ]));
 }
 
@@ -135,21 +156,43 @@ mod tests {
     use crate::Point3;
     use crate::vision::State;
 
-    fn uncertain_state(y: f64) -> State {
+    /// 메인 `SigmaThreshold`(position/velocity 문턱)는 못 넘지만
+    /// [`PLANE_CROSSING_MAX_VELOCITY_SIGMA`]는 넉넉히 통과하는 자리 — 상수가 바뀌어도
+    /// 매직넘버로 안 깨지게 문턱에서 직접 유도한다. `PlaneCrossing`의 위치 문턱만
+    /// 따로 보이게 하는 게 목적.
+    fn confident_state(y: f64) -> State {
+        let params = EstimatorParams::default();
+        let tight_velocity = params.max_impact_sigma / params.max_lead;
+        let velocity_sigma = (tight_velocity + PLANE_CROSSING_MAX_VELOCITY_SIGMA) / 2.0;
         return State {
             t: Duration::from_millis(100),
             position: Point3::new(0.70, y, 1.0),
             velocity: Vector3::new(0.0, -4.0, 0.0),
-            sigma_position: Vector3::repeat(10.0),
-            sigma_velocity: Vector3::repeat(10.0),
+            sigma_position: Vector3::repeat(params.max_impact_sigma * 2.0),
+            sigma_velocity: Vector3::repeat(velocity_sigma),
             spin: None,
+        };
+    }
+
+    /// 속도 σ가 [`PLANE_CROSSING_MAX_VELOCITY_SIGMA`]를 넘는, fly_48류 단안 구간 흉내.
+    fn ill_conditioned_state(y: f64) -> State {
+        return State {
+            sigma_velocity: Vector3::repeat(PLANE_CROSSING_MAX_VELOCITY_SIGMA * 2.0),
+            ..confident_state(y)
         };
     }
 
     #[test]
     fn fallback_trigger_starts_at_seventy_five_percent_table_length() {
         let trigger = trigger();
-        assert!(!trigger.ready(&[uncertain_state(table::LENGTH_Y * 0.76)]));
-        assert!(trigger.ready(&[uncertain_state(table::LENGTH_Y * 0.74)]));
+        assert!(!trigger.ready(&[confident_state(table::LENGTH_Y * 0.76)]));
+        assert!(trigger.ready(&[confident_state(table::LENGTH_Y * 0.74)]));
+    }
+
+    /// fly_48 사후분석 회귀 — 평면은 넘었어도 속도 σ가 나쁘면 아직 안 걸린다.
+    #[test]
+    fn fallback_trigger_waits_out_a_badly_conditioned_fit_past_the_plane() {
+        let trigger = trigger();
+        assert!(!trigger.ready(&[ill_conditioned_state(table::LENGTH_Y * 0.3)]));
     }
 }

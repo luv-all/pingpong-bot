@@ -91,13 +91,17 @@ pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 pub const DETECTION_WINDUP_MIN_DURATION_SECS: f64 = 0.120;
 /// 임팩트 순간 목표 라켓 선속도 [m/s].
 /// 백스윙 없이 길게 바로 밀 때 사용할 임팩트 목표 선속도.
-pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 0.85;
+/// 공이 네트를 넘을 추진력을 확보하도록 0.85m/s에서 1.20m/s로 올렸다.
+pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 1.20;
 /// 정렬 시 공의 접촉점보다 뒤에서 대기해 다관절 푸시 가속거리를 확보한다 [m].
 /// 전역 READY 자세는 실물 캘리브레이션이므로 바꾸지 않고, 공별 타격 준비
 /// 자세만 이 거리만큼 접는다.
 pub const FIXED_JOINT_PUSH_DISTANCE_M: f64 = 0.100;
+/// 직진 푸시 10cm 동안 라켓 중심을 함께 들어 올릴 거리 [m].
+/// 아래쪽에서 공을 퍼 올리도록 j2를 상승 추진에 사용한다.
+pub const FIXED_JOINT_PUSH_LIFT_M: f64 = 0.020;
 /// 백스윙 없는 다관절 직진 푸시 시작부터 예상 타격점에 도달하는 시간 [s].
-/// 10cm 전진과 0.85m/s 임팩트 속도를 백스윙 없이 만족하는 기존 궤적 길이다.
+/// 10cm 전진과 설정된 임팩트 속도를 백스윙 없이 만족하는 궤적 길이다.
 pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.200;
 /// 예상 공 도착 시각보다 스윙 명령을 앞서 시작할 시간 [s].
 /// 궤적 길이는 0.20초로 유지하고 명령만 기존보다 0.20초 앞당긴다.

@@ -90,9 +90,9 @@ fn wrist_zero_offset_rotates_id5_eight_degrees_toward_bench_alignment() {
 }
 
 #[test]
-fn high_arch_ready_pose_stays_inside_every_real_motor_limit() {
+fn post_hit_ready_pose_stays_inside_every_real_motor_limit() {
     let mapping = MotorMapping::new(bench_config()).expect("valid mapping");
-    for (index, angle) in crate::defaults::POST_HIT_TUCKED_JOINTS_4DOF
+    for (index, angle) in crate::defaults::POST_HIT_READY_JOINTS_4DOF
         .iter()
         .copied()
         .enumerate()
@@ -104,6 +104,7 @@ fn high_arch_ready_pose_stays_inside_every_real_motor_limit() {
         );
     }
 }
+
 
 #[test]
 fn dry_run_limit_escape_holds_outside_start_and_only_moves_inward() {

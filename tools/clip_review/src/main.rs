@@ -457,10 +457,16 @@ fn run_trigger_sweep() -> Result<()> {
     };
     println!("기본 트리거 — 접수 평면 오차 중앙값 {base_plane_median:.2}cm");
 
-    // 후보 하나 채점 — (평균 리드타임 이득 ms, 접수 평면 오차 중앙값 cm, 표본 수).
-    let eval = |y_frac: f64, sigma: f64| -> Option<(f64, f64, usize)> {
+    // 후보 하나 채점 — (평균 리드타임 이득 ms, 접수 평면 오차 중앙값 cm, 계약 선 클립 수,
+    // 전체 클립 수). 클립 수를 따로 두는 이유: 문턱을 너무 조이면 일부 클립은 공이
+    // 지나갈 때까지 끝내 트리거가 안 걸려 contract 자체가 안 생긴다 — 그 클립은
+    // plane_error 표본에서 조용히 빠지므로, 정확도만 보면 "쉬운 클립만 남아서 좋아
+    // 보이는" 착시가 생긴다. n_total 대비 n_triggered로 그 착시를 걸러낸다.
+    let eval = |y_frac: f64, sigma: f64| -> Option<(f64, f64, usize, usize)> {
         let mut lead_gain_ms = Vec::new();
         let mut plane_errs = Vec::new();
+        let n_total = detected.len();
+        let mut n_triggered = 0usize;
         for (cache, base) in detected.iter().zip(&baseline) {
             let Some((base_t, _)) = base else { continue };
             let fit = pingpong_bot::vision::Fit::with_physics(
@@ -474,6 +480,7 @@ fn run_trigger_sweep() -> Result<()> {
             let Some(contract) = &reviewed.contract else {
                 continue;
             };
+            n_triggered += 1;
             lead_gain_ms.push((base_t - contract.t) * 1000.0);
             plane_errs.extend(
                 Score::of(&reviewed)
@@ -488,38 +495,45 @@ fn run_trigger_sweep() -> Result<()> {
         plane_errs.sort_by(|a, b| a.partial_cmp(b).expect("유한"));
         let median = plane_errs.get(plane_errs.len() / 2).copied().unwrap_or(f64::INFINITY);
         let mean_gain = lead_gain_ms.iter().sum::<f64>() / lead_gain_ms.len() as f64;
-        return Some((mean_gain, median, lead_gain_ms.len()));
+        return Some((mean_gain, median, n_triggered, n_total));
     };
 
-    const Y_FRACS: [f64; 8] = [0.75, 0.78, 0.81, 0.84, 0.87, 0.90, 0.93, 0.96];
-    const SIGMAS: [f64; 6] = [0.15, 0.20, 0.25, 0.30, 0.40, 0.50];
+    // 앞쪽(더 이른 트리거)은 이미 확인함 — 여기부터는 반대로 더 늦게·더 확신 서야
+    // 거는 쪽으로 훑는다. y_frac을 낮추면(0.75 미만) 평면 폴백이 더 늦게 걸리고,
+    // sigma를 낮추면(0.15 미만) 확신 문턱이 더 엄격해진다.
+    const Y_FRACS: [f64; 6] = [0.55, 0.60, 0.65, 0.70, 0.75, 0.80];
+    const SIGMAS: [f64; 7] = [0.03, 0.05, 0.07, 0.09, 0.11, 0.13, 0.15];
 
     println!(
-        "{:>7} {:>6} {:>10} {:>10} {:>6}   (기준 대비 정확도 안 나빠지면 *)",
-        "y_frac", "sigma", "리드이득ms", "평면오차cm", "n"
+        "{:>7} {:>6} {:>10} {:>10} {:>10}   (5cm 밑이면 *, 트리거 못 건 클립 있으면 †)",
+        "y_frac", "sigma", "리드이득ms", "평면오차cm", "걸린수/전체"
     );
-    let mut best: Option<(f64, f64, f64)> = None; // (y_frac, sigma, gain)
+    let mut best: Option<(f64, f64, f64)> = None; // (y_frac, sigma, median)
     for &y_frac in &Y_FRACS {
         for &sigma in &SIGMAS {
-            let Some((gain, median, n)) = eval(y_frac, sigma) else {
+            let Some((gain, median, n_triggered, n_total)) = eval(y_frac, sigma) else {
                 continue;
             };
-            let ok = median <= base_plane_median;
+            let under_5cm = median <= 5.0;
+            let missed = n_triggered < n_total;
             println!(
-                "{y_frac:>7.2} {sigma:>6.2} {gain:>10.1} {median:>10.2} {n:>6}   {}",
-                if ok { "*" } else { "" }
+                "{y_frac:>7.2} {sigma:>6.2} {gain:>10.1} {median:>10.2}      {n_triggered}/{n_total}   {}{}",
+                if under_5cm { "*" } else { "" },
+                if missed { "†" } else { "" },
             );
-            if ok && best.is_none_or(|(_, _, best_gain)| gain > best_gain) {
-                best = Some((y_frac, sigma, gain));
+            if !missed && under_5cm && best.is_none_or(|(_, _, best_median)| median < best_median) {
+                best = Some((y_frac, sigma, median));
             }
         }
     }
 
     match best {
-        Some((y_frac, sigma, gain)) => println!(
-            "\n최선(정확도 기준 이내, 리드이득 최대): y_frac={y_frac:.2} sigma={sigma:.2}  이득 {gain:.1}ms"
+        Some((y_frac, sigma, median)) => println!(
+            "\n최선(전 클립 트리거 걸리면서 5cm 밑, 오차 최소): y_frac={y_frac:.2} sigma={sigma:.2}  평면오차 {median:.2}cm"
         ),
-        None => println!("\n기준 정확도를 유지하면서 리드타임을 버는 조합이 격자 안에 없다"),
+        None => println!(
+            "\n전 클립 트리거 걸면서 5cm 밑으로 가는 조합이 격자 안에 없다"
+        ),
     }
     return Ok(());
 }
