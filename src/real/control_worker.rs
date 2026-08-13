@@ -1628,8 +1628,11 @@ fn move_to_ready(hardware: &mut dyn Hardware, arm: &Arm, rail_x: f64) -> Result<
     hardware
         .arm_joint_limit_escape(&start.joints)
         .map_err(MoveError::Hardware)?;
+    let mut ready_arm = arm.clone();
+    ready_arm.default_joints =
+        Joints::from_slice(&pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF);
     let trajectories =
-        plan_neutral_return_segments(arm, &start, rail_x).map_err(MoveError::Plan)?;
+        plan_neutral_return_segments(&ready_arm, &start, rail_x).map_err(MoveError::Plan)?;
     if trajectories.len() > 1 {
         info!(
             segments = trajectories.len(),
