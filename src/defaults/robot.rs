@@ -106,10 +106,11 @@ pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
 /// 네 값 모두 `motor_angle_limits_deg` 소프트 한계 안이다(가장 좁은 여유는
 /// j2, 상단까지 8.7°).
 ///
-/// `table_penetration`의 `TABLE_CLEARANCE`(3cm 안전 여유) 일부를 잠식한다 —
-/// 실제 상판까지는 약 2.47cm 남는다. sim GUI로 시각 확인해 실제 접촉이
-/// 아님을 검증했다(`post_hit_ready_pose_keeps_entire_racket_above_table`가
-/// 그 여유 없이 실제 상판 접촉만 검증).
+/// 실제 상판까지는 약 2.47cm 남는다. 원래 `TABLE_CLEARANCE`가 3cm였을 때는
+/// 그 안전 여유를 5.3mm 잠식해 시작 자세 복귀 플래너가 항상 실패했다 — sim
+/// GUI로 실제 접촉은 없음을 확인한 뒤 `TABLE_CLEARANCE`를 2cm로 낮췄다
+/// (`post_hit_ready_pose_keeps_entire_racket_above_table`가 여유 없이 실제
+/// 상판 접촉만 검증).
 pub const POST_HIT_READY_JOINTS_4DOF: [f64; 4] =
     [-0.331613, -0.0023, 0.925025, -0.488692];
 

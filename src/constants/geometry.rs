@@ -94,9 +94,14 @@ pub const RAIL_VISUAL_WIDTH: f64 = 0.06;
 /// 테이블 면 위 최소 안전 여유 [m].
 ///
 /// 실물의 조립 오차·링크 유격·Dynamixel 추종 오차를 흡수하기 위해 로봇 링크와
-/// 라켓 OBB의 최저점이 상판보다 최소 3 cm 높게 유지되도록 한다. 예전 3 mm는
+/// 라켓 OBB의 최저점이 상판보다 최소 2 cm 높게 유지되도록 한다. 예전 3 mm는
 /// 시뮬 기하가 정확하다는 전제에 가까워 실기 충돌 방지 여유로는 부족했다.
-pub const TABLE_CLEARANCE: f64 = 0.030;
+///
+/// 2026-08-13: 3cm → 2cm로 축소. 2026-08-13 벤치 실측 `POST_HIT_READY_JOINTS_4DOF`가
+/// 실제 상판까지는 2.47cm 여유가 있는데도 3cm 버퍼에 5.3mm 파고들어 시작 자세
+/// 복귀 플래너(`build_feasible_trajectory_with_follow_time`)가 항상 실패했다 —
+/// sim GUI로 실제 접촉 없음을 확인한 값이었다. 버퍼를 좁혀 그 여유를 되살린다.
+pub const TABLE_CLEARANCE: f64 = 0.020;
 
 /// `clamp_above_table` 최대 반복 (리프트->재IK).
 pub const TABLE_CLAMP_ITERS: usize = 6;
