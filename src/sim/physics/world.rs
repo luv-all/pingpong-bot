@@ -305,16 +305,15 @@ impl SimWorld {
         let mut collider_set = ColliderSet::new();
         let mut multibody_joint_set = MultibodyJointSet::new();
 
-        // 실기와 같이 4-DOF는 안쪽으로 말린 높은 아치 자세에서 시작한다.
-        // 다른 축 수의 진단 로봇은 대응 상수가 없으므로 기존 default를 유지한다.
+        // 실기와 같이 라켓 전체가 탁구대 상판보다 높은, 살짝 오므린 준비 자세에서 시작한다.
         let initial_rail_x = arm
             .rail
             .as_ref()
             .map_or(arm.base.coords.x, |rail| rail.default_x());
         let initial_joints = if arm.default_joints.values.len()
-            == crate::defaults::POST_HIT_TUCKED_JOINTS_4DOF.len()
+            == crate::defaults::POST_HIT_READY_JOINTS_4DOF.len()
         {
-            robot::Joints::from_slice(&crate::defaults::POST_HIT_TUCKED_JOINTS_4DOF)
+            robot::Joints::from_slice(&crate::defaults::POST_HIT_READY_JOINTS_4DOF)
         } else {
             arm.default_joints.clone()
         };
@@ -1040,15 +1039,18 @@ impl SimWorld {
                     "j0~j3 백스윙 없는 직진 푸시 시작"
                 );
             }
-            Err(error) => warn!(
-                shot = self.shot_seq,
-                %error,
-                "고정 스윙 계획 불가 — 스윙만 생략"
-            ),
+            Err(error) => {
+                self.debug_snap.last_fail_text = Some(error.to_string());
+                warn!(
+                    shot = self.shot_seq,
+                    %error,
+                    "고정 스윙 계획 불가 — 스윙만 생략"
+                );
+            }
         }
     }
 
-    /// 위치 정렬 유지가 끝나면 레일을 고정하고 관절만 안쪽으로 말린 자세로 복귀한다.
+    /// 위치 정렬 유지가 끝나면 레일을 고정하고 관절만 상판 위 준비 자세로 복귀한다.
     fn try_direct_return_to_center(&mut self) {
         let Some(return_at) = self.direct_return_at else {
             return;
@@ -1059,7 +1061,7 @@ impl SimWorld {
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
         let mut ready_arm = (*self.arm).clone();
         ready_arm.default_joints =
-            robot::Joints::from_slice(&crate::defaults::POST_HIT_TUCKED_JOINTS_4DOF);
+            robot::Joints::from_slice(&crate::defaults::POST_HIT_READY_JOINTS_4DOF);
         match motion::Planner::return_to_center_at_speed_ratio(
             &ready_arm,
             &start,
@@ -1072,7 +1074,7 @@ impl SimWorld {
                 info!(
                     shot = self.shot_seq,
                     rail_held_m = start.rail_x,
-                    "shot: 제어 후 레일 유지·관절 접힘 자세 복귀"
+                    "shot: 제어 후 레일 유지·관절 상판 위 준비 자세 복귀"
                 );
             }
             Err(error) => {
@@ -1546,7 +1548,7 @@ mod tests {
     }
 
     #[test]
-    fn shoot_ball_launches_immediately_from_tucked_pose() {
+    fn shoot_ball_launches_immediately_from_ready_pose() {
         let mut world = SimWorld::new(test_robot());
         world.shoot_ball(&launch::Settings::default());
         assert_eq!(
@@ -1557,10 +1559,11 @@ mod tests {
     }
 
     #[test]
-    fn sim_starts_at_center_tucked_pose() {
+    fn sim_starts_at_center_ready_pose() {
         let robot = test_robot();
         let center_rail_x = robot.arm.rail.as_ref().expect("레일").default_x();
-        let ready_joints = robot::Joints::from_slice(&crate::defaults::POST_HIT_TUCKED_JOINTS_4DOF);
+        let ready_joints =
+            robot::Joints::from_slice(&crate::defaults::POST_HIT_READY_JOINTS_4DOF);
         let world = SimWorld::new(robot);
 
         assert!((world.robot().rail_x() - center_rail_x).abs() < 1e-12);
@@ -2187,7 +2190,12 @@ mod tests {
         }
         assert!(
             alignment_started,
-            "준비 자세 복귀 전에 공 위치·방향 정렬이 실행돼야 함"
+            "준비 자세 복귀 전에 공 위치·방향 정렬이 실행돼야 함: last_fail={:?}, ball_state={:?}, ball_pos={:?}, ball_vel={:?}, phase={:?}",
+            world.debug_snap.last_fail_text,
+            world.ball_state,
+            world.ball_position(),
+            world.ball_velocity(),
+            world.debug_snap.commit_phase,
         );
     }
 
@@ -2219,7 +2227,10 @@ mod tests {
                 return;
             }
         }
-        panic!("고정 관절 스윙이 실행되지 않음");
+        panic!(
+            "고정 관절 스윙이 실행되지 않음: last_fail={:?}",
+            world.debug_snap.last_fail_text
+        );
     }
 
     /// 실기와 같이 타격 후 레일은 타격 위치에 두고 관절만 준비 자세로
@@ -2256,13 +2267,13 @@ mod tests {
         for _ in 0..5_000 {
             world.step(1.0 / 1000.0, None);
         }
-        let tucked = robot::Joints::from_slice(&crate::defaults::POST_HIT_TUCKED_JOINTS_4DOF);
+        let ready = robot::Joints::from_slice(&crate::defaults::POST_HIT_READY_JOINTS_4DOF);
         let joints_at_center = world
             .robot()
             .joints()
             .values
             .iter()
-            .zip(tucked.values.iter())
+            .zip(ready.values.iter())
             .all(|(actual, center)| (actual - center).abs() < 1e-2);
         let rail_target_at_hit = rail_target_at_hit.expect("타격 시작 레일 목표");
         assert!(
@@ -2285,16 +2296,10 @@ mod tests {
         assert!(world.debug_snap.last_fail_text.is_none());
     }
 
-    /// 2026-07-30 실측 마운트(베이스 z 0.81→0.935)로 관절속도 한계를 넘기기
-    /// 시작했다. `rail_bottom_z`를 0.755(= 옛 베이스 z 0.81)로 되돌리면 통과하는
-    /// 것을 확인했으므로 원인은 마운트 높이 하나다.
-    ///
-    /// **[`READY_JOINTS_4DOF`](crate::defaults::READY_JOINTS_4DOF)를 새 마운트에서
-    /// 재산출하면 통과한다** — 재산출 값 `[0.8612, 0.0, 0.1889, -1.2076]`로 직접
-    /// 확인했다. 다만 휴지 자세 교체는 스윙 튜닝 담당 몫이라 여기서는 값을
-    /// 바꾸지 않았다(그쪽 상수 주석에 수치와 딸려오는 작업 정리해 둠).
+    /// 레일 높이 변경 뒤 레거시 전역 스윙 플래너를 점검하는 진단.
+    /// 실기 정렬→고정 레일 푸시 경로와 달리 테이블 관통 회피용 준비 자세 재튜닝이 필요하다.
     #[test]
-    #[ignore = "measured rail_frame mount (base z 0.935) needs READY_JOINTS_4DOF retune — owned by swing tuning; see the constant's doc comment"]
+    #[ignore = "legacy global swing starts from a ready pose that penetrates the table; real control uses alignment + fixed-joint push"]
     fn auto_swing_plans_with_strike_velocity() {
         use crate::robot::motion;
 
@@ -2660,15 +2665,9 @@ mod tests {
         );
     }
 
-    /// 실측 마운트(베이스 z 0.935)에서 일부 off-center 샷이 포기 후에도 접수돼
-    /// 판정에 걸린다. `rail_bottom_z`를 0.755로 되돌리면 통과한다.
-    ///
-    /// `auto_swing_plans_with_strike_velocity`와 달리 휴지 자세 재산출만으로는
-    /// 복구되지 않는다(재산출 값으로도 실패 확인) — 베이스를 올린 대가로
-    /// 도달성이 나빠진 것(IK 해 118/240 → 91/240)이 원인으로 보인다. 새 높이에서
-    /// `mount_search`로 `mount_y`를 다시 잡아야 한다. 스윙 튜닝 담당 몫.
+    /// 낮아진 실측 마운트에서 레거시 랜덤 샷 접수 정책을 점검하는 장시간 진단.
     #[test]
-    #[ignore = "measured rail_frame mount (base z 0.935) needs mount_search retune for mount_y — owned by swing tuning; see defaults::rail_frame doc comment"]
+    #[ignore = "legacy random-shot reachability diagnostic; real control uses vision alignment targets"]
     fn random_shot_grid_still_swings_when_robot_starts_from_center() {
         // 실제 GUI 재현: 첫 샷이 끝나면 로봇이 (레일 0이 아니라) 테이블
         // 보정 준비 위치(`default_x()`)로 복귀해 있다. 이후 Random Shoot이 쏘는

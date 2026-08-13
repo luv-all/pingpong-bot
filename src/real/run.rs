@@ -577,7 +577,7 @@ mod startup_rail_tests {
         let start = pingpong_bot::robot::Pose::new(
             rail_x,
             pingpong_bot::robot::Joints::from_slice(
-                &pingpong_bot::defaults::POST_HIT_TUCKED_JOINTS_4DOF,
+                &pingpong_bot::defaults::POST_HIT_READY_JOINTS_4DOF,
             ),
         );
         let joints = racket_table_reference_joints(&robot.arm, &start).expect("reference joints");

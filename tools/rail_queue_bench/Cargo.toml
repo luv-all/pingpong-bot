@@ -1,0 +1,14 @@
+[package]
+name = "rail-queue-bench"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "rail_queue_bench"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.103"
+clap = { version = "4.6.1", features = ["derive"] }
+tracing = "0.1"
+pingpong-bot = { path = "../..", default-features = false, features = ["real"] }

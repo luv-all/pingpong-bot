@@ -1,6 +1,21 @@
 //! 접수 계획 — 인터셉트·bang-bang·Magnus 휴리스틱.
 
+use crate::defaults::rail::RAIL_MOUNT_Y_M;
 use crate::robot::motion::InterceptWindow;
+
+/// [`RAIL_MOUNT_Y_M`]에서 인터셉트 구간 하한까지의 고정 오프셋 [m].
+///
+/// 마운트 실측 -0.128일 때 검증된 하한 0.08(`0.08 - (-0.128)`)로 고정한다 —
+/// 마운트가 옮겨져도 팔 기준 도달 가능 범위는 그대로이므로, 월드 y 하한은
+/// 마운트를 따라 같은 만큼 이동해야 한다.
+pub const INTERCEPT_Y_MIN_OFFSET_FROM_MOUNT_M: f64 = 0.208;
+/// [`RAIL_MOUNT_Y_M`]에서 인터셉트 구간 상한까지의 고정 오프셋 [m].
+/// 마운트 실측 -0.128일 때 검증된 상한 0.35(`0.35 - (-0.128)`)로 고정한다.
+pub const INTERCEPT_Y_MAX_OFFSET_FROM_MOUNT_M: f64 = 0.478;
+/// 기본 인터셉트 구간 하한 y [m] — [`RAIL_MOUNT_Y_M`]이 바뀌면 같이 이동한다.
+pub const INTERCEPT_Y_MIN_M: f64 = RAIL_MOUNT_Y_M + INTERCEPT_Y_MIN_OFFSET_FROM_MOUNT_M;
+/// 기본 인터셉트 구간 상한 y [m] — [`RAIL_MOUNT_Y_M`]이 바뀌면 같이 이동한다.
+pub const INTERCEPT_Y_MAX_M: f64 = RAIL_MOUNT_Y_M + INTERCEPT_Y_MAX_OFFSET_FROM_MOUNT_M;
 
 /// 인터셉트 샘플 상한.
 pub const MAX_INTERCEPT_SAMPLES: usize = 1_024;
@@ -36,9 +51,21 @@ pub const FIXED_IMPACT_MIN_DURATION_SECS: f64 = 0.25;
 /// 큰 동작을 줄인 반복 발사기 시험값 2cm.
 pub const READY_PREWIND_DISTANCE_M: f64 = 0.020;
 /// 공이 없을 때 미리 맞춰 둘 대표 라켓 중심 높이 [m].
-pub const READY_RACKET_HEIGHT_M: f64 = 1.050;
+///
+/// [`crate::defaults::robot::READY_JOINTS_4DOF`]의 FK z를 그대로 쓴다 — 벤치
+/// 정렬 자세(홈 포지션)가 재보정되면 준비 높이도 같이 이동해, 둘을 따로
+/// 맞출 필요가 없다.
+pub fn ready_racket_height_m() -> f64 {
+    return crate::defaults::robot::ready_racket_pose().position.z;
+}
 /// 기본 인터셉트 구간 중앙의 준비 타격 y [m].
-pub const READY_RACKET_Y_M: f64 = 0.215;
+///
+/// [`crate::defaults::robot::READY_JOINTS_4DOF`]의 FK y를 그대로 쓴다 — 벤치
+/// 정렬 자세(홈 포지션)가 재보정되면 준비 타격 y도 같이 이동해, 둘을 따로
+/// 맞출 필요가 없다.
+pub fn ready_racket_y_m() -> f64 {
+    return crate::defaults::robot::ready_racket_pose().position.y;
+}
 /// 공 검출 후 공 높이에서 유지할 임팩트 자세 기준 백스윙 거리 [m].
 /// 준비 자세와 같은 2cm로 두어 검출 뒤 불필요한 추가 감김을 없앤다.
 pub const DETECTION_WINDUP_DISTANCE_M: f64 = 0.020;
@@ -70,6 +97,9 @@ pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 1.20;
 /// 전역 READY 자세는 실물 캘리브레이션이므로 바꾸지 않고, 공별 타격 준비
 /// 자세만 이 거리만큼 접는다.
 pub const FIXED_JOINT_PUSH_DISTANCE_M: f64 = 0.100;
+/// 직진 푸시 10cm 동안 라켓 중심을 함께 들어 올릴 거리 [m].
+/// 아래쪽에서 공을 퍼 올리도록 j2를 상승 추진에 사용한다.
+pub const FIXED_JOINT_PUSH_LIFT_M: f64 = 0.020;
 /// 백스윙 없는 다관절 직진 푸시 시작부터 예상 타격점에 도달하는 시간 [s].
 /// 10cm 전진과 설정된 임팩트 속도를 백스윙 없이 만족하는 궤적 길이다.
 pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.200;
@@ -83,10 +113,10 @@ pub const FIXED_JOINT_SNAP_SPEED_RATIO: f64 = 1.0;
 pub const FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS: f64 = 0.120;
 impl Default for InterceptWindow {
     fn default() -> Self {
-        // 즉시 출발하되 기존 검증된 접수 범위 안에서 타격점을 고른다.
+        // 즉시 출발하되 기존 검증된 접수 범위(마운트 기준 오프셋) 안에서 타격점을 고른다.
         return Self {
-            y_min: 0.08,
-            y_max: 0.35,
+            y_min: INTERCEPT_Y_MIN_M,
+            y_max: INTERCEPT_Y_MAX_M,
             sample_step: 0.03,
         };
     }

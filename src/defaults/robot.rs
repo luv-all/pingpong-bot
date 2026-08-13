@@ -6,7 +6,7 @@
 //! 공유·배선은 항상 [`Robot`] (`shared_robot`). FK/IK가 필요하면 `robot.arm`을 본다.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector3};
 
@@ -19,8 +19,8 @@ use crate::defaults::rail::{
     RAIL_MAX_SPEED, RAIL_READY_X_M, RAIL_X_MAX_M, RAIL_X_MIN_M, rail_frame,
 };
 use crate::robot::{
-    Arm, JointLimit, Joints, LinkInertial, MountPreset, Robot, RobotBuildError, RobotBuilder,
-    SerialChain, SerialJoint,
+    Arm, JointLimit, Joints, LinkInertial, MountPreset, RacketPose, Robot, RobotBuildError,
+    RobotBuilder, SerialChain, SerialJoint,
 };
 
 /// 4-DOF 휴지(ready) 자세 [rad] — yaw, 어깨, 팔꿈치, 손목 순.
@@ -63,10 +63,9 @@ use crate::robot::{
 /// 이것만으로는 commit 창에 다 못 들어와, rough 단계 관절 선추종
 /// (`plan_coarse_track` + `RobotState::slew_targets_toward`)과 **함께** 쓴다.
 ///
-/// # 2026-07-30 재산출 필요 — 미착수 (스윙 튜닝 담당 몫)
+/// # 마운트 높이 변경 이력
 ///
-/// [`rail_frame`]에 실측을 반영해 베이스 z가 0.81→0.935로 올라갔다. 아래 값은
-/// **낮은 베이스에서 뽑은 것**이라 현재 마운트에서는 최적이 아니다. 새 마운트에서
+/// 2026-07-30에 베이스 z가 0.81→0.935로 올라가 아래 값이 최적이 아니게 됐다. 당시
 /// `diag_windup_rest_pose_search`를 돌려 확인한 수치:
 ///
 /// | | 최악 Δq | 필요시간 |
@@ -74,7 +73,8 @@ use crate::robot::{
 /// | 아래 값(낮은 베이스 산출) | 1.282 rad | 0.835s |
 /// | 같은 방식으로 재산출 `[0.8612, 0.0, 0.1889, -1.2076]` | 0.767 rad | 0.499s |
 ///
-/// 도달성 자체도 나빠졌다(IK 해 118/240 → 91/240) — 베이스를 올린 대가다.
+/// 2026-08-13에 레일을 12cm 내려 베이스 z가 0.815가 됐다. 현재 기구학은 이 낮아진
+/// 높이를 [`rail_frame`]에서 공통으로 사용한다.
 ///
 /// 값을 바꾸면 딸려오는 것들: [`JOINT_EFFECTIVE_INERTIA_4DOF`]
 /// (crate::defaults::JOINT_EFFECTIVE_INERTIA_4DOF) 재측정(휴지 자세가 mass matrix
@@ -87,12 +87,31 @@ use crate::robot::{
 /// 시작 자세가 어긋났다. 이 값은 기본 자세에서 그 괴리를 없앤다.
 pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
 
-/// 공을 기다리거나 타격을 마친 뒤 사용하는 안쪽으로 말린 높은 아치 자세.
+/// 타격을 마친 뒤 돌아가는 준비 자세.
 ///
-/// `READY_JOINTS_4DOF`는 벤치 정렬 기준 자세이고, 런타임의 대기·복귀 자세는
-/// 이것을 사용한다. 최종 모션 브랜치에서 q0을 ID1 소프트 한계 안쪽인 0.10rad로
-/// 두고 q2·q3는 높은 아치 목표를 유지한 값이다.
-pub const POST_HIT_TUCKED_JOINTS_4DOF: [f64; 4] = [0.10, 0.0, 1.2, -1.5721];
+/// j0을 실기 클램프 경계(0.09rad)보다 0.01rad 안쪽에 두고 q2·q3를 접어,
+/// 라켓 면을 거의 수직으로 유지하면서 가능한 만큼 오므린 준비 자세다. 라켓의
+/// 몸통 거리는 약 25.6cm이고 최하단은 상판보다 약 3.1cm 높다.
+pub const POST_HIT_READY_JOINTS_4DOF: [f64; 4] = [0.10, -0.0023, 0.52, -0.81];
+
+/// [`READY_JOINTS_4DOF`]의 FK 라켓 자세.
+///
+/// [`crate::defaults::motion::ready_racket_height_m`]/[`crate::defaults::motion::ready_racket_y_m`]이
+/// 여기서 y·z를 읽어가, 벤치 정렬 자세가 재보정되면 준비 타격점도 같이
+/// 이동한다 — 둘을 따로 맞출 필요가 없다. [`robot`]은 URDF를 다시 읽고
+/// 파싱하므로, 계획 루프에서 매 호출마다 부르지 않도록 한 번만 계산해
+/// 캐시한다.
+pub fn ready_racket_pose() -> RacketPose {
+    static POSE: OnceLock<RacketPose> = OnceLock::new();
+    return *POSE.get_or_init(|| {
+        let built = robot().expect("기본 로봇 빌드");
+        let joints = Joints::from_slice(&READY_JOINTS_4DOF);
+        return built
+            .arm
+            .forward_kinematics(&joints)
+            .expect("READY_JOINTS_4DOF FK");
+    });
+}
 
 /// 경연용 단순 4-dof (URDF 없음) → [`Robot`].
 ///
@@ -539,43 +558,46 @@ mod tests {
             pose.normal
         );
         assert!(
-            (lowest - 0.155).abs() < 0.003,
-            "bench lowest=0.155m, model={lowest:.4}m"
+            (lowest - 0.035).abs() < 0.003,
+            "12cm 하향 설치 후 라켓 최하단=0.035m, model={lowest:.4}m"
         );
     }
 
     #[test]
-    fn post_hit_pose_forms_high_arch_without_table_collision() {
+    fn post_hit_ready_pose_keeps_entire_racket_above_table() {
         let robot = urdf_4dof().expect("4-dof");
         let arm = robot.arm.as_ref();
         let rail_x = arm
             .rail
             .as_ref()
             .map_or(RAIL_READY_X_M, |rail| rail.default_x());
-        let joints = Joints::from_slice(&POST_HIT_TUCKED_JOINTS_4DOF);
-        let chain = arm.chain_points(rail_x, &joints).expect("post-hit chain");
-        let mount_z = chain.first().expect("mount").z;
-        let peak_z = chain.iter().map(|point| point.z).fold(mount_z, f64::max);
-        let mount = chain.first().expect("mount");
-        let racket = chain.last().expect("racket");
-        let racket_z = racket.z;
-
-        assert!(peak_z - mount_z > 0.25, "팔꿈치가 충분히 높아야 함");
+        let joints = Joints::from_slice(&POST_HIT_READY_JOINTS_4DOF);
+        let racket = arm
+            .forward_kinematics_with_rail(rail_x, &joints)
+            .expect("post-hit FK");
+        let rotation = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            racket.orientation[0],
+            racket.orientation[1],
+            racket.orientation[2],
+            racket.orientation[3],
+        ));
+        let axis_x = rotation * nalgebra::Vector3::x();
+        let axis_y = rotation * nalgebra::Vector3::y();
+        let axis_z = rotation * nalgebra::Vector3::z();
+        let half_height = axis_x.z.abs() * geometry::RACKET_HALF_X
+            + axis_y.z.abs() * geometry::RACKET_HALF_Y
+            + axis_z.z.abs() * geometry::RACKET_HALF_Z;
+        let lowest_above_table =
+            racket.position.z - crate::constants::table::SURFACE_Z - half_height;
         assert!(
-            peak_z - racket_z > 0.25,
-            "높은 아치 뒤 라켓이 아래로 접혀야 함"
+            lowest_above_table >= 0.015,
+            "복귀 자세의 라켓 전체가 상판보다 높아야 함: clearance={lowest_above_table:.4}m"
         );
+        let penetration = crate::robot::collision::table_penetration(arm, rail_x, &joints);
         assert!(
-            (racket_z - mount_z).abs() < 0.02,
-            "라켓 중심은 마운트 높이 근처"
-        );
-        assert!(
-            (racket.x - mount.x).hypot(racket.y - mount.y) < 0.20,
-            "라켓이 몸통 가까이 접혀야 함"
-        );
-        assert!(
-            crate::robot::collision::table_penetration(arm, rail_x, &joints) <= 1e-4,
-            "복귀 자세가 테이블을 관통하면 안 됨"
+            penetration <= 1e-4,
+            "복귀 자세가 테이블을 관통하면 안 됨: depth={penetration:.4}m"
         );
     }
+
 }

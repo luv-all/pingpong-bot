@@ -305,9 +305,10 @@ impl AlignmentController {
 }
 
 /// 전역 IK가 다른 팔 접힘 가지를 골라 듀얼 베이스가 튀는 것을 막는 한계.
-/// 더 접힌 높은 기본자세에서 앞쪽 접수점까지 한 번에 전개할 수 있는 범위.
+/// 낮아진 레일 베이스에서 한쪽 끝 접수점까지 전개할 때 실측 기구학상 약 56°가
+/// 필요하므로 60°까지 허용한다.
 /// 속도·가속도 한계는 궤적 계획기가 별도로 검사한다.
-pub const MAX_ALIGNMENT_BASE_STEP_RAD: f64 = 50.0_f64.to_radians();
+pub const MAX_ALIGNMENT_BASE_STEP_RAD: f64 = 60.0_f64.to_radians();
 
 pub fn alignment_base_step_rad(start: &Pose, trajectory: &Trajectory) -> f64 {
     return trajectory

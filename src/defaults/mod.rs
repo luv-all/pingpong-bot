@@ -63,7 +63,8 @@ pub use impact::ImpactParams;
 pub use motion::{
     ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_MIN_UPWARD_TILT_DEG,
     ALIGNMENT_TARGET_HEIGHT_OFFSET_M, ALIGNMENT_TARGET_X_OFFSET_M, COARSE_TRACK_JOINT_FRACTION,
-    FIRST_CONTROL_AFTER_DETECTION_SECS, FIXED_JOINT_PUSH_DISTANCE_M, FIXED_JOINT_SNAP_SPEED_RATIO,
+    FIRST_CONTROL_AFTER_DETECTION_SECS, FIXED_JOINT_PUSH_DISTANCE_M, FIXED_JOINT_PUSH_LIFT_M,
+    FIXED_JOINT_SNAP_SPEED_RATIO,
     FIXED_JOINT_SWING_DURATION_SECS, FIXED_JOINT_SWING_LEAD_SECS, HOME_RETURN_SPEED_RATIO,
     JACOBIAN_DAMPING, JDOT_STEP, MAGNUS_OMEGA_MAX, MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS,
     MIN_TIME_TO_GO_SECS, PLAN_DT_SECS, POSITION_TOLERANCE_RAD_OR_M, POST_ALIGNMENT_HOLD_SECS,
@@ -72,15 +73,16 @@ pub use motion::{
 };
 pub use physics::PhysicsParams;
 pub use rail::{
-    DEFAULT_RAIL_CALIBRATION_PATH, RAIL_ACCEL_M_S2, RAIL_BOARD_ZERO_DOMAIN_M,
+    DEFAULT_RAIL_CALIBRATION_PATH, RAIL_ACCEL_M_S2, RAIL_BOARD_ZERO_DOMAIN_M, RAIL_BOTTOM_Z_M,
     RAIL_COORDINATE_POSITIVE_X_OFFSET_M, RAIL_HOMING_OVERTRAVEL_MARGIN_M,
     RAIL_HOMING_RETURN_VELOCITY_M_S, RAIL_HOMING_TIMEOUT_SECS, RAIL_HOMING_VELOCITY_M_S,
-    RAIL_LEFT_END_MARGIN_M, RAIL_MAX_SPEED, RAIL_NEGATIVE_X_ZERO_SHIFT_M, RAIL_PHYSICAL_X_MAX_M,
-    RAIL_PHYSICAL_X_MIN_M, RAIL_POSITIVE_X_TRIM_M, RAIL_PULSES_PER_METER, RAIL_READY_X_M,
-    RAIL_RIGHT_END_MARGIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M, rail_calibration_path, rail_frame,
+    RAIL_LEFT_END_MARGIN_M, RAIL_MAX_SPEED, RAIL_MOUNT_Z_M, RAIL_NEGATIVE_X_ZERO_SHIFT_M,
+    RAIL_PHYSICAL_X_MAX_M, RAIL_PHYSICAL_X_MIN_M, RAIL_POSITIVE_X_TRIM_M, RAIL_PULSES_PER_METER,
+    RAIL_READY_X_M, RAIL_RIGHT_END_MARGIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M, rail_calibration_path,
+    rail_frame,
 };
 pub use robot::{
-    POST_HIT_TUCKED_JOINTS_4DOF, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount,
+    POST_HIT_READY_JOINTS_4DOF, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount,
     robot, shared_robot, urdf_4dof, urdf_test,
 };
 pub use sim::{
@@ -130,6 +132,7 @@ mod tests {
         let model_rail = robot.arm.rail.expect("기본 로봇 리니어 레일");
         assert_eq!(model_rail.x_min, rail_config.x_min_m);
         assert_eq!(model_rail.x_max, rail_config.x_max_m);
+        assert!((model_rail.mount_z - RAIL_MOUNT_Z_M).abs() < 1e-12);
         assert!((model_rail.x_min - 0.0100).abs() < 1e-12);
         assert!((model_rail.x_max - 1.3395).abs() < 1e-12);
         assert!((model_rail.default_x() - 0.6750).abs() < 1e-12);
@@ -140,6 +143,10 @@ mod tests {
         assert!((ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M - 0.0200).abs() < 1e-12);
         assert!((RAIL_COORDINATE_POSITIVE_X_OFFSET_M - 0.0150).abs() < 1e-12);
         assert!((rail_frame().mount_x() - 0.09025).abs() < 1e-12);
+        assert!((rail_frame().rail_bottom_z - RAIL_BOTTOM_Z_M).abs() < 1e-12);
+        assert!((rail_frame().mount_z() - RAIL_MOUNT_Z_M).abs() < 1e-12);
+        assert!((RAIL_BOTTOM_Z_M - 0.760).abs() < 1e-12);
+        assert!((RAIL_MOUNT_Z_M - 0.815).abs() < 1e-12);
         assert!((ALIGNMENT_TARGET_X_OFFSET_M - 0.09475).abs() < 1e-12);
         assert!((JOINT_SPEED_DERATE - 0.95).abs() < 1e-12);
         assert!((rail_config.x_min_m - model_rail.x_min).abs() < 1e-12);
