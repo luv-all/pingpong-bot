@@ -9,6 +9,10 @@ use crate::robot::RailFrame;
 /// 2026-08-13 설치 위치를 기존 0.88m에서 12cm 낮췄다.
 pub const RAIL_BOTTOM_Z_M: f64 = 0.760;
 /// 레일 위 로봇 베이스의 월드 Z [m] — 프로파일 하단 + 고정 두께.
+///
+/// 이 값이 바뀌면 로봇 베이스가 옮겨지고, [`crate::defaults::robot::READY_JOINTS_4DOF`]의
+/// FK로 정의되는 준비 라켓 높이(`crate::defaults::motion::ready_racket_height_m`)도
+/// 그 FK를 통해 자동으로 같이 이동한다 — 따로 맞출 필요가 없다.
 pub const RAIL_MOUNT_Z_M: f64 = RAIL_BOTTOM_Z_M + crate::constants::geometry::RAIL_THICKNESS;
 
 /// 실기 좌측 안전 마진 [m].
@@ -85,15 +89,31 @@ pub fn rail_calibration_path() -> std::path::PathBuf {
     return std::path::PathBuf::from(DEFAULT_RAIL_CALIBRATION_PATH);
 }
 
+/// 레일 마운트 y [m] — [`rail_frame`]의 `mount_y`와 [`crate::defaults::motion`]의
+/// 인터셉트 구간(`INTERCEPT_Y_MIN_M`/`INTERCEPT_Y_MAX_M`)이 공유하는 값. 인터셉트
+/// 구간은 이 값에 대한 고정 오프셋으로 정의되므로, 마운트 실측이 바뀌어도 둘을
+/// 따로 맞출 필요가 없다. (준비 타격 y `ready_racket_y_m`은 이 값이 아니라
+/// [`crate::defaults::robot::READY_JOINTS_4DOF`]의 FK를 따른다 — 마운트가
+/// 바뀌면 로봇 베이스가 옮겨져 그 FK도 자동으로 같이 이동한다.)
+///
+/// **2026-08-13 실측** — 이전 값 **-0.128**은 `mount_search`(2026-07-26)가 낮은
+/// 베이스 기준으로 추천한 `behind=0.10`(y=−0.10)을, 이후 베이스 z 실측(0.935)에
+/// 맞춰 대체한 값이었다. 이번 실측으로 -0.068로 갱신한다.
+pub const RAIL_MOUNT_Y_M: f64 = -0.068;
+
 /// 리니어모터를 받치는 철제 프로파일 (탁구대 끝면·바닥 기준).
 ///
-/// **높이는 실측(2026-08-13).** 바닥→프로파일 하단 0.76 m,
+/// **높이는 실측(2026-08-13).** 바닥→프로파일 하단은 [`RAIL_BOTTOM_Z_M`](0.76 m),
 /// 두께 [`RAIL_THICKNESS`](crate::constants::geometry::RAIL_THICKNESS) 0.055 m →
-/// 베이스 z = **0.815**. 기존 프로파일 하단 0.88m에서 12cm 내린 설치값이다.
+/// 베이스 z는 [`RAIL_MOUNT_Z_M`](0.815). 기존 프로파일 하단 0.88m(베이스 z
+/// 0.935)에서 12cm 내린 설치값이다. 그 0.88m 자체는 `SURFACE_Z + 0.05` = 0.81로
+/// "실기 브래킷(~면 위 3~5cm)과 맞춤"이라는 추정에 기대고 있었는데 2026-07-30
+/// 실측이 그 가정을 뒤집었었다 — 시뮬 베이스가 실물보다 12.5 cm 낮았다.
 ///
-/// `mount_y`는 실측값 **-0.128**을 쓴다 — `mount_search`(2026-07-26)가 낮은
-/// 베이스 기준으로 추천한 `behind=0.10`(y=−0.10, `behind=0.02` 대비 ratio≤1이
-/// **10/150**, mean≈2.48)은 현재와 거의 같은 낮은 베이스 기준이다.
+/// `mount_y`는 [`RAIL_MOUNT_Y_M`] 참고 — `mount_search`(2026-07-26)가 낮은
+/// 베이스 기준으로 추천한 `behind=0.10`(y=−0.10)은 그 스윕이 **낮은 베이스
+/// 기준**이라, 지금 다시 낮아진 베이스(0.815)에서는 0.935 시절보다 오히려
+/// 더 근접한 참고값이다.
 ///
 /// 두 값 모두 sim GUI "Rig" 패널에서 공이 주차된 동안 런타임 조정 가능하다
 /// (`SimRuntimeControls::rail_frame`). 좋은 위치를 눈으로 찾은 뒤
@@ -103,7 +123,7 @@ pub fn rail_frame() -> RailFrame {
     return RailFrame {
         // 2026-08-13 실측 양쪽 마진이 말하는 원점차 9.00cm/9.05cm의 평균.
         mount_x: 0.09025,
-        mount_y: -0.068,
+        mount_y: RAIL_MOUNT_Y_M,
         rail_bottom_z: RAIL_BOTTOM_Z_M,
     };
 }

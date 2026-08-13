@@ -6,7 +6,7 @@
 //! 공유·배선은 항상 [`Robot`] (`shared_robot`). FK/IK가 필요하면 `robot.arm`을 본다.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use nalgebra::{Isometry3, Matrix3, UnitQuaternion, Vector3};
 
@@ -19,8 +19,8 @@ use crate::defaults::rail::{
     RAIL_MAX_SPEED, RAIL_READY_X_M, RAIL_X_MAX_M, RAIL_X_MIN_M, rail_frame,
 };
 use crate::robot::{
-    Arm, JointLimit, Joints, LinkInertial, MountPreset, Robot, RobotBuildError, RobotBuilder,
-    SerialChain, SerialJoint,
+    Arm, JointLimit, Joints, LinkInertial, MountPreset, RacketPose, Robot, RobotBuildError,
+    RobotBuilder, SerialChain, SerialJoint,
 };
 
 /// 4-DOF 휴지(ready) 자세 [rad] — yaw, 어깨, 팔꿈치, 손목 순.
@@ -93,6 +93,25 @@ pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
 /// 라켓 면을 거의 수직으로 유지하면서 가능한 만큼 오므린 준비 자세다. 라켓의
 /// 몸통 거리는 약 25.6cm이고 최하단은 상판보다 약 3.1cm 높다.
 pub const POST_HIT_READY_JOINTS_4DOF: [f64; 4] = [0.10, -0.0023, 0.52, -0.81];
+
+/// [`READY_JOINTS_4DOF`]의 FK 라켓 자세.
+///
+/// [`crate::defaults::motion::ready_racket_height_m`]/[`crate::defaults::motion::ready_racket_y_m`]이
+/// 여기서 y·z를 읽어가, 벤치 정렬 자세가 재보정되면 준비 타격점도 같이
+/// 이동한다 — 둘을 따로 맞출 필요가 없다. [`robot`]은 URDF를 다시 읽고
+/// 파싱하므로, 계획 루프에서 매 호출마다 부르지 않도록 한 번만 계산해
+/// 캐시한다.
+pub fn ready_racket_pose() -> RacketPose {
+    static POSE: OnceLock<RacketPose> = OnceLock::new();
+    return *POSE.get_or_init(|| {
+        let built = robot().expect("기본 로봇 빌드");
+        let joints = Joints::from_slice(&READY_JOINTS_4DOF);
+        return built
+            .arm
+            .forward_kinematics(&joints)
+            .expect("READY_JOINTS_4DOF FK");
+    });
+}
 
 /// 경연용 단순 4-dof (URDF 없음) → [`Robot`].
 ///
