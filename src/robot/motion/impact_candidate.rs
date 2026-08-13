@@ -90,7 +90,8 @@ pub(crate) fn best_impact_candidate_for_outgoing(
     let desired_normal = (v_out - v_in).normalize();
 
     let base_hint = arm.with_wrist_open(&start.joints, Arm::wrist_open_for_return(v_out - v_in))?;
-    let racket_center = crate::Point3::from(
+    // 면 중심이 정확히 공과 닿는 지점 (오프셋 0 — 기본·선호 대상).
+    let dead_center = crate::Point3::from(
         impact_position.coords
             - desired_normal
                 * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z),
@@ -98,7 +99,8 @@ pub(crate) fn best_impact_candidate_for_outgoing(
 
     let mut best: Option<ImpactCandidate> = None;
     let mut last_error = None;
-    let try_hint = |hint: Joints,
+    let try_hint = |racket_center: crate::Point3,
+                    hint: Joints,
                     search: robot::IkSearch,
                     best: &mut Option<ImpactCandidate>,
                     last_error: &mut Option<SwingPlanError>| {
@@ -179,28 +181,59 @@ pub(crate) fn best_impact_candidate_for_outgoing(
     // 실패시에만 대안 시드 폴백")대로. `diag_wp4a_single_vs_multi_seed`가
     // 150개 표본에서 이 폴백이 필요했던 사례는 0건이었지만, 그 표본이
     // 못 덮는 기하가 있을 수 있어 안전망으로 남긴다.
-    try_hint(
-        base_hint.clone(),
-        robot::IkSearch::Local,
-        &mut best,
-        &mut last_error,
-    );
-    if best.is_none() {
-        for hint in candidate_ik_hints(arm, &base_hint).into_iter().skip(1) {
-            try_hint(hint, robot::IkSearch::Local, &mut best, &mut last_error);
-        }
-    }
-    // 반사 시드가 전부 막혔을 때만 관절공간 전역 스윕. 바깥 반사 시드는 **서로 다른
-    // 해를 열거해 조작성을 비교**하려는 것이고 전역 스윕은 **아무 해라도 찾으려는**
-    // 것이라 목적이 다르다 — 둘을 곱하면(반사 4 x 확산 16) 한 표적에 76갈래를 돌게
-    // 되어 bang-bang 워커가 CPU를 독점한다. 전역은 마지막 한 번으로 족하다.
-    if best.is_none() {
+    let try_all_seeds = |racket_center: crate::Point3,
+                          best: &mut Option<ImpactCandidate>,
+                          last_error: &mut Option<SwingPlanError>| {
         try_hint(
+            racket_center,
             base_hint.clone(),
-            robot::IkSearch::Global,
-            &mut best,
-            &mut last_error,
+            robot::IkSearch::Local,
+            best,
+            last_error,
         );
+        if best.is_none() {
+            for hint in candidate_ik_hints(arm, &base_hint).into_iter().skip(1) {
+                try_hint(racket_center, hint, robot::IkSearch::Local, best, last_error);
+            }
+        }
+        // 반사 시드가 전부 막혔을 때만 관절공간 전역 스윕. 바깥 반사 시드는 **서로 다른
+        // 해를 열거해 조작성을 비교**하려는 것이고 전역 스윕은 **아무 해라도 찾으려는**
+        // 것이라 목적이 다르다 — 둘을 곱하면(반사 4 x 확산 16) 한 표적에 76갈래를 돌게
+        // 되어 bang-bang 워커가 CPU를 독점한다. 전역은 마지막 한 번으로 족하다.
+        if best.is_none() {
+            try_hint(
+                racket_center,
+                base_hint.clone(),
+                robot::IkSearch::Global,
+                best,
+                last_error,
+            );
+        }
+    };
+
+    try_all_seeds(dead_center, &mut best, &mut last_error);
+
+    // 물리적으로 낮은 공: 중심 접촉이 모든 시드·전역 스윕에서도 완전히 막혔을
+    // 때만, 라켓 중심을 **월드 아래 방향의 면내 투영** 반대쪽(위)으로 들어
+    // 올려 재시도한다 — 손잡이 반대편이 아니라 세계좌표 기준이라 자세가
+    // 달라져도 "낮은 공에 닿는 방향"이 항상 같다. 라켓 면 반경
+    // (`RACKET_BLADE_RADIUS`) 안에서 작은 오프셋부터 시도해 필요한 만큼만
+    // 쓴다 — 중심 접촉이 성립하면 이 블록은 전혀 실행되지 않는다.
+    if best.is_none() {
+        let world_down = Vector3::new(0.0, 0.0, -1.0);
+        let in_plane_down = world_down - desired_normal * world_down.dot(&desired_normal);
+        if in_plane_down.norm() > 1e-6 {
+            let down_dir = in_plane_down.normalize();
+            const OFFSET_FRACTIONS: [f64; 4] = [0.25, 0.5, 0.75, 1.0];
+            for &frac in &OFFSET_FRACTIONS {
+                let offset = frac * crate::constants::geometry::RACKET_BLADE_RADIUS;
+                let offset_center = crate::Point3::from(dead_center.coords - down_dir * offset);
+                try_all_seeds(offset_center, &mut best, &mut last_error);
+                if best.is_some() {
+                    break;
+                }
+            }
+        }
     }
 
     return best.ok_or_else(|| {

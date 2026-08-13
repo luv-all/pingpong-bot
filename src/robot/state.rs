@@ -669,6 +669,7 @@ mod tests {
     fn dual_yaw_torque_tracks_farther_than_single() {
         let arm = crate::defaults::primitive_4dof().expect("arm").arm;
         let start = arm.initial_state();
+        let start_q0 = start.joints().values[0];
         let mut impact = start.joints().clone();
         impact.values[0] += 0.5;
         let end = impact.clone();
@@ -693,7 +694,7 @@ mod tests {
         for _ in 0..8 {
             dual.advance_swing_torque_limited(&arm, 0.005, &dual_ctrl);
         }
-        let dual_q0 = dual.joints().values[0].abs();
+        let dual_q0 = (dual.joints().values[0] - start_q0).abs();
 
         let single_ctrl = ControlParams {
             max_joint_torques: [3.0, 3.0, 1.25, 1.25],
@@ -704,7 +705,7 @@ mod tests {
         for _ in 0..8 {
             single.advance_swing_torque_limited(&arm, 0.005, &single_ctrl);
         }
-        let single_q0 = single.joints().values[0].abs();
+        let single_q0 = (single.joints().values[0] - start_q0).abs();
         assert!(
             dual_q0 > single_q0 + 1e-4,
             "τ0=6 should outpace τ0=3: dual={dual_q0} single={single_q0}"
