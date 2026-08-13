@@ -44,6 +44,8 @@ const STARTUP_RAIL_SCALE_CHECK_HOLD: Duration = Duration::from_secs(6);
 const FINAL_RACKET_TABLE_CLEARANCE_M: f64 = 0.010;
 /// 홈 자세에서 테이블 근접 자세로 천천히 내려가는 시간.
 const FINAL_RACKET_APPROACH_SECS: f64 = 6.0;
+/// 최종 기준 자세에서 라켓 장축이 수직선과 이루어도 되는 최대 각도.
+const FINAL_RACKET_VERTICAL_TOLERANCE_DEG: f64 = 3.0;
 
 /// 보정된 공 접촉점에 라켓을 맞추고 상대편 반코트의 무게중심을 조준한다.
 /// 종료는 ESC·`q`(preview) 또는 제어 워커 `Done`이다.
@@ -256,27 +258,39 @@ fn racket_table_reference_joints(
     arm: &pingpong_bot::robot::Arm,
     start: &pingpong_bot::robot::Pose,
 ) -> Result<pingpong_bot::robot::Joints> {
-    let rail = arm
-        .rail
+    arm.rail
         .context("라켓·탁구대 기준 자세에 레일 모델이 없습니다")?;
     let mut joints = start.joints.clone();
-    for _ in 0..16 {
-        let racket = arm
-            .forward_kinematics_with_rail(start.rail_x, &joints)
-            .context("라켓·탁구대 기준 자세 FK 실패")?;
-        let clearance = racket_tip_clearance_m(&racket);
-        let error_m = clearance - FINAL_RACKET_TABLE_CLEARANCE_M;
-        if error_m.abs() <= 0.0005 {
-            return Ok(joints);
+    let start_racket = arm
+        .forward_kinematics_with_rail(start.rail_x, &start.joints)
+        .context("라켓·탁구대 기준 시작 FK 실패")?;
+    let mut best_score = racket_table_reference_score(arm, start, &start_racket, &joints)?;
+    // 위치 IK는 라켓 중심만 맞추므로 장축 롤을 고정하지 못한다. 홈 관절 가지 주변에서
+    // 각 축을 점차 작은 각도로 훑어 수직도와 상판 간격을 동시에 맞춘다.
+    for step_deg in [20.0_f64, 10.0, 5.0, 2.0, 1.0, 0.5, 0.2, 0.1] {
+        let step = step_deg.to_radians();
+        for _ in 0..32 {
+            let mut improved = false;
+            for index in 0..joints.values.len() {
+                for direction in [-1.0, 1.0] {
+                    let mut candidate = joints.clone();
+                    candidate.values[index] += direction * step;
+                    if !arm.joints_in_limits(&candidate) {
+                        continue;
+                    }
+                    let score =
+                        racket_table_reference_score(arm, start, &start_racket, &candidate)?;
+                    if score + 1e-12 < best_score {
+                        joints = candidate;
+                        best_score = score;
+                        improved = true;
+                    }
+                }
+            }
+            if !improved {
+                break;
+            }
         }
-        let center_target = pingpong_bot::Point3::new(
-            racket.position.x,
-            racket.position.y,
-            racket.position.z - error_m.clamp(-0.05, 0.05),
-        );
-        joints = arm
-            .inverse_kinematics_with_rail(&rail, start.rail_x, center_target, Some(&joints))
-            .map_err(|error| anyhow::anyhow!("라켓·탁구대 기준 자세 IK 실패: {error}"))?;
     }
     let racket = arm
         .forward_kinematics_with_rail(start.rail_x, &joints)
@@ -287,7 +301,33 @@ fn racket_table_reference_joints(
         "라켓 끝 기준 간격 수렴 실패: 목표={:.4}m 계산={clearance:.4}m",
         FINAL_RACKET_TABLE_CLEARANCE_M
     );
+    let vertical_error_deg = racket_blade_vertical_error_deg(&racket);
+    ensure!(
+        vertical_error_deg <= FINAL_RACKET_VERTICAL_TOLERANCE_DEG,
+        "라켓 장축 수직 자세 수렴 실패: 수직 오차={vertical_error_deg:.2}°"
+    );
     return Ok(joints);
+}
+
+fn racket_table_reference_score(
+    arm: &pingpong_bot::robot::Arm,
+    start: &pingpong_bot::robot::Pose,
+    start_racket: &pingpong_bot::robot::RacketPose,
+    joints: &pingpong_bot::robot::Joints,
+) -> Result<f64> {
+    let racket = arm
+        .forward_kinematics_with_rail(start.rail_x, joints)
+        .context("라켓·탁구대 기준 후보 FK 실패")?;
+    let clearance_error =
+        (racket_tip_clearance_m(&racket) - FINAL_RACKET_TABLE_CLEARANCE_M) / 0.002;
+    let vertical_error =
+        racket_blade_vertical_error_deg(&racket) / FINAL_RACKET_VERTICAL_TOLERANCE_DEG;
+    // 측정 기준점이 탁구대 밖으로 달아나는 해를 피하되, 수직·높이 조건보다 약하게 둔다.
+    let horizontal_drift =
+        (racket.position.coords.xy() - start_racket.position.coords.xy()).norm() / 0.05;
+    return Ok(clearance_error * clearance_error
+        + vertical_error * vertical_error
+        + 0.05 * horizontal_drift * horizontal_drift);
 }
 
 fn validate_racket_table_reference_trajectory(
@@ -410,10 +450,18 @@ fn log_home_racket_table_clearance(
         table_surface_z_m = f2(table_z),
         racket_tip_clearance_m = f2(clearance_m),
         racket_tip_contacts_table = clearance_m <= 0.0,
+        racket_blade_vertical_error_deg = f2(racket_blade_vertical_error_deg(&racket)),
         robot_table_safety_penetration_m = f2(robot_table_penetration_m),
         "최종 홈 자세 라켓 끝·탁구대 충돌 계산"
     );
     return Ok(());
+}
+
+fn racket_blade_vertical_error_deg(racket: &pingpong_bot::robot::RacketPose) -> f64 {
+    let [w, x, y, z] = racket.orientation;
+    let rotation = nalgebra::UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(w, x, y, z));
+    let blade_axis = rotation * nalgebra::Vector3::y();
+    return blade_axis.z.abs().clamp(-1.0, 1.0).acos().to_degrees();
 }
 
 fn racket_tip_clearance_m(racket: &pingpong_bot::robot::RacketPose) -> f64 {
@@ -507,6 +555,7 @@ mod startup_rail_tests {
             (clearance - FINAL_RACKET_TABLE_CLEARANCE_M).abs() <= 0.002,
             "clearance={clearance:.4}"
         );
+        assert!(racket_blade_vertical_error_deg(&racket) <= FINAL_RACKET_VERTICAL_TOLERANCE_DEG);
         let zeros = vec![0.0; joints.values.len()];
         let trajectory = pingpong_bot::robot::motion::Trajectory::new(
             start.joints.clone(),

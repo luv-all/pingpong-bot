@@ -334,7 +334,7 @@ cargo run -p pingpong-bot -- --mode real --dry-run
 # 실기
 cargo run -p pingpong-bot -- --mode real --dxl-port COM8 --debug
 
-# 레일 스케일 전용 점검 — 홈잉, 중앙↔-X 50cm, 중앙↔+X 50cm, 라켓 끝 1cm 기준 자세 후 종료
+# 레일 스케일 전용 점검 — 홈잉, 중앙↔±X 50cm, 라켓 수직·끝 1cm 기준 자세 후 종료
 cargo run -p pingpong-bot -- --mode real --rail-scale-check --dxl-port COM8 --debug
 ```
 
@@ -343,7 +343,7 @@ cargo run -p pingpong-bot -- --mode real --rail-scale-check --dxl-port COM8 --de
 | `--dry-run` | off | 모터·레일 정지. 나머지 체인은 그대로 |
 | `--preview` | on | 좌/우 검출 오버레이 창 (ESC·`q` 종료) |
 | `--home` | on | 시작 시 센터(ready) 자세로 이동 |
-| `--rail-scale-check` | off | 카메라 없이 중앙 기준 -X/+X 각각 50cm 스케일을 점검하고 라켓 끝을 상판 위 1cm 기준 자세로 이동한 뒤 종료 |
+| `--rail-scale-check` | off | 카메라 없이 중앙 기준 ±X 50cm를 점검하고 라켓을 수직으로 세워 끝을 상판 위 1cm 기준 자세로 이동한 뒤 종료 |
 | `--release-torque` | off | 종료 시 토크 해제. 기본은 켠 채로 둬서 팔이 안 주저앉게 한다 |
 | `--timeout-secs` | 60 | 공 대기 경고 간격. 초과해도 세션은 계속 |
 
