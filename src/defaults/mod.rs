@@ -43,12 +43,14 @@ pub mod vision;
 
 pub use calib::{
     CHARUCO_MARKER_LENGTH_M, CHARUCO_SQUARE_LENGTH_M, CHARUCO_SQUARES_X, CHARUCO_SQUARES_Y,
+    CLIP_CALIBRATION_NAME,
     CURRENT_RIG_CLIPS, DEFAULT_CALIBRATION_PATH, DEFAULT_CALIBRATION_PENDING_NAME,
     DEFAULT_CLIPS_DIR, DEFAULT_COLORMASK_PATH, DEFAULT_DATA_DIR, DEFAULT_FOV_Y_DEG,
     DEFAULT_STEREO_CAM_ROLES, DEFAULT_STREAM_BACKEND, DEFAULT_STREAM_FOURCC, DEFAULT_STREAM_FPS,
     DEFAULT_STREAM_HEIGHT, DEFAULT_STREAM_THREADED, DEFAULT_STREAM_WIDTH, LEFT_CAMERA_ID,
     LEFT_DEVICE, MAX_REPROJ_RMSE_PX, MIN_CHARUCO_CORNERS, RIGHT_CAMERA_ID, RIGHT_DEVICE,
-    calibration_path, calibration_pending_path, colormask_path, ensure_parent_dir,
+    calibration_path, calibration_pending_path, clip_calibration_path, colormask_path,
+    ensure_parent_dir,
 };
 pub use control::ControlParams;
 pub use dxl_limits::{

@@ -45,6 +45,26 @@ pub const DEFAULT_COLORMASK_PATH: &str = "data/colormask.json";
 /// `record-stereo` 오프라인 클립 루트 (`{scene}_{nn}/left.avi` …).
 pub const DEFAULT_CLIPS_DIR: &str = "data/clips";
 
+/// 클립 폴더 안에 두는, **그 클립을 찍을 때의** 캘리브 스냅샷 파일명.
+///
+/// 클립은 과거의 기록인데 캘리브는 지금 리그를 가리키는 살아 있는 값이라, 카메라를
+/// 옮기면 옛 클립이 통째로 무효가 된다. 그때 지표가 에러 없이 빈 표만 내서 두 번이나
+/// 조용히 거짓말을 했다(2026-08-13: `fe94531`, `3db054e`). 찍을 때의 기하를 클립 옆에
+/// 같이 두면 그 결합이 끊긴다 — 실기는 전역 파일을, 클립 도구는 클립 옆 파일을 쓴다.
+pub const CLIP_CALIBRATION_NAME: &str = "calibration.json";
+
+/// `dir` 클립이 자기 캘리브를 들고 있으면 그 경로, 없으면 전역 [`calibration_path`].
+///
+/// 옛 클립엔 스냅샷이 없으므로 전역으로 접는다 — 그 경우가 바로 위험한 경우라,
+/// 호출 쪽이 결과가 비면 크게 실패해야 한다([`crate::camera::Calibration`] 소비자 참고).
+pub fn clip_calibration_path(dir: &Path) -> PathBuf {
+    let beside = dir.join(CLIP_CALIBRATION_NAME);
+    if beside.is_file() {
+        return beside;
+    }
+    return calibration_path();
+}
+
 /// [`DEFAULT_CALIBRATION_PATH`]의 `PathBuf`.
 pub fn calibration_path() -> PathBuf {
     return PathBuf::from(DEFAULT_CALIBRATION_PATH);
