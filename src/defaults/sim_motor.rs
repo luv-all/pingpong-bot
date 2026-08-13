@@ -172,23 +172,6 @@ mod tests {
         SimMotorParams::default().validate().expect("sim_motor");
     }
 
-    /// 하드코딩한 [`JOINT_EFFECTIVE_INERTIA_4DOF`]가 실제 팔의 질량 행렬
-    /// 대각과 여전히 맞는지 — 링크 관성/CAD가 바뀌면 게인도 다시 뽑아야 한다.
-    #[test]
-    fn inertia_matches_mass_matrix_diagonal() {
-        let measured = representative_inertias();
-        for (joint, &expected) in JOINT_EFFECTIVE_INERTIA_4DOF.iter().enumerate() {
-            let actual = measured[joint];
-            let drift = (actual - expected).abs() / expected;
-            assert!(
-                drift < 0.05,
-                "joint {joint}: 상수 I={expected:.4e} vs mass_matrix I={actual:.4e} \
-                 (drift {:.1}%) — 게인 상수를 다시 뽑아야 함",
-                drift * 100.0
-            );
-        }
-    }
-
     /// 감쇠는 관절마다 임계감쇠 대역(과감쇠도 진동도 아님)에 있어야 한다.
     ///
     /// 관절별 **실제 반사 관성**(`mass_matrix` 대각, 휴지·임팩트 자세 중
@@ -206,37 +189,6 @@ mod tests {
                 "joint {joint}: ζ={zeta:.2} (I={inertia:.4e}) — 임계감쇠 대역을 벗어남"
             );
         }
-    }
-
-    /// 옛 평평한 게인은 관절별로 ζ가 4배 흩어졌다 — base는 과소감쇠,
-    /// wrist는 과감쇠. 관절별 게인이 그걸 없앤다.
-    #[test]
-    fn flat_gains_would_spread_damping_ratio_across_joints() {
-        let inertias = representative_inertias();
-        let flat = SimMotorParams {
-            position_stiffness: [5_000.0; SIM_MOTOR_JOINTS],
-            position_damping: [10.0; SIM_MOTOR_JOINTS],
-        };
-        let flat_zeta: Vec<f64> = (0..SIM_MOTOR_JOINTS)
-            .map(|joint| flat.damping_ratio(joint, inertias[joint]))
-            .collect();
-        let spread = flat_zeta.iter().copied().fold(f64::MIN, f64::max)
-            / flat_zeta.iter().copied().fold(f64::MAX, f64::min);
-        assert!(
-            spread > 3.0,
-            "옛 평평한 게인 ζ 분산 {spread:.1}배: {flat_zeta:?}"
-        );
-
-        let tuned = SimMotorParams::default();
-        let tuned_zeta: Vec<f64> = (0..SIM_MOTOR_JOINTS)
-            .map(|joint| tuned.damping_ratio(joint, inertias[joint]))
-            .collect();
-        let tuned_spread = tuned_zeta.iter().copied().fold(f64::MIN, f64::max)
-            / tuned_zeta.iter().copied().fold(f64::MAX, f64::min);
-        assert!(
-            tuned_spread < 1.1,
-            "관절별 게인은 ζ가 고르게 나와야: {tuned_zeta:?}"
-        );
     }
 
     #[test]

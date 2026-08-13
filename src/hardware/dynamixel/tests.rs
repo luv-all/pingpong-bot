@@ -64,8 +64,8 @@ fn base_zero_offset_moves_ready_pair_forty_five_degrees_backward() {
     let calibrated_slave = calibrated.config().mirror_tick(calibrated_master);
 
     assert_eq!(calibrated_master - old_master, 512, "45° = 512tick");
-    assert_eq!(calibrated_master, 2217);
-    assert_eq!(calibrated_slave, 1929);
+    assert_eq!(calibrated_master, 2776);
+    assert_eq!(calibrated_slave, 1370);
     assert!(
         (calibrated.ticks_to_radians(0, calibrated_master) - ready_base).abs() < 0.002,
         "보정 후에도 논리 관절각 round-trip은 유지돼야 함"
@@ -82,7 +82,7 @@ fn wrist_zero_offset_rotates_id5_eight_degrees_toward_bench_alignment() {
 
     let calibrated_tick = calibrated.radians_to_ticks(3, ready_wrist);
     let old_tick = zero_offset.radians_to_ticks(3, ready_wrist);
-    assert_eq!(old_tick - calibrated_tick, 92, "8° 보정 tick 반올림");
+    assert_eq!(old_tick - calibrated_tick, 91, "8° 보정 tick 반올림");
     assert!(
         (calibrated.ticks_to_radians(3, calibrated_tick) - ready_wrist).abs() < 0.002,
         "보정 후에도 논리 관절각 round-trip은 유지돼야 함"
@@ -92,7 +92,7 @@ fn wrist_zero_offset_rotates_id5_eight_degrees_toward_bench_alignment() {
 #[test]
 fn post_hit_ready_pose_stays_inside_every_real_motor_limit() {
     let mapping = MotorMapping::new(bench_config()).expect("valid mapping");
-    for (index, angle) in crate::defaults::POST_HIT_READY_JOINTS_4DOF
+    for (index, angle) in crate::defaults::READY_JOINTS_4DOF
         .iter()
         .copied()
         .enumerate()

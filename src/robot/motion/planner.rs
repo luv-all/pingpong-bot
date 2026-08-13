@@ -182,6 +182,25 @@ impl Planner {
         return physics::plan_fixed_joint_swing_from_alignment(arm, start, aligned);
     }
 
+    /// [`Self::fixed_joint_swing`]의 등가속(quadratic) 버전 — A/B 비교용.
+    /// 임팩트 목표 선속도를 고정하지 않고, 목표 위치와 소요시간에서 유일하게
+    /// 정해지는 등가속을 그대로 쓴다.
+    pub fn fixed_joint_swing_quadratic(
+        arm: &Arm,
+        start: &robot::Pose,
+    ) -> Result<physics::FixedJointSwing, DomainError> {
+        return physics::plan_fixed_joint_swing_quadratic(arm, start);
+    }
+
+    /// [`Self::fixed_joint_swing_from_alignment`]의 등가속 버전.
+    pub fn fixed_joint_swing_quadratic_from_alignment(
+        arm: &Arm,
+        start: &robot::Pose,
+        aligned: &robot::Pose,
+    ) -> Result<physics::FixedJointSwing, DomainError> {
+        return physics::plan_fixed_joint_swing_quadratic_from_alignment(arm, start, aligned);
+    }
+
     /// 정지 → 정지로 임의 포즈까지 잇는 최단 실행가능 궤적 (coarse 선추종용).
     pub fn move_to(
         arm: &Arm,

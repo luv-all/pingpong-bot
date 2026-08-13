@@ -23,6 +23,7 @@ use crate::robot::{self, Joints};
 use super::impact_candidate::{ImpactCandidate, best_impact_candidate};
 use super::impact_target::{impact_target_from_candidate, solve_impact_target};
 use super::planned_intercept::PlannedIntercept;
+use super::quadratic_segment::QuadraticSegment;
 use super::quintic_segment::QuinticSegment;
 use super::rail::Rail;
 use super::trajectory::Trajectory;
@@ -1131,6 +1132,126 @@ fn plan_fixed_joint_swing_to_pose(
     });
 }
 
+/// [`plan_fixed_joint_swing`]의 등가속(quadratic) 버전 — A/B 비교용.
+///
+/// quintic 버전은 임팩트 순간 목표 라켓 선속도([`FIXED_IMPACT_PUSH_SPEED_M_S`])를
+/// 먼저 정하고 자코비안으로 관절속도를 역산한 뒤, `a0=0`(ease-in)으로
+/// 시작하는 quintic이 그 속도에 맞춰 첨두 가속도를 스스로 정하게 한다.
+/// 이 버전은 반대로 목표 위치와 소요시간만 주고, 관절마다 유일하게 정해지는
+/// 등가속(`QuadraticSegment`)이 내는 임팩트 속도를 그대로 받아들인다 — 휴지
+/// 자세가 포물선의 꼭짓점이라 첨두 가속도가 평균 가속도와 같다(더 낮다).
+pub fn plan_fixed_joint_swing_quadratic(
+    arm: &Arm,
+    start: &robot::Pose,
+) -> Result<FixedJointSwing, DomainError> {
+    return plan_fixed_joint_swing_quadratic_from_alignment(arm, start, start);
+}
+
+/// [`plan_fixed_joint_swing_from_alignment`]의 등가속 버전.
+pub fn plan_fixed_joint_swing_quadratic_from_alignment(
+    arm: &Arm,
+    start: &robot::Pose,
+    aligned: &robot::Pose,
+) -> Result<FixedJointSwing, DomainError> {
+    let aligned_racket = arm
+        .forward_kinematics_with_rail(aligned.rail_x, &aligned.joints)
+        .ok_or_else(|| {
+            DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
+                target_x: aligned.rail_x,
+                target_y: 0.0,
+                target_z: table::SURFACE_Z,
+            })
+        })?;
+    let joint_count = start.joints.values.len();
+    if joint_count < 4 {
+        return Err(DomainError::InfeasibleSwing(
+            SwingPlanError::JointOrTorqueLimit {
+                target_x: aligned_racket.position.x,
+                target_y: aligned_racket.position.y,
+                target_z: aligned_racket.position.z,
+            },
+        ));
+    }
+    let horizontal_normal = Vector3::new(aligned_racket.normal.x, aligned_racket.normal.y, 0.0);
+    if horizontal_normal.norm_squared() <= 1e-12 {
+        return Err(DomainError::InfeasibleSwing(
+            SwingPlanError::RacketOrientationUnreachable {
+                target_x: aligned_racket.position.x,
+                target_y: aligned_racket.position.y,
+                target_z: aligned_racket.position.z,
+                normal_x: aligned_racket.normal.x,
+                normal_y: aligned_racket.normal.y,
+                normal_z: aligned_racket.normal.z,
+            },
+        ));
+    };
+    let push_direction = horizontal_normal.normalize();
+    let target_normal = aligned_racket.normal;
+    for push_distance_m in [
+        FIXED_JOINT_PUSH_DISTANCE_M,
+        FIXED_JOINT_PUSH_DISTANCE_M * 0.75,
+        FIXED_JOINT_PUSH_DISTANCE_M * 0.50,
+        FIXED_JOINT_PUSH_DISTANCE_M * 0.30,
+    ] {
+        let lift_m = FIXED_JOINT_PUSH_LIFT_M * push_distance_m / FIXED_JOINT_PUSH_DISTANCE_M;
+        let target_position = Point3::from(
+            aligned_racket.position.coords
+                + push_direction * push_distance_m
+                + Vector3::z() * lift_m,
+        );
+        if let Ok(planned) =
+            plan_fixed_joint_swing_quadratic_to_pose(arm, start, target_position, target_normal)
+        {
+            return Ok(planned);
+        }
+    }
+    let fallback_distance_m = 0.020;
+    let fallback_lift_m =
+        FIXED_JOINT_PUSH_LIFT_M * fallback_distance_m / FIXED_JOINT_PUSH_DISTANCE_M;
+    let fallback_position = Point3::from(
+        aligned_racket.position.coords
+            + push_direction * fallback_distance_m
+            + Vector3::z() * fallback_lift_m,
+    );
+    return plan_fixed_joint_swing_quadratic_to_pose(arm, start, fallback_position, target_normal);
+}
+
+fn plan_fixed_joint_swing_quadratic_to_pose(
+    arm: &Arm,
+    start: &robot::Pose,
+    target_position: Point3,
+    target_normal: Vector3<f64>,
+) -> Result<FixedJointSwing, DomainError> {
+    let joint_count = start.joints.values.len();
+    let (impact_pose, _) = arm
+        .inverse_pose_at_fixed_rail_best_normal(
+            start.rail_x,
+            target_position,
+            target_normal,
+            start,
+            robot::IkSearch::Global,
+        )
+        .map_err(DomainError::InfeasibleSwing)?;
+    let skipped_joint_indices = (0..joint_count)
+        .filter(|index| {
+            (impact_pose.joints.values[*index] - start.joints.values[*index]).abs() < 1e-6
+        })
+        .collect();
+    let trajectory = build_feasible_trajectory_quadratic_push(
+        arm,
+        &start.joints,
+        impact_pose.joints,
+        FIXED_JOINT_SWING_DURATION_SECS,
+        Rail::fixed(start.rail_x),
+        FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
+    )
+    .map_err(DomainError::InfeasibleSwing)?;
+    return Ok(FixedJointSwing {
+        trajectory,
+        skipped_joint_indices,
+    });
+}
+
 /// 정지 → 정지로 임의의 포즈까지 잇는 최단 실행가능 궤적.
 ///
 /// [`plan_return_to_center`]가 목표만 센터로 고정한 특수형이고, real의 coarse 선추종도
@@ -1360,6 +1481,116 @@ fn build_feasible_trajectory_with_follow_time(
     return Ok(trajectory);
 }
 
+/// [`build_feasible_trajectory_with_follow_time`]의 등가속 버전.
+///
+/// quintic 경로와 달리 `fit_end_velocity`(목표 끝속도를 한계 안으로 스케일)가
+/// 필요 없다 — 등가속에서는 끝속도가 `(Δq, duration)`로 유일하게 정해지는
+/// 유도값이라 별도로 맞출 게 없다. 실현가능성 검사 세 가지(기구학/토크/충돌)는
+/// quintic 버전과 동일하게 재사용한다 — `Trajectory`가 내부적으로 quintic과
+/// quadratic 타격-전 세그먼트를 모두 지원해서, 이 검사들이 두 프로파일에
+/// 그대로 적용된다.
+fn build_feasible_trajectory_quadratic_push(
+    arm: &Arm,
+    start: &Joints,
+    impact: Joints,
+    impact_time: f64,
+    rail: Rail,
+    follow_time: f64,
+) -> Result<Trajectory, SwingPlanError> {
+    let trajectory = quadratic_trajectory_with_follow_through(
+        arm,
+        start,
+        &impact,
+        impact_time,
+        rail,
+        follow_time,
+    );
+    if let Some(violated) = kinematic_limit_violation(arm, &trajectory) {
+        return Err(SwingPlanError::TrajectoryExceedsLimits {
+            rail_end_x: rail.end,
+            violated,
+        });
+    }
+    let torque_utilization = peak_torque_utilization(arm, &trajectory);
+    if torque_utilization > 1.0 {
+        return Err(SwingPlanError::TrajectoryExceedsTorque {
+            rail_end_x: rail.end,
+            utilization: torque_utilization,
+        });
+    }
+    if !trajectory_collision_free(arm, &trajectory) {
+        let depth = {
+            let samples = (trajectory.duration_secs / 0.005).ceil() as usize;
+            let mut worst = 0.0_f64;
+            for index in 0..=samples.max(1) {
+                let time = trajectory.duration_secs * index as f64 / samples.max(1) as f64;
+                let joints = trajectory.sample_at(time);
+                let rail_x = trajectory.sample_rail_at(time);
+                worst = worst.max(crate::robot::collision::table_penetration(
+                    arm, rail_x, &joints,
+                ));
+            }
+            worst
+        };
+        return Err(SwingPlanError::TablePenetration {
+            target_x: rail.end,
+            target_y: 0.0,
+            target_z: table::SURFACE_Z,
+            depth,
+        });
+    }
+    return Ok(trajectory);
+}
+
+/// 타격-전 구간을 등가속으로, 팔로스루는 quintic으로 잇는 궤적을 만든다.
+/// 팔로스루 종료 관절각을 "임팩트 위치 + 임팩트 속도 × 팔로스루 시간의
+/// 절반" 휴리스틱으로 잡는 것은 [`trajectory_with_follow_through_in`]과 같다
+/// (관절 한계로 클램프).
+fn quadratic_trajectory_with_follow_through(
+    arm: &Arm,
+    start: &Joints,
+    impact: &Joints,
+    impact_time: f64,
+    rail: Rail,
+    follow_time: f64,
+) -> Trajectory {
+    let start_velocity = vec![0.0; start.values.len()];
+    let impact_velocity: Vec<f64> = (0..impact.values.len())
+        .map(|i| {
+            QuadraticSegment::new(start.values[i], 0.0, impact.values[i], impact_time)
+                .sample(impact_time)
+                .1
+        })
+        .collect();
+    let mut end_values = impact.values.clone();
+    for (index, (value, velocity)) in end_values
+        .iter_mut()
+        .zip(impact_velocity.iter())
+        .enumerate()
+    {
+        *value += velocity * follow_time * 0.5;
+        if let Some(limit) = arm.joint_limit(index) {
+            *value = (*value).clamp(limit.min, limit.max);
+        }
+    }
+    let follow_through_velocity = vec![0.0; impact.values.len()];
+    let follow_rail_x = arm.rail.as_ref().map_or(rail.end, |linear| {
+        linear.clamp_x(rail.end + rail.end_velocity * follow_time * 0.5)
+    });
+    return Trajectory::with_quadratic_push(
+        start.clone(),
+        impact.clone(),
+        Joints { values: end_values },
+        start_velocity,
+        follow_through_velocity,
+        impact_time,
+        impact_time + follow_time,
+        rail,
+        follow_rail_x,
+        0.0,
+    );
+}
+
 /// `pub(crate)`인 이유: WP10 진단(`world.rs`의
 /// `diag_wp10_commit_time_joint_speed_blame`)이 같은 후보에 대해 끝속도만
 /// 0으로 바꾼 궤적을 만들어 "이동 Δq가 먹는 예산"과 "임팩트 속도가 먹는
@@ -1544,15 +1775,19 @@ fn peak_torque_utilization(arm: &Arm, trajectory: &Trajectory) -> f64 {
     let mut worst = 0.0_f64;
     for index in 0..=samples {
         let time = trajectory.duration_secs * index as f64 / samples as f64;
-        let (segments, local_t) = if time <= trajectory.impact_time_secs
-            || trajectory.duration_secs <= trajectory.impact_time_secs
-        {
-            (&pre, time)
+        let in_pre_impact = time <= trajectory.impact_time_secs
+            || trajectory.duration_secs <= trajectory.impact_time_secs;
+        let local_t = if in_pre_impact {
+            time
         } else {
-            (&post, time - trajectory.impact_time_secs)
+            time - trajectory.impact_time_secs
         };
         for i in 0..n {
-            let (q, qd, qdd) = segments[i].sample(local_t);
+            let (q, qd, qdd) = if in_pre_impact {
+                pre[i].sample(local_t)
+            } else {
+                post[i].sample(local_t)
+            };
             joints.values[i] = q;
             velocities[i] = qd;
             accelerations[i] = qdd;
@@ -1914,6 +2149,66 @@ mod tests {
         );
     }
 
+    /// [`plan_fixed_joint_swing_quadratic`]는 quintic 버전과 같은 위치·조준
+    /// 목표(백스윙 없음, 정렬 라켓 면 유지)를 달성하되, 타격-전 구간의
+    /// 가속도가 시간에 따라 변하는 quintic ease-in이 아니라 **상수**여야
+    /// 한다 — quintic은 `a(0)=0`으로 시작해 도중에 가속하지만, quadratic은
+    /// 휴지 자세(t=0, v=0)가 등가속 포물선의 꼭짓점이라 전 구간 가속도가
+    /// 동일해야 한다.
+    #[test]
+    fn fixed_joint_swing_quadratic_pushes_forward_with_constant_acceleration() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let ready = robot::Pose::new(
+            arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+            arm.default_joints.clone(),
+        );
+        let alignment = plan_ball_alignment(
+            arm,
+            &ready,
+            Point3::new(table::WIDTH_X * 0.5, ready_racket_y_m(), 0.95),
+        )
+        .expect("alignment");
+        let start = robot::Pose::new(
+            alignment.follow_through_rail_x,
+            alignment.follow_through.clone(),
+        );
+        let planned =
+            plan_fixed_joint_swing_quadratic(arm, &start).expect("quadratic fixed joint swing");
+        let trajectory = planned.trajectory;
+
+        assert_eq!(
+            trajectory.start, start.joints,
+            "백스윙 포즈가 삽입되면 안 됨"
+        );
+        for index in [0, 2, 3] {
+            assert!(
+                (trajectory.end.values[index] - trajectory.start.values[index]).abs() > 1e-5
+                    || trajectory.end_velocity[index].abs() > 1e-5,
+                "j{index}가 타격에 참여해야 함"
+            );
+        }
+
+        // 타격-전 구간 전체(0, T/2, T)에서 가속도가 (거의) 상수여야 한다 —
+        // quintic이었다면 a(0)=0이라 이 assert가 실패한다.
+        for index in [0, 2, 3] {
+            let a_start = trajectory.sample_acceleration_at(0.0)[index];
+            let a_mid = trajectory.sample_acceleration_at(trajectory.impact_time_secs * 0.5)[index];
+            let a_end = trajectory.sample_acceleration_at(trajectory.impact_time_secs)[index];
+            if a_end.abs() > 1e-6 {
+                assert!(
+                    (a_start - a_mid).abs() < 1e-6 && (a_mid - a_end).abs() < 1e-6,
+                    "j{index} 가속도가 상수가 아님: start={a_start:.6} mid={a_mid:.6} end={a_end:.6}"
+                );
+            }
+        }
+
+        assert!(
+            trajectory.peak_joint_speed() <= arm.max_joint_speed * (1.0 + 1e-9),
+            "가속·감속 포함 전체 피크가 모터 최고속의 95% 상한을 넘으면 안 됨"
+        );
+    }
+
     #[test]
     fn fixed_joint_swing_recovers_absolute_height_from_lagging_measured_pose() {
         let active = crate::defaults::robot().expect("active robot");
@@ -1944,10 +2239,7 @@ mod tests {
             .forward_kinematics_with_rail(lagging.rail_x, &lagging.joints)
             .expect("measured FK");
         let impact = arm
-            .forward_kinematics_with_rail(
-                planned.trajectory.rail.end,
-                &planned.trajectory.end,
-            )
+            .forward_kinematics_with_rail(planned.trajectory.rail.end, &planned.trajectory.end)
             .expect("impact FK");
         let horizontal_normal =
             Vector3::new(aligned_racket.normal.x, aligned_racket.normal.y, 0.0).normalize();
