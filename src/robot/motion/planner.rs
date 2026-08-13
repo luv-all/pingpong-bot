@@ -165,7 +165,8 @@ impl Planner {
         return physics::plan_aligned_impact_sequence(arm, start, ball, time_to_impact_secs);
     }
 
-    /// 접힌 정렬 자세에서 j0·j1·j2 전진 푸시와 j3 손목 스냅을 합성한다.
+    /// 접힌 정렬 자세에서 별도 백스윙 없이 j0~j3로 라켓을 바로 민다 —
+    /// 관절 배분은 IK가 정하며 특정 관절의 역할을 강제하지 않는다.
     pub fn fixed_joint_swing(
         arm: &Arm,
         start: &robot::Pose,
@@ -199,6 +200,25 @@ impl Planner {
         aligned: &robot::Pose,
     ) -> Result<physics::FixedJointSwing, DomainError> {
         return physics::plan_fixed_joint_swing_quadratic_from_alignment(arm, start, aligned);
+    }
+
+    /// [`Self::fixed_joint_swing_quadratic`]를 대체하는 파워 스윙 — j0·j2가
+    /// 관절 속도 상한까지 가속-순항하며 임팩트를 만들고, j3는 접힌 자세로
+    /// 대기하다 임팩트 직전에만 스냅한다.
+    pub fn fixed_joint_swing_power_sweep(
+        arm: &Arm,
+        start: &robot::Pose,
+    ) -> Result<physics::FixedJointSwing, DomainError> {
+        return physics::plan_fixed_joint_swing_power_sweep(arm, start);
+    }
+
+    /// [`Self::fixed_joint_swing_power_sweep`]의 정렬-기준 버전.
+    pub fn fixed_joint_swing_power_sweep_from_alignment(
+        arm: &Arm,
+        start: &robot::Pose,
+        aligned: &robot::Pose,
+    ) -> Result<physics::FixedJointSwing, DomainError> {
+        return physics::plan_fixed_joint_swing_power_sweep_from_alignment(arm, start, aligned);
     }
 
     /// 정지 → 정지로 임의 포즈까지 잇는 최단 실행가능 궤적 (coarse 선추종용).

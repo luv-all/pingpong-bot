@@ -114,6 +114,17 @@ pub const FIXED_JOINT_SWING_LEAD_SECS: f64 = 0.400;
 pub const FIXED_JOINT_SNAP_SPEED_RATIO: f64 = 1.0;
 /// 임팩트 이후에도 같은 방향으로 계속 밀고 멈추는 시간 [s].
 pub const FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS: f64 = 0.120;
+/// 파워 스윙에서 j0·j2가 정지에서 관절 속도 상한까지 가속하는 데 쓰는
+/// 시간 [s]. `arm.max_joint_speed / FIXED_JOINT_SWING_RAMP_SECS`가 이 관절들의
+/// 가속도로 쓰인다.
+pub const FIXED_JOINT_SWING_RAMP_SECS: f64 = 0.060;
+/// 가속 뒤 첨두속도를 그대로 유지(순항)하는 시간 [s] — 공 도착 시각 예측
+/// 오차를 흡수하는 창이다. `FIXED_JOINT_SWING_RAMP_SECS`와 합이 파워 스윙의
+/// 전체 타격-전 시간이 된다.
+pub const FIXED_JOINT_SWING_CRUISE_SECS: f64 = 0.060;
+/// 손목(j3)이 접힌 자세로 대기하다 등가속 스냅으로 목표각까지 움직이는
+/// 시간 [s] — 파워 스윙 전체 시간의 마지막 구간이다.
+pub const FIXED_JOINT_SWING_SNAP_DURATION_SECS: f64 = 0.050;
 impl Default for InterceptWindow {
     fn default() -> Self {
         // 즉시 출발하되 기존 검증된 접수 범위(마운트 기준 오프셋) 안에서 타격점을 고른다.

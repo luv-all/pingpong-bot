@@ -51,6 +51,46 @@ impl QuadraticSegment {
     }
 }
 
+/// `delay`만큼 시작값에 정지해 있다가 나머지 시간 동안 [`QuadraticSegment`]로
+/// 목표에 도달하는 래퍼 — 손목(j3)처럼 접힌 자세를 유지하다 임팩트 직전에만
+/// 등가속으로 스냅하는 관절에 쓴다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DelayedQuadraticSegment {
+    hold_value: f64,
+    delay: f64,
+    inner: QuadraticSegment,
+}
+
+impl DelayedQuadraticSegment {
+    /// `q0`에서 `delay`초 동안 정지한 뒤, 나머지 `duration - delay`초 동안
+    /// 등가속(정지에서 출발)으로 `qf`에 도달한다. `delay`는 `[0, duration]`로
+    /// 클램프한다.
+    pub fn new(q0: f64, qf: f64, duration: f64, delay: f64) -> Self {
+        let delay = delay.clamp(0.0, duration.max(0.0));
+        let inner = QuadraticSegment::new(q0, 0.0, qf, duration - delay);
+        return Self {
+            hold_value: q0,
+            delay,
+            inner,
+        };
+    }
+
+    pub fn sample(&self, t: f64) -> (f64, f64, f64) {
+        if t < self.delay {
+            return (self.hold_value, 0.0, 0.0);
+        }
+        return self.inner.sample(t - self.delay);
+    }
+
+    pub fn max_speed(&self, samples: usize) -> f64 {
+        return self.inner.max_speed(samples);
+    }
+
+    pub fn max_acceleration(&self, samples: usize) -> f64 {
+        return self.inner.max_acceleration(samples);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +146,42 @@ mod tests {
         assert!(segment.max_speed(24).is_finite());
         assert!(segment.max_acceleration(24).is_finite());
         assert!(segment.max_speed(24) > 0.0);
+    }
+
+    #[test]
+    fn delayed_segment_holds_start_value_during_the_delay() {
+        let segment = DelayedQuadraticSegment::new(0.2, 1.0, 0.4, 0.3);
+        let (q_hold, v_hold, a_hold) = segment.sample(0.15);
+        assert!((q_hold - 0.2).abs() < 1e-9, "should not have moved yet: q={q_hold}");
+        assert!(v_hold.abs() < 1e-9);
+        assert!(a_hold.abs() < 1e-9);
+    }
+
+    #[test]
+    fn delayed_segment_reaches_target_exactly_at_duration() {
+        let segment = DelayedQuadraticSegment::new(0.2, 1.0, 0.4, 0.3);
+        let (q_end, _, _) = segment.sample(0.4);
+        assert!((q_end - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn delayed_segment_moves_with_nonzero_velocity_during_the_burst() {
+        let segment = DelayedQuadraticSegment::new(0.2, 1.0, 0.4, 0.3);
+        let v_mid_burst = segment.sample(0.35).1;
+        assert!(v_mid_burst.abs() > 1e-6, "should be moving during the burst window");
+    }
+
+    #[test]
+    fn delayed_segment_with_zero_delay_matches_plain_quadratic_segment() {
+        let delayed = DelayedQuadraticSegment::new(0.0, 1.0, 0.4, 0.0);
+        let plain = QuadraticSegment::new(0.0, 0.0, 1.0, 0.4);
+        for step in 0..=10 {
+            let t = 0.4 * f64::from(step) / 10.0;
+            let (q_d, v_d, a_d) = delayed.sample(t);
+            let (q_p, v_p, a_p) = plain.sample(t);
+            assert!((q_d - q_p).abs() < 1e-9, "position mismatch at t={t}");
+            assert!((v_d - v_p).abs() < 1e-9, "velocity mismatch at t={t}");
+            assert!((a_d - a_p).abs() < 1e-9, "acceleration mismatch at t={t}");
+        }
     }
 }
