@@ -210,6 +210,17 @@ impl AxlRail {
         }
     }
 
+    /// 지금 이동 중이면 `true`. 논블로킹 — `RailQueue`가 이동 완료를 짧은
+    /// 주기로 폴링하며 그 사이사이에 위치 읽기를 끼워 넣을 때 쓴다.
+    /// `DryRun`은 이동이 항상 즉시 끝나므로 언제나 `false`다.
+    pub fn is_moving(&mut self) -> Result<bool, HwError> {
+        match &mut self.kind {
+            RailKind::DryRun { .. } => Ok(false),
+            #[cfg(all(windows, feature = "real"))]
+            RailKind::Live(live) => live.is_moving(self.config.axis),
+        }
+    }
+
     /// 진행 중인 레일 이동을 부드럽게 정지시킨다.
     pub fn stop(&mut self) -> Result<(), HwError> {
         match &mut self.kind {

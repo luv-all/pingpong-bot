@@ -183,15 +183,22 @@ impl AxlLive {
     }
 
     pub(super) fn stop_if_moving(&mut self, axis: i32) -> Result<(), HwError> {
-        let mut in_motion = 0;
-        check_axl("AxmStatusReadInMotion", unsafe {
-            (self.ffi.axm_status_read_in_motion)(axis, &mut in_motion)
-        })?;
-        if in_motion != 0 {
+        if self.is_moving(axis)? {
             self.stop(axis)?;
             self.wait_idle(axis)?;
         }
         return Ok(());
+    }
+
+    /// 지금 축이 이동 중인지 논블로킹으로 확인한다. `RailQueue`가 이동 완료를
+    /// 폴링하는 동안 그 사이사이에 위치 읽기를 끼워 넣을 수 있게 한다 —
+    /// `wait_idle`처럼 완료까지 통째로 블로킹하지 않는다.
+    pub(super) fn is_moving(&mut self, axis: i32) -> Result<bool, HwError> {
+        let mut in_motion = 0;
+        check_axl("AxmStatusReadInMotion", unsafe {
+            (self.ffi.axm_status_read_in_motion)(axis, &mut in_motion)
+        })?;
+        return Ok(in_motion != 0);
     }
 
     pub(super) fn move_abs_m_blocking(

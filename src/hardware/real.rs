@@ -13,6 +13,7 @@ use tracing::{debug, error};
 use super::dynamixel::{DynamixelBus, DynamixelConfig};
 use super::rail::AxlRail;
 use super::rail::RailConfig;
+use super::rail::RailQueue;
 use crate::error::HwError;
 use crate::hardware::{AppliedRailRacketCommand, Hardware};
 use crate::robot::motion;
@@ -20,8 +21,14 @@ use crate::robot::motion;
 /// Dynamixel 버스와 quintic 재생 worker를 소유한다.
 pub struct RealHardware {
     bus: Arc<Mutex<DynamixelBus>>,
-    /// `None`이면 `rail_x = 0` (레일 비활성). executor와 pose 읽기가 공유.
-    rail: Arc<Mutex<Option<AxlRail>>>,
+    /// `None`이면 `rail_x = 0` (레일 비활성). `RailQueue`가 AXL 드라이버를
+    /// 배타적으로 소유하며 executor 스레드와 직접 호출부가 함께 공유한다.
+    rail: Option<Arc<RailQueue<AxlRail>>>,
+    /// `command_rail`/`command_rail_and_racket`이 실제로 명령을 보내지 않고도
+    /// 클램프된 목표를 동기로 돌려주는 데 쓴다. `x_min_m`/`x_max_m`만 읽으며,
+    /// 이 값들은 홈잉으로도 바뀌지 않으므로(바뀌는 건 `board_zero_domain_m`뿐)
+    /// 생성 시점 복사본으로 계속 유효하다.
+    rail_config: Option<RailConfig>,
     busy: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     executor: Option<JoinHandle<()>>,
@@ -61,6 +68,7 @@ impl RealHardware {
         rail: Option<RailConfig>,
         is_dry_run: bool,
     ) -> Result<Self, HwError> {
+        let rail_config = rail.clone().filter(|config| config.enabled);
         let rail = match rail.filter(|config| config.enabled) {
             None => {
                 debug!("레일 비활성 — rail_x=0 고정");
@@ -101,7 +109,8 @@ impl RealHardware {
         };
         return Ok(Self {
             bus: Arc::new(Mutex::new(bus)),
-            rail: Arc::new(Mutex::new(rail)),
+            rail: rail.map(|rail| Arc::new(RailQueue::spawn(rail))),
+            rail_config,
             busy: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
             executor: None,
@@ -110,10 +119,7 @@ impl RealHardware {
     }
 
     fn read_rail_x_m(&mut self) -> Result<f64, HwError> {
-        let mut guard = self.rail.lock().map_err(|_| HwError::ReadFailed {
-            reason: "레일 mutex poisoned".into(),
-        })?;
-        return match guard.as_mut() {
+        return match &self.rail {
             None => Ok(0.0),
             Some(rail) => rail.read_x_m(),
         };
@@ -155,7 +161,7 @@ impl RealHardware {
 
         let trajectory = trajectory.clone();
         let bus = Arc::clone(&self.bus);
-        let rail = Arc::clone(&self.rail);
+        let rail = self.rail.clone();
         let busy = Arc::clone(&self.busy);
         self.cancel.store(false, Ordering::Release);
         let cancel = Arc::clone(&self.cancel);
@@ -163,19 +169,13 @@ impl RealHardware {
         let rail_target = trajectory.follow_through_rail_x;
         let rail_duration = trajectory.duration_secs;
         self.executor = Some(thread::spawn(move || {
+            // enqueue는 전송 성공 여부를 동기로 알려주지 않는다 — 실패는
+            // 아래 wait_idle 이후 take_error()로만 드러난다. 그때는 이미
+            // 관절이 레일 목표 도착을 가정하고 스트리밍을 마쳤을 수 있다.
             if drive_rail
-                && let Ok(mut guard) = rail.lock()
-                && let Some(rail_hw) = guard.as_mut()
-                && let Err(error) = rail_hw.command_abs_in_secs(rail_target, rail_duration)
+                && let Some(rail_queue) = &rail
             {
-                error!(
-                    rail_target,
-                    rail_duration,
-                    error = %error,
-                    "AXL 레일 이동 시작 실패 — 궤적 중단"
-                );
-                busy.store(false, Ordering::Release);
-                return;
+                rail_queue.enqueue(rail_target, rail_duration);
             }
 
             let started = Instant::now();
@@ -215,11 +215,17 @@ impl RealHardware {
             }
             if drive_rail
                 && !cancel.load(Ordering::Acquire)
-                && let Ok(mut guard) = rail.lock()
-                && let Some(rail_hw) = guard.as_mut()
-                && let Err(error) = rail_hw.wait_idle()
+                && let Some(rail_queue) = &rail
             {
-                error!(error = %error, "AXL 레일 완료 대기 실패");
+                rail_queue.wait_idle();
+                if let Some(error) = rail_queue.take_error() {
+                    error!(
+                        rail_target,
+                        rail_duration,
+                        %error,
+                        "AXL 레일 이동 실패 — 팔은 이미 레일이 목표에 도착했다고 가정하고 진행했습니다"
+                    );
+                }
             }
             busy.store(false, Ordering::Release);
         }));
@@ -227,16 +233,12 @@ impl RealHardware {
     }
 
     /// 온디맨드 레일 홈잉. `--calibrate-rail`과 jog 툴 버튼이 이 메서드를 부른다.
+    /// 완료까지(최대 몇 분) 블로킹하며, 그동안 다른 모든 레일 요청도 함께 대기한다.
     pub fn home_rail(
         &mut self,
         end: super::rail::RailEnd,
     ) -> Result<super::rail::RailHomeResult, HwError> {
-        let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
-            duration_secs: 0.0,
-            joint_count: 0,
-            reason: "레일 mutex poisoned".into(),
-        })?;
-        return match rail.as_mut() {
+        return match &self.rail {
             None => Err(HwError::InvalidConfig {
                 reason: "레일이 비활성화됨 — home_rail 호출 불가".into(),
             }),
@@ -256,14 +258,13 @@ impl Hardware for RealHardware {
 
     fn command_rail(&mut self, rail_x: f64, duration_secs: f64) -> Result<f64, HwError> {
         self.reap_executor();
-        let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
-            duration_secs,
-            joint_count: 0,
-            reason: "레일 mutex poisoned".into(),
-        })?;
-        return match rail.as_mut() {
-            Some(rail) => rail.command_abs_in_secs(rail_x, duration_secs),
-            None => Ok(0.0),
+        return match (&self.rail, &self.rail_config) {
+            (Some(rail), Some(config)) => {
+                let clamped_m = config.clamp_m(rail_x);
+                rail.enqueue(clamped_m, duration_secs);
+                Ok(clamped_m)
+            }
+            _ => Ok(0.0),
         };
     }
 
@@ -316,16 +317,13 @@ impl Hardware for RealHardware {
             });
         }
 
-        let (applied_rail_m, rail_sent) = {
-            let mut rail = self.rail.lock().map_err(|_| HwError::CommandFailed {
-                duration_secs,
-                joint_count: 1,
-                reason: "레일 mutex poisoned".into(),
-            })?;
-            match rail.as_mut() {
-                Some(rail) => (rail.command_abs_in_secs(rail_x, duration_secs)?, true),
-                None => (0.0, false),
+        let (applied_rail_m, rail_sent) = match (&self.rail, &self.rail_config) {
+            (Some(rail), Some(config)) => {
+                let clamped_m = config.clamp_m(rail_x);
+                rail.enqueue(clamped_m, duration_secs);
+                (clamped_m, true)
             }
+            _ => (0.0, false),
         };
         // 4-DOF 논리 관절 1번은 라켓 수평 조준축(ID 3)이다.
         // 다른 관절에는 Goal Position을 보내지 않는다.
@@ -371,11 +369,10 @@ impl Hardware for RealHardware {
         // executor 루프가 매 틱 이 플래그를 보고 빠져나오며 `busy`를 내린다.
         // `Drop`이 쓰는 것과 같은 경로다.
         self.cancel.store(true, Ordering::Release);
-        if let Ok(mut rail) = self.rail.lock()
-            && let Some(rail) = rail.as_mut()
-            && let Err(error) = rail.stop()
-        {
-            error!(%error, "AXL 레일 안전 정지 실패");
+        // RailQueue::stop은 논블로킹이라 실패를 동기로 알 수 없다 — 실패하면
+        // 다음 take_error() 폴에서 드러난다(다른 레일 호출부와 동일).
+        if let Some(rail) = &self.rail {
+            rail.stop();
         }
         if let Ok(mut bus) = self.bus.lock()
             && let Ok(joints) = bus.read_joints()
@@ -608,6 +605,9 @@ mod tests {
         assert!((applied.aim_rad - -0.25).abs() < 0.002);
         assert!(applied.rail_sent);
 
+        // command_rail_and_racket이 반환하는 값은 클램프된 목표를 동기로
+        // 계산한 것일 뿐, RailQueue 워커가 실제로 적용하는 건 비동기다.
+        thread::sleep(Duration::from_millis(100));
         let after = hardware.read_pose().expect("after");
         assert!((after.rail_x - 0.35).abs() < 1e-9);
         for index in [0, 2, 3] {
