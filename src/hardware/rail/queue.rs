@@ -281,4 +281,22 @@ mod tests {
         queue.wait_idle();
         assert_eq!(sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 3.0);
     }
+
+    #[test]
+    fn drop_joins_the_worker_thread_without_hanging() {
+        let (queue, sent_rx, release_tx) = spawn_mock(None);
+        release_tx.send(()).unwrap();
+        queue.enqueue(5.0, 0.1);
+        queue.wait_idle();
+        assert_eq!(sent_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 5.0);
+
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            drop(queue);
+            let _ = done_tx.send(());
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("RailQueue::drop hung instead of joining the worker");
+    }
 }
