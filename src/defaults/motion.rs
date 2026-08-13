@@ -8,10 +8,10 @@ use crate::robot::motion::InterceptWindow;
 /// 마운트 실측 -0.128일 때 검증된 하한 0.08(`0.08 - (-0.128)`)로 고정한다 —
 /// 마운트가 옮겨져도 팔 기준 도달 가능 범위는 그대로이므로, 월드 y 하한은
 /// 마운트를 따라 같은 만큼 이동해야 한다.
-pub const INTERCEPT_Y_MIN_OFFSET_FROM_MOUNT_M: f64 = 0.208;
+pub const INTERCEPT_Y_MIN_OFFSET_FROM_MOUNT_M: f64 = 0.380;
 /// [`RAIL_MOUNT_Y_M`]에서 인터셉트 구간 상한까지의 고정 오프셋 [m].
 /// 마운트 실측 -0.128일 때 검증된 상한 0.35(`0.35 - (-0.128)`)로 고정한다.
-pub const INTERCEPT_Y_MAX_OFFSET_FROM_MOUNT_M: f64 = 0.478;
+pub const INTERCEPT_Y_MAX_OFFSET_FROM_MOUNT_M: f64 = 0.480;
 /// 기본 인터셉트 구간 하한 y [m] — [`RAIL_MOUNT_Y_M`]이 바뀌면 같이 이동한다.
 pub const INTERCEPT_Y_MIN_M: f64 = RAIL_MOUNT_Y_M + INTERCEPT_Y_MIN_OFFSET_FROM_MOUNT_M;
 /// 기본 인터셉트 구간 상한 y [m] — [`RAIL_MOUNT_Y_M`]이 바뀌면 같이 이동한다.
