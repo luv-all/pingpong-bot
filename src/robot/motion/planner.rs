@@ -165,7 +165,8 @@ impl Planner {
         return physics::plan_aligned_impact_sequence(arm, start, ball, time_to_impact_secs);
     }
 
-    /// 접힌 정렬 자세에서 j0·j1·j2 전진 푸시와 j3 손목 스냅을 합성한다.
+    /// 접힌 정렬 자세에서 별도 백스윙 없이 j0~j3로 라켓을 바로 민다 —
+    /// 관절 배분은 IK가 정하며 특정 관절의 역할을 강제하지 않는다.
     pub fn fixed_joint_swing(
         arm: &Arm,
         start: &robot::Pose,
