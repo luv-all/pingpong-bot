@@ -20,6 +20,7 @@ pub mod planner;
 pub mod prediction;
 pub mod quadratic_segment;
 pub mod quintic_segment;
+pub mod ramp_cruise_segment;
 pub mod rail;
 pub mod trajectory;
 
