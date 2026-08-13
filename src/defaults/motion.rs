@@ -77,6 +77,7 @@ pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.020;
 /// 예측된 공 높이에서 실제 정렬 타격점을 올리는 보정 [m].
 pub const ALIGNMENT_TARGET_HEIGHT_OFFSET_M: f64 = 0.015;
 /// 레일 마운트 X 9.025cm를 기구학에 반영한 뒤에도 남는 타격 X 보정 [m].
+
 /// 2026-08-13 실기 테스트에서 타격점이 목표보다 -X로 밀린다는 보고에 따라,
 /// 같은 날 추가했던 실험용 6cm(-X 방향)를 되돌리고 실측 잔여 보정
 /// 3.475cm로 복원한다.
