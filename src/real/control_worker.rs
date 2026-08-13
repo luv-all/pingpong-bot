@@ -30,7 +30,12 @@ use super::{
 };
 
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
-const FIXED_SWING_LEAD: Duration = Duration::from_millis(400);
+/// 파워 스윙(`Planner::fixed_joint_swing_power_sweep_from_alignment`) 전용
+/// 리드 타임 — sim이 쓰는 quadratic 스윙 리드(`FIXED_JOINT_SWING_LEAD_SECS`,
+/// 0.400s)와는 더 이상 같지 않다: 타격-전 시간이 0.12s로 짧아진 만큼 그대로
+/// 줄였다. `pingpong_bot::defaults::FIXED_JOINT_SWING_POWER_SWEEP_LEAD_SECS`와
+/// 값이 같아야 한다(테스트로 고정).
+const FIXED_SWING_LEAD: Duration = Duration::from_millis(320);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const BUSY_POLL: Duration = Duration::from_millis(5);
 const AUTO_NEXT_AFTER_HIT_WAIT: Duration = Duration::from_millis(300);
@@ -2006,10 +2011,12 @@ mod tests {
     }
 
     #[test]
-    fn real_fixed_swing_lead_matches_shared_sim_lead() {
+    fn real_fixed_swing_lead_matches_power_sweep_lead_constant() {
         assert_eq!(
             FIXED_SWING_LEAD,
-            Duration::from_secs_f64(pingpong_bot::defaults::FIXED_JOINT_SWING_LEAD_SECS)
+            Duration::from_secs_f64(
+                pingpong_bot::defaults::FIXED_JOINT_SWING_POWER_SWEEP_LEAD_SECS
+            )
         );
     }
 

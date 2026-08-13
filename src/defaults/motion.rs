@@ -107,6 +107,8 @@ pub const FIXED_JOINT_PUSH_LIFT_M: f64 = 0.020;
 pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.200;
 /// 예상 공 도착 시각보다 스윙 명령을 앞서 시작할 시간 [s].
 /// 궤적 길이는 0.20초로 유지하고 명령만 기존보다 0.20초 앞당긴다.
+/// sim의 quadratic 스윙(`FIXED_JOINT_SWING_DURATION_SECS`)과만 짝을 이룬다 —
+/// 실기 파워 스윙 경로는 [`FIXED_JOINT_SWING_POWER_SWEEP_LEAD_SECS`]를 쓴다.
 pub const FIXED_JOINT_SWING_LEAD_SECS: f64 = 0.400;
 /// 임팩트 순간 다관절 푸시가 사용할 설정상 관절 속도 상한 비율.
 /// 설정상 상한 자체가 모터 무부하 최고속의 95%이므로 여기서는 전부 사용한다.
@@ -124,6 +126,13 @@ pub const FIXED_JOINT_SWING_CRUISE_SECS: f64 = 0.060;
 /// 손목(j3)이 접힌 자세로 대기하다 등가속 스냅으로 목표각까지 움직이는
 /// 시간 [s] — 파워 스윙 전체 시간의 마지막 구간이다.
 pub const FIXED_JOINT_SWING_SNAP_DURATION_SECS: f64 = 0.050;
+/// 예상 공 도착 시각보다 파워 스윙 명령을 앞서 시작할 시간 [s] —
+/// [`FIXED_JOINT_SWING_LEAD_SECS`]의 파워 스윙 전용 짝.
+/// 타격-전 시간이 `FIXED_JOINT_SWING_RAMP_SECS + FIXED_JOINT_SWING_CRUISE_SECS`
+/// (0.12s)로 quadratic 스윙(0.20s)보다 짧아진 만큼(0.08s), 원래 의도했던
+/// "예상 도착보다 0.20초 먼저 임팩트" 여유를 그대로 유지하도록
+/// `FIXED_JOINT_SWING_LEAD_SECS`(0.400)에서 그만큼 줄였다.
+pub const FIXED_JOINT_SWING_POWER_SWEEP_LEAD_SECS: f64 = 0.320;
 impl Default for InterceptWindow {
     fn default() -> Self {
         // 즉시 출발하되 기존 검증된 접수 범위(마운트 기준 오프셋) 안에서 타격점을 고른다.
