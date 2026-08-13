@@ -2316,16 +2316,16 @@ mod tests {
         let planning = alignment_planning_target(target);
         let corrected = corrected_alignment_target(target);
 
-        assert!((planning.x - 0.76525).abs() < 1e-12);
+        assert!((planning.x - 0.70525).abs() < 1e-12);
         assert!((planning.y - target.y).abs() < 1e-12);
         assert!((planning.z - target.z).abs() < 1e-12);
         let robot = pingpong_bot::defaults::robot().expect("robot");
         let rail = robot.arm.rail.expect("rail");
         assert!(
-            (rail.rail_x_for_world_x(planning.x) - 0.675).abs() < 1e-12,
-            "0.80m 비전 목표는 마운트 9.025cm+잔여 보정 3.475cm로 기존 총 12.5cm 명령과 같아야 함"
+            (rail.rail_x_for_world_x(planning.x) - 0.615).abs() < 1e-12,
+            "0.80m 비전 목표는 마운트 9.025cm+잔여 보정 9.475cm로 총 18.5cm 보정되어야 함"
         );
-        assert!((corrected.x - 0.76525).abs() < 1e-12);
+        assert!((corrected.x - 0.70525).abs() < 1e-12);
         assert!((corrected.y - target.y).abs() < 1e-12);
         assert!(
             (corrected.z - target.z - pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M)

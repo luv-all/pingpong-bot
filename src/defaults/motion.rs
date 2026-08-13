@@ -50,8 +50,8 @@ pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.005;
 /// 예측된 공 높이에서 실제 정렬 타격점을 올리는 보정 [m].
 pub const ALIGNMENT_TARGET_HEIGHT_OFFSET_M: f64 = 0.015;
 /// 레일 마운트 X 9.025cm를 기구학에 반영한 뒤에도 남는 타격 X 보정 [m].
-/// 기존 총 12.5cm에서 실측 마운트 원점차 9.025cm를 뺀 3.475cm다.
-pub const ALIGNMENT_TARGET_X_OFFSET_M: f64 = 0.03475;
+/// 기존 잔여 보정 3.475cm에 실험용 6cm를 같은 -X 방향으로 추가했다.
+pub const ALIGNMENT_TARGET_X_OFFSET_M: f64 = 0.09475;
 /// 타격 정렬 시 라켓 면이 수평에서 위로 보는 최소 각도 [deg].
 pub const ALIGNMENT_MIN_UPWARD_TILT_DEG: f64 = 25.0;
 /// 공을 처음 검출한 뒤 첫 정렬 명령을 허용하기까지 기다리는 시간 [s].
