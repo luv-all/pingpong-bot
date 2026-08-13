@@ -128,6 +128,16 @@ pub const FIXED_JOINT_SWING_RAMP_SECS: f64 = 0.060;
 /// j3 요구 회전량이 커질수록(최대 -24°) 50ms 창을 넘어서면서 궤적 전체가
 /// 강제로 2cm 비상 폴백까지 떨어지는 문제가 있었다.)
 pub const FIXED_JOINT_SWING_MIN_SNAP_SECS: f64 = 0.050;
+/// 스냅 창 계산에 쓸 목표 속도를 `max_joint_speed`의 이 비율까지만 노리게
+/// 하는 여유 [무차원]. 스냅(등가속) 구간의 끝 속도·가속도는 그대로
+/// 팔로스루(quintic, [`FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS`]) 시작
+/// 경계조건이 되는데, quintic은 그 경계 가속도가 0이 아니면 끝 지점
+/// 직후 속도가 잠깐 더 올라갔다 내려온다(관성처럼) — 스냅 속도를 상한
+/// 그대로 겨냥하면 이 오버슈트가 실제 첨두 속도를 한계 밖으로 밀어낸다.
+/// 실측(2026-08-14): 스냅 시간이 하한(`FIXED_JOINT_SWING_MIN_SNAP_SECS`)에
+/// 걸린 대표 사례들에서 오버슈트가 약 11~15% — 0.85를 곱해 그만큼의 여유를
+/// 남긴다.
+pub const FIXED_JOINT_SWING_SNAP_VELOCITY_MARGIN: f64 = 0.85;
 /// 파워 스윙 타격-전 시간의 하한 [s] — `FIXED_JOINT_SWING_RAMP_SECS`(0.06)
 /// + 이전에 고정이었던 순항 시간(0.06)과 같은 값으로, 오늘 출하되는
 /// 스윙보다 짧아지지 않도록 막는다. 실제 타격-전 시간은
