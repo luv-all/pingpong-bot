@@ -70,6 +70,9 @@ pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 1.20;
 /// 전역 READY 자세는 실물 캘리브레이션이므로 바꾸지 않고, 공별 타격 준비
 /// 자세만 이 거리만큼 접는다.
 pub const FIXED_JOINT_PUSH_DISTANCE_M: f64 = 0.100;
+/// 직진 푸시 10cm 동안 라켓 중심을 함께 들어 올릴 거리 [m].
+/// 아래쪽에서 공을 퍼 올리도록 j2를 상승 추진에 사용한다.
+pub const FIXED_JOINT_PUSH_LIFT_M: f64 = 0.020;
 /// 백스윙 없는 다관절 직진 푸시 시작부터 예상 타격점에 도달하는 시간 [s].
 /// 10cm 전진과 설정된 임팩트 속도를 백스윙 없이 만족하는 궤적 길이다.
 pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.200;

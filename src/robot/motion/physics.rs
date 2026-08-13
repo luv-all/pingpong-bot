@@ -8,8 +8,9 @@ use crate::defaults;
 use crate::defaults::motion::{
     ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_TARGET_HEIGHT_OFFSET_M,
     DETECTION_WINDUP_DISTANCE_M, DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S,
-    FIXED_JOINT_PUSH_DISTANCE_M, FIXED_JOINT_SNAP_SPEED_RATIO, FIXED_JOINT_SWING_DURATION_SECS,
-    FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS, IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG,
+    FIXED_JOINT_PUSH_DISTANCE_M, FIXED_JOINT_PUSH_LIFT_M, FIXED_JOINT_SNAP_SPEED_RATIO,
+    FIXED_JOINT_SWING_DURATION_SECS, FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
+    IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG,
     READY_PREWIND_DISTANCE_M, READY_RACKET_HEIGHT_M, READY_RACKET_Y_M, RETURN_TO_CENTER_GROWTH,
     RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
 };
@@ -978,7 +979,8 @@ pub struct FixedJointSwing {
 
 /// 공 뒤쪽의 접힌 정렬 자세에서 별도 백스윙 없이 j0~j3로 라켓을 바로 민다.
 /// 예상 타격 시점에는 라켓 중심이 공 쪽으로 [`FIXED_JOINT_PUSH_DISTANCE_M`]
-/// 전진하고 정렬된 라켓 면은 그대로 유지한다.
+/// 전진하면서 [`FIXED_JOINT_PUSH_LIFT_M`]만큼 상승하고, 정렬된 라켓 면은
+/// 그대로 유지한다.
 /// 레일은 정렬 결과를 유지한다.
 pub fn plan_fixed_joint_swing(
     arm: &Arm,
@@ -1029,15 +1031,26 @@ pub fn plan_fixed_joint_swing(
         FIXED_JOINT_PUSH_DISTANCE_M * 0.50,
         FIXED_JOINT_PUSH_DISTANCE_M * 0.30,
     ] {
-        let target_position =
-            Point3::from(start_racket.position.coords + push_direction * push_distance_m);
+        let lift_m = FIXED_JOINT_PUSH_LIFT_M * push_distance_m / FIXED_JOINT_PUSH_DISTANCE_M;
+        let target_position = Point3::from(
+            start_racket.position.coords
+                + push_direction * push_distance_m
+                + Vector3::z() * lift_m,
+        );
         if let Ok(planned) =
             plan_fixed_joint_swing_to_pose(arm, start, target_position, target_normal)
         {
             return Ok(planned);
         }
     }
-    let fallback_position = Point3::from(start_racket.position.coords + push_direction * 0.020);
+    let fallback_distance_m = 0.020;
+    let fallback_lift_m =
+        FIXED_JOINT_PUSH_LIFT_M * fallback_distance_m / FIXED_JOINT_PUSH_DISTANCE_M;
+    let fallback_position = Point3::from(
+        start_racket.position.coords
+            + push_direction * fallback_distance_m
+            + Vector3::z() * fallback_lift_m,
+    );
     return plan_fixed_joint_swing_to_pose(arm, start, fallback_position, target_normal);
 }
 
@@ -1057,19 +1070,20 @@ fn plan_fixed_joint_swing_to_pose(
             robot::IkSearch::Global,
         )
         .map_err(DomainError::InfeasibleSwing)?;
-    let achieved = arm
-        .forward_kinematics_with_rail(start.rail_x, &impact_pose.joints)
+    let start_racket = arm
+        .forward_kinematics_with_rail(start.rail_x, &start.joints)
         .ok_or_else(|| {
             DomainError::InfeasibleSwing(SwingPlanError::InverseKinematicsNoSolution {
-                target_x: target_position.x,
-                target_y: target_position.y,
-                target_z: target_position.z,
+                target_x: start.rail_x,
+                target_y: 0.0,
+                target_z: table::SURFACE_Z,
             })
         })?;
+    let scoop_direction = (target_position - start_racket.position).normalize();
     let (_, mut impact_velocity) = arm
         .linear_velocities_for_racket_velocity(
             &impact_pose,
-            achieved.normal * FIXED_IMPACT_PUSH_SPEED_M_S,
+            scoop_direction * FIXED_IMPACT_PUSH_SPEED_M_S,
         )
         .map_err(DomainError::InfeasibleSwing)?;
     let peak = impact_velocity
@@ -1844,6 +1858,11 @@ mod tests {
             (pushed_distance - FIXED_JOINT_PUSH_DISTANCE_M).abs() < 2e-3,
             "라켓 전진 거리: {pushed_distance:.4}m"
         );
+        let lifted_distance = impact.position.z - aligned.position.z;
+        assert!(
+            (lifted_distance - FIXED_JOINT_PUSH_LIFT_M).abs() < 2e-3,
+            "j2를 활용한 라켓 상승 거리: {lifted_distance:.4}m"
+        );
         let velocity_probe_dt = 1e-5;
         let mut after_impact = trajectory.end.clone();
         for (angle, velocity) in after_impact.values.iter_mut().zip(&trajectory.end_velocity) {
@@ -1852,12 +1871,13 @@ mod tests {
         let after_impact_pose = arm
             .forward_kinematics_with_rail(trajectory.rail.end, &after_impact)
             .expect("impact velocity FK");
-        let forward_speed = ((after_impact_pose.position - impact.position) / velocity_probe_dt)
-            .dot(&impact.normal);
-        // 10cm 직진 뒤 설정한 임팩트 끝속도를 유지한다.
+        let scoop_direction = (impact.position - aligned.position).normalize();
+        let scoop_speed = ((after_impact_pose.position - impact.position) / velocity_probe_dt)
+            .dot(&scoop_direction);
+        // 10cm 전진+2cm 상승 뒤 설정한 임팩트 끝속도를 유지한다.
         assert!(
-            forward_speed > FIXED_IMPACT_PUSH_SPEED_M_S - 0.02,
-            "직진 타격 속도가 유지돼야 함: target={FIXED_IMPACT_PUSH_SPEED_M_S:.3}m/s, actual={forward_speed:.3}m/s"
+            scoop_speed > FIXED_IMPACT_PUSH_SPEED_M_S - 0.02,
+            "퍼 올리는 타격 속도가 유지돼야 함: target={FIXED_IMPACT_PUSH_SPEED_M_S:.3}m/s, actual={scoop_speed:.3}m/s"
         );
         assert!(
             trajectory.peak_joint_speed() <= arm.max_joint_speed * (1.0 + 1e-9),
