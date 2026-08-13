@@ -233,6 +233,7 @@ fn draw_rig_panel(
     let frame = &mut ui_state.rail_frame;
 
     ui.add_enabled_ui(parked, |ui| {
+        ui.add(egui::Slider::new(&mut frame.mount_x, -0.10..=0.20).text("x [m]"));
         ui.add(egui::Slider::new(&mut frame.mount_y, -0.30..=0.05).text("y [m]"));
         ui.add(egui::Slider::new(&mut frame.rail_bottom_z, 0.70..=1.10).text("레일 하단 z [m]"));
     });

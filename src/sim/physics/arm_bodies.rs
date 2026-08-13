@@ -412,11 +412,20 @@ fn link_mass(index: usize, count: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Point3;
     use crate::defaults::primitive_4dof;
 
     fn sample_arm() -> Arm {
         return (*primitive_4dof().expect("arm").arm).clone();
+    }
+
+    fn default_mount(arm: &Arm) -> nalgebra::Vector3<f64> {
+        return arm.rail.map_or(arm.base.coords, |rail| {
+            rail.mount_point(rail.default_x()).coords
+        });
+    }
+
+    fn default_rail_x(arm: &Arm) -> f64 {
+        return arm.rail.map_or(arm.base.x, |rail| rail.default_x());
     }
 
     fn racket_e() -> f32 {
@@ -436,8 +445,7 @@ mod tests {
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
         let mut joints = MultibodyJointSet::new();
-        let mut mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
-        mount.x = arm.rail.as_ref().map_or(mount.x, |rail| rail.default_x());
+        let mount = default_mount(&arm);
         let mb = ArmMultibody::spawn(
             &mut bodies,
             &mut colliders,
@@ -497,8 +505,7 @@ mod tests {
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
         let mut joints = MultibodyJointSet::new();
-        let mut mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
-        mount.x = arm.rail.as_ref().map_or(mount.x, |rail| rail.default_x());
+        let mount = default_mount(&arm);
         let mut q = arm.default_joints.clone();
         q.values[1] = 0.3;
         q.values[2] = -0.5;
@@ -512,7 +519,7 @@ mod tests {
             racket_e(),
         );
         let fk = arm
-            .forward_kinematics_with_rail(mount.x, &q)
+            .forward_kinematics_with_rail(default_rail_x(&arm), &q)
             .expect("fk")
             .position
             .coords;
@@ -540,7 +547,7 @@ mod tests {
         let mut params = IntegrationParameters::default();
         params.dt = 1.0 / 1000.0;
 
-        let mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
+        let mount = default_mount(&arm);
         let mb = ArmMultibody::spawn(
             &mut bodies,
             &mut colliders,
@@ -585,7 +592,7 @@ mod tests {
             }
             let read = mb.read_joint_angles(&joints);
             let fk = arm
-                .forward_kinematics_with_rail(mount.x, &read)
+                .forward_kinematics_with_rail(default_rail_x(&arm), &read)
                 .expect("fk")
                 .position
                 .coords;
@@ -613,7 +620,7 @@ mod tests {
         let gravity = Vec3::new(0.0, 0.0, -9.81);
         let params = IntegrationParameters::default();
 
-        let mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
+        let mount = default_mount(&arm);
         let mb = ArmMultibody::spawn(
             &mut bodies,
             &mut colliders,
@@ -646,7 +653,7 @@ mod tests {
         }
         let read = mb.read_joint_angles(&joints);
         let fk = arm
-            .forward_kinematics_with_rail(mount.x, &read)
+            .forward_kinematics_with_rail(default_rail_x(&arm), &read)
             .expect("fk")
             .position
             .coords;
@@ -663,9 +670,8 @@ mod tests {
     #[test]
     fn ee_matches_fk_within_2mm_at_default_pose() {
         let (arm, bodies, _c, _j, mb) = spawn_test_arm(true);
-        let mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
         let fk = arm
-            .forward_kinematics_with_rail(mount.x, &arm.default_joints)
+            .forward_kinematics_with_rail(default_rail_x(&arm), &arm.default_joints)
             .expect("fk");
         let ee = mb.ee_world_translation(&bodies).expect("ee");
         let err = (ee - fk.position.coords).norm();
@@ -679,9 +685,8 @@ mod tests {
     #[test]
     fn ee_face_normal_matches_fk_toward_opponent() {
         let (arm, bodies, _c, _j, mb) = spawn_test_arm(true);
-        let mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
         let fk = arm
-            .forward_kinematics_with_rail(mount.x, &arm.default_joints)
+            .forward_kinematics_with_rail(default_rail_x(&arm), &arm.default_joints)
             .expect("fk");
         let iso = mb.ee_world_isometry(&bodies).expect("ee");
         // Rapier 라켓 계약: local +Z = 면 법선.
@@ -708,8 +713,7 @@ mod tests {
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
         let mut joints = MultibodyJointSet::new();
-        let mut mount = Point3::from(crate::defaults::rail_frame().mount_xyz0()).coords;
-        mount.x = arm.rail.as_ref().map_or(mount.x, |rail| rail.default_x());
+        let mount = default_mount(&arm);
         let mb = ArmMultibody::spawn(
             &mut bodies,
             &mut colliders,
@@ -720,7 +724,7 @@ mod tests {
             racket_e(),
         );
         let fk0 = arm
-            .forward_kinematics_with_rail(mount.x, &arm.default_joints)
+            .forward_kinematics_with_rail(default_rail_x(&arm), &arm.default_joints)
             .expect("fk")
             .position
             .coords;
@@ -751,8 +755,15 @@ mod tests {
             for i in 0..target.values.len().min(impact.values.len()) {
                 target.values[i] = start.values[i] + t * (impact.values[i] - start.values[i]);
             }
-            let rail_x = arm.rail.as_ref().map_or(mount.x, |rail| rail.x_min) + 0.05 * t;
-            mb.set_base_xy(&mut bodies, &mut joints, rail_x, mount.y, mount.z);
+            let rail_x = arm
+                .rail
+                .as_ref()
+                .map_or(mount.x, |rail| rail.x_min + 0.05 * t);
+            let world_x = arm
+                .rail
+                .as_ref()
+                .map_or(rail_x, |rail| rail.world_x(rail_x));
+            mb.set_base_xy(&mut bodies, &mut joints, world_x, mount.y, mount.z);
             mb.set_motor_targets(&mut joints, &target);
             pipeline.step(
                 gravity,

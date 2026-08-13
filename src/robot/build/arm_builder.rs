@@ -56,6 +56,7 @@ impl ArmBuilder {
     /// X축 리니어 레일 파라미터를 빌더에 직접 넣는다.
     pub fn linear_rail(
         self,
+        mount_x: f64,
         mount_y: f64,
         mount_z: f64,
         x_min: f64,
@@ -64,6 +65,7 @@ impl ArmBuilder {
         max_speed: f64,
     ) -> Self {
         return self.rail(LinearRail {
+            mount_x,
             mount_y,
             mount_z,
             x_min,

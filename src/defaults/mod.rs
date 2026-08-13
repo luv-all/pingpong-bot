@@ -34,8 +34,8 @@ mod estimator;
 mod hardware;
 mod impact;
 pub mod motion;
-pub mod rail;
 mod physics;
+pub mod rail;
 mod robot;
 pub mod sim;
 mod sim_motor;
@@ -61,14 +61,14 @@ pub use estimator::EstimatorParams;
 pub use hardware::{BASE_JOINT_ZERO_OFFSET_RAD, WRIST_JOINT_ZERO_OFFSET_RAD};
 pub use impact::ImpactParams;
 pub use motion::{
-    ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M,
-    ALIGNMENT_MIN_UPWARD_TILT_DEG, ALIGNMENT_TARGET_HEIGHT_OFFSET_M, COARSE_TRACK_JOINT_FRACTION,
-    FIRST_CONTROL_AFTER_DETECTION_SECS, FIXED_JOINT_SNAP_SPEED_RATIO,
-    FIXED_JOINT_SWING_DURATION_SECS, HOME_RETURN_SPEED_RATIO, JACOBIAN_DAMPING, JDOT_STEP,
-    MAGNUS_OMEGA_MAX, MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS, MIN_TIME_TO_GO_SECS, PLAN_DT_SECS,
-    POSITION_TOLERANCE_RAD_OR_M, POST_ALIGNMENT_HOLD_SECS, RACKET_DIRECTION_TOLERANCE_DEG,
-    RACKET_SPEED_RATIO_TOLERANCE, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS,
-    RETURN_TO_CENTER_MIN_SECS, TIME_TO_GO_BIAS,
+    ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M, ALIGNMENT_MIN_UPWARD_TILT_DEG,
+    ALIGNMENT_TARGET_HEIGHT_OFFSET_M, ALIGNMENT_TARGET_X_OFFSET_M, COARSE_TRACK_JOINT_FRACTION,
+    FIRST_CONTROL_AFTER_DETECTION_SECS, FIXED_JOINT_PUSH_DISTANCE_M, FIXED_JOINT_SNAP_SPEED_RATIO,
+    FIXED_JOINT_SWING_DURATION_SECS, FIXED_JOINT_SWING_LEAD_SECS, HOME_RETURN_SPEED_RATIO,
+    JACOBIAN_DAMPING, JDOT_STEP, MAGNUS_OMEGA_MAX, MAX_INTERCEPT_SAMPLES, MAX_PLAN_TIME_SECS,
+    MIN_TIME_TO_GO_SECS, PLAN_DT_SECS, POSITION_TOLERANCE_RAD_OR_M, POST_ALIGNMENT_HOLD_SECS,
+    RACKET_DIRECTION_TOLERANCE_DEG, RACKET_SPEED_RATIO_TOLERANCE, RETURN_TO_CENTER_GROWTH,
+    RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS, TIME_TO_GO_BIAS,
 };
 pub use physics::PhysicsParams;
 pub use rail::{
@@ -76,12 +76,12 @@ pub use rail::{
     RAIL_COORDINATE_POSITIVE_X_OFFSET_M, RAIL_HOMING_OVERTRAVEL_MARGIN_M,
     RAIL_HOMING_RETURN_VELOCITY_M_S, RAIL_HOMING_TIMEOUT_SECS, RAIL_HOMING_VELOCITY_M_S,
     RAIL_LEFT_END_MARGIN_M, RAIL_MAX_SPEED, RAIL_NEGATIVE_X_ZERO_SHIFT_M, RAIL_PHYSICAL_X_MAX_M,
-    RAIL_PHYSICAL_X_MIN_M, RAIL_POSITIVE_X_TRIM_M, RAIL_READY_X_M, RAIL_RIGHT_END_MARGIN_M,
-    RAIL_X_MAX_M, RAIL_X_MIN_M, rail_calibration_path, rail_frame,
+    RAIL_PHYSICAL_X_MIN_M, RAIL_POSITIVE_X_TRIM_M, RAIL_PULSES_PER_METER, RAIL_READY_X_M,
+    RAIL_RIGHT_END_MARGIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M, rail_calibration_path, rail_frame,
 };
 pub use robot::{
-    READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount, robot, shared_robot, urdf_4dof,
-    urdf_test,
+    POST_HIT_TUCKED_JOINTS_4DOF, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount,
+    robot, shared_robot, urdf_4dof, urdf_test,
 };
 pub use sim::{
     EVAL_MAX_SCORE, EVAL_NET_PASSTHROUGH_RETRIES, EVAL_PASS_SCORE_EXCLUSIVE, EVAL_PITCH_JITTER_DEG,
@@ -123,6 +123,9 @@ mod tests {
         let rail_config = RailConfig::default();
         assert_eq!(rail_config.accel, RAIL_ACCEL_M_S2);
         assert_eq!(rail_config.decel, RAIL_ACCEL_M_S2);
+        assert!((RAIL_ACCEL_M_S2 - 24.0).abs() < 1e-12);
+        assert_eq!(rail_config.pulses_per_meter, RAIL_PULSES_PER_METER);
+        assert_eq!(RAIL_PULSES_PER_METER, 240_385);
         let robot = robot().unwrap();
         let model_rail = robot.arm.rail.expect("기본 로봇 리니어 레일");
         assert_eq!(model_rail.x_min, rail_config.x_min_m);
@@ -134,9 +137,10 @@ mod tests {
         assert!((rail_config.domain_to_board_abs(0.0100) - 1.3850).abs() < 1e-12);
         assert!((rail_config.domain_to_board_abs(1.3395) - 0.0555).abs() < 1e-12);
         assert!((rail_config.domain_to_board_abs(0.6750) - 0.7200).abs() < 1e-12);
-        assert!((ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M - 0.0050).abs() < 1e-12);
-        assert!((ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M - 0.0600).abs() < 1e-12);
+        assert!((ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M - 0.0200).abs() < 1e-12);
         assert!((RAIL_COORDINATE_POSITIVE_X_OFFSET_M - 0.0150).abs() < 1e-12);
+        assert!((rail_frame().mount_x() - 0.09025).abs() < 1e-12);
+        assert!((ALIGNMENT_TARGET_X_OFFSET_M - 0.09475).abs() < 1e-12);
         assert!((JOINT_SPEED_DERATE - 0.95).abs() < 1e-12);
         assert!((rail_config.x_min_m - model_rail.x_min).abs() < 1e-12);
         assert!((rail_config.x_max_m - model_rail.x_max).abs() < 1e-12);

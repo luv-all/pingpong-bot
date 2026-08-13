@@ -5,7 +5,7 @@ use crate::hardware::rail::RailConfig;
 
 use super::rail::{
     RAIL_ACCEL_M_S2, RAIL_BOARD_ZERO_DOMAIN_M, RAIL_MAX_SPEED, RAIL_PHYSICAL_X_MAX_M,
-    RAIL_PHYSICAL_X_MIN_M, RAIL_X_MAX_M, RAIL_X_MIN_M,
+    RAIL_PHYSICAL_X_MIN_M, RAIL_PULSES_PER_METER, RAIL_X_MAX_M, RAIL_X_MIN_M,
 };
 
 /// 손목 q3(ID 5) 실물 혼·라켓 장착 영점 보정 [rad].
@@ -18,6 +18,10 @@ pub const WRIST_JOINT_ZERO_OFFSET_RAD: f64 = -8.0_f64.to_radians();
 
 /// 하단 듀얼 MX-64 q0(ID 1·2) 재조립 혼 영점 보정 [rad].
 pub const BASE_JOINT_ZERO_OFFSET_RAD: f64 = 45.0_f64.to_radians();
+/// 하단 듀얼 MX-64 슬레이브(ID 2) 조립 영점 보정 [tick].
+/// 실물 정렬 자세에서 ID2가 이론 대칭값 `2*zero-ID1`보다
+/// 항상 +50tick에 서므로, 명령과 정렬 검사의 기준에 한 번만 반영한다.
+pub const BASE_MIRROR_SLAVE_OFFSET_TICKS: i32 = 50;
 
 impl Default for DynamixelConfig {
     /// 벤치 4-dof + yaw 미러(ID1↔ID2). 포트는 호출측/`--dxl-port`로 덮어쓴다.
@@ -88,6 +92,7 @@ impl Default for DynamixelConfig {
                 master_id: 1,
                 slave_id: 2,
             }],
+            mirror_slave_offset_ticks: BASE_MIRROR_SLAVE_OFFSET_TICKS,
             // 종료 시 토크를 끄면 팔이 그대로 주저앉는다 — 켠 채로 둔다.
             hold_torque_on_close: true,
         };
@@ -104,7 +109,7 @@ impl Default for RailConfig {
             ),
             axis: 0,
             irq_no: 7,
-            pulses_per_meter: 250_000,
+            pulses_per_meter: RAIL_PULSES_PER_METER,
             reverse: true,
             board_zero_domain_m: RAIL_BOARD_ZERO_DOMAIN_M,
             x_min_m: RAIL_X_MIN_M,

@@ -65,7 +65,7 @@ fn base_zero_offset_moves_ready_pair_forty_five_degrees_backward() {
 
     assert_eq!(calibrated_master - old_master, 512, "45° = 512tick");
     assert_eq!(calibrated_master, 2217);
-    assert_eq!(calibrated_slave, 1879);
+    assert_eq!(calibrated_slave, 1929);
     assert!(
         (calibrated.ticks_to_radians(0, calibrated_master) - ready_base).abs() < 0.002,
         "보정 후에도 논리 관절각 round-trip은 유지돼야 함"
@@ -87,6 +87,22 @@ fn wrist_zero_offset_rotates_id5_eight_degrees_toward_bench_alignment() {
         (calibrated.ticks_to_radians(3, calibrated_tick) - ready_wrist).abs() < 0.002,
         "보정 후에도 논리 관절각 round-trip은 유지돼야 함"
     );
+}
+
+#[test]
+fn high_arch_ready_pose_stays_inside_every_real_motor_limit() {
+    let mapping = MotorMapping::new(bench_config()).expect("valid mapping");
+    for (index, angle) in crate::defaults::POST_HIT_TUCKED_JOINTS_4DOF
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        assert!(
+            !mapping.clamped_by_motor_limit(index, angle),
+            "high-arch ready joint {index} must not be clamped: angle={angle}rad tick={}",
+            mapping.radians_to_ticks(index, angle)
+        );
+    }
 }
 
 #[test]
@@ -172,11 +188,11 @@ fn torque_enable_holds_every_bus_id_before_motion() {
 fn dry_run_mirrors_slave_goal_around_zero_tick() {
     let mut bus = DynamixelBus::dry_run(bench_config()).expect("dry-run bus");
     // joint0 sign=-1 → URDF +angle decreases ticks from 2048.
-    // Pick ticks via mapping: want master absolute ~2276 (200°) → slave 1820 (160°).
-    let zero = bus.mapping.config().zero_tick;
+    // Pick ticks via mapping: master absolute ~2276 (200°) → 이론 대칭
+    // 1820 (160°) + 실물 조립 영점 50tick = slave 1870.
     let ticks_per_rev = bus.mapping.config().ticks_per_revolution;
     let master_200 = (200.0 * f64::from(ticks_per_rev) / 360.0).round() as i32;
-    let expected_slave = 2 * zero - master_200;
+    let expected_slave = bus.mapping.config().mirror_tick(master_200);
 
     // Drive joint0 so radians_to_ticks yields master_200 (within clamp).
     let angle = bus.mapping.ticks_to_radians(0, master_200);
@@ -228,8 +244,8 @@ fn dry_run_configures_position_mode_with_max_effort() {
 #[test]
 fn mirror_tick_formula() {
     let cfg = bench_config();
-    assert_eq!(cfg.mirror_tick(2048), 2048);
+    assert_eq!(cfg.mirror_tick(2048), 2098);
     let t200 = (200.0_f64 * 4096.0 / 360.0).round() as i32;
     let t160 = (160.0_f64 * 4096.0 / 360.0).round() as i32;
-    assert_eq!(cfg.mirror_tick(t200), t160);
+    assert_eq!(cfg.mirror_tick(t200), t160 + 50);
 }

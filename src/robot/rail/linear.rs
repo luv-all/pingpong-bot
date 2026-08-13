@@ -5,9 +5,12 @@ use crate::Point3;
 /// 탁구대 한쪽 변에 설치된 X축 리니어 레일.
 ///
 /// 팔 베이스는 레일 위에서 좌우로 이동하고, 팔은 주로 Y/Z 평면에서 접수한다.
-/// y/z는 [`RailFrame`] 에서 오고, 값은 `crate::defaults::primitive_4dof` 빌더 체인에서 명시한다.
+/// x/y/z 마운트는 [`RailFrame`] 에서 오고, 값은
+/// `crate::defaults::primitive_4dof` 빌더 체인에서 명시한다.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinearRail {
+    /// 레일 좌표 x=0의 탁구대 월드 X [m] ([`RailFrame::mount_x`])
+    pub mount_x: f64,
     /// 레일 위 베이스 고정 y [m] ([`RailFrame::mount_y`])
     pub mount_y: f64,
     /// 레일 위 베이스 z [m] ([`RailFrame::mount_z`])
@@ -28,9 +31,19 @@ impl LinearRail {
         return x.clamp(self.x_min, self.x_max);
     }
 
+    /// 탁구대 월드 X를 하드웨어 레일 좌표로 변환한다.
+    pub fn rail_x_for_world_x(self, world_x: f64) -> f64 {
+        return self.clamp_x(world_x - self.mount_x);
+    }
+
+    /// 하드웨어 레일 좌표를 탁구대 월드 X로 변환한다.
+    pub fn world_x(self, rail_x: f64) -> f64 {
+        return self.mount_x + self.clamp_x(rail_x);
+    }
+
     /// 레일 위 베이스 원점 (월드).
     pub fn mount_point(self, rail_x: f64) -> Point3 {
-        return Point3::new(self.clamp_x(rail_x), self.mount_y, self.mount_z);
+        return Point3::new(self.world_x(rail_x), self.mount_y, self.mount_z);
     }
 
     /// 대기 위치 x - 레일 원점(로봇 쪽 끝).

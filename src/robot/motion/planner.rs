@@ -111,7 +111,7 @@ impl Planner {
         return physics::plan_ready_prewind(arm, start);
     }
 
-    /// 발사기 기준 오른쪽 6cm로 보정한 예측 위치에, 라켓 중심보다
+    /// x 보정 없이 예측된 공 위치에, 라켓 중심보다
     /// 0.5cm 아래 지점이 닿도록 정지 정렬한다.
     /// 라켓 면은 공 반지름+라켓 반두께만큼 뒤에 둔다.
     pub fn ball_alignment(
@@ -165,7 +165,7 @@ impl Planner {
         return physics::plan_aligned_impact_sequence(arm, start, ball, time_to_impact_secs);
     }
 
-    /// 정렬 자세에서 q3만 돌려 타격 시점 라켓 면을 25°로 만든다.
+    /// 접힌 정렬 자세에서 j0·j1·j2 전진 푸시와 j3 손목 스냅을 합성한다.
     pub fn fixed_joint_swing(
         arm: &Arm,
         start: &robot::Pose,

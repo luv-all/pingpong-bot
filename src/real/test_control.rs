@@ -51,8 +51,8 @@ impl TestZone {
             Self::Right => (0.55, 1.0),
         };
         return (
-            rail.x_min + span * min_fraction,
-            rail.x_min + span * max_fraction,
+            rail.world_x(rail.x_min + span * min_fraction),
+            rail.world_x(rail.x_min + span * max_fraction),
         );
     }
 
@@ -113,6 +113,7 @@ mod tests {
 
     fn test_rail() -> LinearRail {
         return LinearRail {
+            mount_x: pingpong_bot::defaults::rail_frame().mount_x(),
             mount_y: 1.0,
             mount_z: 0.2,
             x_min: pingpong_bot::defaults::RAIL_X_MIN_M,
@@ -134,7 +135,7 @@ mod tests {
     #[test]
     fn zones_use_requested_overlapping_ranges() {
         let rail = test_rail();
-        let at = |fraction: f64| rail.x_min + (rail.x_max - rail.x_min) * fraction;
+        let at = |fraction: f64| rail.world_x(rail.x_min + (rail.x_max - rail.x_min) * fraction);
 
         assert!(TestZone::Left.contains_x(rail, at(0.0)));
         assert!(TestZone::Left.contains_x(rail, at(0.45)));

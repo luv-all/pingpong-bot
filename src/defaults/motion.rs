@@ -45,37 +45,44 @@ pub const DETECTION_WINDUP_DISTANCE_M: f64 = 0.020;
 /// 기본 타격에서 라켓 중심을 공 중심보다 아래에 둘 거리 [m].
 pub const IMPACT_CENTER_BELOW_BALL_M: f64 = 0.020;
 /// 기초 정렬 모드에서 공이 닿을 지점을 블레이드 중심보다 낮추는 거리 [m].
-/// 현재는 블레이드 중심보다 0.5cm 아래를 맞춘다.
-pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.005;
+/// 현재는 블레이드 중심보다 2cm 아래를 맞춘다.
+pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.020;
 /// 예측된 공 높이에서 실제 정렬 타격점을 올리는 보정 [m].
 pub const ALIGNMENT_TARGET_HEIGHT_OFFSET_M: f64 = 0.015;
+/// 레일 마운트 X 9.025cm를 기구학에 반영한 뒤에도 남는 타격 X 보정 [m].
+/// 기존 잔여 보정 3.475cm에 실험용 6cm를 같은 -X 방향으로 추가했다.
+pub const ALIGNMENT_TARGET_X_OFFSET_M: f64 = 0.09475;
 /// 타격 정렬 시 라켓 면이 수평에서 위로 보는 최소 각도 [deg].
 pub const ALIGNMENT_MIN_UPWARD_TILT_DEG: f64 = 25.0;
-/// 발사기 기준 오른쪽으로 적용하는 공별 타격 예측 위치 보정 [m].
-/// 현재 실물 레일은 `reverse=true`이므로 오른쪽은 제어 x 감소 방향이다.
-pub const ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M: f64 = 0.060;
 /// 공을 처음 검출한 뒤 첫 정렬 명령을 허용하기까지 기다리는 시간 [s].
-///
-/// 너무 이른 단일 관측으로 레일과 팔이 출발하지 않도록 0.15초 동안 관측을
-/// 모은 뒤, 그 이후 들어온 첫 유효 예측부터 제어에 사용한다.
-pub const FIRST_CONTROL_AFTER_DETECTION_SECS: f64 = 0.150;
+/// 첫 유효 예측에서 즉시 레일·팔을 출발시키고, 정확한 타격 확정은 별도의
+/// 연속 안정화 조건이 담당한다.
+pub const FIRST_CONTROL_AFTER_DETECTION_SECS: f64 = 0.010;
 /// 공을 상대편으로 넘기기 위한 라켓 면의 위쪽 기울기 [deg].
 pub const IMPACT_UPWARD_TILT_DEG: f64 = 8.0;
 /// 검출 직후 추가 백스윙의 첫 시도 시간 [s].
 pub const DETECTION_WINDUP_MIN_DURATION_SECS: f64 = 0.120;
 /// 임팩트 순간 목표 라켓 선속도 [m/s].
-pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 1.80;
-/// j3 손목 스윙 명령 시작부터 예상 타격점에 도달하는 시간 [s].
-/// 기존 0.25초보다 0.15초 먼저 시작하되 임팩트 시각은 그대로 맞춘다.
-pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.400;
-/// 임팩트 순간 j3가 사용할 설정상 관절 속도 상한 비율.
+/// 백스윙 없이 길게 바로 밀 때 사용할 임팩트 목표 선속도.
+pub const FIXED_IMPACT_PUSH_SPEED_M_S: f64 = 0.85;
+/// 정렬 시 공의 접촉점보다 뒤에서 대기해 다관절 푸시 가속거리를 확보한다 [m].
+/// 전역 READY 자세는 실물 캘리브레이션이므로 바꾸지 않고, 공별 타격 준비
+/// 자세만 이 거리만큼 접는다.
+pub const FIXED_JOINT_PUSH_DISTANCE_M: f64 = 0.100;
+/// 백스윙 없는 다관절 직진 푸시 시작부터 예상 타격점에 도달하는 시간 [s].
+/// 10cm 전진과 0.85m/s 임팩트 속도를 백스윙 없이 만족하는 기존 궤적 길이다.
+pub const FIXED_JOINT_SWING_DURATION_SECS: f64 = 0.200;
+/// 예상 공 도착 시각보다 스윙 명령을 앞서 시작할 시간 [s].
+/// 궤적 길이는 0.20초로 유지하고 명령만 기존보다 0.20초 앞당긴다.
+pub const FIXED_JOINT_SWING_LEAD_SECS: f64 = 0.400;
+/// 임팩트 순간 다관절 푸시가 사용할 설정상 관절 속도 상한 비율.
 /// 설정상 상한 자체가 모터 무부하 최고속의 95%이므로 여기서는 전부 사용한다.
 pub const FIXED_JOINT_SNAP_SPEED_RATIO: f64 = 1.0;
 /// 임팩트 이후에도 같은 방향으로 계속 밀고 멈추는 시간 [s].
 pub const FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS: f64 = 0.120;
 impl Default for InterceptWindow {
     fn default() -> Self {
-        // rail_frame behind≈0.10 기준 접수 창.
+        // 즉시 출발하되 기존 검증된 접수 범위 안에서 타격점을 고른다.
         return Self {
             y_min: 0.08,
             y_max: 0.35,

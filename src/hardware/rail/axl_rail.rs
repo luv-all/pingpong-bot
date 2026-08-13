@@ -85,7 +85,7 @@ impl AxlRail {
 
     /// 저속으로 물리적 엔드스톱까지 이동해 AXL 알람으로 도달을 감지하고, 그 지점을
     /// 기준으로 `board_zero_domain_m`을 다시 계산한다. `DryRun`엔 물리 엔드스톱이 없어
-    /// 항상 에러를 반환한다. 온디맨드 호출 전용 — 기동 시 자동으로 부르지 않는다.
+    /// 항상 에러를 반환한다. 실기 기본 기동과 calib-rail/jog의 수동 홈잉이 사용한다.
     pub fn home(
         &mut self,
         #[cfg_attr(not(all(windows, feature = "real")), allow(unused_variables))] end: RailEnd,
@@ -287,8 +287,7 @@ fn home_live(
             // 이 복구 자체가 실패하면 소프트 리밋이 꺼진 채로 남는 fail-open 상태이므로,
             // 조용히 삼키지 않고 반드시 로그로 남긴다 — 다음 이동부터 안전장치 없이
             // 움직인다는 것을 운용자가 알아야 한다.
-            if let Err(restore_error) = live.set_soft_limit(config.axis, config.soft_limit_args())
-            {
+            if let Err(restore_error) = live.set_soft_limit(config.axis, config.soft_limit_args()) {
                 tracing::error!(
                     axis = config.axis,
                     %restore_error,

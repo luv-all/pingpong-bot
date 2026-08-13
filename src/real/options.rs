@@ -11,8 +11,10 @@ pub struct Options {
     pub dry_run: bool,
     /// 좌/우 검출 오버레이 프리뷰 창.
     pub preview: bool,
-    /// 시작 시 센터(ready) 자세로 이동.
+    /// 시작 시 레일 홈잉·영점 저장 후 센터(ready) 자세로 이동.
     pub home: bool,
+    /// 카메라 제어 대신 홈잉·양쪽 안전 마진 끝 레일 정렬 점검만 실행한다.
+    pub rail_scale_check: bool,
     /// 녹화 클립 재생 경로 — `None`이면 라이브 캠.
     pub clip: Option<std::path::PathBuf>,
     /// 종료 시 토크를 빼서 팔을 손으로 옮길 수 있게 한다.
@@ -29,6 +31,7 @@ impl Options {
             dry_run: args.dry_run,
             preview: args.preview,
             home: args.home,
+            rail_scale_check: args.rail_scale_check,
             clip: args.clip.clone(),
             release_torque: args.release_torque,
             timeout_secs: args.timeout_secs,

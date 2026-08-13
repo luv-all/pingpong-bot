@@ -37,6 +37,7 @@ pub fn to_arm(urdf: &UrdfModel, max_joint_speed: f64) -> Result<Arm, UrdfLoadErr
     // 완전히 동일). 마운트 위치는 뷰어 배치에만 쓰이고 기구학과 조용히
     // 어긋나 있었던 셈이라, 마운트 위치 튜닝 자체가 불가능했다.
     let mut rail = template.arm.rail.expect("primitive 4-dof arm은 레일 포함");
+    rail.mount_x = urdf.mount.position[0];
     rail.mount_y = urdf.mount.position[1];
     rail.mount_z = urdf.mount.position[2];
     let full_chain = fk::chain_joint_indices(&urdf.robot, &urdf.ee_link).ok_or_else(|| {

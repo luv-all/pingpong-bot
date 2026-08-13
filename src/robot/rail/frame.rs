@@ -15,6 +15,8 @@ use crate::constants::geometry::RAIL_THICKNESS;
 /// 숫자는 [`crate::defaults::rail_frame`] 에서만 둔다.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RailFrame {
+    /// 레일 물리 x=0이 탁구대 월드 x=0에서 떨어진 거리 [m].
+    pub mount_x: f64,
     /// 레일 마운트 y [m] — 탁구대 끝면(y=0) 기준, 테이블 밖이면 음수.
     /// 실물에서는 레일을 밀면 되는 조정.
     pub mount_y: f64,
@@ -23,6 +25,10 @@ pub struct RailFrame {
 }
 
 impl RailFrame {
+    pub fn mount_x(self) -> f64 {
+        return self.mount_x;
+    }
+
     /// base_link / 레일 마운트 y [m].
     pub fn mount_y(self) -> f64 {
         return self.mount_y;
@@ -35,7 +41,7 @@ impl RailFrame {
 
     /// x=0 에서의 마운트 위치 `[x, y, z]`.
     pub fn mount_xyz0(self) -> [f64; 3] {
-        return [0.0, self.mount_y(), self.mount_z()];
+        return [self.mount_x(), self.mount_y(), self.mount_z()];
     }
 }
 
@@ -46,17 +52,20 @@ mod tests {
     #[test]
     fn mount_z_is_profile_bottom_plus_thickness() {
         let frame = RailFrame {
+            mount_x: 0.09,
             mount_y: -0.10,
             rail_bottom_z: 0.88,
         };
         assert!((frame.mount_z() - (0.88 + RAIL_THICKNESS)).abs() < 1e-12);
         assert!((frame.mount_y() - -0.10).abs() < 1e-12);
+        assert!((frame.mount_xyz0()[0] - 0.09).abs() < 1e-12);
     }
 
     /// 두께는 고정이므로 하단을 Δ만큼 올리면 마운트도 정확히 Δ만큼 올라간다.
     #[test]
     fn raising_the_profile_bottom_raises_the_mount_by_the_same_amount() {
         let low = RailFrame {
+            mount_x: 0.09,
             mount_y: -0.10,
             rail_bottom_z: 0.88,
         };

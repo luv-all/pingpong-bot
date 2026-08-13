@@ -15,7 +15,9 @@ use crate::constants::geometry;
 use crate::defaults::dxl_limits::{
     DYNAMIXEL_MAX_JOINT_SPEED_RAD_S, joint_reflected_inertias_4dof, joint_torque_limits_4dof,
 };
-use crate::defaults::rail::{RAIL_MAX_SPEED, RAIL_READY_X_M, RAIL_X_MAX_M, RAIL_X_MIN_M, rail_frame};
+use crate::defaults::rail::{
+    RAIL_MAX_SPEED, RAIL_READY_X_M, RAIL_X_MAX_M, RAIL_X_MIN_M, rail_frame,
+};
 use crate::robot::{
     Arm, JointLimit, Joints, LinkInertial, MountPreset, Robot, RobotBuildError, RobotBuilder,
     SerialChain, SerialJoint,
@@ -85,12 +87,19 @@ use crate::robot::{
 /// 시작 자세가 어긋났다. 이 값은 기본 자세에서 그 괴리를 없앤다.
 pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
 
+/// 공을 기다리거나 타격을 마친 뒤 사용하는 안쪽으로 말린 높은 아치 자세.
+///
+/// `READY_JOINTS_4DOF`는 벤치 정렬 기준 자세이고, 런타임의 대기·복귀 자세는
+/// 이것을 사용한다. 최종 모션 브랜치에서 q0을 ID1 소프트 한계 안쪽인 0.10rad로
+/// 두고 q2·q3는 높은 아치 목표를 유지한 값이다.
+pub const POST_HIT_TUCKED_JOINTS_4DOF: [f64; 4] = [0.10, 0.0, 1.2, -1.5721];
+
 /// 경연용 단순 4-dof (URDF 없음) → [`Robot`].
 ///
 /// mesh가 필요하면 [`urdf_4dof`]. 활성 배선은 [`robot`].
 pub fn primitive_4dof() -> Result<Robot, RobotBuildError> {
     let frame = rail_frame();
-    return primitive_4dof_with_mount(frame.mount_y(), frame.mount_z());
+    return primitive_4dof_with_mount_xyz(frame.mount_x(), frame.mount_y(), frame.mount_z());
 }
 
 /// [`primitive_4dof`]와 같지만 레일 마운트 위치(y·z)를 직접 지정한다 —
@@ -99,6 +108,14 @@ pub fn primitive_4dof() -> Result<Robot, RobotBuildError> {
 /// `mount_y`: 베이스 y [m], 탁구대 로봇쪽 끝(y=0) 기준. 음수면 테이블 바깥.
 /// `mount_z`: 베이스 z [m] (월드). 기본 배치는 [`rail_frame`]이 계산한다.
 pub fn primitive_4dof_with_mount(mount_y: f64, mount_z: f64) -> Result<Robot, RobotBuildError> {
+    return primitive_4dof_with_mount_xyz(0.0, mount_y, mount_z);
+}
+
+fn primitive_4dof_with_mount_xyz(
+    mount_x: f64,
+    mount_y: f64,
+    mount_z: f64,
+) -> Result<Robot, RobotBuildError> {
     let joints = vec![
         SerialJoint::new(
             Isometry3::translation(-0.02575, 0.028, 0.0601),
@@ -149,8 +166,9 @@ pub fn primitive_4dof_with_mount(mount_y: f64, mount_z: f64) -> Result<Robot, Ro
     let (link_inertials, aggregated_inertials) = primitive_4dof_inertials();
 
     let built = Arm::builder()
-        .base_xyz(0.0, mount_y, mount_z)
+        .base_xyz(mount_x, mount_y, mount_z)
         .linear_rail(
+            mount_x,
             mount_y,
             mount_z,
             RAIL_X_MIN_M,
@@ -523,6 +541,41 @@ mod tests {
         assert!(
             (lowest - 0.155).abs() < 0.003,
             "bench lowest=0.155m, model={lowest:.4}m"
+        );
+    }
+
+    #[test]
+    fn post_hit_pose_forms_high_arch_without_table_collision() {
+        let robot = urdf_4dof().expect("4-dof");
+        let arm = robot.arm.as_ref();
+        let rail_x = arm
+            .rail
+            .as_ref()
+            .map_or(RAIL_READY_X_M, |rail| rail.default_x());
+        let joints = Joints::from_slice(&POST_HIT_TUCKED_JOINTS_4DOF);
+        let chain = arm.chain_points(rail_x, &joints).expect("post-hit chain");
+        let mount_z = chain.first().expect("mount").z;
+        let peak_z = chain.iter().map(|point| point.z).fold(mount_z, f64::max);
+        let mount = chain.first().expect("mount");
+        let racket = chain.last().expect("racket");
+        let racket_z = racket.z;
+
+        assert!(peak_z - mount_z > 0.25, "팔꿈치가 충분히 높아야 함");
+        assert!(
+            peak_z - racket_z > 0.25,
+            "높은 아치 뒤 라켓이 아래로 접혀야 함"
+        );
+        assert!(
+            (racket_z - mount_z).abs() < 0.02,
+            "라켓 중심은 마운트 높이 근처"
+        );
+        assert!(
+            (racket.x - mount.x).hypot(racket.y - mount.y) < 0.20,
+            "라켓이 몸통 가까이 접혀야 함"
+        );
+        assert!(
+            crate::robot::collision::table_penetration(arm, rail_x, &joints) <= 1e-4,
+            "복귀 자세가 테이블을 관통하면 안 됨"
         );
     }
 }
