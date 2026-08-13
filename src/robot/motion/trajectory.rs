@@ -3,8 +3,9 @@
 
 use crate::robot::Joints;
 
-use super::quadratic_segment::QuadraticSegment;
+use super::quadratic_segment::{DelayedQuadraticSegment, QuadraticSegment};
 use super::quintic_segment::QuinticSegment;
+use super::ramp_cruise_segment::RampCruiseSegment;
 use super::rail::Rail;
 
 /// 타격-전 구간에 쓸 세그먼트 모양.
@@ -27,6 +28,8 @@ enum SegmentProfile {
 pub(crate) enum PreImpactSegment {
     Quintic(QuinticSegment),
     Quadratic(QuadraticSegment),
+    DelayedQuadratic(DelayedQuadraticSegment),
+    RampCruise(RampCruiseSegment),
 }
 
 impl PreImpactSegment {
@@ -34,6 +37,8 @@ impl PreImpactSegment {
         return match self {
             PreImpactSegment::Quintic(segment) => segment.sample(t),
             PreImpactSegment::Quadratic(segment) => segment.sample(t),
+            PreImpactSegment::DelayedQuadratic(segment) => segment.sample(t),
+            PreImpactSegment::RampCruise(segment) => segment.sample(t),
         };
     }
 
@@ -41,6 +46,8 @@ impl PreImpactSegment {
         return match self {
             PreImpactSegment::Quintic(segment) => segment.max_speed(samples),
             PreImpactSegment::Quadratic(segment) => segment.max_speed(samples),
+            PreImpactSegment::DelayedQuadratic(segment) => segment.max_speed(samples),
+            PreImpactSegment::RampCruise(segment) => segment.max_speed(samples),
         };
     }
 
@@ -48,6 +55,46 @@ impl PreImpactSegment {
         return match self {
             PreImpactSegment::Quintic(segment) => segment.max_acceleration(samples),
             PreImpactSegment::Quadratic(segment) => segment.max_acceleration(samples),
+            PreImpactSegment::DelayedQuadratic(segment) => segment.max_acceleration(samples),
+            PreImpactSegment::RampCruise(segment) => segment.max_acceleration(samples),
+        };
+    }
+}
+
+/// 관절별 타격-전 프로파일 — [`Trajectory::with_power_sweep`] 전용.
+/// 항상 정지(v0=0)에서 출발한다는 전제라 quintic은 대상이 아니다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum PreImpactJointProfile {
+    /// 전 구간 등가속(정지 출발) — [`QuadraticSegment`]와 동일.
+    Quadratic,
+    /// `delay`초 정지 후 등가속 스냅 — 손목처럼 접힌 자세를 유지하다 임팩트
+    /// 직전에만 움직이는 관절.
+    DelayedQuadratic { delay: f64 },
+    /// 가속도 `accel`로 첨두속도까지 가속한 뒤 순항 — j0·j2처럼 임팩트
+    /// 앞에서 첨두속도를 유지해야 하는 관절.
+    RampCruise { accel: f64 },
+}
+
+impl PreImpactJointProfile {
+    /// `pub(crate)`인 이유: `physics.rs`의 파워 스윙 플래너가 임팩트 속도를
+    /// 미리 뽑아 보기 위해 직접 호출한다.
+    pub(crate) fn build(&self, q0: f64, qf: f64, duration: f64) -> PreImpactSegment {
+        return match *self {
+            PreImpactJointProfile::Quadratic => {
+                PreImpactSegment::Quadratic(QuadraticSegment::new(q0, 0.0, qf, duration))
+            }
+            PreImpactJointProfile::DelayedQuadratic { delay } => PreImpactSegment::DelayedQuadratic(
+                DelayedQuadraticSegment::new(q0, qf, duration, delay),
+            ),
+            PreImpactJointProfile::RampCruise { accel } => {
+                match RampCruiseSegment::new(q0, qf, duration, accel) {
+                    Some(segment) => PreImpactSegment::RampCruise(segment),
+                    // 호출자(physics.rs)가 미리 `RampCruiseSegment::new`로 실현
+                    // 가능성을 검증하므로 여기 도달하면 안 되지만, Trajectory
+                    // 자체는 실패하지 않는 기존 관례를 지키기 위한 방어적 대체.
+                    None => PreImpactSegment::Quadratic(QuadraticSegment::new(q0, 0.0, qf, duration)),
+                }
+            }
         };
     }
 }
@@ -77,6 +124,9 @@ pub struct Trajectory {
     pub follow_through_rail_x: f64,
     pub follow_through_rail_velocity: f64,
     pre_impact_profile: SegmentProfile,
+    /// 관절별 타격-전 프로파일 — 비어 있으면(기본) `pre_impact_profile`(전역)을
+    /// 쓴다. [`Trajectory::with_power_sweep`]만 채운다.
+    pre_impact_profiles: Vec<PreImpactJointProfile>,
 }
 
 impl Trajectory {
@@ -104,6 +154,7 @@ impl Trajectory {
             follow_through_rail_velocity: rail.end_velocity,
             rail,
             pre_impact_profile: SegmentProfile::Quintic,
+            pre_impact_profiles: Vec::new(),
         };
     }
 
@@ -136,6 +187,7 @@ impl Trajectory {
             follow_through_rail_x,
             follow_through_rail_velocity,
             pre_impact_profile: SegmentProfile::Quintic,
+            pre_impact_profiles: Vec::new(),
         };
     }
 
@@ -187,6 +239,53 @@ impl Trajectory {
             follow_through_rail_x,
             follow_through_rail_velocity,
             pre_impact_profile: SegmentProfile::Quadratic,
+            pre_impact_profiles: Vec::new(),
+        };
+    }
+
+    /// 관절마다 다른 타격-전 프로파일(정지 출발 등가속 / 지연 스냅 /
+    /// 가속-순항)을 섞어 쓰는 "파워 스윙" 궤적을 만든다. 세 프로파일 모두
+    /// `start_velocity=0`을 전제한다.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_power_sweep(
+        start: Joints,
+        impact: Joints,
+        end: Joints,
+        profiles: Vec<PreImpactJointProfile>,
+        follow_through_velocity: Vec<f64>,
+        impact_time_secs: f64,
+        duration_secs: f64,
+        rail: Rail,
+        follow_through_rail_x: f64,
+        follow_through_rail_velocity: f64,
+    ) -> Self {
+        let n = impact.values.len();
+        assert_eq!(start.values.len(), n, "start joint count");
+        assert_eq!(profiles.len(), n, "profile count");
+        let start_velocity = vec![0.0; n];
+        let mut end_velocity = Vec::with_capacity(n);
+        let mut impact_acceleration = Vec::with_capacity(n);
+        for i in 0..n {
+            let segment = profiles[i].build(start.values[i], impact.values[i], impact_time_secs);
+            let (_, velocity, acceleration) = segment.sample(impact_time_secs);
+            end_velocity.push(velocity);
+            impact_acceleration.push(acceleration);
+        }
+        return Self {
+            start,
+            end: impact,
+            follow_through: end,
+            start_velocity,
+            end_velocity,
+            follow_through_velocity,
+            impact_acceleration,
+            impact_time_secs,
+            duration_secs,
+            rail,
+            follow_through_rail_x,
+            follow_through_rail_velocity,
+            pre_impact_profile: SegmentProfile::Quadratic,
+            pre_impact_profiles: profiles,
         };
     }
 
@@ -208,6 +307,17 @@ impl Trajectory {
         assert_eq!(self.end.values.len(), n, "impact joint count");
         assert_eq!(self.start_velocity.len(), n, "start velocity count");
         assert_eq!(self.end_velocity.len(), n, "impact velocity count");
+        if self.pre_impact_profiles.len() == n {
+            return (0..n)
+                .map(|i| {
+                    self.pre_impact_profiles[i].build(
+                        self.start.values[i],
+                        self.end.values[i],
+                        self.impact_time_secs,
+                    )
+                })
+                .collect();
+        }
         let mut segments = Vec::with_capacity(n);
         for i in 0..n {
             let impact_accel = self.impact_acceleration.get(i).copied().unwrap_or(0.0);
@@ -564,5 +674,77 @@ mod tests {
         let just_after = trajectory.sample_acceleration_at(trajectory.impact_time_secs + 1e-9)[0];
         assert!((just_before - 3.5).abs() < 1e-3, "before={just_before}");
         assert!((just_after - 3.5).abs() < 1e-3, "after={just_after}");
+    }
+
+    #[test]
+    fn power_sweep_ramp_cruise_joint_reaches_target_and_sustains_speed_before_it() {
+        let trajectory = Trajectory::with_power_sweep(
+            Joints::from_slice(&[0.0]),
+            Joints::from_slice(&[4.0]),
+            Joints::from_slice(&[4.2]),
+            vec![PreImpactJointProfile::RampCruise { accel: 10.0 }],
+            vec![0.0],
+            1.0,
+            1.12,
+            Rail::fixed(0.3),
+            0.3,
+            0.0,
+        );
+        let impact = trajectory.sample_at(1.0);
+        assert!((impact.values[0] - 4.0).abs() < 1e-6);
+        let v_near_impact = trajectory.sample_velocity_at(0.9)[0];
+        let v_at_impact = trajectory.sample_velocity_at(1.0)[0];
+        assert!(
+            (v_near_impact - v_at_impact).abs() < 1e-3,
+            "should be cruising before impact, not still ramping: v(0.9)={v_near_impact} v(1.0)={v_at_impact}"
+        );
+    }
+
+    #[test]
+    fn power_sweep_delayed_joint_holds_then_snaps_exactly_at_impact() {
+        let trajectory = Trajectory::with_power_sweep(
+            Joints::from_slice(&[-0.5]),
+            Joints::from_slice(&[0.3]),
+            Joints::from_slice(&[0.3]),
+            vec![PreImpactJointProfile::DelayedQuadratic { delay: 0.8 }],
+            vec![0.0],
+            1.0,
+            1.0,
+            Rail::fixed(0.3),
+            0.3,
+            0.0,
+        );
+        let held = trajectory.sample_at(0.4);
+        assert!(
+            (held.values[0] - -0.5).abs() < 1e-9,
+            "wrist should still be cocked: {held:?}"
+        );
+        let impact = trajectory.sample_at(1.0);
+        assert!((impact.values[0] - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn power_sweep_mixes_profiles_per_joint_independently() {
+        let trajectory = Trajectory::with_power_sweep(
+            Joints::from_slice(&[0.0, -0.5]),
+            Joints::from_slice(&[4.0, 0.3]),
+            Joints::from_slice(&[4.2, 0.3]),
+            vec![
+                PreImpactJointProfile::RampCruise { accel: 10.0 },
+                PreImpactJointProfile::DelayedQuadratic { delay: 0.8 },
+            ],
+            vec![0.0, 0.0],
+            1.0,
+            1.12,
+            Rail::fixed(0.3),
+            0.3,
+            0.0,
+        );
+        let mid = trajectory.sample_at(0.4);
+        assert!(mid.values[0] > 0.5, "j0 should already be moving: {mid:?}");
+        assert!(
+            (mid.values[1] - -0.5).abs() < 1e-9,
+            "j1 should still be held: {mid:?}"
+        );
     }
 }
