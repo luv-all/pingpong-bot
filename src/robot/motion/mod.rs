@@ -18,6 +18,7 @@ pub mod physics;
 pub mod planned_intercept;
 pub mod planner;
 pub mod prediction;
+pub mod quadratic_segment;
 pub mod quintic_segment;
 pub mod rail;
 pub mod trajectory;

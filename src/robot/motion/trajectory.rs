@@ -1,11 +1,58 @@
-//! 하드웨어에 넘기는 quintic 스윙 궤적.
+//! 하드웨어에 넘기는 스윙 궤적 — 타격-전 구간은 quintic 또는 quadratic(등가속),
+//! 팔로스루는 항상 quintic.
 
 use crate::robot::Joints;
 
+use super::quadratic_segment::QuadraticSegment;
 use super::quintic_segment::QuinticSegment;
 use super::rail::Rail;
 
-/// 하드웨어에 넘기는 quintic 스윙 궤적.
+/// 타격-전 구간에 쓸 세그먼트 모양.
+///
+/// [`Trajectory::new`]/[`Trajectory::with_follow_through`]는 항상 `Quintic`을
+/// 쓰고([`QuinticSegment`]가 `a0=0` ease-in), [`Trajectory::with_quadratic_push`]만
+/// `Quadratic`을 쓴다 — 휴지 자세(t=0, v=0)가 등가속 포물선의 꼭짓점이 되는
+/// 프로파일로, quintic의 ease-in이 강제하는 "느린 시작"이 없다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SegmentProfile {
+    Quintic,
+    Quadratic,
+}
+
+/// 타격-전 세그먼트를 한 축으로 통일해 다루기 위한 래퍼.
+///
+/// `pub(crate)`인 이유: [`Trajectory::joint_segments`]가 크레이트 내부(토크
+/// 샘플링, `physics.rs`)에 노출한다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum PreImpactSegment {
+    Quintic(QuinticSegment),
+    Quadratic(QuadraticSegment),
+}
+
+impl PreImpactSegment {
+    pub(crate) fn sample(&self, t: f64) -> (f64, f64, f64) {
+        return match self {
+            PreImpactSegment::Quintic(segment) => segment.sample(t),
+            PreImpactSegment::Quadratic(segment) => segment.sample(t),
+        };
+    }
+
+    fn max_speed(&self, samples: usize) -> f64 {
+        return match self {
+            PreImpactSegment::Quintic(segment) => segment.max_speed(samples),
+            PreImpactSegment::Quadratic(segment) => segment.max_speed(samples),
+        };
+    }
+
+    fn max_acceleration(&self, samples: usize) -> f64 {
+        return match self {
+            PreImpactSegment::Quintic(segment) => segment.max_acceleration(samples),
+            PreImpactSegment::Quadratic(segment) => segment.max_acceleration(samples),
+        };
+    }
+}
+
+/// 하드웨어에 넘기는 스윙 궤적.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trajectory {
     pub start: Joints,
@@ -29,6 +76,7 @@ pub struct Trajectory {
     pub rail: Rail,
     pub follow_through_rail_x: f64,
     pub follow_through_rail_velocity: f64,
+    pre_impact_profile: SegmentProfile,
 }
 
 impl Trajectory {
@@ -55,6 +103,7 @@ impl Trajectory {
             follow_through_rail_x: rail.end,
             follow_through_rail_velocity: rail.end_velocity,
             rail,
+            pre_impact_profile: SegmentProfile::Quintic,
         };
     }
 
@@ -86,6 +135,58 @@ impl Trajectory {
             rail,
             follow_through_rail_x,
             follow_through_rail_velocity,
+            pre_impact_profile: SegmentProfile::Quintic,
+        };
+    }
+
+    /// 타격-전 구간을 등가속(quadratic)으로 만든다 — `start_velocity`(보통
+    /// 0)에서 출발해 `impact_time_secs` 뒤 `impact` 관절각에 도달하는 유일한
+    /// 등가속을 관절마다 풀고, 그 시점의 속도·가속도를 그대로 knot 경계값으로
+    /// 써서 팔로스루(quintic)가 이어받는다. quintic 버전과 달리 임팩트
+    /// 속도는 별도로 지정하지 않는다 — `(Δq, T)`가 정해지면 유도값이다.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_quadratic_push(
+        start: Joints,
+        impact: Joints,
+        end: Joints,
+        start_velocity: Vec<f64>,
+        follow_through_velocity: Vec<f64>,
+        impact_time_secs: f64,
+        duration_secs: f64,
+        rail: Rail,
+        follow_through_rail_x: f64,
+        follow_through_rail_velocity: f64,
+    ) -> Self {
+        let n = impact.values.len();
+        assert_eq!(start.values.len(), n, "start joint count");
+        assert_eq!(start_velocity.len(), n, "start velocity count");
+        let mut end_velocity = Vec::with_capacity(n);
+        let mut impact_acceleration = Vec::with_capacity(n);
+        for i in 0..n {
+            let segment = QuadraticSegment::new(
+                start.values[i],
+                start_velocity[i],
+                impact.values[i],
+                impact_time_secs,
+            );
+            let (_, velocity, acceleration) = segment.sample(impact_time_secs);
+            end_velocity.push(velocity);
+            impact_acceleration.push(acceleration);
+        }
+        return Self {
+            start,
+            end: impact,
+            follow_through: end,
+            start_velocity,
+            end_velocity,
+            follow_through_velocity,
+            impact_acceleration,
+            impact_time_secs,
+            duration_secs,
+            rail,
+            follow_through_rail_x,
+            follow_through_rail_velocity,
+            pre_impact_profile: SegmentProfile::Quadratic,
         };
     }
 
@@ -102,7 +203,7 @@ impl Trajectory {
         return &self.follow_through;
     }
 
-    fn pre_impact_segments(&self) -> Vec<QuinticSegment> {
+    fn pre_impact_segments(&self) -> Vec<PreImpactSegment> {
         let n = self.start.values.len();
         assert_eq!(self.end.values.len(), n, "impact joint count");
         assert_eq!(self.start_velocity.len(), n, "start velocity count");
@@ -110,15 +211,23 @@ impl Trajectory {
         let mut segments = Vec::with_capacity(n);
         for i in 0..n {
             let impact_accel = self.impact_acceleration.get(i).copied().unwrap_or(0.0);
-            segments.push(QuinticSegment::new(
-                self.start.values[i],
-                self.end.values[i],
-                self.start_velocity[i],
-                self.end_velocity[i],
-                0.0,
-                impact_accel,
-                self.impact_time_secs,
-            ));
+            segments.push(match self.pre_impact_profile {
+                SegmentProfile::Quintic => PreImpactSegment::Quintic(QuinticSegment::new(
+                    self.start.values[i],
+                    self.end.values[i],
+                    self.start_velocity[i],
+                    self.end_velocity[i],
+                    0.0,
+                    impact_accel,
+                    self.impact_time_secs,
+                )),
+                SegmentProfile::Quadratic => PreImpactSegment::Quadratic(QuadraticSegment::new(
+                    self.start.values[i],
+                    self.start_velocity[i],
+                    self.end.values[i],
+                    self.impact_time_secs,
+                )),
+            });
         }
         return segments;
     }
@@ -254,7 +363,7 @@ impl Trajectory {
     /// Newton-Euler 토크 샘플링처럼 궤적을 여러 시점에서 반복 평가할 때, 매
     /// 샘플마다 세그먼트를 재구성(관절당 3x3 LU)하지 않고 한 번 만들어 두고
     /// `QuinticSegment::sample`로 `(각, 각속도, 각가속도)`를 뽑도록 노출한다.
-    pub fn joint_segments(&self) -> (Vec<QuinticSegment>, Vec<QuinticSegment>) {
+    pub(crate) fn joint_segments(&self) -> (Vec<PreImpactSegment>, Vec<QuinticSegment>) {
         return (self.pre_impact_segments(), self.follow_through_segments());
     }
 
@@ -359,6 +468,71 @@ mod tests {
         let velocity = (after - before) / (2.0 * dt);
         assert!((velocity - 0.8).abs() < 1e-3);
         assert!((trajectory.sample_rail_at(trajectory.duration_secs) - 0.51).abs() < 1e-6);
+    }
+
+    /// [`Trajectory::with_quadratic_push`]는 타격-전 구간을 등가속(quadratic)
+    /// 세그먼트로 만든다 — 시작 속도 0에서 출발해 목표 관절각까지 일정
+    /// 가속도로 밀고, 그 지점에서의 속도·가속도를 팔로스루(quintic) 시작
+    /// 경계조건으로 그대로 넘겨받아야(knot에서 위치·속도·가속도 모두 연속)
+    /// 한다.
+    #[test]
+    fn quadratic_push_trajectory_reaches_targets_and_is_continuous_through_the_knot() {
+        let trajectory = Trajectory::with_quadratic_push(
+            Joints::from_slice(&[0.0]),
+            Joints::from_slice(&[1.0]),
+            Joints::from_slice(&[1.08]),
+            vec![0.0],
+            vec![0.0],
+            0.40,
+            0.50,
+            Rail {
+                start: 0.2,
+                end: 0.5,
+                start_velocity: 0.0,
+                end_velocity: 0.1,
+            },
+            0.51,
+            0.0,
+        );
+
+        let start = trajectory.sample_at(0.0);
+        let impact = trajectory.sample_at(trajectory.impact_time_secs);
+        let end = trajectory.sample_at(trajectory.duration_secs);
+        assert!((start.values[0] - 0.0).abs() < 1e-9);
+        assert!((impact.values[0] - 1.0).abs() < 1e-6);
+        assert!((end.values[0] - 1.08).abs() < 1e-6);
+
+        // 등가속이므로 v(T) = 2*Δq/T (v0=0).
+        let expected_impact_velocity = 2.0 * 1.0 / 0.40;
+        let impact_velocity = trajectory.sample_velocity_at(trajectory.impact_time_secs)[0];
+        assert!(
+            (impact_velocity - expected_impact_velocity).abs() < 1e-6,
+            "impact_velocity={impact_velocity}"
+        );
+
+        // knot에서 위치/속도/가속도가 모두 연속이어야 한다(팔로스루가 같은
+        // 값에서 출발).
+        let dt = 1e-6;
+        let vel_before = trajectory.sample_velocity_at(trajectory.impact_time_secs - dt)[0];
+        let vel_after = trajectory.sample_velocity_at(trajectory.impact_time_secs + dt)[0];
+        assert!(
+            (vel_before - vel_after).abs() < 1e-3,
+            "velocity discontinuous at knot: before={vel_before} after={vel_after}"
+        );
+        let accel_before = trajectory.sample_acceleration_at(trajectory.impact_time_secs - 1e-9)[0];
+        let accel_after = trajectory.sample_acceleration_at(trajectory.impact_time_secs + 1e-9)[0];
+        assert!(
+            (accel_before - accel_after).abs() < 1e-3,
+            "acceleration discontinuous at knot: before={accel_before} after={accel_after}"
+        );
+
+        // 등가속 구간 전체에서 가속도가 상수여야 한다(quintic ease-in과의 핵심 차이).
+        let accel_start = trajectory.sample_acceleration_at(0.0)[0];
+        let accel_mid = trajectory.sample_acceleration_at(0.20)[0];
+        assert!(
+            (accel_start - accel_mid).abs() < 1e-6,
+            "start={accel_start} mid={accel_mid}"
+        );
     }
 
     /// `impact_acceleration`이 0이 아니면 타격-전 세그먼트의 끝과 팔로스루

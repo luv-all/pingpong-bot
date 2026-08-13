@@ -1018,7 +1018,7 @@ impl SimWorld {
         self.direct_swing_attempted = true;
 
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        match motion::Planner::fixed_joint_swing(&self.arm, &start) {
+        match motion::Planner::fixed_joint_swing_quadratic(&self.arm, &start) {
             Ok(planned) => {
                 let trajectory = planned.trajectory;
                 let duration_secs = trajectory.duration_secs;

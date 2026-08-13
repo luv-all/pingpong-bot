@@ -468,7 +468,7 @@ pub fn spawn(
                 match hardware.read_pose() {
                     Ok(swing_start) => {
                         let swing_arm = arm_for_rail_position(&arm, swing_start.rail_x);
-                        match Planner::fixed_joint_swing_from_alignment(
+                        match Planner::fixed_joint_swing_quadratic_from_alignment(
                             &swing_arm,
                             &swing_start,
                             &aligned_target,
