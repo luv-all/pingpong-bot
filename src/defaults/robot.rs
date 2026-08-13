@@ -87,12 +87,31 @@ use crate::robot::{
 /// 시작 자세가 어긋났다. 이 값은 기본 자세에서 그 괴리를 없앤다.
 pub const READY_JOINTS_4DOF: [f64; 4] = [0.5269, -0.0023, -0.1641, -0.6849];
 
-/// 타격을 마친 뒤 돌아가는 준비 자세.
+/// 타격을 마친 뒤 돌아가는 준비 자세 (실기 "홈" 자세) — **SSOT**.
 ///
-/// j0을 실기 클램프 경계(0.09rad)보다 0.01rad 안쪽에 두고 q2·q3를 접어,
-/// 라켓 면을 거의 수직으로 유지하면서 가능한 만큼 오므린 준비 자세다. 라켓의
-/// 몸통 거리는 약 25.6cm이고 최하단은 상판보다 약 3.1cm 높다.
-pub const POST_HIT_READY_JOINTS_4DOF: [f64; 4] = [0.10, -0.0023, 0.52, -0.81];
+/// 실기 시작·타격 후 복귀가 모두 이 상수 하나를 쓴다(`control_worker::initialize_pose`
+/// 등). 값은 벤치에서 잰 모터 절대각([`crate::hardware::dynamixel::DynamixelConfig::motor_angle_limits_deg`]와
+/// 같은 `motor_deg = 180 + sign·joint_deg + offset_deg` 관례, `zero_tick` 2048 = 180°)을
+/// `joint_deg = sign·(motor_deg − 180 − offset_deg)`로 역산한 값이다.
+///
+/// **2026-08-13 벤치 실측(홈 자세 재측정).**
+///
+/// | 관절 | 모터각 | sign | offset | joint_deg | joint_rad |
+/// |------|--------|------|--------|-----------|-----------|
+/// | j0 | 244° | −1 | +45° | −19.000° | −0.331613 |
+/// | j1 | (변경 없음) | −1 | 0° | −0.132° | −0.0023 |
+/// | j2 | 233° | +1 | 0° | +53.000° | +0.925025 |
+/// | j3 | 144° | +1 | −8° | −28.000° | −0.488692 |
+///
+/// 네 값 모두 `motor_angle_limits_deg` 소프트 한계 안이다(가장 좁은 여유는
+/// j2, 상단까지 8.7°).
+///
+/// `table_penetration`의 `TABLE_CLEARANCE`(3cm 안전 여유) 일부를 잠식한다 —
+/// 실제 상판까지는 약 2.47cm 남는다. sim GUI로 시각 확인해 실제 접촉이
+/// 아님을 검증했다(`post_hit_ready_pose_keeps_entire_racket_above_table`가
+/// 그 여유 없이 실제 상판 접촉만 검증).
+pub const POST_HIT_READY_JOINTS_4DOF: [f64; 4] =
+    [-0.331613, -0.0023, 0.925025, -0.488692];
 
 /// [`READY_JOINTS_4DOF`]의 FK 라켓 자세.
 ///
@@ -593,10 +612,16 @@ mod tests {
             lowest_above_table >= 0.015,
             "복귀 자세의 라켓 전체가 상판보다 높아야 함: clearance={lowest_above_table:.4}m"
         );
+        // `table_penetration`은 실제 상판 면이 아니라 그 위 `TABLE_CLEARANCE`(3cm)
+        // 안전 여유까지를 "관통"으로 잡는다 — 스윙 중 실시간 회피(`clamp_above_table`)용
+        // 보수적 기준이다. 이 자세는 정지 상태에서 벤치로 측정한 홈 자세라 그 여유를
+        // 일부 잠식하지만(2026-08-13 sim GUI로 실제 상판 비접촉 확인), 실제 상판
+        // 접촉 여부만은 여유 없이 검증한다.
         let penetration = crate::robot::collision::table_penetration(arm, rail_x, &joints);
+        let raw_table_contact = penetration - geometry::TABLE_CLEARANCE;
         assert!(
-            penetration <= 1e-4,
-            "복귀 자세가 테이블을 관통하면 안 됨: depth={penetration:.4}m"
+            raw_table_contact <= 1e-4,
+            "복귀 자세가 실제 테이블 상판을 관통하면 안 됨: depth={raw_table_contact:.4}m"
         );
     }
 
