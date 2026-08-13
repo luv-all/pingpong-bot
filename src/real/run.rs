@@ -39,9 +39,14 @@ const STARTUP_RAIL_SCALE_CHECK_DISTANCE_M: f64 = 0.50;
 const STARTUP_RAIL_SCALE_CHECK_MOVE_SECS: f64 = 2.0;
 /// 각 목표에 도착한 뒤 육안 측정을 위해 멈춰 있는 시간.
 const STARTUP_RAIL_SCALE_CHECK_HOLD: Duration = Duration::from_secs(6);
-/// 마지막 실측 자세에서 라켓 최하단과 상판 사이에 남길 물리 간격 [m].
-/// 조립 오차가 있어도 의도적으로 상판을 누르지 않도록 1cm를 남긴다.
+/// 마지막 실측 자세에서 라켓 최하단과 상판 사이에 남길 실제 목표 간격 [m].
 const FINAL_RACKET_TABLE_CLEARANCE_M: f64 = 0.010;
+/// 모델 1cm 목표에서 실물이 4.3cm였던 실측 차이 [m].
+/// 전용 측정 자세의 라켓 높이에만 적용하고 메인 타격·링크 충돌 모델은 바꾸지 않는다.
+const FINAL_RACKET_OBSERVED_HEIGHT_ERROR_M: f64 = 0.033;
+/// 실물 1cm를 만들기 위해 FK 모델에서 노려야 하는 라켓 끝 간격 [m].
+const FINAL_RACKET_MODEL_CLEARANCE_M: f64 =
+    FINAL_RACKET_TABLE_CLEARANCE_M - FINAL_RACKET_OBSERVED_HEIGHT_ERROR_M;
 /// 홈 자세에서 테이블 근접 자세로 천천히 내려가는 시간.
 const FINAL_RACKET_APPROACH_SECS: f64 = 6.0;
 /// 최종 기준 자세에서 라켓 장축이 수직선과 이루어도 되는 최대 각도.
@@ -305,11 +310,18 @@ fn racket_table_reference_joints(
     let racket = arm
         .forward_kinematics_with_rail(start.rail_x, &joints)
         .context("라켓·탁구대 기준 자세 최종 FK 실패")?;
-    let clearance = racket_tip_clearance_m(&racket);
+    let model_clearance = racket_tip_clearance_m(&racket);
+    let corrected_clearance = model_clearance + FINAL_RACKET_OBSERVED_HEIGHT_ERROR_M;
     ensure!(
-        (clearance - FINAL_RACKET_TABLE_CLEARANCE_M).abs() <= 0.002,
-        "라켓 끝 기준 간격 수렴 실패: 목표={:.4}m 계산={clearance:.4}m",
+        (corrected_clearance - FINAL_RACKET_TABLE_CLEARANCE_M).abs() <= 0.002,
+        "라켓 끝 실측 보정 간격 수렴 실패: 실물 목표={:.4}m 모델={model_clearance:.4}m 보정후={corrected_clearance:.4}m",
         FINAL_RACKET_TABLE_CLEARANCE_M
+    );
+    let horizontal_drift_m =
+        (racket.position.coords.xy() - start_racket.position.coords.xy()).norm();
+    ensure!(
+        horizontal_drift_m <= 0.050,
+        "라켓을 내리며 너무 멀리 뻗는 자세입니다: 홈 대비 수평 이동={horizontal_drift_m:.4}m"
     );
     let vertical_error_deg = racket_blade_vertical_error_deg(&racket);
     ensure!(
@@ -329,15 +341,22 @@ fn racket_table_reference_score(
         .forward_kinematics_with_rail(start.rail_x, joints)
         .context("라켓·탁구대 기준 후보 FK 실패")?;
     let clearance_error =
-        (racket_tip_clearance_m(&racket) - FINAL_RACKET_TABLE_CLEARANCE_M) / 0.002;
+        (racket_tip_clearance_m(&racket) - FINAL_RACKET_MODEL_CLEARANCE_M) / 0.002;
     let vertical_error =
         racket_blade_vertical_error_deg(&racket) / FINAL_RACKET_VERTICAL_TOLERANCE_DEG;
-    // 측정 기준점이 탁구대 밖으로 달아나는 해를 피하되, 수직·높이 조건보다 약하게 둔다.
+    // 홈 위치를 적극적으로 유지해 라켓을 앞쪽으로 길게 뻗으며 내리는 해를 피한다.
     let horizontal_drift =
-        (racket.position.coords.xy() - start_racket.position.coords.xy()).norm() / 0.05;
+        (racket.position.coords.xy() - start_racket.position.coords.xy()).norm() / 0.01;
+    let joint_drift = joints
+        .values
+        .iter()
+        .zip(&start.joints.values)
+        .map(|(candidate, home)| ((candidate - home) / 20.0_f64.to_radians()).powi(2))
+        .sum::<f64>();
     return Ok(clearance_error * clearance_error
         + vertical_error * vertical_error
-        + 0.05 * horizontal_drift * horizontal_drift);
+        + 0.18 * horizontal_drift * horizontal_drift
+        + 0.02 * joint_drift);
 }
 
 fn validate_racket_table_reference_trajectory(
@@ -353,8 +372,6 @@ fn validate_racket_table_reference_trajectory(
             <= pingpong_bot::defaults::ControlParams::default().max_joint_accel,
         "라켓·탁구대 기준 자세 궤적이 관절 가속도 한계를 초과합니다"
     );
-    let allowed_safety_penetration =
-        pingpong_bot::constants::geometry::TABLE_CLEARANCE - FINAL_RACKET_TABLE_CLEARANCE_M + 0.001;
     for index in 0..=120 {
         let time = trajectory.duration_secs * index as f64 / 120.0;
         let joints = trajectory.sample_at(time);
@@ -362,14 +379,25 @@ fn validate_racket_table_reference_trajectory(
             arm.joints_in_limits(&joints),
             "라켓·탁구대 기준 자세 궤적이 관절 한계를 벗어납니다: t={time:.3}s"
         );
-        let depth = pingpong_bot::robot::collision::table_penetration(
-            arm,
-            trajectory.sample_rail_at(time),
-            &joints,
-        );
+        let rail_x = trajectory.sample_rail_at(time);
+        let boxes = pingpong_bot::robot::collision::robot_obbs(arm, rail_x, &joints);
+        let link_depth = boxes
+            .iter()
+            .take(boxes.len().saturating_sub(1))
+            .map(pingpong_bot::robot::OrientedBox::table_penetration)
+            .fold(0.0_f64, f64::max);
         ensure!(
-            depth <= allowed_safety_penetration,
-            "라켓·탁구대 기준 자세 궤적이 물리 상판을 침범할 수 있습니다: t={time:.3}s safety_depth={depth:.4}m"
+            link_depth <= 0.001,
+            "라켓 접근 중 전완 링크가 기존 3cm 안전영역을 침범합니다: t={time:.3}s safety_depth={link_depth:.4}m"
+        );
+        let racket = arm
+            .forward_kinematics_with_rail(rail_x, &joints)
+            .context("라켓 접근 궤적 FK 실패")?;
+        let corrected_clearance =
+            racket_tip_clearance_m(&racket) + FINAL_RACKET_OBSERVED_HEIGHT_ERROR_M;
+        ensure!(
+            corrected_clearance >= FINAL_RACKET_TABLE_CLEARANCE_M - 0.002,
+            "실측 보정 기준 라켓이 상판에 너무 가까워집니다: t={time:.3}s corrected_clearance={corrected_clearance:.4}m"
         );
         let velocity = trajectory.sample_velocity_at(time);
         let acceleration = trajectory.sample_acceleration_at(time);
@@ -447,9 +475,10 @@ fn log_home_racket_table_clearance(
     let racket = arm
         .forward_kinematics_with_rail(pose.rail_x, &pose.joints)
         .context("최종 홈 자세 라켓 FK 실패")?;
-    let clearance_m = racket_tip_clearance_m(&racket);
+    let model_clearance_m = racket_tip_clearance_m(&racket);
+    let corrected_clearance_m = model_clearance_m + FINAL_RACKET_OBSERVED_HEIGHT_ERROR_M;
     let table_z = pingpong_bot::constants::table::SURFACE_Z;
-    let racket_tip_z = table_z + clearance_m;
+    let racket_tip_z = table_z + model_clearance_m;
     let robot_table_penetration_m =
         pingpong_bot::robot::collision::table_penetration(arm, pose.rail_x, &pose.joints);
     info!(
@@ -458,8 +487,10 @@ fn log_home_racket_table_clearance(
         racket_center_z_m = f2(racket.position.z),
         racket_tip_z_m = f2(racket_tip_z),
         table_surface_z_m = f2(table_z),
-        racket_tip_clearance_m = f2(clearance_m),
-        racket_tip_contacts_table = clearance_m <= 0.0,
+        racket_tip_model_clearance_m = f2(model_clearance_m),
+        racket_tip_corrected_clearance_m = f2(corrected_clearance_m),
+        observed_height_error_m = FINAL_RACKET_OBSERVED_HEIGHT_ERROR_M,
+        racket_tip_contacts_table = corrected_clearance_m <= 0.0,
         racket_blade_vertical_error_deg = f2(racket_blade_vertical_error_deg(&racket)),
         robot_table_safety_penetration_m = f2(robot_table_penetration_m),
         "최종 홈 자세 라켓 끝·탁구대 충돌 계산"
@@ -560,10 +591,11 @@ mod startup_rail_tests {
             .arm
             .forward_kinematics_with_rail(rail_x, &joints)
             .expect("reference FK");
-        let clearance = racket_tip_clearance_m(&racket);
+        let model_clearance = racket_tip_clearance_m(&racket);
+        let corrected_clearance = model_clearance + FINAL_RACKET_OBSERVED_HEIGHT_ERROR_M;
         assert!(
-            (clearance - FINAL_RACKET_TABLE_CLEARANCE_M).abs() <= 0.002,
-            "clearance={clearance:.4}"
+            (corrected_clearance - FINAL_RACKET_TABLE_CLEARANCE_M).abs() <= 0.002,
+            "model={model_clearance:.4} corrected={corrected_clearance:.4}"
         );
         assert!(racket_blade_vertical_error_deg(&racket) <= FINAL_RACKET_VERTICAL_TOLERANCE_DEG);
         let zeros = vec![0.0; joints.values.len()];
