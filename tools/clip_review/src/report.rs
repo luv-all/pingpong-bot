@@ -30,9 +30,12 @@ const TABLE_LINE: Scalar = Scalar::new(200.0, 160.0, 90.0, 0.0);
 const TEXT: Scalar = Scalar::new(230.0, 230.0, 230.0, 0.0);
 /// overlay 와 같은 색을 쓴다 — 두 화면을 나란히 놓고 봐야 한다.
 ///
-/// raw(초록, `overlay::RAW`)는 여기(`_sim.png`)선 안 그린다 — fitted·predicted 둘만
-/// 비교하고 싶을 때 raw가 자꾸 겹쳐 가려서, 사용자 요청으로 뺐다(카메라 창의 raw는
-/// 그대로 남아 있다).
+/// raw(초록)를 한 번 뺐다가 되돌렸다 — fitted(파랑)는 raw와 별개인 "진짜 관측"이
+/// 아니라 **적합 자체의 산출물**이다(`p0,v0`를 풀어서 각 관측 시각에 그 물리로
+/// 어디 있었을지 되돌려 그린 것). raw가 없으면 fitted·predicted 둘 다 같은 적합
+/// 계열이라 "그래서 진짜 공은 어디 있었나"를 잃는다 — 특히 fitted가 이상해 보일 때
+/// (예: fly_48 x축) raw와 나란히 봐야 적합 자체가 튄 건지 원래 그런 궤적인지 갈린다.
+const RAW: Scalar = Scalar::new(60.0, 255.0, 60.0, 0.0);
 const FITTED: Scalar = Scalar::new(255.0, 200.0, 0.0, 0.0);
 const PREDICTED: Scalar = Scalar::new(255.0, 0.0, 255.0, 0.0);
 
@@ -152,10 +155,44 @@ fn draw_table(img: &mut Mat, plan: &Plan) -> Result<()> {
     return Ok(());
 }
 
+/// 좌상단 색 범례 — raw·fitted·predicted가 뭔지 그림만 보고는 안 잡혀서.
+/// 라벨은 ASCII만 — Hershey 폰트가 한글을 `??????`로 그린다.
+fn legend(img: &mut Mat) -> Result<()> {
+    let entries = [("raw", RAW), ("fitted", FITTED), ("predicted", PREDICTED)];
+    let (x, mut y) = (12, 22);
+    for (label, color) in entries {
+        imgproc::line(
+            img,
+            Point::new(x, y),
+            Point::new(x + 24, y),
+            color,
+            3,
+            imgproc::LINE_AA,
+            0,
+        )?;
+        imgproc::put_text(
+            img,
+            label,
+            Point::new(x + 32, y + 5),
+            imgproc::FONT_HERSHEY_SIMPLEX,
+            0.5,
+            TEXT,
+            1,
+            imgproc::LINE_AA,
+            false,
+        )?;
+        y += 22;
+    }
+    return Ok(());
+}
+
 fn view(plan: &Plan, reviewed: &Reviewed) -> Result<Mat> {
     let mut img =
         Mat::new_rows_cols_with_default(VIEW_H, VIEW_W, opencv::core::CV_8UC3, BACKGROUND)?;
     draw_table(&mut img, plan)?;
+    legend(&mut img)?;
+    let raw: Vec<Point3> = reviewed.observed.iter().map(|o| o.point).collect();
+    polyline(&mut img, plan, &raw, RAW, 2)?;
     if let Some(contract) = &reviewed.contract {
         let fitted: Vec<Point3> = contract
             .latest
