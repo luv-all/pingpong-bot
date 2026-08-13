@@ -106,7 +106,9 @@ fn inverse_kinematics_round_trips_forward_kinematics() {
     let pose = arm.forward_kinematics(&joints).expect("FK");
     let solved = arm.inverse_kinematics(pose.position).expect("IK");
     let again = arm.forward_kinematics(&solved).expect("FK again");
-    assert!((again.position.coords - pose.position.coords).norm() < 1e-5);
+    assert!(
+        (again.position.coords - pose.position.coords).norm() < Arm::POSE_IK_POSITION_TOLERANCE
+    );
 }
 
 #[test]

@@ -95,7 +95,11 @@ pub(crate) fn build_table_scene(
         let rail_w = crate::constants::geometry::RAIL_VISUAL_WIDTH as f32;
         let mut node = scene.add_cube(tw, rail_w, rail_profile_thickness());
         node.set_color(Color::new(0.35, 0.38, 0.42, 1.0))
-            .set_position(rail_profile_center(tcx, frame.mount_y(), frame.mount_z()));
+            .set_position(rail_profile_center(
+                frame.mount_x() as f32 + crate::defaults::RAIL_PHYSICAL_X_MAX_M as f32 * 0.5,
+                frame.mount_y(),
+                frame.mount_z(),
+            ));
         return node;
     });
 

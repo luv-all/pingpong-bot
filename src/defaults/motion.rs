@@ -49,9 +49,9 @@ pub const IMPACT_CENTER_BELOW_BALL_M: f64 = 0.020;
 pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.005;
 /// 예측된 공 높이에서 실제 정렬 타격점을 올리는 보정 [m].
 pub const ALIGNMENT_TARGET_HEIGHT_OFFSET_M: f64 = 0.015;
-/// 실물 타격이 공보다 +X로 약 15cm 빗나간 실측을 보정하는 목표 X 이동량 [m].
-/// 제어 목표에서 이 값을 빼서 -X로 12.5cm 이동한다.
-pub const ALIGNMENT_TARGET_X_OFFSET_M: f64 = 0.125;
+/// 레일 마운트 X 9.025cm를 기구학에 반영한 뒤에도 남는 타격 X 보정 [m].
+/// 기존 총 12.5cm에서 실측 마운트 원점차 9.025cm를 뺀 3.475cm다.
+pub const ALIGNMENT_TARGET_X_OFFSET_M: f64 = 0.03475;
 /// 타격 정렬 시 라켓 면이 수평에서 위로 보는 최소 각도 [deg].
 pub const ALIGNMENT_MIN_UPWARD_TILT_DEG: f64 = 25.0;
 /// 공을 처음 검출한 뒤 첫 정렬 명령을 허용하기까지 기다리는 시간 [s].

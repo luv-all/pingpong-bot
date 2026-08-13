@@ -2311,15 +2311,21 @@ mod tests {
     }
 
     #[test]
-    fn alignment_target_applies_negative_x_twelve_point_five_centimeters() {
+    fn alignment_target_applies_remaining_negative_x_correction() {
         let target = Point3::new(0.80, 0.20, 0.90);
         let planning = alignment_planning_target(target);
         let corrected = corrected_alignment_target(target);
 
-        assert!((planning.x - 0.675).abs() < 1e-12);
+        assert!((planning.x - 0.76525).abs() < 1e-12);
         assert!((planning.y - target.y).abs() < 1e-12);
         assert!((planning.z - target.z).abs() < 1e-12);
-        assert!((corrected.x - 0.675).abs() < 1e-12);
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let rail = robot.arm.rail.expect("rail");
+        assert!(
+            (rail.rail_x_for_world_x(planning.x) - 0.675).abs() < 1e-12,
+            "0.80m 비전 목표는 마운트 9.025cm+잔여 보정 3.475cm로 기존 총 12.5cm 명령과 같아야 함"
+        );
+        assert!((corrected.x - 0.76525).abs() < 1e-12);
         assert!((corrected.y - target.y).abs() < 1e-12);
         assert!(
             (corrected.z - target.z - pingpong_bot::defaults::ALIGNMENT_TARGET_HEIGHT_OFFSET_M)

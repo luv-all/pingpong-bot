@@ -4,7 +4,7 @@
 
 - **자동으로 다시 잡을 수 있는 값** — 레일 영점(`board_zero_domain_m`). `calib-rail`
   툴로 물리적 엔드스톱까지 저속 이동해 재측정한다. 이 문서가 다루는 대상.
-- **손으로만 측정할 수 있는 값** — 레일 **마운트 위치**(`rail_frame()`의 `mount_y`,
+- **손으로만 측정할 수 있는 값** — 레일 **마운트 위치**(`rail_frame()`의 `mount_x`, `mount_y`,
   `rail_bottom_z`). 레일 이동 범위/영점이 아니라 베이스가 레일에 얹히는 물리적 설치
   좌표라 홈잉으로는 얻을 수 없다. §손 측정이 필요한 값 참고.
 
@@ -90,12 +90,14 @@ cargo run -p calib-rail -- --dll-path "C:/path/to/AXL.dll"
 
 ## 손 측정이 필요한 값
 
-`rail_frame()`(`src/defaults/rail.rs`)의 `mount_y`(탁구대 로봇쪽 끝면 기준 레일 y
-오프셋)와 `rail_bottom_z`(바닥→레일 프로파일 하단 높이)는 홈잉으로 얻을 수 없다.
+`rail_frame()`(`src/defaults/rail.rs`)의 `mount_x`(탁구대 왼쪽 끝→레일 x=0),
+`mount_y`(탁구대 로봇쪽 끝면 기준 레일 y 오프셋)와 `rail_bottom_z`
+(바닥→레일 프로파일 하단 높이)는 홈잉으로 얻을 수 없다.
 재측정 절차:
 
-1. 줄자로 바닥→프로파일 하단 높이, 탁구대 끝면→레일 y 오프셋을 잰다.
-2. sim GUI의 "Rig" 패널에서 공이 주차된 동안 두 값을 런타임으로 조정하며 눈으로
+1. 양쪽 안전 마진에서 로봇 중심→탁구대 끝을 재 `mount_x`를 구하고,
+   바닥→프로파일 하단 높이와 탁구대 끝면→레일 y 오프셋을 잰다.
+2. sim GUI의 "Rig" 패널에서 공이 주차된 동안 세 값을 런타임으로 조정하며 눈으로
    맞춘다(`SimRuntimeControls::rail_frame`).
 3. 좋은 위치를 찾으면 `mount_search`(또는 `--rest-pose-search`)를 그 위치에서 다시
    돌려 `rail_frame()`과 `READY_JOINTS_4DOF`(`src/defaults/robot.rs`)를 함께

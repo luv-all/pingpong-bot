@@ -660,10 +660,9 @@ pub fn ball_alignment_pose(
     for prewind_distance_m in [FIXED_JOINT_PUSH_DISTANCE_M, 0.025, 0.020] {
         let (corrected_ball, target_normal, racket_center) =
             ball_alignment_geometry_with_prewind(ball, prewind_distance_m);
-        let hint_rail_x = arm
-            .rail
-            .as_ref()
-            .map_or(start.rail_x, |rail| rail.clamp_x(racket_center.x));
+        let hint_rail_x = arm.rail.as_ref().map_or(start.rail_x, |rail| {
+            rail.rail_x_for_world_x(racket_center.x)
+        });
         let hint = robot::Pose::new(hint_rail_x, start.joints.clone());
         let result = arm
             .inverse_pose_with_rail_best_normal(
@@ -710,7 +709,10 @@ pub fn ball_alignment_bearing_error_deg(
 /// 팔 IK를 계산한다. 따라서 IK 계산 시간이 레일 출발 지연으로 더해지지 않는다.
 pub fn ball_alignment_rail_target(arm: &Arm, ball: Point3) -> f64 {
     let raw = ball_alignment_rail_target_unclamped(ball);
-    return arm.rail.as_ref().map_or(raw, |rail| rail.clamp_x(raw));
+    return arm
+        .rail
+        .as_ref()
+        .map_or(raw, |rail| rail.rail_x_for_world_x(raw));
 }
 
 /// 안전 마진을 적용하기 전 공별 레일 목표.
@@ -832,10 +834,9 @@ fn plan_aligned_impact_sequence_for_target(
     target_normal: Vector3<f64>,
     time_to_impact_secs: f64,
 ) -> Result<AlignedImpactSequence, DomainError> {
-    let hint_rail = arm
-        .rail
-        .as_ref()
-        .map_or(start.rail_x, |rail| rail.clamp_x(contact_center.x));
+    let hint_rail = arm.rail.as_ref().map_or(start.rail_x, |rail| {
+        rail.rail_x_for_world_x(contact_center.x)
+    });
     // 같은 라켓 방향 해가 여러 개일 때 현재 준비 자세와 가까운 팔 모양을 고른다.
     // 기본 관절값을 힌트로 쓰면 타격 직전에 다른 IK 가지로 넘어가며 팔이 다시
     // 뒤로 말릴 수 있다.

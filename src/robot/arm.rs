@@ -399,7 +399,7 @@ impl Arm {
         // 레일 오프셋(-9 cm, -6 cm, +7 cm)을 건너뛰었다.
         const RAIL_SAMPLES: usize = 41;
         const RAIL_SPAN_M: f64 = 0.20;
-        let center_rail_x = rail.clamp_x(target.coords.x);
+        let center_rail_x = rail.rail_x_for_world_x(target.coords.x);
         let seeds = self.pose_ik_seeds(hint, search);
         let candidates: Vec<_> = (0..RAIL_SAMPLES)
             .flat_map(|rail_step| {
@@ -590,7 +590,8 @@ impl Arm {
         let mount_distance = match &self.rail {
             // 레일은 (mount_y, mount_z)에서 x축과 나란한 선분 — 표적까지의 최소거리.
             Some(rail) => {
-                let dx = target.coords.x - rail.clamp_x(target.coords.x);
+                let nearest_world_x = rail.world_x(rail.rail_x_for_world_x(target.coords.x));
+                let dx = target.coords.x - nearest_world_x;
                 let dy = target.coords.y - rail.mount_y;
                 let dz = target.coords.z - rail.mount_z;
                 (dx * dx + dy * dy + dz * dz).sqrt()
@@ -650,7 +651,7 @@ impl Arm {
         let mut seeds = vec![make_values(hint.rail_x, &hint.joints)];
         if let Some(rail) = &self.rail {
             seeds.push(make_values(
-                rail.clamp_x(target.coords.x),
+                rail.rail_x_for_world_x(target.coords.x),
                 &self.default_joints,
             ));
             seeds.push(make_values(rail.default_x(), &self.default_joints));
@@ -688,7 +689,7 @@ impl Arm {
         let spread_rail_x = self
             .rail
             .as_ref()
-            .map_or(hint.rail_x, |rail| rail.clamp_x(target.coords.x));
+            .map_or(hint.rail_x, |rail| rail.rail_x_for_world_x(target.coords.x));
         let spread = (1..=spread_count).map(|index| {
             let values = (0..self.joint_count())
                 .map(|joint| {
@@ -949,7 +950,7 @@ impl Arm {
     /// 가능하면 hit-plane y를 유지하고 xz(레일/높이)만 줄인다.
     /// 구면 투영만 하면 y가 로봇 쪽으로 당겨져 타이밍/접촉이 어긋난다.
     pub fn clamp_impact_for_rail(&self, rail: &LinearRail, target: Point3) -> (f64, Point3) {
-        let rail_x = rail.clamp_x(target.coords.x);
+        let rail_x = rail.rail_x_for_world_x(target.coords.x);
         let mount = rail.mount_point(rail_x);
         return (
             rail_x,

@@ -99,7 +99,7 @@ pub const POST_HIT_TUCKED_JOINTS_4DOF: [f64; 4] = [0.10, 0.0, 1.2, -1.5721];
 /// mesh가 필요하면 [`urdf_4dof`]. 활성 배선은 [`robot`].
 pub fn primitive_4dof() -> Result<Robot, RobotBuildError> {
     let frame = rail_frame();
-    return primitive_4dof_with_mount(frame.mount_y(), frame.mount_z());
+    return primitive_4dof_with_mount_xyz(frame.mount_x(), frame.mount_y(), frame.mount_z());
 }
 
 /// [`primitive_4dof`]와 같지만 레일 마운트 위치(y·z)를 직접 지정한다 —
@@ -108,6 +108,14 @@ pub fn primitive_4dof() -> Result<Robot, RobotBuildError> {
 /// `mount_y`: 베이스 y [m], 탁구대 로봇쪽 끝(y=0) 기준. 음수면 테이블 바깥.
 /// `mount_z`: 베이스 z [m] (월드). 기본 배치는 [`rail_frame`]이 계산한다.
 pub fn primitive_4dof_with_mount(mount_y: f64, mount_z: f64) -> Result<Robot, RobotBuildError> {
+    return primitive_4dof_with_mount_xyz(0.0, mount_y, mount_z);
+}
+
+fn primitive_4dof_with_mount_xyz(
+    mount_x: f64,
+    mount_y: f64,
+    mount_z: f64,
+) -> Result<Robot, RobotBuildError> {
     let joints = vec![
         SerialJoint::new(
             Isometry3::translation(-0.02575, 0.028, 0.0601),
@@ -158,8 +166,9 @@ pub fn primitive_4dof_with_mount(mount_y: f64, mount_z: f64) -> Result<Robot, Ro
     let (link_inertials, aggregated_inertials) = primitive_4dof_inertials();
 
     let built = Arm::builder()
-        .base_xyz(0.0, mount_y, mount_z)
+        .base_xyz(mount_x, mount_y, mount_z)
         .linear_rail(
+            mount_x,
             mount_y,
             mount_z,
             RAIL_X_MIN_M,

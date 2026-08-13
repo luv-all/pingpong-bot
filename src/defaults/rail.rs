@@ -100,6 +100,8 @@ pub fn rail_calibration_path() -> std::path::PathBuf {
 /// [`crate::defaults::robot::READY_JOINTS_4DOF`]를 확정하는 것이 순서다.
 pub fn rail_frame() -> RailFrame {
     return RailFrame {
+        // 2026-08-13 실측 양쪽 마진이 말하는 원점차 9.00cm/9.05cm의 평균.
+        mount_x: 0.09025,
         mount_y: -0.068,
         rail_bottom_z: 0.88,
     };

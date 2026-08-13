@@ -422,7 +422,10 @@ mod tests {
             .inverse_kinematics_near(target, Some(&hint))
             .expect("URDF 수치 IK");
         let solved_pose = arm.forward_kinematics(&solved).expect("solved FK");
-        assert!((solved_pose.position.coords - target.coords).norm() < 1e-5);
+        assert!(
+            (solved_pose.position.coords - target.coords).norm()
+                < crate::robot::Arm::POSE_IK_POSITION_TOLERANCE
+        );
     }
 
     #[test]

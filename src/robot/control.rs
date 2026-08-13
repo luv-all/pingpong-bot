@@ -491,7 +491,8 @@ pub fn aim_angle_for_rail(arm: &Arm, rail_x: f64) -> Result<f64, DirectControlEr
         return Err(DirectControlError::InvalidRailPosition);
     }
     let mount_y = arm.rail.map_or(arm.base.y, |rail| rail.mount_y);
-    let dx = crate::constants::table::WIDTH_X * 0.5 - rail_x;
+    let mount_x = arm.rail.map_or(rail_x, |rail| rail.world_x(rail_x));
+    let dx = crate::constants::table::WIDTH_X * 0.5 - mount_x;
     let dy = crate::constants::table::LENGTH_Y - mount_y;
     let requested = dx.atan2(dy);
     return Ok(arm
@@ -505,7 +506,9 @@ fn rail_for_racket_head_x(arm: &Arm, start: &Pose, ball_x: f64) -> Result<f64, D
     if !ball_x.is_finite() {
         return Err(DirectControlError::InvalidRailPosition);
     }
-    let mut rail_x = arm.rail.map_or(ball_x, |rail| rail.clamp_x(ball_x));
+    let mut rail_x = arm
+        .rail
+        .map_or(ball_x, |rail| rail.rail_x_for_world_x(ball_x));
     for _ in 0..4 {
         let mut joints = start.joints.clone();
         let aim = joints
@@ -672,7 +675,7 @@ fn position_only_goal(
 
     // 현재 레일, 표적 x 직하, 그 중간을 풀어 레일·관절 동시 이동
     // 시간이 짧은 해를 고른다. 모두 고정 레일의 3차원 위치 IK이다.
-    let target_rail = rail.clamp_x(target.x);
+    let target_rail = rail.rail_x_for_world_x(target.x);
     let rail_candidates = [
         rail.clamp_x(start.rail_x),
         target_rail,

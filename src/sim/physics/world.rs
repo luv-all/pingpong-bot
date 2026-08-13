@@ -554,18 +554,22 @@ impl SimWorld {
         if self.ball_state != crate::sim::physics::BallState::Parked {
             return;
         }
-        let (y, z) = (frame.mount_y(), frame.mount_z());
+        let (x, y, z) = (frame.mount_x(), frame.mount_y(), frame.mount_z());
         let unchanged = self.arm.rail.as_ref().is_some_and(|rail| {
-            (rail.mount_y - y).abs() < 1e-12 && (rail.mount_z - z).abs() < 1e-12
+            (rail.mount_x - x).abs() < 1e-12
+                && (rail.mount_y - y).abs() < 1e-12
+                && (rail.mount_z - z).abs() < 1e-12
         });
         if unchanged {
             return;
         }
 
         let arm = Arc::make_mut(&mut self.arm);
+        arm.base.coords.x = x;
         arm.base.coords.y = y;
         arm.base.coords.z = z;
         if let Some(rail) = arm.rail.as_mut() {
+            rail.mount_x = x;
             rail.mount_y = y;
             rail.mount_z = z;
         }
@@ -1432,7 +1436,11 @@ impl SimWorld {
     pub fn effective_sim_mount(&self) -> crate::robot::urdf::SimRobotMount {
         if let Some(rail) = self.arm.rail.as_ref() {
             return crate::robot::urdf::SimRobotMount {
-                position: [self.robot.rail_x(), rail.mount_y, rail.mount_z],
+                position: [
+                    rail.world_x(self.robot.rail_x()),
+                    rail.mount_y,
+                    rail.mount_z,
+                ],
                 rpy: self
                     .urdf
                     .as_ref()
@@ -1579,6 +1587,7 @@ mod tests {
         let moved = crate::robot::RailFrame {
             mount_y: base.mount_y - 0.06,
             rail_bottom_z: base.rail_bottom_z + 0.04,
+            ..base
         };
         world.apply_rail_frame(moved);
 
@@ -1616,6 +1625,7 @@ mod tests {
         world.apply_rail_frame(crate::robot::RailFrame {
             mount_y: base.mount_y - 0.06,
             rail_bottom_z: base.rail_bottom_z + 0.04,
+            ..base
         });
 
         let after = world.arm().rail.expect("rail");
@@ -1791,7 +1801,7 @@ mod tests {
                 .read_joint_angles(&world.multibody_joint_set);
             let fk = arm
                 .arm
-                .forward_kinematics_with_rail(0.0, &read)
+                .forward_kinematics_with_rail(world.robot().rail_x(), &read)
                 .expect("fk")
                 .position
                 .coords;
@@ -2446,7 +2456,8 @@ mod tests {
         let joints = world.robot().joints().clone();
         *world.robot_mut() = robot::State::new(joints, x);
         let mount = world.effective_sim_mount();
-        assert!((mount.position[0] - x).abs() < 1e-9);
+        let expected_world_x = world.arm().rail.expect("rail").world_x(x);
+        assert!((mount.position[0] - expected_world_x).abs() < 1e-9);
     }
 
     #[test]

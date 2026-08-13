@@ -560,9 +560,8 @@ fn sync_rail_profile(nodes: &mut SceneDynamics, world: &SimWorld) {
     let Some(rail) = world.arm().rail.as_ref() else {
         return;
     };
-    let tcx = (table::WIDTH_X * 0.5) as f32;
     node.set_position(super::super::scene::rail_profile_center(
-        tcx,
+        rail.mount_x as f32 + crate::defaults::RAIL_PHYSICAL_X_MAX_M as f32 * 0.5,
         rail.mount_y,
         rail.mount_z,
     ));
