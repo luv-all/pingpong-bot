@@ -2,7 +2,7 @@
 //!
 //! `run`이 워커 시작 전에 레일과 4축 Dynamixel을 최초 중립 자세에 둔다.
 //! 이후 공 하나당 보정된 접촉점 뒤에 팔을 접어 정렬하고, 예상 타격
-//! 0.25초 전에 j0~j3 백스윙 없는 10cm 직진 푸시를 시작한다. 타격 계획이
+//! 0.20초 전에 j0~j3 백스윙 없는 10cm 직진 푸시를 시작한다. 타격 계획이
 //! 불가능하면 동작을 생략하고 정렬 자세를 유지한 뒤 준비 자세로 복귀한다.
 
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use super::{
 };
 
 const COMMAND_THROTTLE: Duration = Duration::from_millis(20);
-const FIXED_SWING_LEAD: Duration = Duration::from_millis(250);
+const FIXED_SWING_LEAD: Duration = Duration::from_millis(200);
 const RECV_TIMEOUT: Duration = Duration::from_millis(100);
 const BUSY_POLL: Duration = Duration::from_millis(5);
 const AUTO_NEXT_AFTER_HIT_WAIT: Duration = Duration::from_millis(300);
@@ -40,8 +40,12 @@ const MAX_CONSECUTIVE_MISSES: u8 = 3;
 const RAIL_ERROR_WARN_M: f64 = 0.020;
 const AIM_ERROR_WARN_RAD: f64 = 3.0_f64.to_radians();
 const STARTUP_SETTLE_TIMEOUT: Duration = Duration::from_secs(10);
-// 시작 얼라인은 관절별 1° 이내가 5회 연속 측정돼야 완료로 본다.
+// 시작 얼라인은 관절별 허용오차 이내가 5회 연속 측정돼야 완료로 본다.
 const STARTUP_JOINT_TOLERANCE_RAD: f64 = 1.0_f64.to_radians();
+/// 듀얼 MX-64 베이스 j0는 두 모터의 조립 영점·기계 유격·정하중이
+/// 합쳐져 실기에서 2.44° 잔류 편차에 반복 수렴한다. 이 축만 3°를
+/// 허용하고 나머지 축은 1°를 유지한다.
+const STARTUP_BASE_JOINT_TOLERANCE_RAD: f64 = 3.0_f64.to_radians();
 const STARTUP_TRIM_DELAY: Duration = Duration::from_secs(1);
 const STARTUP_MAX_TRIM_ATTEMPTS: u8 = 6;
 const STARTUP_MAX_TRIM_STEP_RAD: f64 = 5.0_f64.to_radians();
@@ -60,6 +64,15 @@ const BENCH_RACKET_LOWEST_ABOVE_TABLE_M: f64 = 0.155;
 const BENCH_HANDLE_END_ABOVE_TABLE_M: f64 = 0.410;
 const BENCH_RACKET_AXIS_FROM_VERTICAL_DEG: f64 = 8.0;
 const BENCH_RACKET_TOTAL_LENGTH_M: f64 = 0.255;
+
+fn startup_joint_tolerance_rad(index: usize) -> f64 {
+    return if index == 0 {
+        STARTUP_BASE_JOINT_TOLERANCE_RAD
+    } else {
+        STARTUP_JOINT_TOLERANCE_RAD
+    };
+}
+
 fn arm_with_physical_rail_range(arm: &Arm) -> Arm {
     let mut expanded = arm.clone();
     if let Some(rail) = expanded.rail.as_mut() {
@@ -98,7 +111,7 @@ fn detection_age(request: &CommitRequest) -> Option<Duration> {
     return Some(Instant::now().saturating_duration_since(detected_at));
 }
 
-/// 첫 검출 뒤 main에서 정한 관측 대기시간이 지난 예측만 제어에 사용한다.
+/// 첫 검출부터 즉시 예비 정렬에 사용한다.
 fn first_control_delay_elapsed(request: &CommitRequest) -> bool {
     let required =
         Duration::from_secs_f64(pingpong_bot::defaults::FIRST_CONTROL_AFTER_DETECTION_SECS);
@@ -1290,7 +1303,9 @@ fn accumulate_startup_trim_goal(
 ) -> Vec<f64> {
     let mut incremental_correction_deg = Vec::with_capacity(joint_errors.len());
     for (index, error) in joint_errors.iter().copied().enumerate() {
-        let correction = if error.abs() > STARTUP_TRIM_MIN_ERROR_RAD {
+        let correction_threshold =
+            STARTUP_TRIM_MIN_ERROR_RAD.max(startup_joint_tolerance_rad(index));
+        let correction = if error.abs() > correction_threshold {
             (error * STARTUP_TRIM_GAIN).clamp(-STARTUP_MAX_TRIM_STEP_RAD, STARTUP_MAX_TRIM_STEP_RAD)
         } else {
             0.0
@@ -1431,12 +1446,14 @@ fn initialize_pose_attempt(
             "시작 자세 초기화 전 실측"
         );
     }
-    // 전원이 꺼진 동안 손으로 팔을 움직였을 수 있다. 4-DOF는 main의 준비
-    // 자세로 초기화한다. 곧장 가는 경로가 테이블을 스치면 상승
+    // 전원이 꺼진 동안 손으로 팔을 움직였을 수 있다. 4-DOF는 안쪽으로 말린
+    // 높은 아치 자세로 초기화한다. 곧장 가는 경로가 테이블을 스치면 상승
     // 중간 자세를 거치는 안전 복귀를 쓴다.
     let mut startup_arm = arm.clone();
-    if arm.default_joints.values.len() == pingpong_bot::defaults::READY_JOINTS_4DOF.len() {
-        startup_arm.default_joints = Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF);
+    if arm.default_joints.values.len() == pingpong_bot::defaults::POST_HIT_TUCKED_JOINTS_4DOF.len()
+    {
+        startup_arm.default_joints =
+            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_TUCKED_JOINTS_4DOF);
     }
     let ready_joints = startup_arm.default_joints.clone();
     let ready_rail_x = arm
@@ -1507,7 +1524,11 @@ fn initialize_pose_attempt(
             .iter()
             .map(|error| error.abs())
             .fold(0.0_f64, f64::max);
-        if max_joint_error_rad <= STARTUP_JOINT_TOLERANCE_RAD {
+        let joints_settled = joint_errors
+            .iter()
+            .enumerate()
+            .all(|(index, error)| error.abs() <= startup_joint_tolerance_rad(index));
+        if joints_settled {
             stable_samples = stable_samples.saturating_add(1);
             if stable_samples >= STARTUP_STABLE_SAMPLES {
                 break pose;
@@ -1658,7 +1679,7 @@ fn move_to_ready(hardware: &mut dyn Hardware, arm: &Arm, rail_x: f64) -> Result<
     return Ok(());
 }
 
-/// 타격 후 레일은 현재 위치에 고정하고 Dynamixel 관절만 main의 준비 자세로 복귀한다.
+/// 타격 후 레일은 현재 위치에 고정하고 Dynamixel 관절만 안쪽으로 말린 자세로 복귀한다.
 /// 직접 복귀가 테이블을 스치면 기존 상승 중간 자세를 쓰되, 모든 구간을
 /// `command_joints`로 실행해 AXL 리니어 모터에는 명령을 내리지 않는다.
 fn move_joints_to_ready_in_place(hardware: &mut dyn Hardware, arm: &Arm) -> Result<(), MoveError> {
@@ -1670,7 +1691,8 @@ fn move_joints_to_ready_in_place(hardware: &mut dyn Hardware, arm: &Arm) -> Resu
         .arm_joint_limit_escape(&start.joints)
         .map_err(MoveError::Hardware)?;
     let mut ready_arm = arm.clone();
-    ready_arm.default_joints = Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF);
+    ready_arm.default_joints =
+        Joints::from_slice(&pingpong_bot::defaults::POST_HIT_TUCKED_JOINTS_4DOF);
     let trajectories =
         plan_neutral_return_segments(&ready_arm, &start, start.rail_x).map_err(MoveError::Plan)?;
     for trajectory in trajectories {
@@ -2076,18 +2098,11 @@ mod tests {
     }
 
     #[test]
-    fn first_control_uses_main_detection_delay() {
+    fn first_control_accepts_first_detection_immediately() {
         let mut request = vision_request(Duration::ZERO);
         let first_t = request.trajectory.measured.first().expect("first state").t;
-        let required =
-            Duration::from_secs_f64(pingpong_bot::defaults::FIRST_CONTROL_AFTER_DETECTION_SECS);
 
-        request.trajectory.origin =
-            Instant::now() - first_t - (required - Duration::from_millis(1));
-        assert!(!first_control_delay_elapsed(&request));
-
-        request.trajectory.origin =
-            Instant::now() - first_t - (required + Duration::from_millis(1));
+        request.trajectory.origin = Instant::now() - first_t - Duration::from_millis(11);
         assert!(first_control_delay_elapsed(&request));
     }
 
@@ -2207,7 +2222,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_initialization_sets_main_ready_rail_and_all_joints() {
+    fn startup_initialization_sets_tucked_rail_and_all_joints() {
         let robot = pingpong_bot::defaults::robot().expect("robot");
         let rail = robot.arm.rail.expect("rail");
         let mut hardware = PoseApplyingHardware {
@@ -2218,8 +2233,9 @@ mod tests {
         let initialized = initialize_pose(&mut hardware, &robot.arm).expect("initialize");
         let start = Pose::new(rail.x_min, Joints::from_slice(&[0.0; 4]));
         let mut startup_arm = (*robot.arm).clone();
-        startup_arm.default_joints = Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF);
-        let expected = Planner::return_to_center(&startup_arm, &start).expect("main ready");
+        startup_arm.default_joints =
+            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_TUCKED_JOINTS_4DOF);
+        let expected = Planner::return_to_center(&startup_arm, &start).expect("tucked ready");
 
         assert!((initialized.rail_x - rail.default_x()).abs() < 1e-12);
         assert_eq!(initialized.joints, expected.follow_through);
@@ -2249,7 +2265,7 @@ mod tests {
         assert!((hardware.pose.rail_x - hit_rail_x).abs() < 1e-12);
         assert_eq!(
             hardware.pose.joints,
-            Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF)
+            Joints::from_slice(&pingpong_bot::defaults::POST_HIT_TUCKED_JOINTS_4DOF)
         );
     }
 
@@ -2265,6 +2281,22 @@ mod tests {
 
         assert!((goal[2] - (original[2] - 2.8_f64.to_radians())).abs() < 1e-12);
         assert_eq!(goal[3], original[3], "0.25° 미만 진동은 무시");
+    }
+
+    #[test]
+    fn startup_base_joint_accepts_measured_dual_motor_residual_only_for_j0() {
+        assert!(2.44_f64.to_radians() < startup_joint_tolerance_rad(0));
+        assert!(2.44_f64.to_radians() > startup_joint_tolerance_rad(1));
+
+        let robot = pingpong_bot::defaults::robot().expect("robot");
+        let mut goal = robot.arm.default_joints.values.clone();
+        let original = goal.clone();
+        accumulate_startup_trim_goal(
+            &robot.arm,
+            &mut goal,
+            &[2.44_f64.to_radians(), 0.0, 0.0, 0.0],
+        );
+        assert_eq!(goal[0], original[0], "3° 안쪽 j0는 과보정하지 않음");
     }
 
     #[test]

@@ -578,7 +578,7 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 /// 기초 정렬 모드에서 사용하지 않는다. 공 중심과 라켓 중심을 겹치지 않도록
 /// `공 반지름 + 라켓 반두께 + 다관절 푸시 거리` 만큼 법선 반대쪽에 라켓
 /// 중심을 둔다. 따라서 공별 정렬 자세 자체가 팔을 접은 타격 준비 자세가 된다.
-/// 공의 x는 발사기 기준 오른쪽으로 6 cm, z는 위로 1.5 cm 보정한다. 공이 닿는 지점은
+/// 공의 x는 발사기 기준 오른쪽으로 10 cm, z는 위로 1.5 cm 보정한다. 공이 닿는 지점은
 /// 블레이드 중심보다 0.5 cm 아래라서, 라켓 중심은 공 중심보다 0.5 cm 위로 올린다.
 fn ball_alignment_geometry(ball: Point3) -> (Point3, Vector3<f64>, Point3) {
     return ball_alignment_geometry_with_prewind(ball, FIXED_JOINT_PUSH_DISTANCE_M);
@@ -662,7 +662,7 @@ pub fn ball_alignment_pose(
     ball: Point3,
 ) -> Result<robot::Pose, DomainError> {
     let mut last_error = None;
-    for prewind_distance_m in [FIXED_JOINT_PUSH_DISTANCE_M, 0.025, 0.020, 0.0] {
+    for prewind_distance_m in [FIXED_JOINT_PUSH_DISTANCE_M, 0.025, 0.020] {
         let (corrected_ball, target_normal, racket_center) =
             ball_alignment_geometry_with_prewind(ball, prewind_distance_m);
         let hint_rail_x = arm
@@ -741,7 +741,7 @@ pub fn plan_ball_alignment_fixed_rail(
 ) -> Result<Trajectory, DomainError> {
     let hint = robot::Pose::new(start.rail_x, start.joints.clone());
     let mut last_error = None;
-    for prewind_distance_m in [FIXED_JOINT_PUSH_DISTANCE_M, 0.025, 0.020, 0.0] {
+    for prewind_distance_m in [FIXED_JOINT_PUSH_DISTANCE_M, 0.025, 0.020] {
         let (corrected_ball, target_normal, racket_center) =
             ball_alignment_geometry_with_prewind(ball, prewind_distance_m);
         let result = arm
@@ -1854,9 +1854,9 @@ mod tests {
             .expect("impact velocity FK");
         let forward_speed = ((after_impact_pose.position - impact.position) / velocity_probe_dt)
             .dot(&impact.normal);
-        // 10cm 직진 뒤 임팩트 끝속도 0.7m/s를 유지한다.
+        // 10cm 직진 뒤 임팩트 끝속도 0.85m/s를 유지한다.
         assert!(
-            forward_speed > 0.69,
+            forward_speed > 0.84,
             "직진 타격 속도가 유지돼야 함: {forward_speed:.3}m/s"
         );
         assert!(
@@ -2078,7 +2078,7 @@ mod tests {
     }
 
     #[test]
-    fn ball_alignment_reaches_position_with_zero_impact_velocity() {
+    fn ball_alignment_waits_behind_position_with_zero_impact_velocity() {
         let active = crate::defaults::robot().expect("active robot");
         let arm = &active.arm;
         let start = robot::Pose::new(
@@ -2120,10 +2120,16 @@ mod tests {
             - Vector3::z() * ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M
             + reached.normal
                 * (crate::constants::BALL_RADIUS + crate::constants::geometry::RACKET_HALF_Z);
+        let prewind = corrected_ball.coords - contact;
+        let prewind_distance_m = prewind.dot(&reached.normal);
+        let lateral_error_m = (prewind - reached.normal * prewind_distance_m).norm();
         assert!(
-            (contact - corrected_ball.coords).norm() < 2e-3,
-            "오른쪽 6cm 보정 후 라켓 중심보다 0.5cm 아래 접촉점이 목표에 닿아야 함: contact={contact:?} corrected_ball={:?}",
-            corrected_ball.coords
+            (0.019..=0.101).contains(&prewind_distance_m),
+            "접힌 타격 준비 자세는 공 뒤 2~10cm에 있어야 함: prewind={prewind_distance_m:.4}m"
+        );
+        assert!(
+            lateral_error_m < 2e-3,
+            "10cm x 보정 후 법선 방향으로만 접혀야 함: lateral_error={lateral_error_m:.4}m"
         );
         assert!(
             alignment

@@ -80,8 +80,8 @@ pub use rail::{
     RAIL_X_MAX_M, RAIL_X_MIN_M, rail_calibration_path, rail_frame,
 };
 pub use robot::{
-    READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount, robot, shared_robot, urdf_4dof,
-    urdf_test,
+    POST_HIT_TUCKED_JOINTS_4DOF, READY_JOINTS_4DOF, primitive_4dof, primitive_4dof_with_mount,
+    robot, shared_robot, urdf_4dof, urdf_test,
 };
 pub use sim::{
     EVAL_MAX_SCORE, EVAL_NET_PASSTHROUGH_RETRIES, EVAL_PASS_SCORE_EXCLUSIVE, EVAL_PITCH_JITTER_DEG,
@@ -135,7 +135,7 @@ mod tests {
         assert!((rail_config.domain_to_board_abs(1.3395) - 0.0555).abs() < 1e-12);
         assert!((rail_config.domain_to_board_abs(0.6750) - 0.7200).abs() < 1e-12);
         assert!((ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M - 0.0050).abs() < 1e-12);
-        assert!((ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M - 0.0600).abs() < 1e-12);
+        assert!((ALIGNMENT_LAUNCHER_RIGHT_OFFSET_M - 0.1000).abs() < 1e-12);
         assert!((RAIL_COORDINATE_POSITIVE_X_OFFSET_M - 0.0150).abs() < 1e-12);
         assert!((JOINT_SPEED_DERATE - 0.95).abs() < 1e-12);
         assert!((rail_config.x_min_m - model_rail.x_min).abs() < 1e-12);

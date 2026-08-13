@@ -90,6 +90,22 @@ fn wrist_zero_offset_rotates_id5_eight_degrees_toward_bench_alignment() {
 }
 
 #[test]
+fn high_arch_ready_pose_stays_inside_every_real_motor_limit() {
+    let mapping = MotorMapping::new(bench_config()).expect("valid mapping");
+    for (index, angle) in crate::defaults::POST_HIT_TUCKED_JOINTS_4DOF
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        assert!(
+            !mapping.clamped_by_motor_limit(index, angle),
+            "high-arch ready joint {index} must not be clamped: angle={angle}rad tick={}",
+            mapping.radians_to_ticks(index, angle)
+        );
+    }
+}
+
+#[test]
 fn dry_run_limit_escape_holds_outside_start_and_only_moves_inward() {
     let mut config = bench_config();
     config.joint_offsets_rad[0] = 0.0;

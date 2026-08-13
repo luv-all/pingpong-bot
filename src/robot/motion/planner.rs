@@ -111,7 +111,7 @@ impl Planner {
         return physics::plan_ready_prewind(arm, start);
     }
 
-    /// 발사기 기준 오른쪽 6cm로 보정한 예측 위치에, 라켓 중심보다
+    /// 발사기 기준 오른쪽 10cm로 보정한 예측 위치에, 라켓 중심보다
     /// 0.5cm 아래 지점이 닿도록 정지 정렬한다.
     /// 라켓 면은 공 반지름+라켓 반두께만큼 뒤에 둔다.
     pub fn ball_alignment(
