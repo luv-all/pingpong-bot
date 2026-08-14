@@ -2278,11 +2278,14 @@ mod tests {
                     trajectory.end.values[wrist_index] < trajectory.start.values[wrist_index],
                     "sim 정상 스윙도 IK의 j3 목표를 버리고 위로 휘둘러야 함"
                 );
-                let cruise_velocity = trajectory.sample_velocity_at(
-                    (crate::defaults::motion::FIXED_JOINT_SWING_RAMP_SECS
-                        + trajectory.impact_time_secs)
-                        * 0.5,
-                )[wrist_index];
+                let wrist_travel = trajectory.start.values[wrist_index]
+                    - trajectory.end.values[wrist_index];
+                assert!((wrist_travel.to_degrees() - 15.0).abs() < 1e-9);
+                assert!((trajectory.start.values[wrist_index]
+                    - trajectory.follow_through.values[wrist_index]).to_degrees() <= 15.0 + 1e-9);
+                let peak_time = trajectory.impact_time_secs
+                    - wrist_travel / world.arm.max_joint_speed;
+                let cruise_velocity = trajectory.sample_velocity_at(peak_time)[wrist_index];
                 assert!(
                     (cruise_velocity + world.arm.max_joint_speed).abs() < 1e-6,
                     "sim j3가 위쪽 최고속도로 순항해야 함: {cruise_velocity}"
@@ -2316,8 +2319,14 @@ mod tests {
         assert!(trajectory.end.values[2] < trajectory.start.values[2]);
         assert!(trajectory.end.values[3] < trajectory.start.values[3]);
         let wrist_index = world.arm.wrist_joint_index().expect("wrist");
-        let wrist_velocity =
-            trajectory.sample_velocity_at(trajectory.impact_time_secs)[wrist_index];
+        let wrist_travel =
+            trajectory.start.values[wrist_index] - trajectory.end.values[wrist_index];
+        assert!((wrist_travel.to_degrees() - 15.0).abs() < 1e-9);
+        assert!((trajectory.start.values[wrist_index]
+            - trajectory.follow_through.values[wrist_index]).to_degrees() <= 15.0 + 1e-9);
+        let peak_time = trajectory.impact_time_secs
+            - wrist_travel / world.arm.max_joint_speed;
+        let wrist_velocity = trajectory.sample_velocity_at(peak_time)[wrist_index];
         assert!(
             (wrist_velocity + world.arm.max_joint_speed).abs() < 1e-6,
             "sim 고정 밀치기에서도 j3가 위쪽 최고속도여야 함: {wrist_velocity}"

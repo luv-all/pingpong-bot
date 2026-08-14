@@ -1426,7 +1426,7 @@ pub fn plan_fixed_joint_swing_power_sweep_from_alignment(
 ///
 /// 레일은 현재 위치를 유지하고, j0·j2는 중앙 기준 정상 파워 스윙에서 얻은
 /// 고정 델타만큼 밀친다. j1은 유지하고 j3는 정상 스윙과 똑같이 IK 목표를
-/// 무시한 채 위로 최고속 스윙한다. IK는 호출하지 않으며 일반 스윙과 동일한
+/// 무시한 채 위로 15° 안에서 최고속도까지 스윙한다. IK는 호출하지 않으며 일반 스윙과 동일한
 /// 관절·속도·가속도·테이블 충돌 검사를 통과해야만 반환한다.
 pub fn plan_fixed_joint_push_fallback(
     arm: &Arm,
@@ -1457,19 +1457,6 @@ pub fn plan_fixed_joint_push_fallback(
             .joint_limit(index)
             .map_or(requested, |limit| requested.clamp(limit.min, limit.max));
     }
-    let q0 = impact_values[wrist_index];
-    let ramp_duration = FIXED_JOINT_SWING_RAMP_SECS.min(impact_time);
-    let max_travel = if impact_time <= FIXED_JOINT_SWING_RAMP_SECS {
-        0.5 * ramp_accel * impact_time * impact_time
-    } else {
-        0.5 * ramp_accel * ramp_duration * ramp_duration
-            + arm.max_joint_speed * (impact_time - ramp_duration)
-    };
-    let upward_limit = arm
-        .joint_limit(wrist_index)
-        .map_or(q0 - max_travel, |limit| limit.min);
-    impact_values[wrist_index] = (q0 - max_travel).max(upward_limit);
-
     let mut profiles = vec![PreImpactJointProfile::Quadratic; joint_count];
     for &(index, _) in &FIXED_PUSH_DELTAS_RAD {
         if RampCruiseSegment::new(
@@ -1490,7 +1477,13 @@ pub fn plan_fixed_joint_push_fallback(
         }
         profiles[index] = PreImpactJointProfile::RampCruise { accel: ramp_accel };
     }
-    profiles[wrist_index] = PreImpactJointProfile::RampCruise { accel: ramp_accel };
+    apply_fixed_wrist_swing(
+        arm,
+        start.joints.values[wrist_index],
+        impact_time,
+        &mut impact_values[wrist_index],
+        &mut profiles[wrist_index],
+    );
     let impact = Joints {
         values: impact_values,
     };
@@ -1544,6 +1537,32 @@ pub fn plan_fixed_joint_push_fallback(
 /// j0·j2 인덱스 — 이 팔에서 토크가 가장 큰 두 관절(이중/단일 MX-64).
 const POWER_SWEEP_JOINT_INDICES: [usize; 2] = [0, 2];
 
+/// 정상·폴백에서 공통으로 쓰는 독립 손목 상향 스윙 각도: 15°.
+const FIXED_WRIST_SWING_RAD: f64 = 0.261_799_387_799_149_4;
+
+fn apply_fixed_wrist_swing(
+    arm: &Arm,
+    q0: f64,
+    impact_time: f64,
+    qf: &mut f64,
+    profile: &mut PreImpactJointProfile,
+) {
+    let upward_limit = arm
+        .joint_limit(arm.wrist_joint_index().expect("wrist index"))
+        .map_or(q0 - FIXED_WRIST_SWING_RAD, |limit| limit.min);
+    *qf = (q0 - FIXED_WRIST_SWING_RAD).max(upward_limit);
+    let travel = (q0 - *qf).max(0.0);
+    if travel <= f64::EPSILON {
+        return;
+    }
+
+    let active_time = 2.0 * travel / arm.max_joint_speed;
+    *profile = PreImpactJointProfile::DelayedTriangular {
+        peak_speed: arm.max_joint_speed,
+        delay: (impact_time - active_time).max(0.0),
+    };
+}
+
 fn plan_fixed_joint_swing_power_sweep_to_pose(
     arm: &Arm,
     start: &robot::Pose,
@@ -1583,21 +1602,16 @@ fn plan_fixed_joint_swing_power_sweep_to_pose(
     if let Some(wrist_index) = arm.wrist_joint_index() {
         // IK가 고른 손목각은 사용하지 않는다. j0~j2의 임팩트 자세를 푼 뒤
         // j3만 실행 궤적에서 라켓 면이 위로 열리는 음의 방향으로 덮어쓴다.
-        // 가속 램프 뒤 최고속도를 유지하되, 관절 하한이 먼저 오면 그 한계에서
-        // 멈추도록 임팩트 목표각을 정한다.
+        // 총 목표각은 위쪽 15°로 제한한다. 필요한 만큼 시작을 늦춘 뒤
+        // 최고속도까지 올렸다가 15° 끝점에서 멈춘다.
         let q0 = start.joints.values[wrist_index];
-        let ramp_duration = FIXED_JOINT_SWING_RAMP_SECS.min(impact_time);
-        let max_travel = if impact_time <= FIXED_JOINT_SWING_RAMP_SECS {
-            0.5 * ramp_accel * impact_time * impact_time
-        } else {
-            0.5 * ramp_accel * ramp_duration * ramp_duration
-                + arm.max_joint_speed * (impact_time - ramp_duration)
-        };
-        let upward_limit = arm
-            .joint_limit(wrist_index)
-            .map_or(q0 - max_travel, |limit| limit.min);
-        impact_pose.joints.values[wrist_index] = (q0 - max_travel).max(upward_limit);
-        profiles[wrist_index] = PreImpactJointProfile::RampCruise { accel: ramp_accel };
+        apply_fixed_wrist_swing(
+            arm,
+            q0,
+            impact_time,
+            &mut impact_pose.joints.values[wrist_index],
+            &mut profiles[wrist_index],
+        );
     }
 
     let skipped_joint_indices = (0..joint_count)
@@ -2804,9 +2818,13 @@ mod tests {
             trajectory.end.values[wrist_index] < trajectory.start.values[wrist_index],
             "wrist must move in the upward (negative joint-angle) direction"
         );
-        let v_during_cruise = trajectory
-            .sample_velocity_at((FIXED_JOINT_SWING_RAMP_SECS + trajectory.impact_time_secs) * 0.5)
-            [wrist_index];
+        let wrist_travel = trajectory.start.values[wrist_index] - trajectory.end.values[wrist_index];
+        assert!((wrist_travel - FIXED_WRIST_SWING_RAD).abs() < 1e-9);
+        assert!((trajectory.start.values[wrist_index]
+            - trajectory.follow_through.values[wrist_index]
+            - FIXED_WRIST_SWING_RAD).abs() < 1e-9);
+        let peak_time = trajectory.impact_time_secs - FIXED_WRIST_SWING_RAD / arm.max_joint_speed;
+        let v_during_cruise = trajectory.sample_velocity_at(peak_time)[wrist_index];
         assert!(
             (v_during_cruise + arm.max_joint_speed).abs() < 1e-6,
             "wrist should cruise upward at max speed: v={v_during_cruise}"
@@ -2831,9 +2849,13 @@ mod tests {
         assert_eq!(trajectory.end.values[1], trajectory.start.values[1]);
         assert!(trajectory.end.values[2] < trajectory.start.values[2]);
         let wrist_index = arm.wrist_joint_index().expect("wrist");
-        let cruise_velocity = trajectory
-            .sample_velocity_at((FIXED_JOINT_SWING_RAMP_SECS + trajectory.impact_time_secs) * 0.5)
-            [wrist_index];
+        let wrist_travel = trajectory.start.values[wrist_index] - trajectory.end.values[wrist_index];
+        assert!((wrist_travel - FIXED_WRIST_SWING_RAD).abs() < 1e-9);
+        assert!((trajectory.start.values[wrist_index]
+            - trajectory.follow_through.values[wrist_index]
+            - FIXED_WRIST_SWING_RAD).abs() < 1e-9);
+        let peak_time = trajectory.impact_time_secs - FIXED_WRIST_SWING_RAD / arm.max_joint_speed;
+        let cruise_velocity = trajectory.sample_velocity_at(peak_time)[wrist_index];
         assert!((cruise_velocity + arm.max_joint_speed).abs() < 1e-6);
     }
 

@@ -30,6 +30,67 @@ pub(crate) enum PreImpactSegment {
     Quadratic(QuadraticSegment),
     DelayedQuadratic(DelayedQuadraticSegment),
     RampCruise(RampCruiseSegment),
+    DelayedTriangular(DelayedTriangularSegment),
+}
+
+/// 지정 시각까지 정지한 뒤 가속·감속해 정해진 각도에서 멈추는 손목 세그먼트.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DelayedTriangularSegment {
+    q0: f64,
+    qf: f64,
+    delay: f64,
+    half_time: f64,
+    accel: f64,
+}
+
+impl DelayedTriangularSegment {
+    fn new(q0: f64, qf: f64, duration: f64, peak_speed: f64, delay: f64) -> Option<Self> {
+        let travel = (qf - q0).abs();
+        if travel <= f64::EPSILON || peak_speed <= f64::EPSILON {
+            return None;
+        }
+        let delay = delay.clamp(0.0, duration);
+        let half_time = travel / peak_speed;
+        if delay + 2.0 * half_time > duration + 1e-9 {
+            return None;
+        }
+        let sign = if qf < q0 { -1.0 } else { 1.0 };
+        let accel = sign * peak_speed / half_time;
+        return Some(Self { q0, qf, delay, half_time, accel });
+    }
+
+    fn sample(&self, t: f64) -> (f64, f64, f64) {
+        if t <= self.delay {
+            return (self.q0, 0.0, 0.0);
+        }
+        let active_t = t - self.delay;
+        if active_t < self.half_time {
+            return (
+                self.q0 + 0.5 * self.accel * active_t * active_t,
+                self.accel * active_t,
+                self.accel,
+            );
+        }
+        if active_t < 2.0 * self.half_time {
+            let decel_t = active_t - self.half_time;
+            let peak_velocity = self.accel * self.half_time;
+            let midpoint = self.q0 + 0.5 * self.accel * self.half_time * self.half_time;
+            return (
+                midpoint + peak_velocity * decel_t - 0.5 * self.accel * decel_t * decel_t,
+                peak_velocity - self.accel * decel_t,
+                -self.accel,
+            );
+        }
+        return (self.qf, 0.0, 0.0);
+    }
+
+    fn max_speed(&self, _samples: usize) -> f64 {
+        return (self.accel * self.half_time).abs();
+    }
+
+    fn max_acceleration(&self, _samples: usize) -> f64 {
+        return self.accel.abs();
+    }
 }
 
 impl PreImpactSegment {
@@ -39,6 +100,7 @@ impl PreImpactSegment {
             PreImpactSegment::Quadratic(segment) => segment.sample(t),
             PreImpactSegment::DelayedQuadratic(segment) => segment.sample(t),
             PreImpactSegment::RampCruise(segment) => segment.sample(t),
+            PreImpactSegment::DelayedTriangular(segment) => segment.sample(t),
         };
     }
 
@@ -48,6 +110,7 @@ impl PreImpactSegment {
             PreImpactSegment::Quadratic(segment) => segment.max_speed(samples),
             PreImpactSegment::DelayedQuadratic(segment) => segment.max_speed(samples),
             PreImpactSegment::RampCruise(segment) => segment.max_speed(samples),
+            PreImpactSegment::DelayedTriangular(segment) => segment.max_speed(samples),
         };
     }
 
@@ -57,6 +120,7 @@ impl PreImpactSegment {
             PreImpactSegment::Quadratic(segment) => segment.max_acceleration(samples),
             PreImpactSegment::DelayedQuadratic(segment) => segment.max_acceleration(samples),
             PreImpactSegment::RampCruise(segment) => segment.max_acceleration(samples),
+            PreImpactSegment::DelayedTriangular(segment) => segment.max_acceleration(samples),
         };
     }
 }
@@ -73,6 +137,8 @@ pub(crate) enum PreImpactJointProfile {
     /// 가속도 `accel`로 첨두속도까지 가속한 뒤 순항 — j0·j2처럼 임팩트
     /// 앞에서 첨두속도를 유지해야 하는 관절.
     RampCruise { accel: f64 },
+    /// `delay`초 동안 현재 각도를 유지한 뒤 최고속도까지 가속하고 감속한다.
+    DelayedTriangular { peak_speed: f64, delay: f64 },
 }
 
 impl PreImpactJointProfile {
@@ -92,6 +158,12 @@ impl PreImpactJointProfile {
                     // 호출자(physics.rs)가 미리 `RampCruiseSegment::new`로 실현
                     // 가능성을 검증하므로 여기 도달하면 안 되지만, Trajectory
                     // 자체는 실패하지 않는 기존 관례를 지키기 위한 방어적 대체.
+                    None => PreImpactSegment::Quadratic(QuadraticSegment::new(q0, 0.0, qf, duration)),
+                }
+            }
+            PreImpactJointProfile::DelayedTriangular { peak_speed, delay } => {
+                match DelayedTriangularSegment::new(q0, qf, duration, peak_speed, delay) {
+                    Some(segment) => PreImpactSegment::DelayedTriangular(segment),
                     None => PreImpactSegment::Quadratic(QuadraticSegment::new(q0, 0.0, qf, duration)),
                 }
             }
