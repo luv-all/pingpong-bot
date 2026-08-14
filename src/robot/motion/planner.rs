@@ -127,6 +127,11 @@ impl Planner {
         return physics::ball_alignment_rail_target(arm, ball);
     }
 
+    /// 관절은 유지한 채 현재 라켓 중심 x를 공 x에 맞추는 레일 목표.
+    pub fn ball_x_tracking_rail_target(arm: &Arm, start: &robot::Pose, ball_x: f64) -> f64 {
+        return physics::ball_x_tracking_rail_target(arm, start, ball_x);
+    }
+
     pub fn ball_alignment_rail_target_unclamped(ball: Point3) -> f64 {
         return physics::ball_alignment_rail_target_unclamped(ball);
     }
@@ -203,8 +208,8 @@ impl Planner {
     }
 
     /// [`Self::fixed_joint_swing_quadratic`]를 대체하는 파워 스윙 — j0·j2가
-    /// 관절 속도 상한까지 가속-순항하며 임팩트를 만들고, j3는 요구
-    /// 회전량에 맞춘 스냅 창으로 접힌 자세를 유지하다 스냅한다.
+    /// 관절 속도 상한까지 가속-순항하며 임팩트를 만들고, j3는 IK 목표와
+    /// 무관하게 위쪽으로 가속한 뒤 관절 최고속도로 순항한다.
     /// `target_impact_time_secs`는 타격-전 전체 시간의 목표값이다
     /// (`FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS` 미만이면 그 값으로
     /// 클램프된다).
@@ -229,6 +234,16 @@ impl Planner {
             aligned,
             target_impact_time_secs,
         );
+    }
+
+    /// 자세 IK 실패 시 레일은 유지하고 j0·j2 고정 밀치기와 j3 상향 전속
+    /// 스윙을 합성하는 IK 없는 폴백.
+    pub fn fixed_joint_push_fallback(
+        arm: &Arm,
+        start: &robot::Pose,
+        target_impact_time_secs: f64,
+    ) -> Result<physics::FixedJointSwing, DomainError> {
+        return physics::plan_fixed_joint_push_fallback(arm, start, target_impact_time_secs);
     }
 
     /// 정지 → 정지로 임의 포즈까지 잇는 최단 실행가능 궤적 (coarse 선추종용).

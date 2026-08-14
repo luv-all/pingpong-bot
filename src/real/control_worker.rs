@@ -3,7 +3,8 @@
 //! `run`이 워커 시작 전에 레일과 4축 Dynamixel을 최초 중립 자세에 둔다.
 //! 이후 공 하나당 보정된 접촉점 뒤에 팔을 접어 정렬하고, 예상 타격
 //! 0.40초 전에 j0~j3 백스윙 없는 10cm 직진 푸시를 시작한다. 타격 계획이
-//! 불가능하면 동작을 생략하고 정렬 자세를 유지한 뒤 준비 자세로 복귀한다.
+//! 불가능하면 레일은 공 x 추적을 유지하고, 팔은 IK 없는 고정 밀치기 스윙으로
+//! 타격을 시도한 뒤 준비 자세로 복귀한다.
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -235,6 +236,8 @@ enum BallControlState {
     Aligning {
         swing_due_at: Instant,
         swing_attempted: bool,
+        /// 팔 자세 IK가 실패해 관절 스윙을 고정 밀치기 모션으로 대체해야 하는지.
+        fixed_swing_fallback: bool,
         return_due_at: Instant,
         /// 파워 스윙 목표 타격-전 시간을 스윙 트리거 시점에 다시 계산하는 데
         /// 쓴다 (`target_impact_time_secs`) — 매 새 예측마다 `swing_due_at`과
@@ -252,6 +255,50 @@ impl BallControlState {
             Self::Aligning { measurement, .. } => Some(measurement.track_seq),
         };
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn schedule_fixed_swing_fallback(
+    state: &mut BallControlState,
+    event_tx: &Sender<RuntimeEvent>,
+    track_seq: u64,
+    fallback_swing_due_at: Instant,
+    return_due_at: Instant,
+    predicted_arrival_at: Instant,
+    rail_commanded_m: f64,
+    joints: Joints,
+) {
+    // 고정 밀치기는 남은 시간 전체에 동작을 늘이지 않는다. 고정된 최소
+    // 타격 구간만 남았을 때 시작해야 j3가 관절 끝에 먼저 닿지 않고
+    // 임팩트에서 위쪽 최고속도를 낼 수 있다.
+    let fallback_lead = Duration::from_secs_f64(
+        pingpong_bot::defaults::FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS
+            + pingpong_bot::defaults::FIXED_JOINT_SWING_IMPACT_MARGIN_SECS,
+    );
+    let swing_due_at = predicted_arrival_at
+        .checked_sub(fallback_lead)
+        .unwrap_or(fallback_swing_due_at);
+    let aim_commanded_rad = joints.values.get(1).copied().unwrap_or(0.0);
+    *state = BallControlState::Aligning {
+        swing_due_at,
+        swing_attempted: false,
+        fixed_swing_fallback: true,
+        return_due_at,
+        predicted_arrival_at,
+        measurement: PendingAlignmentMeasurement {
+            track_seq,
+            rail_commanded_m,
+            joints_commanded: joints,
+        },
+    };
+    let _ = event_tx.send(RuntimeEvent::ControlState {
+        state: ControlStateSnapshot::Aligning {
+            track_seq,
+            return_due_at,
+            rail_commanded_m,
+            aim_commanded_rad,
+        },
+    });
 }
 
 /// 명령 후 레일·조준축 재측정 상태.
@@ -437,25 +484,32 @@ pub fn spawn(
                 BallControlState::Aligning {
                     swing_due_at,
                     swing_attempted,
+                    fixed_swing_fallback,
                     predicted_arrival_at,
                     measurement,
                     ..
-                } if !swing_attempted && Instant::now() >= *swing_due_at => {
-                    Some((
+                } if !swing_attempted && Instant::now() >= *swing_due_at => Some((
                         measurement.track_seq,
                         *swing_due_at,
                         *predicted_arrival_at,
+                    *fixed_swing_fallback,
                         pingpong_bot::robot::Pose::new(
                             measurement.rail_commanded_m,
                             measurement.joints_commanded.clone(),
                         ),
-                    ))
-                }
+                )),
                 BallControlState::Idle
                 | BallControlState::Waiting
                 | BallControlState::Aligning { .. } => None,
             };
-            if let Some((track_seq, swing_due_at, predicted_arrival_at, aligned_target)) = due_swing {
+            if let Some((
+                track_seq,
+                swing_due_at,
+                predicted_arrival_at,
+                fixed_swing_fallback,
+                aligned_target,
+            )) = due_swing
+            {
                 if let BallControlState::Aligning {
                     swing_attempted, ..
                 } = &mut state
@@ -468,13 +522,38 @@ pub fn spawn(
                         let swing_arm = arm_for_rail_position(&arm, swing_start.rail_x);
                         let swing_target_impact_time_secs =
                             target_impact_time_secs(predicted_arrival_at, Instant::now());
+                        let planned = if fixed_swing_fallback {
+                            Planner::fixed_joint_push_fallback(
+                                &swing_arm,
+                                &swing_start,
+                                swing_target_impact_time_secs,
+                            )
+                            .map(|planned| (planned, true))
+                        } else {
                         match Planner::fixed_joint_swing_power_sweep_from_alignment(
                             &swing_arm,
                             &swing_start,
                             &aligned_target,
                             swing_target_impact_time_secs,
                         ) {
-                        Ok(planned) => {
+                                Ok(planned) => Ok((planned, false)),
+                                Err(error) => {
+                                    warn!(
+                                        track_seq,
+                                        %error,
+                                        "다관절 직진 푸시 계획 불가 — 고정 밀치기 스윙으로 폴백"
+                                    );
+                                    Planner::fixed_joint_push_fallback(
+                                        &swing_arm,
+                                        &swing_start,
+                                        swing_target_impact_time_secs,
+                                    )
+                                    .map(|planned| (planned, true))
+                                }
+                            }
+                        };
+                        match planned {
+                            Ok((planned, used_fixed_swing_fallback)) => {
                             let swing = &planned.trajectory;
                             let measured_racket_z = swing_arm
                                 .forward_kinematics_with_rail(
@@ -501,10 +580,18 @@ pub fn spawn(
                                         &mut state
                                     {
                                         measurement.rail_commanded_m = swing_start.rail_x;
-                                        measurement.joints_commanded = swing.follow_through.clone();
+                                            measurement.joints_commanded =
+                                                swing.follow_through.clone();
                                     }
-                                    motion_watch =
-                                        Some((track_seq, command_send_started, "fixed_swing"));
+                                        motion_watch = Some((
+                                            track_seq,
+                                            command_send_started,
+                                            if used_fixed_swing_fallback {
+                                                "fixed_joint_push_fallback"
+                                            } else {
+                                                "fixed_swing"
+                                            },
+                                        ));
                                     info!(
                                         target: "latency",
                                         track_seq,
@@ -520,7 +607,8 @@ pub fn spawn(
                                         measured_racket_z_m = ?measured_racket_z.map(f4),
                                         aligned_racket_z_m = ?aligned_racket_z.map(f4),
                                         impact_racket_z_m = ?impact_racket_z.map(f4),
-                                        "j0~j3 백스윙 없는 직진 푸시 시작"
+                                            fixed_swing_fallback = used_fixed_swing_fallback,
+                                            "관절 타격 시작"
                                     );
                                 }
                                 Err(error) => warn!(
@@ -533,7 +621,7 @@ pub fn spawn(
                         Err(error) => warn!(
                             track_seq,
                             %error,
-                            "다관절 직진 푸시 계획 불가 — 타격 동작 생략"
+                                "고정 밀치기 폴백까지 계획 불가 — 타격 동작 생략"
                         ),
                     }
                     }
@@ -770,6 +858,7 @@ pub fn spawn(
             let planning_target_position = alignment_planning_target(target.position);
             let corrected_target_position = corrected_alignment_target(target.position);
             let corrected_target_x = corrected_target_position.x;
+            let predicted_arrival_at = request.trajectory.origin + target.t;
             if let Some(zone) = zone_filter
                 && let Some(rail) = arm.rail
                 && !zone.contains_x(rail, corrected_target_x)
@@ -817,30 +906,26 @@ pub fn spawn(
                 log_verification(&previous, &start, "superseded", false);
             }
             let issued_at = Instant::now();
+            let swing_due_at = predicted_arrival_at
+                .checked_sub(FIXED_SWING_LEAD)
+                .unwrap_or(issued_at);
+            let return_due_at = predicted_arrival_at
+                + Duration::from_secs_f64(pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS);
             let mut rail_command_ms = 0.0;
             let mut rail_move_duration_secs = 0.0;
             let alignment_arm = arm_for_rail_position(&arm, start.rail_x);
-            let preparation = match AlignmentController::prepare(
-                &alignment_arm,
-                &start,
-                planning_target_position,
-                action,
-            ) {
-                Ok(preparation) => preparation,
-                Err(error) => {
-                    let _ = event_tx.send(RuntimeEvent::Failed {
-                        track_seq: Some(track_seq),
-                        reason: format!("{action:?} 정렬 목표 계획 불가: {error}"),
-                    });
-                    continue;
-                }
-            };
             let planning_start = match action {
                 RefinedAction::PrimaryRailAndArm => {
                     // 본 예측이 처음 안정 기준을 넘은 순간에만 레일을 한 번
-                    // 먼저 출발시킨다. 이후 같은 공의 갱신은 ArmCorrection으로
-                    // 들어와 레일을 다시 명령하지 않는다.
-                    let rail_target = preparation.rail_target_m.unwrap_or(start.rail_x);
+                    // 먼저 출발시킨다. 이 목표는 팔 IK와 무관하게 공 x에서
+                    // 직접 계산하므로, 자세 계획이 실패해도 레일 추적은 유지된다.
+                    // 이후 같은 공의 갱신은 ArmCorrection으로 들어와 레일을
+                    // 다시 명령하지 않는다.
+                    let rail_target = Planner::ball_x_tracking_rail_target(
+                        &alignment_arm,
+                        &start,
+                        corrected_target_x,
+                    );
                     rail_move_duration_secs =
                         alignment_rail_move_duration(&alignment_arm, start.rail_x, rail_target);
                     let rail_command_started = Instant::now();
@@ -868,11 +953,40 @@ pub fn spawn(
                         rail_target_m = f4(applied_rail),
                         safe_min_m = f4(arm.rail.map_or(applied_rail, |rail| rail.x_min)),
                         safe_max_m = f4(arm.rail.map_or(applied_rail, |rail| rail.x_max)),
-                        "본 예측 기준 통과 — 중앙 방향 팔·레일 통합해로 레일 1회 명령"
+                        "본 예측 기준 통과 — 현재 라켓 중심을 공 x에 맞추는 레일 1회 명령"
                     );
                     pingpong_bot::robot::Pose::new(applied_rail, start.joints.clone())
                 }
                 RefinedAction::ArmCorrection => start.clone(),
+            };
+            let preparation = match AlignmentController::prepare(
+                &alignment_arm,
+                &start,
+                planning_target_position,
+                action,
+            ) {
+                Ok(preparation) => preparation,
+                Err(error) => {
+                    let _ = event_tx.send(RuntimeEvent::Failed {
+                        track_seq: Some(track_seq),
+                        reason: format!(
+                            "{action:?} 정렬 목표 계획 불가 — 레일 추적 후 고정 스윙 사용: {error}"
+                        ),
+                    });
+                    if action == RefinedAction::PrimaryRailAndArm {
+                        schedule_fixed_swing_fallback(
+                            &mut state,
+                            &event_tx,
+                            track_seq,
+                            swing_due_at,
+                            return_due_at,
+                            predicted_arrival_at,
+                            planning_start.rail_x,
+                            start.joints.clone(),
+                        );
+                    }
+                    continue;
+                }
             };
             let alignment_plan_started = Instant::now();
             // 레일은 이미 출발했으므로, 팔은 도착 예정 레일 좌표에 고정해
@@ -890,8 +1004,22 @@ pub fn spawn(
                 Err(error) => {
                     let _ = event_tx.send(RuntimeEvent::Failed {
                         track_seq: Some(track_seq),
-                        reason: format!("본 예측 {action:?} 정렬 계획 불가: {error}"),
+                        reason: format!(
+                            "본 예측 {action:?} 팔 자세 계획 불가 — 레일 추적 후 고정 스윙 사용: {error}"
+                        ),
                     });
+                    if action == RefinedAction::PrimaryRailAndArm {
+                        schedule_fixed_swing_fallback(
+                            &mut state,
+                            &event_tx,
+                            track_seq,
+                            swing_due_at,
+                            return_due_at,
+                            predicted_arrival_at,
+                            planning_start.rail_x,
+                            start.joints.clone(),
+                        );
+                    }
                     continue;
                 }
             };
@@ -915,6 +1043,18 @@ pub fn spawn(
                         MAX_ALIGNMENT_BASE_STEP_RAD.to_degrees(),
                     ),
                 });
+                if action == RefinedAction::PrimaryRailAndArm {
+                    schedule_fixed_swing_fallback(
+                        &mut state,
+                        &event_tx,
+                        track_seq,
+                        swing_due_at,
+                        return_due_at,
+                        predicted_arrival_at,
+                        planning_start.rail_x,
+                        start.joints.clone(),
+                    );
+                }
                 continue;
             }
             let rail_commanded_m = alignment.rail.end;
@@ -956,15 +1096,10 @@ pub fn spawn(
                 });
             }
 
-            let predicted_arrival_at = request.trajectory.origin + target.t;
-            let swing_due_at = predicted_arrival_at
-                .checked_sub(FIXED_SWING_LEAD)
-                .unwrap_or(issued_at);
-            let return_due_at = predicted_arrival_at
-                + Duration::from_secs_f64(pingpong_bot::defaults::POST_ALIGNMENT_HOLD_SECS);
             state = BallControlState::Aligning {
                 swing_due_at,
                 swing_attempted: false,
+                fixed_swing_fallback: false,
                 return_due_at,
                 predicted_arrival_at,
                 measurement: PendingAlignmentMeasurement {
@@ -1374,8 +1509,7 @@ fn initialize_pose_attempt(
     // 시작과 타격 후 모두 라켓 전체가 상판보다 높은, 살짝 오므린 준비 자세를 쓴다.
     let mut startup_arm = arm.clone();
     if arm.default_joints.values.len() == pingpong_bot::defaults::READY_JOINTS_4DOF.len() {
-        startup_arm.default_joints =
-            Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF);
+        startup_arm.default_joints = Joints::from_slice(&pingpong_bot::defaults::READY_JOINTS_4DOF);
     }
     let ready_joints = startup_arm.default_joints.clone();
     let ready_rail_x = arm
@@ -1384,8 +1518,7 @@ fn initialize_pose_attempt(
         .map_or(measured.rail_x, |rail| rail.default_x());
     // 레일 이동과 큰 관절 동작을 동시에 보간하면 전완이 탁구대를 가로지를 수 있다.
     // 현재 레일 위치에서 준비 자세를 먼저 만든 뒤 그 자세로 중앙까지 이동한다.
-    let mut trajectories =
-        match plan_neutral_return_segments(
+    let mut trajectories = match plan_neutral_return_segments(
             &startup_arm,
             &measured,
             measured.rail_x,
@@ -1837,12 +1970,8 @@ fn plan_neutral_return_segments(
     speed_ratio: f64,
 ) -> Result<Vec<pingpong_bot::robot::motion::Trajectory>, DomainError> {
     let planning_start = clamp_small_joint_limit_overshoot(arm, start);
-    let direct_error = match Planner::return_to_center_at_speed_ratio(
-        arm,
-        &planning_start,
-        rail_x,
-        speed_ratio,
-    ) {
+    let direct_error =
+        match Planner::return_to_center_at_speed_ratio(arm, &planning_start, rail_x, speed_ratio) {
         Ok(direct) => return Ok(vec![direct]),
         Err(error) => error,
     };
@@ -1973,6 +2102,54 @@ mod tests {
     use pingpong_bot::robot::{Joints, Pose};
     use pingpong_bot::vision::{State as VisionState, Track, Trajectory as VisionTrajectory};
 
+    #[test]
+    fn fixed_swing_fallback_state_keeps_the_commanded_ball_x_rail_target() {
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let now = Instant::now();
+        let joints = Joints::from_slice(&[0.1, 0.2, 0.3, 0.4]);
+        let mut state = BallControlState::Idle;
+        schedule_fixed_swing_fallback(
+            &mut state,
+            &event_tx,
+            17,
+            now,
+            now + Duration::from_secs(1),
+            now + Duration::from_millis(500),
+            0.81,
+            joints.clone(),
+        );
+        match state {
+            BallControlState::Aligning {
+                swing_due_at,
+                fixed_swing_fallback,
+                measurement,
+                ..
+            } => {
+                assert!(fixed_swing_fallback);
+                assert_eq!(
+                    swing_due_at,
+                    now + Duration::from_millis(500)
+                        - Duration::from_secs_f64(
+                            pingpong_bot::defaults::FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS
+                                + pingpong_bot::defaults::FIXED_JOINT_SWING_IMPACT_MARGIN_SECS,
+                        )
+                );
+                assert_eq!(measurement.rail_commanded_m, 0.81);
+                assert_eq!(measurement.joints_commanded, joints);
+            }
+            _ => panic!("fixed fallback must schedule an aligning state"),
+        }
+        match event_rx.try_recv().expect("control state event") {
+            RuntimeEvent::ControlState {
+                state:
+                    ControlStateSnapshot::Aligning {
+                        rail_commanded_m, ..
+                    },
+            } => assert_eq!(rail_commanded_m, 0.81),
+            _ => panic!("expected aligning control state"),
+        }
+    }
+
     fn vision_state(t_secs: f64, y: f64) -> VisionState {
         return VisionState {
             t: Duration::from_secs_f64(t_secs),
@@ -2023,10 +2200,7 @@ mod tests {
         let now = Instant::now();
         let predicted_arrival_at = now + FIXED_SWING_LEAD;
         let target = target_impact_time_secs(predicted_arrival_at, now);
-        assert!(
-            (target - 0.180).abs() < 1e-9,
-            "target={target}"
-        );
+        assert!((target - 0.180).abs() < 1e-9, "target={target}");
     }
 
     #[test]
@@ -2045,8 +2219,7 @@ mod tests {
         let predicted_arrival_at = now + Duration::from_millis(50);
         let target = target_impact_time_secs(predicted_arrival_at, now);
         assert!(
-            (target - pingpong_bot::defaults::FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS).abs()
-                < 1e-9,
+            (target - pingpong_bot::defaults::FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS).abs() < 1e-9,
             "target={target}"
         );
     }
@@ -2542,6 +2715,7 @@ mod tests {
         let mut state = BallControlState::Aligning {
             swing_due_at: Instant::now(),
             swing_attempted: false,
+            fixed_swing_fallback: false,
             return_due_at: Instant::now(),
             predicted_arrival_at: Instant::now(),
             measurement: PendingAlignmentMeasurement {

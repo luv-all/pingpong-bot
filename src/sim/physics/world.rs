@@ -13,8 +13,9 @@ use crate::estimator;
 use crate::physics;
 use crate::robot::Arm;
 use crate::robot::control::{
-    AlignmentController, AlignmentLatch, DirectController, MAX_ALIGNMENT_BASE_STEP_RAD,
-    PredictionStability, PredictionStage, alignment_base_step_rad, alignment_rail_move_duration,
+    AlignmentAction, AlignmentController, AlignmentLatch, DirectController,
+    MAX_ALIGNMENT_BASE_STEP_RAD, PredictionStability, PredictionStage, alignment_base_step_rad,
+    alignment_rail_move_duration,
 };
 use crate::robot::motion;
 use crate::robot::motion::InterceptWindow;
@@ -103,6 +104,8 @@ pub struct SimWorld {
     direct_alignment_latch: AlignmentLatch,
     /// 손목 타격을 시작한 뒤 늦은 예측이 궤적을 덮어쓰지 못하게 한다.
     direct_swing_attempted: bool,
+    /// 팔 자세 계획 실패로 레일 추적 + 고정 밀치기 스윙을 예약했는지.
+    direct_fixed_swing_fallback: bool,
     /// 이번 비행에서 스윙을 포기했는지 (도달 불능·너무 늦음). commit 없이 손 뗌.
     swing_abandoned: bool,
     /// 발사마다 증가 — 터미널 샷 로그 상관용.
@@ -310,9 +313,8 @@ impl SimWorld {
             .rail
             .as_ref()
             .map_or(arm.base.coords.x, |rail| rail.default_x());
-        let initial_joints = if arm.default_joints.values.len()
-            == crate::defaults::READY_JOINTS_4DOF.len()
-        {
+        let initial_joints =
+            if arm.default_joints.values.len() == crate::defaults::READY_JOINTS_4DOF.len() {
             robot::Joints::from_slice(&crate::defaults::READY_JOINTS_4DOF)
         } else {
             arm.default_joints.clone()
@@ -433,6 +435,7 @@ impl SimWorld {
             direct_prediction_stability: PredictionStability::default(),
             direct_alignment_latch: AlignmentLatch::default(),
             direct_swing_attempted: false,
+            direct_fixed_swing_fallback: false,
             swing_abandoned: false,
             shot_seq: 0,
             hard_fail_streak: 0,
@@ -916,6 +919,19 @@ impl SimWorld {
             return;
         };
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
+        let predicted_arrival_at = self.sim_time + target.time_secs;
+        let mut applied_rail_m = None;
+        let mut rail_move_duration_secs = 0.0;
+        if action == AlignmentAction::PrimaryRailAndArm {
+            let rail_target_m =
+                motion::Planner::ball_x_tracking_rail_target(&self.arm, &start, target.position.x);
+            rail_move_duration_secs =
+                alignment_rail_move_duration(&self.arm, start.rail_x, rail_target_m);
+            self.robot
+                .set_rail_target_in_secs(&self.arm, rail_target_m, rail_move_duration_secs);
+            self.direct_alignment_latch.mark_rail_sent(action);
+            applied_rail_m = Some(rail_target_m);
+        }
         let preparation =
             match AlignmentController::prepare(&self.arm, &start, target.position, action) {
                 Ok(preparation) => preparation,
@@ -923,23 +939,12 @@ impl SimWorld {
                     self.hard_fail_streak = self.hard_fail_streak.saturating_add(1);
                     self.debug_snap.last_fail_text = Some(error.to_string());
                     warn!(shot = self.shot_seq, ?action, %error, "shot: 공통 정렬 목표 계획 실패");
+                    if action == AlignmentAction::PrimaryRailAndArm {
+                        self.schedule_direct_fixed_swing_fallback(predicted_arrival_at);
+                    }
                     return;
                 }
             };
-        let mut applied_rail_m = None;
-        let mut rail_move_duration_secs = 0.0;
-        if let Some(rail_target_m) = preparation.rail_target_m {
-            let applied = self
-                .arm
-                .rail
-                .map_or(rail_target_m, |rail| rail.clamp_x(rail_target_m));
-            rail_move_duration_secs =
-                alignment_rail_move_duration(&self.arm, start.rail_x, applied);
-            self.robot
-                .set_rail_target_in_secs(&self.arm, applied, rail_move_duration_secs);
-            self.direct_alignment_latch.mark_rail_sent(action);
-            applied_rail_m = Some(applied);
-        }
         let alignment = match AlignmentController::plan_joints(
             &self.arm,
             &start,
@@ -953,6 +958,9 @@ impl SimWorld {
                 self.debug_snap.last_fail_text = Some(error.to_string());
                 if self.hard_fail_streak == 1 || self.hard_fail_streak.is_multiple_of(25) {
                     warn!(shot = self.shot_seq, %error, "shot: 위치·방향 정렬 계획 실패");
+                }
+                if action == AlignmentAction::PrimaryRailAndArm {
+                    self.schedule_direct_fixed_swing_fallback(predicted_arrival_at);
                 }
                 return;
             }
@@ -968,6 +976,9 @@ impl SimWorld {
                 base_step_deg = base_step_rad.to_degrees(),
                 "shot: 정렬 듀얼 베이스 급회전 차단"
             );
+            if action == AlignmentAction::PrimaryRailAndArm {
+                self.schedule_direct_fixed_swing_fallback(predicted_arrival_at);
+            }
             return;
         }
         self.hard_fail_streak = 0;
@@ -976,9 +987,9 @@ impl SimWorld {
         let rail_commanded_m = alignment.rail.end;
         self.robot.set_auto_return_to_center(false);
         self.robot.replace_joint_swing(alignment);
-        let predicted_arrival_at = self.sim_time + target.time_secs;
+        self.direct_fixed_swing_fallback = false;
         self.direct_swing_at = Some(
-            (predicted_arrival_at - crate::defaults::FIXED_JOINT_SWING_LEAD_SECS)
+            (predicted_arrival_at - crate::defaults::FIXED_JOINT_SWING_POWER_SWEEP_LEAD_SECS)
                 .max(self.sim_time),
         );
         self.direct_return_at =
@@ -994,14 +1005,31 @@ impl SimWorld {
             rail_move_duration_secs,
             predicted_arrival_in_secs = target.time_secs,
             post_alignment_hold_secs = crate::defaults::POST_ALIGNMENT_HOLD_SECS,
-            fixed_swing_lead_secs = crate::defaults::FIXED_JOINT_SWING_LEAD_SECS,
+            fixed_swing_lead_secs = crate::defaults::FIXED_JOINT_SWING_POWER_SWEEP_LEAD_SECS,
             rail_commanded_m,
             target = ?target.position.coords,
             "shot: sim·real 공통 정렬 단계 적용"
         );
     }
 
-    /// 예상 타격 0.40초 전에 접힌 정렬 자세에서 백스윙 없는 푸시를 시작한다.
+    fn schedule_direct_fixed_swing_fallback(&mut self, predicted_arrival_at: f64) {
+        self.robot.set_auto_return_to_center(false);
+        self.direct_fixed_swing_fallback = true;
+        self.direct_swing_at = Some(
+            (predicted_arrival_at
+                - crate::defaults::FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS
+                - crate::defaults::FIXED_JOINT_SWING_IMPACT_MARGIN_SECS)
+                .max(self.sim_time),
+        );
+        self.direct_return_at =
+            Some(predicted_arrival_at + crate::defaults::POST_ALIGNMENT_HOLD_SECS);
+        self.swing_committed = true;
+        self.position_refined = true;
+        self.debug_snap.commit_phase = CommitPhase::Committed;
+    }
+
+    /// 예상 타격 전에 접힌 정렬 자세에서 백스윙 없는 파워 스윙 또는
+    /// 고정 다관절 밀치기 폴백을 시작한다.
     ///
     /// 정렬이 아직 진행 중이어도 레일 목표는 계속 추종하고 팔 관절 궤적만
     /// 교체한다. 그렇지 않으면 sim의 `is_swinging()`이 레일 정렬까지
@@ -1018,8 +1046,40 @@ impl SimWorld {
         self.direct_swing_attempted = true;
 
         let start = robot::Pose::new(self.robot.rail_x(), self.robot.joints().clone());
-        match motion::Planner::fixed_joint_swing_quadratic(&self.arm, &start) {
-            Ok(planned) => {
+        let predicted_arrival_at = self.direct_return_at.map_or(self.sim_time, |return_at| {
+            return_at - crate::defaults::POST_ALIGNMENT_HOLD_SECS
+        });
+        let target_impact_time_secs = (predicted_arrival_at
+            - self.sim_time
+            - crate::defaults::FIXED_JOINT_SWING_IMPACT_MARGIN_SECS)
+            .max(crate::defaults::FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS);
+        let planned = if self.direct_fixed_swing_fallback {
+            motion::Planner::fixed_joint_push_fallback(&self.arm, &start, target_impact_time_secs)
+                .map(|planned| (planned, true))
+        } else {
+            match motion::Planner::fixed_joint_swing_power_sweep(
+                &self.arm,
+                &start,
+                target_impact_time_secs,
+            ) {
+                Ok(planned) => Ok((planned, false)),
+                Err(error) => {
+                    warn!(
+                        shot = self.shot_seq,
+                        %error,
+                        "sim 다관절 스윙 계획 불가 — 고정 밀치기 스윙으로 폴백"
+                    );
+                    motion::Planner::fixed_joint_push_fallback(
+                        &self.arm,
+                        &start,
+                        target_impact_time_secs,
+                    )
+                    .map(|planned| (planned, true))
+                }
+            }
+        };
+        match planned {
+            Ok((planned, used_fixed_swing_fallback)) => {
                 let trajectory = planned.trajectory;
                 let duration_secs = trajectory.duration_secs;
                 let joints_start = trajectory.start.values.clone();
@@ -1036,7 +1096,8 @@ impl SimWorld {
                     joints_impact = ?joints_impact,
                     joints_follow_through = ?joints_follow_through,
                     skipped_joint_indices = ?planned.skipped_joint_indices,
-                    "j0~j3 백스윙 없는 직진 푸시 시작"
+                    fixed_swing_fallback = used_fixed_swing_fallback,
+                    "sim 관절 타격 시작"
                 );
             }
             Err(error) => {
@@ -1044,7 +1105,7 @@ impl SimWorld {
                 warn!(
                     shot = self.shot_seq,
                     %error,
-                    "고정 스윙 계획 불가 — 스윙만 생략"
+                    "고정 밀치기 스윙까지 계획 불가 — 스윙만 생략"
                 );
             }
         }
@@ -1253,6 +1314,7 @@ impl SimWorld {
         self.direct_prediction_stability.reset();
         self.direct_alignment_latch = AlignmentLatch::default();
         self.direct_swing_attempted = false;
+        self.direct_fixed_swing_fallback = false;
         self.swing_abandoned = false;
         self.hard_fail_streak = 0;
         self.last_swing_attempt_at = f64::NEG_INFINITY;
@@ -1289,6 +1351,7 @@ impl SimWorld {
         self.swing_abandoned = false;
         self.direct_alignment_latch = AlignmentLatch::default();
         self.direct_swing_attempted = false;
+        self.direct_fixed_swing_fallback = false;
         self.direct_swing_at = None;
         self.debug_snap.last_fail = None;
         self.debug_snap.last_fail_text = None;
@@ -2208,21 +2271,21 @@ mod tests {
         for _ in 0..2_000 {
             world.step(1.0 / 1_000.0, None);
             if let Some(trajectory) = world.robot().active_trajectory()
-                && (trajectory.impact_time_secs - crate::defaults::FIXED_JOINT_SWING_DURATION_SECS)
-                    .abs()
-                    < 1e-12
+                && world.direct_swing_attempted
             {
+                let wrist_index = world.arm.wrist_joint_index().expect("wrist");
                 assert!(
-                    (trajectory.impact_time_secs
-                        - crate::defaults::FIXED_JOINT_SWING_DURATION_SECS)
-                        .abs()
-                        < 1e-12,
-                    "스윙은 예상 타격 0.40초 전에 시작해야 함"
+                    trajectory.end.values[wrist_index] < trajectory.start.values[wrist_index],
+                    "sim 정상 스윙도 IK의 j3 목표를 버리고 위로 휘둘러야 함"
                 );
+                let cruise_velocity = trajectory.sample_velocity_at(
+                    (crate::defaults::motion::FIXED_JOINT_SWING_RAMP_SECS
+                        + trajectory.impact_time_secs)
+                        * 0.5,
+                )[wrist_index];
                 assert!(
-                    trajectory.end.values[2] < trajectory.start.values[2]
-                        || trajectory.end.values[3] < trajectory.start.values[3],
-                    "q2/q3 중 가능한 관절이 타격 방향으로 움직여야 함"
+                    (cruise_velocity + world.arm.max_joint_speed).abs() < 1e-6,
+                    "sim j3가 위쪽 최고속도로 순항해야 함: {cruise_velocity}"
                 );
                 return;
             }
@@ -2230,6 +2293,34 @@ mod tests {
         panic!(
             "고정 관절 스윙이 실행되지 않음: last_fail={:?}",
             world.debug_snap.last_fail_text
+        );
+    }
+
+    #[test]
+    fn sim_fixed_fallback_runs_fixed_push_and_independent_wrist_swing() {
+        let mut world = SimWorld::new(test_robot());
+        let predicted_arrival_at = world.sim_time + 0.32;
+        world.schedule_direct_fixed_swing_fallback(predicted_arrival_at);
+        world.sim_time = world.direct_swing_at.expect("fixed fallback start time");
+        world.try_direct_fixed_swing();
+
+        let trajectory = world.robot().active_trajectory().unwrap_or_else(|| {
+            panic!(
+                "fixed fallback trajectory: {:?}",
+                world.debug_snap.last_fail_text
+            )
+        });
+        assert_eq!(trajectory.rail.start, trajectory.rail.end);
+        assert!(trajectory.end.values[0] > trajectory.start.values[0]);
+        assert_eq!(trajectory.end.values[1], trajectory.start.values[1]);
+        assert!(trajectory.end.values[2] < trajectory.start.values[2]);
+        assert!(trajectory.end.values[3] < trajectory.start.values[3]);
+        let wrist_index = world.arm.wrist_joint_index().expect("wrist");
+        let wrist_velocity =
+            trajectory.sample_velocity_at(trajectory.impact_time_secs)[wrist_index];
+        assert!(
+            (wrist_velocity + world.arm.max_joint_speed).abs() < 1e-6,
+            "sim 고정 밀치기에서도 j3가 위쪽 최고속도여야 함: {wrist_velocity}"
         );
     }
 

@@ -11,9 +11,9 @@ use crate::defaults::motion::{
     FIXED_JOINT_PUSH_DISTANCE_M, FIXED_JOINT_PUSH_LIFT_M, FIXED_JOINT_SNAP_SPEED_RATIO,
     FIXED_JOINT_SWING_DURATION_SECS, FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
     FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS, FIXED_JOINT_SWING_RAMP_SECS,
-    IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG,
-    READY_PREWIND_DISTANCE_M, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS,
-    RETURN_TO_CENTER_MIN_SECS, ready_racket_height_m, ready_racket_y_m,
+    IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG, READY_PREWIND_DISTANCE_M,
+    RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS, RETURN_TO_CENTER_MIN_SECS,
+    ready_racket_height_m, ready_racket_y_m,
 };
 use crate::error::{DomainError, SwingPlanError};
 use crate::robot::Arm;
@@ -26,8 +26,8 @@ use super::impact_target::{impact_target_from_candidate, solve_impact_target};
 use super::planned_intercept::PlannedIntercept;
 use super::quadratic_segment::QuadraticSegment;
 use super::quintic_segment::QuinticSegment;
-use super::ramp_cruise_segment::RampCruiseSegment;
 use super::rail::Rail;
+use super::ramp_cruise_segment::RampCruiseSegment;
 use super::trajectory::{PreImpactJointProfile, Trajectory};
 
 /// 수평 정렬 해가 아래를 보지 않는지 판정하는 오차.
@@ -719,6 +719,20 @@ pub fn ball_alignment_rail_target(arm: &Arm, ball: Point3) -> f64 {
         .map_or(raw, |rail| rail.rail_x_for_world_x(raw));
 }
 
+/// 팔 관절을 움직이지 않고 현재 라켓 중심 x를 공 x에 맞추는 레일 목표.
+///
+/// 고정 스윙 폴백은 자세 IK를 쓰지 않으므로, 현재 FK의 라켓 x 오프셋만큼
+/// 레일을 평행이동해야 실제 라켓 중심이 공 x에 놓인다.
+pub fn ball_x_tracking_rail_target(arm: &Arm, start: &robot::Pose, ball_x: f64) -> f64 {
+    let target = arm
+        .forward_kinematics_with_rail(start.rail_x, &start.joints)
+        .map_or(ball_x, |racket| start.rail_x + ball_x - racket.position.x);
+    return arm
+        .rail
+        .as_ref()
+        .map_or(target, |rail| rail.clamp_x(target));
+}
+
 /// 안전 마진을 적용하기 전 공별 레일 목표.
 pub fn ball_alignment_rail_target_unclamped(ball: Point3) -> f64 {
     let (_, _, racket_center) = ball_alignment_geometry(ball);
@@ -1197,7 +1211,12 @@ pub fn plan_fixed_joint_swing_quadratic_from_alignment(
                 + push_direction * push_distance_m
                 + Vector3::z() * lift_m,
         );
-        return plan_fixed_joint_swing_quadratic_to_pose(arm, start, target_position, target_normal);
+        return plan_fixed_joint_swing_quadratic_to_pose(
+            arm,
+            start,
+            target_position,
+            target_normal,
+        );
     };
 
     if let Ok(planned) = try_push_distance(FIXED_JOINT_PUSH_DISTANCE_M) {
@@ -1403,6 +1422,125 @@ pub fn plan_fixed_joint_swing_power_sweep_from_alignment(
     );
 }
 
+/// 자세 IK가 실패했을 때 쓰는 고정 밀치기 스윙.
+///
+/// 레일은 현재 위치를 유지하고, j0·j2는 중앙 기준 정상 파워 스윙에서 얻은
+/// 고정 델타만큼 밀친다. j1은 유지하고 j3는 정상 스윙과 똑같이 IK 목표를
+/// 무시한 채 위로 최고속 스윙한다. IK는 호출하지 않으며 일반 스윙과 동일한
+/// 관절·속도·가속도·테이블 충돌 검사를 통과해야만 반환한다.
+pub fn plan_fixed_joint_push_fallback(
+    arm: &Arm,
+    start: &robot::Pose,
+    target_impact_time_secs: f64,
+) -> Result<FixedJointSwing, DomainError> {
+    let joint_count = start.joints.values.len();
+    let Some(wrist_index) = arm.wrist_joint_index() else {
+        return Err(DomainError::InfeasibleSwing(
+            SwingPlanError::JointOrTorqueLimit {
+                target_x: start.rail_x,
+                target_y: 0.0,
+                target_z: table::SURFACE_Z,
+            },
+        ));
+    };
+    let impact_time = target_impact_time_secs.max(FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS);
+    let ramp_accel = arm.max_joint_speed / FIXED_JOINT_SWING_RAMP_SECS;
+    let mut impact_values = start.joints.values.clone();
+    // 기본 중앙 자세의 정상 10cm 파워 스윙 실측 계획값을 고정 델타로
+    // 보존한다: j0 +18.74°, j1 유지, j2 -24.27°. 자세 IK 실패 시에도
+    // 같은 밀치기 방향을 재현하려는 폴백 전용 값이다.
+    const FIXED_PUSH_DELTAS_RAD: [(usize, f64); 2] =
+        [(0, 0.327_073_600_041_434_3), (2, -0.423_583_300_198_340_6)];
+    for &(index, delta) in &FIXED_PUSH_DELTAS_RAD {
+        let requested = impact_values[index] + delta;
+        impact_values[index] = arm
+            .joint_limit(index)
+            .map_or(requested, |limit| requested.clamp(limit.min, limit.max));
+    }
+    let q0 = impact_values[wrist_index];
+    let ramp_duration = FIXED_JOINT_SWING_RAMP_SECS.min(impact_time);
+    let max_travel = if impact_time <= FIXED_JOINT_SWING_RAMP_SECS {
+        0.5 * ramp_accel * impact_time * impact_time
+    } else {
+        0.5 * ramp_accel * ramp_duration * ramp_duration
+            + arm.max_joint_speed * (impact_time - ramp_duration)
+    };
+    let upward_limit = arm
+        .joint_limit(wrist_index)
+        .map_or(q0 - max_travel, |limit| limit.min);
+    impact_values[wrist_index] = (q0 - max_travel).max(upward_limit);
+
+    let mut profiles = vec![PreImpactJointProfile::Quadratic; joint_count];
+    for &(index, _) in &FIXED_PUSH_DELTAS_RAD {
+        if RampCruiseSegment::new(
+            start.joints.values[index],
+            impact_values[index],
+            impact_time,
+            ramp_accel,
+        )
+        .is_none()
+        {
+            return Err(DomainError::InfeasibleSwing(
+                SwingPlanError::JointOrTorqueLimit {
+                    target_x: start.rail_x,
+                    target_y: 0.0,
+                    target_z: table::SURFACE_Z,
+                },
+            ));
+        }
+        profiles[index] = PreImpactJointProfile::RampCruise { accel: ramp_accel };
+    }
+    profiles[wrist_index] = PreImpactJointProfile::RampCruise { accel: ramp_accel };
+    let impact = Joints {
+        values: impact_values,
+    };
+    let impact_velocity: Vec<f64> = (0..joint_count)
+        .map(|index| {
+            profiles[index]
+                .build(
+                    start.joints.values[index],
+                    impact.values[index],
+                    impact_time,
+                )
+                .sample(impact_time)
+                .1
+        })
+        .collect();
+    let follow_time = FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS;
+    let mut follow_values = impact.values.clone();
+    for index in 0..joint_count {
+        follow_values[index] += impact_velocity[index] * follow_time * 0.5;
+        if let Some(limit) = arm.joint_limit(index) {
+            follow_values[index] = follow_values[index].clamp(limit.min, limit.max);
+        }
+    }
+    let trajectory = Trajectory::with_power_sweep(
+        start.joints.clone(),
+        impact,
+        Joints {
+            values: follow_values,
+        },
+        profiles,
+        vec![0.0; joint_count],
+        impact_time,
+        impact_time + follow_time,
+        Rail::fixed(start.rail_x),
+        start.rail_x,
+        0.0,
+    );
+    evaluate_trajectory_feasibility(arm, &trajectory, start.rail_x)
+        .map_err(DomainError::InfeasibleSwing)?;
+    let skipped_joint_indices = (0..joint_count)
+        .filter(|index| {
+            (trajectory.end.values[*index] - trajectory.start.values[*index]).abs() < 1e-6
+        })
+        .collect();
+    return Ok(FixedJointSwing {
+        trajectory,
+        skipped_joint_indices,
+    });
+}
+
 /// j0·j2 인덱스 — 이 팔에서 토크가 가장 큰 두 관절(이중/단일 MX-64).
 const POWER_SWEEP_JOINT_INDICES: [usize; 2] = [0, 2];
 
@@ -1482,7 +1620,10 @@ fn plan_fixed_joint_swing_power_sweep_to_pose(
                 .1
         })
         .collect();
-    for (index, (value, velocity)) in end_values.iter_mut().zip(impact_velocity.iter()).enumerate()
+    for (index, (value, velocity)) in end_values
+        .iter_mut()
+        .zip(impact_velocity.iter())
+        .enumerate()
     {
         *value += velocity * follow_time * 0.5;
         if let Some(limit) = arm.joint_limit(index) {
@@ -1497,9 +1638,7 @@ fn plan_fixed_joint_swing_power_sweep_to_pose(
     let trajectory = Trajectory::with_power_sweep(
         start.joints.clone(),
         impact_pose.joints.clone(),
-        Joints {
-            values: end_values,
-        },
+        Joints { values: end_values },
         profiles,
         follow_through_velocity,
         impact_time,
@@ -1643,9 +1782,13 @@ fn plan_move_to_full_speed(
                 // 아래 재시도는 이 경우 무의미하므로, 정지→정지 이동에서만
                 // 안전한 경유점(관통이 가장 깊은 지점을 테이블 위로 들어
                 // 올린 자세)을 넣어 즉시 재시도한다.
-                if let Some(lifted) =
-                    plan_move_to_via_table_clearance(arm, start, center_joints.clone(), duration, rail)
-                {
+                if let Some(lifted) = plan_move_to_via_table_clearance(
+                    arm,
+                    start,
+                    center_joints.clone(),
+                    duration,
+                    rail,
+                ) {
                     return Ok(lifted);
                 }
                 last_error = Some(error);
@@ -2193,7 +2336,9 @@ fn kinematic_limits_ok(arm: &Arm, trajectory: &Trajectory) -> bool {
 const RAIL_ACCEL_CHECK_ENABLED: bool = true;
 
 fn kinematic_limit_violation(arm: &Arm, trajectory: &Trajectory) -> Option<&'static str> {
-    if trajectory.peak_joint_speed() > arm.max_joint_speed {
+    // 프로파일 경계에서 부동소수점 반올림으로 최고속과 수 e-15만큼
+    // 차이 나는 값은 동일한 명령이다. 실제 초과만 거부한다.
+    if trajectory.peak_joint_speed() > arm.max_joint_speed * (1.0 + 1e-9) {
         return Some("관절 속도");
     }
     if trajectory.peak_joint_acceleration() > defaults::ControlParams::default().max_joint_accel {
@@ -2608,11 +2753,8 @@ mod tests {
             arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
             robot::Joints::from_slice(&crate::defaults::READY_JOINTS_4DOF),
         );
-        let planned = plan_fixed_joint_swing_power_sweep(
-            arm,
-            &home,
-            FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS,
-        )
+        let planned =
+            plan_fixed_joint_swing_power_sweep(arm, &home, FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS)
         .expect("power sweep swing");
         let trajectory = planned.trajectory;
         for &index in &[0usize, 2usize] {
@@ -2653,11 +2795,8 @@ mod tests {
             alignment.follow_through_rail_x,
             alignment.follow_through.clone(),
         );
-        let planned = plan_fixed_joint_swing_power_sweep(
-            arm,
-            &start,
-            FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS,
-        )
+        let planned =
+            plan_fixed_joint_swing_power_sweep(arm, &start, FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS)
         .expect("power sweep swing");
         let trajectory = planned.trajectory;
         let wrist_index = arm.wrist_joint_index().expect("4dof arm has a wrist");
@@ -2665,12 +2804,56 @@ mod tests {
             trajectory.end.values[wrist_index] < trajectory.start.values[wrist_index],
             "wrist must move in the upward (negative joint-angle) direction"
         );
-        let v_during_cruise = trajectory.sample_velocity_at(
-            (FIXED_JOINT_SWING_RAMP_SECS + trajectory.impact_time_secs) * 0.5,
-        )[wrist_index];
+        let v_during_cruise = trajectory
+            .sample_velocity_at((FIXED_JOINT_SWING_RAMP_SECS + trajectory.impact_time_secs) * 0.5)
+            [wrist_index];
         assert!(
             (v_during_cruise + arm.max_joint_speed).abs() < 1e-6,
             "wrist should cruise upward at max speed: v={v_during_cruise}"
+        );
+    }
+
+    #[test]
+    fn fixed_push_fallback_keeps_rail_fixed_and_moves_j0_j2_j3() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let ready = robot::Pose::new(
+            arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+            arm.default_joints.clone(),
+        );
+        let planned =
+            plan_fixed_joint_push_fallback(arm, &ready, FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS)
+                .expect("fixed push fallback");
+        let trajectory = planned.trajectory;
+        assert_eq!(trajectory.rail.start, ready.rail_x);
+        assert_eq!(trajectory.rail.end, ready.rail_x);
+        assert!(trajectory.end.values[0] > trajectory.start.values[0]);
+        assert_eq!(trajectory.end.values[1], trajectory.start.values[1]);
+        assert!(trajectory.end.values[2] < trajectory.start.values[2]);
+        let wrist_index = arm.wrist_joint_index().expect("wrist");
+        let cruise_velocity = trajectory
+            .sample_velocity_at((FIXED_JOINT_SWING_RAMP_SECS + trajectory.impact_time_secs) * 0.5)
+            [wrist_index];
+        assert!((cruise_velocity + arm.max_joint_speed).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ball_x_tracking_rail_target_aligns_current_racket_x_without_ik() {
+        let active = crate::defaults::robot().expect("active robot");
+        let arm = &active.arm;
+        let start = robot::Pose::new(
+            arm.rail.as_ref().map_or(0.0, |rail| rail.default_x()),
+            arm.default_joints.clone(),
+        );
+        let ball_x = table::WIDTH_X * 0.5;
+        let rail_x = ball_x_tracking_rail_target(arm, &start, ball_x);
+        let racket = arm
+            .forward_kinematics_with_rail(rail_x, &start.joints)
+            .expect("translated racket FK");
+        assert!(
+            (racket.position.x - ball_x).abs() < 1e-9,
+            "racket_x={} ball_x={ball_x}",
+            racket.position.x
         );
     }
 
@@ -2682,11 +2865,8 @@ mod tests {
         let mut joints = arm.default_joints.clone();
         joints.values[3] = arm.joint_limit(3).expect("q3 limit").min;
         let start = robot::Pose::new(rail_x, joints);
-        let planned = plan_fixed_joint_swing_power_sweep(
-            arm,
-            &start,
-            FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS,
-        )
+        let planned =
+            plan_fixed_joint_swing_power_sweep(arm, &start, FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS)
         .expect("power sweep from wrist limit");
         assert!(arm.joints_in_limits(&planned.trajectory.end));
     }
@@ -2718,11 +2898,8 @@ mod tests {
         let aligned_racket = arm
             .forward_kinematics_with_rail(start.rail_x, &start.joints)
             .expect("aligned FK");
-        let planned = plan_fixed_joint_swing_power_sweep(
-            arm,
-            &start,
-            FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS,
-        )
+        let planned =
+            plan_fixed_joint_swing_power_sweep(arm, &start, FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS)
         .expect("power sweep swing");
         let impact = arm
             .forward_kinematics_with_rail(planned.trajectory.rail.end, &planned.trajectory.end)
