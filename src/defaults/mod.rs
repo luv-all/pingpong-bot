@@ -131,7 +131,7 @@ mod tests {
         let rail_config = RailConfig::default();
         assert_eq!(rail_config.accel, RAIL_ACCEL_M_S2);
         assert_eq!(rail_config.decel, RAIL_ACCEL_M_S2);
-        assert!((RAIL_ACCEL_M_S2 - 16.0).abs() < 1e-12);
+        assert!((RAIL_ACCEL_M_S2 - 24.0).abs() < 1e-12);
         assert_eq!(rail_config.pulses_per_meter, RAIL_PULSES_PER_METER);
         assert_eq!(RAIL_PULSES_PER_METER, 240_385);
         let robot = robot().unwrap();

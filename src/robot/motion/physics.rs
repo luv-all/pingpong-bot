@@ -10,8 +10,7 @@ use crate::defaults::motion::{
     DETECTION_WINDUP_DISTANCE_M, DETECTION_WINDUP_MIN_DURATION_SECS, FIXED_IMPACT_PUSH_SPEED_M_S,
     FIXED_JOINT_PUSH_DISTANCE_M, FIXED_JOINT_PUSH_LIFT_M, FIXED_JOINT_SNAP_SPEED_RATIO,
     FIXED_JOINT_SWING_DURATION_SECS, FIXED_JOINT_SWING_FOLLOW_THROUGH_SECS,
-    FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS, FIXED_JOINT_SWING_MIN_SNAP_SECS,
-    FIXED_JOINT_SWING_RAMP_SECS, FIXED_JOINT_SWING_SNAP_VELOCITY_MARGIN,
+    FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS, FIXED_JOINT_SWING_RAMP_SECS,
     IMPACT_CENTER_BELOW_BALL_M, IMPACT_UPWARD_TILT_DEG,
     READY_PREWIND_DISTANCE_M, RETURN_TO_CENTER_GROWTH, RETURN_TO_CENTER_MAX_SECS,
     RETURN_TO_CENTER_MIN_SECS, ready_racket_height_m, ready_racket_y_m,
@@ -1285,10 +1284,9 @@ fn plan_fixed_joint_swing_quadratic_to_pose(
 ///   속도 상한까지 가속한 뒤 임팩트 앞에서 그 속도를 유지한다 — 공 도착
 ///   시각 예측 오차에 강건하도록 순간이 아니라 구간으로 첨두속도를 낸다.
 /// - j1(어깨)은 그대로 IK가 요구하는 만큼만 따라간다.
-/// - j3(손목)는 요구 회전량에서 계산한 최소 시간만큼만 접힌 자세로
-///   대기하다 마지막 구간에서 등가속 스냅으로 목표각에 도달한다 — 회전량이
-///   크면 스냅 창도 그만큼 넓어진다([`FIXED_JOINT_SWING_MIN_SNAP_SECS`]는
-///   하한일 뿐이다).
+/// - j3(손목)는 IK가 낸 목표각을 사용하지 않는다. 실행 궤적에서 라켓 면이
+///   위로 열리는 방향으로 덮어쓰고, 가속 뒤 관절 최고속도로 순항한다.
+///   관절 하한이 먼저 오면 그 한계까지만 이동한다.
 ///
 /// `target_impact_time_secs`는 타격-전 전체 시간의 목표값이다 —
 /// [`FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS`] 미만이면 그 값으로 클램프한다.
@@ -1416,7 +1414,7 @@ fn plan_fixed_joint_swing_power_sweep_to_pose(
     target_impact_time_secs: f64,
 ) -> Result<FixedJointSwing, DomainError> {
     let joint_count = start.joints.values.len();
-    let (impact_pose, _) = arm
+    let (mut impact_pose, _) = arm
         .inverse_pose_at_fixed_rail_best_normal(
             start.rail_x,
             target_position,
@@ -1445,13 +1443,23 @@ fn plan_fixed_joint_swing_power_sweep_to_pose(
         profiles[index] = PreImpactJointProfile::RampCruise { accel: ramp_accel };
     }
     if let Some(wrist_index) = arm.wrist_joint_index() {
-        let dq3 = impact_pose.joints.values[wrist_index] - start.joints.values[wrist_index];
-        let target_speed = arm.max_joint_speed * FIXED_JOINT_SWING_SNAP_VELOCITY_MARGIN;
-        let snap_duration = (2.0 * dq3.abs() / target_speed)
-            .max(FIXED_JOINT_SWING_MIN_SNAP_SECS)
-            .min(impact_time);
-        let delay = (impact_time - snap_duration).max(0.0);
-        profiles[wrist_index] = PreImpactJointProfile::DelayedQuadratic { delay };
+        // IK가 고른 손목각은 사용하지 않는다. j0~j2의 임팩트 자세를 푼 뒤
+        // j3만 실행 궤적에서 라켓 면이 위로 열리는 음의 방향으로 덮어쓴다.
+        // 가속 램프 뒤 최고속도를 유지하되, 관절 하한이 먼저 오면 그 한계에서
+        // 멈추도록 임팩트 목표각을 정한다.
+        let q0 = start.joints.values[wrist_index];
+        let ramp_duration = FIXED_JOINT_SWING_RAMP_SECS.min(impact_time);
+        let max_travel = if impact_time <= FIXED_JOINT_SWING_RAMP_SECS {
+            0.5 * ramp_accel * impact_time * impact_time
+        } else {
+            0.5 * ramp_accel * ramp_duration * ramp_duration
+                + arm.max_joint_speed * (impact_time - ramp_duration)
+        };
+        let upward_limit = arm
+            .joint_limit(wrist_index)
+            .map_or(q0 - max_travel, |limit| limit.min);
+        impact_pose.joints.values[wrist_index] = (q0 - max_travel).max(upward_limit);
+        profiles[wrist_index] = PreImpactJointProfile::RampCruise { accel: ramp_accel };
     }
 
     let skipped_joint_indices = (0..joint_count)
@@ -2628,7 +2636,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_joint_swing_power_sweep_holds_wrist_until_the_snap_window() {
+    fn fixed_joint_swing_power_sweep_drives_wrist_up_at_max_speed() {
         let active = crate::defaults::robot().expect("active robot");
         let arm = &active.arm;
         let ready = robot::Pose::new(
@@ -2653,26 +2661,16 @@ mod tests {
         .expect("power sweep swing");
         let trajectory = planned.trajectory;
         let wrist_index = arm.wrist_joint_index().expect("4dof arm has a wrist");
-        let dq3 = trajectory.end.values[wrist_index] - trajectory.start.values[wrist_index];
-        let target_speed = arm.max_joint_speed * FIXED_JOINT_SWING_SNAP_VELOCITY_MARGIN;
-        let expected_snap = (2.0 * dq3.abs() / target_speed)
-            .max(FIXED_JOINT_SWING_MIN_SNAP_SECS)
-            .min(trajectory.impact_time_secs);
-        let hold_end = (trajectory.impact_time_secs - expected_snap).max(0.0);
-        if hold_end > 1e-3 {
-            let mid_hold = trajectory.sample_at(hold_end * 0.5);
-            assert!(
-                (mid_hold.values[wrist_index] - start.joints.values[wrist_index]).abs() < 1e-6,
-                "wrist should still be cocked mid-hold: {:?}",
-                mid_hold.values[wrist_index]
-            );
-        }
-        let v_during_snap =
-            trajectory.sample_velocity_at((hold_end + trajectory.impact_time_secs) * 0.5)
-                [wrist_index];
         assert!(
-            v_during_snap.abs() > 1e-6,
-            "wrist should be moving during the snap window"
+            trajectory.end.values[wrist_index] < trajectory.start.values[wrist_index],
+            "wrist must move in the upward (negative joint-angle) direction"
+        );
+        let v_during_cruise = trajectory.sample_velocity_at(
+            (FIXED_JOINT_SWING_RAMP_SECS + trajectory.impact_time_secs) * 0.5,
+        )[wrist_index];
+        assert!(
+            (v_during_cruise + arm.max_joint_speed).abs() < 1e-6,
+            "wrist should cruise upward at max speed: v={v_during_cruise}"
         );
     }
 
@@ -2756,10 +2754,10 @@ mod tests {
         );
     }
 
-    /// 손목 요구 회전량이 다른 두 임팩트 자세를 직접 비교해, 스냅 창이
-    /// 고정값이 아니라 회전량에 비례해 커지는지 확인한다.
+    /// 서로 다른 두 IK 임팩트 자세를 비교해도 실행 단계에서 덮어쓴 j3
+    /// 목표각은 같아야 한다.
     #[test]
-    fn fixed_joint_swing_power_sweep_snap_window_scales_with_required_rotation() {
+    fn fixed_joint_swing_power_sweep_wrist_target_is_independent_of_ik_target() {
         let active = crate::defaults::robot().expect("active robot");
         let arm = &active.arm;
         let ready = robot::Pose::new(
@@ -2782,7 +2780,7 @@ mod tests {
         let horizontal_normal =
             Vector3::new(aligned_racket.normal.x, aligned_racket.normal.y, 0.0).normalize();
 
-        let snap_window_for = |push_distance_m: f64| -> f64 {
+        let wrist_target_for = |push_distance_m: f64| -> f64 {
             let lift_m = FIXED_JOINT_PUSH_LIFT_M * push_distance_m / FIXED_JOINT_PUSH_DISTANCE_M;
             let target_position = Point3::from(
                 aligned_racket.position.coords
@@ -2798,19 +2796,14 @@ mod tests {
             )
             .expect("power sweep to a specific push distance");
             let wrist_index = arm.wrist_joint_index().expect("4dof arm has a wrist");
-            let dq3 = planned.trajectory.end.values[wrist_index]
-                - planned.trajectory.start.values[wrist_index];
-            let target_speed = arm.max_joint_speed * FIXED_JOINT_SWING_SNAP_VELOCITY_MARGIN;
-            return (2.0 * dq3.abs() / target_speed)
-                .max(FIXED_JOINT_SWING_MIN_SNAP_SECS)
-                .min(planned.trajectory.impact_time_secs);
+            return planned.trajectory.end.values[wrist_index];
         };
 
-        let small_push_snap = snap_window_for(FIXED_JOINT_PUSH_DISTANCE_M * 0.10);
-        let large_push_snap = snap_window_for(FIXED_JOINT_PUSH_DISTANCE_M * 0.60);
+        let small_push_target = wrist_target_for(FIXED_JOINT_PUSH_DISTANCE_M * 0.10);
+        let large_push_target = wrist_target_for(FIXED_JOINT_PUSH_DISTANCE_M * 0.60);
         assert!(
-            large_push_snap > small_push_snap + 1e-3,
-            "snap window should grow with required rotation: small={small_push_snap:.4} large={large_push_snap:.4}"
+            (large_push_target - small_push_target).abs() < 1e-9,
+            "wrist target must not depend on the IK push target: small={small_push_target:.4} large={large_push_target:.4}"
         );
     }
 

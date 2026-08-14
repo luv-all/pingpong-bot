@@ -31,7 +31,7 @@ pub const PIXEL_LOUPE_SRC_HALF: i32 = 7;
 /// 세울 만큼 봤나")이고 이건 외삽 거리("여기서 굳히면 접수 평면까지 얼마나 멀리
 /// 내다봐야 하나")다. 느린 서브는 공이 아직 저 뒤에 있는데도 짝이 금방 쌓여서,
 /// 정보는 충분한데 외삽이 길어 오차가 커진다 — 표본 수만으로는 그걸 못 본다.
-pub const ALIGNMENT_TRIGGER_TABLE_Y_FRAC: f64 = 0.75;
+pub const ALIGNMENT_TRIGGER_TABLE_Y_FRAC: f64 = 0.60;
 
 /// 예측을 굳히기 전에 **두 캠이 같은 순간에 함께 본** 표본이 최소 몇 개는 있어야 하나.
 ///
