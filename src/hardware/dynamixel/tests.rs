@@ -73,7 +73,7 @@ fn base_zero_offset_moves_ready_pair_forty_five_degrees_backward() {
 }
 
 #[test]
-fn wrist_zero_offset_rotates_id5_twenty_five_degrees_up_from_previous_calibration() {
+fn wrist_zero_offset_sets_id5_to_negative_thirty_three_degrees() {
     let calibrated = MotorMapping::new(bench_config()).expect("calibrated mapping");
     let mut previous_config = bench_config();
     previous_config.joint_offsets_rad[3] = -8.0_f64.to_radians();
@@ -82,7 +82,7 @@ fn wrist_zero_offset_rotates_id5_twenty_five_degrees_up_from_previous_calibratio
 
     let calibrated_tick = calibrated.radians_to_ticks(3, ready_wrist);
     let previous_tick = previous.radians_to_ticks(3, ready_wrist);
-    assert_eq!(calibrated_tick - previous_tick, 285, "25° 증가 tick 반올림");
+    assert_eq!(calibrated_tick - previous_tick, -284, "기존 -8° 대비 -25° tick 반올림");
     assert!(
         (calibrated.ticks_to_radians(3, calibrated_tick) - ready_wrist).abs() < 0.002,
         "보정 후에도 논리 관절각 round-trip은 유지돼야 함"
