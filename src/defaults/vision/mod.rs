@@ -18,7 +18,7 @@ use crate::constants::table;
 use crate::defaults::calib::{calibration_path, colormask_path};
 use crate::vision::detect::colormask::{ColormaskParams, load_colormask_set};
 use crate::vision::detect::{Background, ColorBox, Layer, Picker, Spatial};
-use crate::vision::triggers::{All, PlaneCrossing, StereoSamples};
+use crate::vision::triggers::{All, Any, PlaneCrossing, StereoSamples};
 use crate::vision::{Detector, Trigger};
 
 /// 픽셀 정밀 찍기용 loupe 배율.
@@ -153,7 +153,7 @@ pub fn picker(params: &camera::Params) -> Result<Picker> {
 /// 실기와 클립 도구가 **같은 걸** 써야 한다. 도구가 더 늦게 거는 트리거를 쓰면 도구가 재는
 /// 리드타임이 실기보다 짧아져, 실기에서 쓸 수 있는 구간을 도구가 못 본다.
 pub fn trigger() -> Box<dyn Trigger> {
-    return Box::new(All(vec![
+    return Box::new(Any(vec![
         Box::new(StereoSamples {
             min_samples: MIN_STEREO_SAMPLES,
         }),
