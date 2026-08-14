@@ -209,7 +209,7 @@ impl Planner {
 
     /// [`Self::fixed_joint_swing_quadratic`]를 대체하는 파워 스윙 — j0·j2가
     /// 관절 속도 상한까지 가속-순항하며 임팩트를 만들고, j3는 IK 목표와
-    /// 무관하게 위쪽 15° 범위 안에서 관절 최고속도까지 가속한 뒤 멈춘다.
+    /// 무관하게 위쪽 20° 범위 안에서 관절 최고속도까지 가속한 뒤 멈춘다.
     /// `target_impact_time_secs`는 타격-전 전체 시간의 목표값이다
     /// (`FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS` 미만이면 그 값으로
     /// 클램프된다).

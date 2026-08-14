@@ -146,7 +146,7 @@ mod tests {
         assert!((rail_config.domain_to_board_abs(0.0100) - 1.3850).abs() < 1e-12);
         assert!((rail_config.domain_to_board_abs(1.3395) - 0.0555).abs() < 1e-12);
         assert!((rail_config.domain_to_board_abs(0.6750) - 0.7200).abs() < 1e-12);
-        assert!((ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M - 0.0200).abs() < 1e-12);
+        assert!(ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M.abs() < 1e-12);
         assert!((RAIL_COORDINATE_POSITIVE_X_OFFSET_M - 0.0150).abs() < 1e-12);
         assert!((rail_frame().mount_x() - 0.09025).abs() < 1e-12);
         assert!((rail_frame().rail_bottom_z - RAIL_BOTTOM_Z_M).abs() < 1e-12);

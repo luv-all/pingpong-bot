@@ -582,7 +582,7 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 /// `공 반지름 + 라켓 반두께 + 다관절 푸시 거리` 만큼 법선 반대쪽에 라켓
 /// 중심을 둔다. 따라서 공별 정렬 자세 자체가 팔을 접은 타격 준비 자세가 된다.
 /// 공의 x는 예측값을 그대로 쓰고, z는 위로 1.5 cm 보정한다. 공이 닿는 지점은
-/// 블레이드 중심보다 0.5 cm 아래라서, 라켓 중심은 공 중심보다 0.5 cm 위로 올린다.
+/// 손잡이 쪽 기존 위치보다 2cm 올린 블레이드 중심이다.
 fn ball_alignment_geometry(ball: Point3) -> (Point3, Vector3<f64>, Point3) {
     return ball_alignment_geometry_with_prewind(ball, FIXED_JOINT_PUSH_DISTANCE_M);
 }
@@ -1426,7 +1426,7 @@ pub fn plan_fixed_joint_swing_power_sweep_from_alignment(
 ///
 /// 레일은 현재 위치를 유지하고, j0·j2는 중앙 기준 정상 파워 스윙에서 얻은
 /// 고정 델타만큼 밀친다. j1은 유지하고 j3는 정상 스윙과 똑같이 IK 목표를
-/// 무시한 채 위로 15° 안에서 최고속도까지 스윙한다. IK는 호출하지 않으며 일반 스윙과 동일한
+/// 무시한 채 위로 20° 안에서 최고속도까지 스윙한다. IK는 호출하지 않으며 일반 스윙과 동일한
 /// 관절·속도·가속도·테이블 충돌 검사를 통과해야만 반환한다.
 pub fn plan_fixed_joint_push_fallback(
     arm: &Arm,
@@ -1443,7 +1443,9 @@ pub fn plan_fixed_joint_push_fallback(
             },
         ));
     };
-    let impact_time = target_impact_time_secs.max(FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS);
+    let impact_time = target_impact_time_secs
+        .max(FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS)
+        .max(fixed_wrist_swing_min_duration(arm));
     let ramp_accel = arm.max_joint_speed / FIXED_JOINT_SWING_RAMP_SECS;
     let mut impact_values = start.joints.values.clone();
     // 기본 중앙 자세의 정상 10cm 파워 스윙 실측 계획값을 고정 델타로
@@ -1537,8 +1539,12 @@ pub fn plan_fixed_joint_push_fallback(
 /// j0·j2 인덱스 — 이 팔에서 토크가 가장 큰 두 관절(이중/단일 MX-64).
 const POWER_SWEEP_JOINT_INDICES: [usize; 2] = [0, 2];
 
-/// 정상·폴백에서 공통으로 쓰는 독립 손목 상향 스윙 각도: 15°.
-const FIXED_WRIST_SWING_RAD: f64 = 0.261_799_387_799_149_4;
+/// 정상·폴백에서 공통으로 쓰는 독립 손목 상향 스윙 각도: 20°.
+const FIXED_WRIST_SWING_RAD: f64 = 0.349_065_850_398_865_9;
+
+fn fixed_wrist_swing_min_duration(arm: &Arm) -> f64 {
+    return 2.0 * FIXED_WRIST_SWING_RAD / arm.max_joint_speed;
+}
 
 fn apply_fixed_wrist_swing(
     arm: &Arm,
@@ -1581,7 +1587,9 @@ fn plan_fixed_joint_swing_power_sweep_to_pose(
         )
         .map_err(DomainError::InfeasibleSwing)?;
 
-    let impact_time = target_impact_time_secs.max(FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS);
+    let impact_time = target_impact_time_secs
+        .max(FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS)
+        .max(fixed_wrist_swing_min_duration(arm));
     let ramp_accel = arm.max_joint_speed / FIXED_JOINT_SWING_RAMP_SECS;
 
     let mut profiles = vec![PreImpactJointProfile::Quadratic; joint_count];
@@ -1602,8 +1610,8 @@ fn plan_fixed_joint_swing_power_sweep_to_pose(
     if let Some(wrist_index) = arm.wrist_joint_index() {
         // IK가 고른 손목각은 사용하지 않는다. j0~j2의 임팩트 자세를 푼 뒤
         // j3만 실행 궤적에서 라켓 면이 위로 열리는 음의 방향으로 덮어쓴다.
-        // 총 목표각은 위쪽 15°로 제한한다. 필요한 만큼 시작을 늦춘 뒤
-        // 최고속도까지 올렸다가 15° 끝점에서 멈춘다.
+        // 총 목표각은 위쪽 20°로 제한한다. 필요한 만큼 시작을 늦춘 뒤
+        // 최고속도까지 올렸다가 20° 끝점에서 멈춘다.
         let q0 = start.joints.values[wrist_index];
         apply_fixed_wrist_swing(
             arm,
@@ -3304,6 +3312,17 @@ mod tests {
                 .all(|velocity| velocity.abs() < 1e-12)
         );
         assert_eq!(alignment.end, alignment.follow_through);
+    }
+
+    #[test]
+    fn ball_alignment_contact_is_raised_two_centimeters_to_blade_center() {
+        let ball = Point3::new(table::WIDTH_X * 0.5, ready_racket_y_m(), 0.95);
+        let (corrected_ball, _, racket_center) = ball_alignment_geometry(ball);
+        assert!(ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M.abs() < 1e-12);
+        assert!(
+            (racket_center.z - corrected_ball.z).abs() < 1e-12,
+            "공 접촉점이 블레이드 중심보다 손잡이 쪽으로 내려가면 안 됨"
+        );
     }
 
     #[test]

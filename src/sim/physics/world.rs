@@ -2280,9 +2280,9 @@ mod tests {
                 );
                 let wrist_travel = trajectory.start.values[wrist_index]
                     - trajectory.end.values[wrist_index];
-                assert!((wrist_travel.to_degrees() - 15.0).abs() < 1e-9);
+                assert!((wrist_travel.to_degrees() - 20.0).abs() < 1e-9);
                 assert!((trajectory.start.values[wrist_index]
-                    - trajectory.follow_through.values[wrist_index]).to_degrees() <= 15.0 + 1e-9);
+                    - trajectory.follow_through.values[wrist_index]).to_degrees() <= 20.0 + 1e-9);
                 let peak_time = trajectory.impact_time_secs
                     - wrist_travel / world.arm.max_joint_speed;
                 let cruise_velocity = trajectory.sample_velocity_at(peak_time)[wrist_index];
@@ -2321,9 +2321,9 @@ mod tests {
         let wrist_index = world.arm.wrist_joint_index().expect("wrist");
         let wrist_travel =
             trajectory.start.values[wrist_index] - trajectory.end.values[wrist_index];
-        assert!((wrist_travel.to_degrees() - 15.0).abs() < 1e-9);
+        assert!((wrist_travel.to_degrees() - 20.0).abs() < 1e-9);
         assert!((trajectory.start.values[wrist_index]
-            - trajectory.follow_through.values[wrist_index]).to_degrees() <= 15.0 + 1e-9);
+            - trajectory.follow_through.values[wrist_index]).to_degrees() <= 20.0 + 1e-9);
         let peak_time = trajectory.impact_time_secs
             - wrist_travel / world.arm.max_joint_speed;
         let wrist_velocity = trajectory.sample_velocity_at(peak_time)[wrist_index];
