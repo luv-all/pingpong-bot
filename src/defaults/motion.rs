@@ -183,7 +183,7 @@ pub const FIXED_JOINT_SWING_SNAP_VELOCITY_MARGIN: f64 = 0.85;
 /// `control_worker`가 예상 도착 시각까지 남은 시간에서
 /// [`FIXED_JOINT_SWING_IMPACT_MARGIN_SECS`]를 뺀 값으로 동적으로 계산하고,
 /// 이 하한으로 클램프한다.
-pub const FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS: f64 = 0.120;
+pub const FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS: f64 = 0.110;
 /// 예상 공 도착 시각보다 몇 초 먼저 임팩트가 나야 하는지 — 파워 스윙의
 /// 목표 타격-전 시간을 `남은 시간 − 이 값`으로 계산하는 데 쓴다.
 ///

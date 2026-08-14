@@ -30,7 +30,7 @@ pub const RAIL_PHYSICAL_X_MAX_M: f64 = 1.41;
 /// 기존 +4.0cm 기준에서 2.5cm를 뺀 최종 좌표 오프셋이다.
 pub const RAIL_COORDINATE_POSITIVE_X_OFFSET_M: f64 = 0.015;
 /// 보드 실측 0.745m를 준비 중앙 0.675m로 해석하는 영점 이동.
-pub const RAIL_POSITIVE_X_TRIM_M: f64 = 0.030;
+pub const RAIL_POSITIVE_X_TRIM_M: f64 = 0.000;
 pub const RAIL_NEGATIVE_X_ZERO_SHIFT_M: f64 =
     (RAIL_PHYSICAL_X_MAX_M - RAIL_PHYSICAL_X_MIN_M) / 2.0 - RAIL_POSITIVE_X_TRIM_M;
 /// **`--calibrate-rail` 홈잉 미실행 시 폴백 기본값.** 홈잉을 한 번이라도 실행하면
