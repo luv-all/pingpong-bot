@@ -12,7 +12,7 @@ use super::rail::{
 ///
 /// 2026-08-14 실기 손목 방향 조정을 위해 ID 5 영점 보정을 -33°로
 /// 설정한다. 논리 관절각은 유지하고 실제 모터 목표만 이동한다.
-pub const WRIST_JOINT_ZERO_OFFSET_RAD: f64 = 0.0_f64.to_radians();
+pub const WRIST_JOINT_ZERO_OFFSET_RAD: f64 = -4.0_f64.to_radians();
 
 /// 하단 듀얼 MX-64 q0(ID 1·2) 재조립 혼 영점 보정 [rad].
 pub const BASE_JOINT_ZERO_OFFSET_RAD: f64 = 45.0_f64.to_radians();
