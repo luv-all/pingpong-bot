@@ -83,7 +83,7 @@ pub const DETECTION_WINDUP_DISTANCE_M: f64 = 0.020;
 pub const IMPACT_CENTER_BELOW_BALL_M: f64 = 0.020;
 /// 기초 정렬 모드에서 공이 닿을 지점을 블레이드 중심보다 낮추는 거리 [m].
 /// 손잡이 타격을 피하려고 기존 2cm 아래에서 2cm 올려 블레이드 중심에 맞춘다.
-pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = 0.0;
+pub const ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M: f64 = -0.05;
 /// 예측된 공 높이에서 실제 정렬 타격점을 올리는 보정 [m].
 pub const ALIGNMENT_TARGET_HEIGHT_OFFSET_M: f64 = 0.015;
 /// 레일 마운트 X 9.025cm를 기구학에 반영한 뒤에도 남는 타격 X 보정 [m].
@@ -183,7 +183,7 @@ pub const FIXED_JOINT_SWING_SNAP_VELOCITY_MARGIN: f64 = 0.85;
 /// `control_worker`가 예상 도착 시각까지 남은 시간에서
 /// [`FIXED_JOINT_SWING_IMPACT_MARGIN_SECS`]를 뺀 값으로 동적으로 계산하고,
 /// 이 하한으로 클램프한다.
-pub const FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS: f64 = 0.110;
+pub const FIXED_JOINT_SWING_MIN_IMPACT_TIME_SECS: f64 = 0.140;
 /// 예상 공 도착 시각보다 몇 초 먼저 임팩트가 나야 하는지 — 파워 스윙의
 /// 목표 타격-전 시간을 `남은 시간 − 이 값`으로 계산하는 데 쓴다.
 ///

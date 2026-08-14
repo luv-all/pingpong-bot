@@ -1,6 +1,6 @@
 {
-  "board_zero_domain_m": 1.113546394325769,
+  "board_zero_domain_m": 1.113583834265865,
   "homed_at_end": "max",
-  "board_position_at_home_m": -0.2964536056742309,
-  "measured_unix_secs": 1786681122
+  "board_position_at_home_m": -0.2964161657341348,
+  "measured_unix_secs": 1786682264
 }
