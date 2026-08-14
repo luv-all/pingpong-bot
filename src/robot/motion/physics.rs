@@ -581,8 +581,8 @@ pub fn plan_ready_prewind(arm: &Arm, start: &robot::Pose) -> Result<Trajectory, 
 /// 기초 정렬 모드에서 사용하지 않는다. 공 중심과 라켓 중심을 겹치지 않도록
 /// `공 반지름 + 라켓 반두께 + 다관절 푸시 거리` 만큼 법선 반대쪽에 라켓
 /// 중심을 둔다. 따라서 공별 정렬 자세 자체가 팔을 접은 타격 준비 자세가 된다.
-/// 공의 x는 예측값을 그대로 쓰고, z는 위로 1.5 cm 보정한다. 공이 닿는 지점은
-/// 손잡이 쪽 기존 위치보다 2cm 올린 블레이드 중심이다.
+/// 공의 x는 예측값을 그대로 쓰고, 비전 공 z에는 기존 1.5cm와 추가 3cm를
+/// 합친 +4.5cm 보정을 적용한다. 공은 블레이드 중심에 닿도록 계산한다.
 fn ball_alignment_geometry(ball: Point3) -> (Point3, Vector3<f64>, Point3) {
     return ball_alignment_geometry_with_prewind(ball, FIXED_JOINT_PUSH_DISTANCE_M);
 }
@@ -3315,13 +3315,17 @@ mod tests {
     }
 
     #[test]
-    fn ball_alignment_contact_is_raised_two_centimeters_to_blade_center() {
+    fn vision_ball_z_is_raised_three_more_centimeters_at_blade_center() {
         let ball = Point3::new(table::WIDTH_X * 0.5, ready_racket_y_m(), 0.95);
         let (corrected_ball, _, racket_center) = ball_alignment_geometry(ball);
         assert!(ALIGNMENT_CONTACT_BELOW_RACKET_CENTER_M.abs() < 1e-12);
         assert!(
+            (corrected_ball.z - ball.z - 0.045).abs() < 1e-12,
+            "비전 공 z에는 기존 1.5cm와 추가 3cm가 함께 적용돼야 함"
+        );
+        assert!(
             (racket_center.z - corrected_ball.z).abs() < 1e-12,
-            "공 접촉점이 블레이드 중심보다 손잡이 쪽으로 내려가면 안 됨"
+            "보정된 공은 블레이드 중심에 맞아야 함"
         );
     }
 
